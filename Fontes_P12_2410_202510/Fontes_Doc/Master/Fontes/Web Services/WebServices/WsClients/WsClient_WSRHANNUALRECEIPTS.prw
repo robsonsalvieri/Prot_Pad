@@ -1,0 +1,315 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "apwebsrv.ch"
+
+/* ===============================================================================
+WSDL Location    http://10.172.68.158:8080/wst2/RHANNUALRECEIPTS.apw?WSDL
+Gerado em        05/17/19 07:52:48
+Observações      Código-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Alterações neste arquivo podem causar funcionamento incorreto
+                 e serão perdidas caso o código-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _HAXSNHH ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSRHANNUALRECEIPTS
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSRHANNUALRECEIPTS
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD BROWSEANNUALRECEIPTS
+	WSMETHOD GETANNUALRECEIPT
+	WSMETHOD TRANSFANNUALRECEIPT
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   cBRANCH                   AS string
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   nCURRENTPAGE              AS integer
+	WSDATA   cFILTERFIELD              AS string
+	WSDATA   cFILTERVALUE              AS string
+	WSDATA   oWSBROWSEANNUALRECEIPTSRESULT AS RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE
+	WSDATA   cTAXYEAR                  AS string
+	WSDATA   cDMRELEASE                AS string
+	WSDATA   cDMREPORT                 AS string
+	WSDATA   cRESPONSIBLE              AS string
+	WSDATA   cCOMPANY                  AS string
+	WSDATA   cGETANNUALRECEIPTRESULT   AS string
+	WSDATA 	 CBRCORIGIN				   AS String
+	WSDATA   CREGORIGIN				   AS String
+	WSDATA   LTRANSFANNUALRECEIPTRESULT AS boolean
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSRHANNUALRECEIPTS
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O Código-Fonte Client atual requer os executáveis do Protheus Build [7.00.170117A-20190212] ou superior. Atualize o Protheus ou gere o Código-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSRHANNUALRECEIPTS
+	::oWSBROWSEANNUALRECEIPTSRESULT := RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE():New()
+Return
+
+WSMETHOD RESET WSCLIENT WSRHANNUALRECEIPTS
+	::cBRANCH            := NIL 
+	::cREGISTRATION      := NIL 
+	::nCURRENTPAGE       := NIL 
+	::cFILTERFIELD       := NIL 
+	::cFILTERVALUE       := NIL 
+	::oWSBROWSEANNUALRECEIPTSRESULT := NIL 
+	::cTAXYEAR           := NIL 
+	::cDMRELEASE         := NIL 
+	::cDMREPORT          := NIL 
+	::cRESPONSIBLE       := NIL 
+	::cCOMPANY           := NIL 
+	::cGETANNUALRECEIPTRESULT := NIL 
+	::cBRCORIGIN				:= NIL
+	::cREGORIGIN				:= NIL
+	::LTRANSFANNUALRECEIPTRESULT	:= NIL
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSRHANNUALRECEIPTS
+Local oClone := WSRHANNUALRECEIPTS():New()
+	oClone:_URL          := ::_URL 
+	oClone:cBRANCH       := ::cBRANCH
+	oClone:cREGISTRATION := ::cREGISTRATION
+	oClone:nCURRENTPAGE  := ::nCURRENTPAGE
+	oClone:cFILTERFIELD  := ::cFILTERFIELD
+	oClone:cFILTERVALUE  := ::cFILTERVALUE
+	oClone:oWSBROWSEANNUALRECEIPTSRESULT :=  IIF(::oWSBROWSEANNUALRECEIPTSRESULT = NIL , NIL ,::oWSBROWSEANNUALRECEIPTSRESULT:Clone() )
+	oClone:cTAXYEAR      := ::cTAXYEAR
+	oClone:cDMRELEASE    := ::cDMRELEASE
+	oClone:cDMREPORT     := ::cDMREPORT
+	oClone:cRESPONSIBLE  := ::cRESPONSIBLE
+	oClone:cCOMPANY      := ::cCOMPANY
+	oClone:cGETANNUALRECEIPTRESULT := ::cGETANNUALRECEIPTRESULT
+	oClone:cBRCORIGIN	:= ::cBRCORIGIN
+	oClone:cREGORIGIN	:= ::::cREGORIGIN
+	oClone:LTRANSFANNUALRECEIPTRESULT	:= ::LTRANSFANNUALRECEIPTRESULT
+Return oClone
+
+// WSDL Method BROWSEANNUALRECEIPTS of Service WSRHANNUALRECEIPTS
+
+WSMETHOD BROWSEANNUALRECEIPTS WSSEND cBRANCH,cREGISTRATION,nCURRENTPAGE,cFILTERFIELD,cFILTERVALUE WSRECEIVE oWSBROWSEANNUALRECEIPTSRESULT WSCLIENT WSRHANNUALRECEIPTS
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<BROWSEANNUALRECEIPTS xmlns="http://10.172.68.158:8080/">'
+cSoap += WSSoapValue("BRANCH", ::cBRANCH, cBRANCH , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRENTPAGE", ::nCURRENTPAGE, nCURRENTPAGE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILTERFIELD", ::cFILTERFIELD, cFILTERFIELD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILTERVALUE", ::cFILTERVALUE, cFILTERVALUE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</BROWSEANNUALRECEIPTS>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://10.172.68.158:8080/BROWSEANNUALRECEIPTS",; 
+	"DOCUMENT","http://10.172.68.158:8080/",,"1.031217",; 
+	"http://10.172.68.158:8080/wst2/RHANNUALRECEIPTS.apw")
+
+::Init()
+::oWSBROWSEANNUALRECEIPTSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_BROWSEANNUALRECEIPTSRESPONSE:_BROWSEANNUALRECEIPTSRESULT","TANNUALRECEIPTSBROWSE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method TRANSFANNUALRECEIPT of Service WSRHANNUALRECEIPTS
+
+WSMETHOD TRANSFANNUALRECEIPT WSSEND cCOMPANY,cBRANCH,cREGISTRATION, cBRCORIGIN, cREGORIGIN WSRECEIVE LTRANSFANNUALRECEIPTRESULT WSCLIENT WSRHANNUALRECEIPTS
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<TRANSFANNUALRECEIPT xmlns="http://10.172.68.158:8080/">'
+cSoap += WSSoapValue("COMPANY", ::cCOMPANY, cCOMPANY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("BRANCH", ::cBRANCH, cBRANCH , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("BRCORIGIN", ::cBRCORIGIN, cBRCORIGIN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGORIGIN", ::cREGORIGIN, cREGORIGIN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+
+cSoap += "</TRANSFANNUALRECEIPT>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://10.172.68.158:8080/TRANSFANNUALRECEIPT",; 
+	"DOCUMENT","http://10.172.68.158:8080/",,"1.031217",; 
+	"http://10.172.68.158:8080/wst2/RHANNUALRECEIPTS.apw")
+
+::Init()
+::LTRANSFANNUALRECEIPTRESULT :=  WSAdvValue( oXmlRet,"_TRANSFANNUALRECEIPTRESPONSE:_TRANSFANNUALRECEIPTRESULT:TEXT","boolean",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETANNUALRECEIPT of Service WSRHANNUALRECEIPTS
+
+WSMETHOD GETANNUALRECEIPT WSSEND cBRANCH,cREGISTRATION,cTAXYEAR,cDMRELEASE,cDMREPORT,cRESPONSIBLE,cCOMPANY WSRECEIVE cGETANNUALRECEIPTRESULT WSCLIENT WSRHANNUALRECEIPTS
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETANNUALRECEIPT xmlns="http://10.172.68.158:8080/">'
+cSoap += WSSoapValue("BRANCH", ::cBRANCH, cBRANCH , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("TAXYEAR", ::cTAXYEAR, cTAXYEAR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("DMRELEASE", ::cDMRELEASE, cDMRELEASE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("DMREPORT", ::cDMREPORT, cDMREPORT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("RESPONSIBLE", ::cRESPONSIBLE, cRESPONSIBLE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("COMPANY", ::cCOMPANY, cCOMPANY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETANNUALRECEIPT>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://10.172.68.158:8080/GETANNUALRECEIPT",; 
+	"DOCUMENT","http://10.172.68.158:8080/",,"1.031217",; 
+	"http://10.172.68.158:8080/wst2/RHANNUALRECEIPTS.apw")
+
+::Init()
+::cGETANNUALRECEIPTRESULT :=  WSAdvValue( oXmlRet,"_GETANNUALRECEIPTRESPONSE:_GETANNUALRECEIPTRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure TANNUALRECEIPTSBROWSE
+
+WSSTRUCT RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE
+	WSDATA   oWSITENS                  AS RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST OPTIONAL
+	WSDATA   nPAGESTOTAL               AS integer OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE
+Return
+
+WSMETHOD CLONE WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE
+	Local oClone := RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE():NEW()
+	oClone:oWSITENS             := IIF(::oWSITENS = NIL , NIL , ::oWSITENS:Clone() )
+	oClone:nPAGESTOTAL          := ::nPAGESTOTAL
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSBROWSE
+	Local oNode1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_ITENS","ARRAYOFTANNUALRECEIPTSLIST",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSITENS := RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST():New()
+		::oWSITENS:SoapRecv(oNode1)
+	EndIf
+	::nPAGESTOTAL        :=  WSAdvValue( oResponse,"_PAGESTOTAL","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFTANNUALRECEIPTSLIST
+
+WSSTRUCT RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST
+	WSDATA   oWSTANNUALRECEIPTSLIST    AS RHANNUALRECEIPTS_TANNUALRECEIPTSLIST OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST
+	::oWSTANNUALRECEIPTSLIST := {} // Array Of  RHANNUALRECEIPTS_TANNUALRECEIPTSLIST():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST
+	Local oClone := RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST():NEW()
+	oClone:oWSTANNUALRECEIPTSLIST := NIL
+	If ::oWSTANNUALRECEIPTSLIST <> NIL 
+		oClone:oWSTANNUALRECEIPTSLIST := {}
+		aEval( ::oWSTANNUALRECEIPTSLIST , { |x| aadd( oClone:oWSTANNUALRECEIPTSLIST , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHANNUALRECEIPTS_ARRAYOFTANNUALRECEIPTSLIST
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_TANNUALRECEIPTSLIST","TANNUALRECEIPTSLIST",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSTANNUALRECEIPTSLIST , RHANNUALRECEIPTS_TANNUALRECEIPTSLIST():New() )
+			::oWSTANNUALRECEIPTSLIST[len(::oWSTANNUALRECEIPTSLIST)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TANNUALRECEIPTSLIST
+
+WSSTRUCT RHANNUALRECEIPTS_TANNUALRECEIPTSLIST
+	WSDATA   cBRANCH                   AS string
+	WSDATA   cCOMPANY                  AS string
+	WSDATA   cDMRELEASE                AS string
+	WSDATA   cDMREPORT                 AS string
+	WSDATA   lINFORMEOK                AS boolean
+	WSDATA   cMAT                      AS string
+	WSDATA   cRESPONSIBLE              AS string
+	WSDATA   cTAXYEAR                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSLIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSLIST
+Return
+
+WSMETHOD CLONE WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSLIST
+	Local oClone := RHANNUALRECEIPTS_TANNUALRECEIPTSLIST():NEW()
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cCOMPANY             := ::cCOMPANY
+	oClone:cDMRELEASE           := ::cDMRELEASE
+	oClone:cDMREPORT            := ::cDMREPORT
+	oClone:lINFORMEOK           := ::lINFORMEOK
+	oClone:cMAT                 := ::cMAT
+	oClone:cRESPONSIBLE         := ::cRESPONSIBLE
+	oClone:cTAXYEAR             := ::cTAXYEAR
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHANNUALRECEIPTS_TANNUALRECEIPTSLIST
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cBRANCH            :=  WSAdvValue( oResponse,"_BRANCH","string",NIL,"Property cBRANCH as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cCOMPANY           :=  WSAdvValue( oResponse,"_COMPANY","string",NIL,"Property cCOMPANY as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cDMRELEASE         :=  WSAdvValue( oResponse,"_DMRELEASE","string",NIL,"Property cDMRELEASE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cDMREPORT          :=  WSAdvValue( oResponse,"_DMREPORT","string",NIL,"Property cDMREPORT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lINFORMEOK         :=  WSAdvValue( oResponse,"_INFORMEOK","boolean",NIL,"Property lINFORMEOK as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+	::cMAT               :=  WSAdvValue( oResponse,"_MAT","string",NIL,"Property cMAT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cRESPONSIBLE       :=  WSAdvValue( oResponse,"_RESPONSIBLE","string",NIL,"Property cRESPONSIBLE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cTAXYEAR           :=  WSAdvValue( oResponse,"_TAXYEAR","string",NIL,"Property cTAXYEAR as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+
+
+

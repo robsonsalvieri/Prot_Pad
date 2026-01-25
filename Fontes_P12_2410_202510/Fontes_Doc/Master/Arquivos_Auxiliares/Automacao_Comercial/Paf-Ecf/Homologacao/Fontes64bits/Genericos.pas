@@ -1,0 +1,196 @@
+unit Genericos;
+
+interface
+
+uses Dialogs, SysUtils, Winapi.Windows, Forms, ExtCtrls, StdCtrls, Controls, Messages,
+     Classes, Graphics, IniFiles, FileCtrl,ShellApi;
+
+const
+  CurrentDate: String = '24/06/2019';           // mudar a cada geração para alterar o MD5
+  Valid      : String = '20190624REMOTEPAF';    // variavel com o conteudo que sera validado
+  Executavel : String = 'SMARTCLIENT.EXE'; // programa padrao do protehus
+  Funcao     : String = 'SIGALOJ';            // funcao a ser executado pelo WinExec
+  Ini        : String = 'CLIENT.INI';      // arquivo com as configuracoes o programa
+
+type TaString = array of String;
+
+  Procedure ExecClient(sCommand, sPrograma, sModulo, sValid, sParams, sAmbiente, sTcp : AnsiString);
+  Procedure MontaArray( sTexto, sSeparador:String; Var aFormas: TaString );
+  Function LeArqIni(sPath, sArquivo, sSecao, sCampo, sDefault: String ) : String;
+  Function GrvArqIni(sPath, sArquivo, sModulo, sTcp, sAmbiente: String ) : Boolean;
+  Procedure PAFAltBarTela;
+
+implementation
+
+//------------------------------------------------------------------------------
+Procedure ExecClient(sCommand, sPrograma, sModulo, sValid,
+                                         sParams, sAmbiente, sTcp : AnsiString);
+Var nExec    , nCont : Integer;
+    aParams  : TaString;
+begin
+
+  // Quebra a String em uma Array
+  MontaArray(sParams, '|', aParams);
+
+  // Monta Comando
+  sCommand := sCommand + ' -E=' + sAmbiente +
+                         ' -C=' + sTcp      +
+                         ' -P=' + sPrograma +
+                         ' -A=' + sModulo   +
+                         ' -A=' + sValid    ;
+
+  For nCont := 0 To (Length(aParams) -1) Do
+  begin
+    sCommand := sCommand + ' ' + aParams[nCont];
+  end;
+
+  Try
+    nExec := WinExec( pAnsiChar(sCommand) , SW_SHOWNORMAL);
+    PAFAltBarTela;
+
+    If nExec <= 31 then
+    Begin
+      Halt;
+    end;
+  Except
+    Halt;
+  end;
+end;
+
+//----------------------------------------------------------------------------
+procedure MontaArray( sTexto, sSeparador:String; Var aFormas: TaString );
+var
+  iTamanho : Integer;
+  iPos : Integer;
+  sFormas : String;
+begin
+  if Copy(sTexto,1,1) = sSeparador then
+    sTexto := Copy(sTexto,2,Length(sTexto));
+
+  iTamanho := 0;
+  While (Pos(sSeparador, sTexto) > 0) do
+  begin
+    Inc(iTamanho);
+    SetLength( aFormas, iTamanho );
+    iPos := Pos(sSeparador, sTexto);
+    if iPos = 1 then
+      sFormas := ''
+    else
+      sFormas := Copy(sTexto, 1, iPos-1);
+    aFormas[iTamanho-1] := sFormas ;
+    sTexto := Copy(sTexto, iPos+1, Length(sTexto));
+  end;
+  if Length(sTexto)>0 then
+  begin
+    Inc(iTamanho);
+    SetLength( aFormas, iTamanho );
+    aFormas[iTamanho-1] := sTexto;
+  end;
+end;
+
+//------------------------------------------------------------------------------
+Function LeArqIni(sPath, sArquivo, sSecao, sCampo, sDefault: String ) : String;
+Var
+  fArquivo : TIniFile;
+  sRetorno : String;
+begin
+
+  If not (Copy(sPath , Length(sPath), 1) = '\') then
+    sPath := sPath + '\';
+
+  try
+    fArquivo := TInifile.Create( sPath + sArquivo );
+    sRetorno := fArquivo.ReadString( sSecao, sCampo, sDefault );
+  except
+    sRetorno := sDefault;
+  end;
+
+  fArquivo.Free;
+  Result := sRetorno;
+end;
+
+//------------------------------------------------------------------------------
+Function GrvArqIni(sPath, sArquivo, sModulo, sTcp, sAmbiente: String ) : Boolean;
+Var
+  sIni : String;
+  fArq : TIniFile;
+  lRet : Boolean;
+begin
+  lRet := True;
+
+  If not (Copy(sPath , Length(sPath), 1) = '\') then
+    sPath := sPath + '\';
+
+  sIni := sPath + sArquivo;
+
+    Try
+      fArq := TInifile.Create( sIni );
+
+      fArq.WriteString( 'config', 'lastmainprog', sModulo );
+      fArq.WriteString( 'config', 'envserver', sAmbiente );
+
+      fArq.WriteString( 'drivers', 'active', sTcp );
+
+      fArq.Free;
+    Except
+      lRet := False;
+    End;
+
+    Result := lRet;
+end;
+
+//------------------------------------------------------------------------------
+Procedure PAFAltBarTela ;
+var
+   HTela : THandle;
+   bAltTela,bTexto2 : boolean;
+   cText1,cText2,cTextPAF : pChar;
+   iTimes, iCount : Integer;
+Begin
+
+  cText1 := 'TOTVS Série T Educacional (Microsiga) 02.9.0012';
+  cText2 := 'TOTVS Série T Serviços (Microsiga) 02.9.0012';
+  cTextPAF := 'TOTVS PROTHEUS - MENU FISCAL INACESSÍVEL NESTA TELA';
+  iTimes := 20;
+  iCount := 0;
+  bAltTela := True;
+  bTexto2 := False;
+
+  While bAltTela Do
+  begin
+    HTela := FindWindow(Nil,cText1);
+    If HTela <> 0 then
+    begin
+      SetWindowText(HTela,cTextPAF);
+      bAltTela := False;
+    end;
+
+    Inc(iCount);
+    If iCount = iTimes then
+    begin
+       bAltTela := False;
+       bTexto2 := True;
+    end;
+  End;
+
+  If bTexto2 then
+  begin
+    iCount := 0;
+    bAltTela := True;
+    While bAltTela Do
+    begin
+      HTela := FindWindow(Nil,cText2);
+      If HTela <> 0 then
+      begin
+        SetWindowText(HTela,cTextPAF);
+        bAltTela := False;
+      end;
+
+      Inc(iCount);
+      If iCount = iTimes
+      then bAltTela := False;
+    End;
+  end;
+End;
+
+end.

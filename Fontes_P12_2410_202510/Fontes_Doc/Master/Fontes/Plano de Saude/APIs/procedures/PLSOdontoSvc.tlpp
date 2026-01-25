@@ -1,0 +1,430 @@
+#INCLUDE 'protheus.ch'
+#INCLUDE 'restful.ch'
+#define TOOTH_REGION 1
+#define SURFACES 2
+
+#define QRY_ORIGINAL "1"
+#define QRY_UNION "2"
+#define QRY_DEPARA "3"
+#define QRY_BUSCADIRETA "4"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLSOdontoSvc
+Servico da API de busca da procedimentos das jornadas do HAT
+
+@author  sakai
+@version P12
+@since   15/09/2023
+/*/
+//------------------------------------------------------------------- 
+class PLSOdontoSvc from PLSSvcAux
+
+    Data lPostgres as Logical
+    Data cQueryType as Character
+
+    Public Method New()
+    Public Method procGet()
+ 
+    Private Method setResultTooth()
+    Private Method setResultSurfaces()
+    Private Method getQryTooth()
+    Private Method getQrySurfaces()
+    Private Method getHasSurface()
+    Private Method getPermanentDecidous(oItem,cTooth)
+
+endClass
+
+Method New(oRest) class PLSOdontoSvc
+
+    _Super:New(oRest)
+    self:lPostgres := Alltrim(Upper(TCGetDB())) == "POSTGRES"
+    self:cQueryType := GetNewPar("MV_PLAPPR1",QRY_ORIGINAL)
+
+Return self
+
+Method procGet(nType) class PLSOdontoSvc
+
+    Local nI := 1
+    Local lHasNext := .F.
+    Local cSql := ""
+  
+    self:setPage(self:oRest:page)
+    self:setPageSize(self:oRest:pageSize)
+
+    if self:cQueryType == QRY_ORIGINAL 
+        cSql := iif(nType == TOOTH_REGION, self:getQryTooth(), self:getQrySurfaces())
+    else
+        if nType == TOOTH_REGION
+            if self:cQueryType == QRY_UNION
+                cSql += " SELECT procCode, BR8_CODPAD, BR8_CODPSA, B05_CODIGO FROM ( "
+                cSql += self:getQryTooth(QRY_DEPARA)
+                cSql += " UNION ALL "
+                cSql += self:getQryTooth(QRY_BUSCADIRETA)
+                cSql += " ) QRY ORDER BY procCode, BR8_CODPAD, BR8_CODPSA, B05_CODIGO "
+            else
+                cSql += self:getQryTooth(self:cQueryType)
+                cSql += " ORDER BY procCode, BR8_CODPAD, BR8_CODPSA, B05_CODIGO "
+            endif    
+        else
+            if self:cQueryType == QRY_UNION
+                cSql += " SELECT procCode, BYL_CODIGO, B05_CODIGO, BYLRECNO, BYL_FACE FROM ( "
+                cSql += self:getQrySurfaces(QRY_DEPARA)
+                cSql += " UNION ALL "
+                cSql += self:getQrySurfaces(QRY_BUSCADIRETA)
+                cSql += " ) QRY GROUP BY procCode, BYL_CODIGO, B05_CODIGO, BYLRECNO, BYL_FACE ORDER BY procCode, BYL_CODIGO, B05_CODIGO, BYLRECNO, BYL_FACE "
+            else
+                cSql += self:getQrySurfaces(self:cQueryType)
+                cSql += " ORDER BY procCode, BYL_CODIGO, B05_CODIGO, BYLRECNO, BYL_FACE "
+            endIf
+        endIf
+        cSql += self:getQryPage()
+    endif
+
+    dbUseArea(.T.,"TOPCONN",TcGenQry(,,cSql),"TRB",.T.,.F.)        
+        
+    self:oResult['items'] := {}        
+    if !TRB->(EOF())                
+        while !TRB->(EOF()) .And. nI <= self:nPageSize                    
+            if nType == TOOTH_REGION
+                self:setResultTooth()
+                nI++
+            elseIf nType == SURFACES
+                self:setResultSurfaces()
+                nI++   
+            endIf                
+            TRB->(DbSkip())
+        endDo
+        lHasNext := !TRB->(EOF())
+    endif
+
+    self:oResult['hasNext'] := lHasNext
+    TRB->(DbCloseArea())
+
+Return self:lSuccess
+
+Method setResultTooth() class PLSOdontoSvc
+
+    Local oItem     := JsonObject():new()
+    Local cDescri   := PLSGETVINC("BTQ_DESTER", "B04", .F., "28", Alltrim(TRB->B05_CODIGO))
+    oItem['procedureCode']   := Alltrim(TRB->procCode)
+    oItem['terminologyCode'] := Alltrim(TRB->B05_CODIGO)
+    oItem['description']     := cDescri
+    if alltrim(cDescri) == Alltrim(TRB->B05_CODIGO)
+        oItem['description'] := PLSGETVINC("BTQ_DESTER", "B04", .F., "42", Alltrim(TRB->B05_CODIGO))
+    endif
+    oItem['hasSurfaces']     := self:getHasSurface()
+    self:getPermanentDecidous(oItem, Alltrim(TRB->B05_CODIGO))
+  
+    aAdd(self:oResult['items'], oItem)
+    
+Return
+
+Method setResultSurfaces() class PLSOdontoSvc
+
+    Local oItem    := JsonObject():new()
+    Local cDescri  := ''
+    Local nLenFace := 0
+    Local nX       := 0
+      
+    oItem['procedureCode'] := Alltrim(TRB->procCode)
+    oItem['id'] := TRB->BYLRECNO
+    oItem['teethCode'] := TRB->B05_CODIGO
+    oItem['terminologyCode'] := Alltrim(TRB->BYL_FACE)
+    oItem['hasSurfaces'] := "1"
+    self:getPermanentDecidous(oItem, Alltrim(TRB->B05_CODIGO))
+
+    nLenFace := len(Alltrim(TRB->BYL_FACE))
+    for nX := 1 to nLenFace
+        cDescri += PLSGETVINC("BTQ_DESTER", "B09", .F., "32", Substr(TRB->BYL_FACE,nX,1)) + iif(nX<nLenFace," ","")
+    next
+    oItem['description'] := cDescri
+
+    aAdd(self:oResult['items'], oItem)
+
+Return
+
+Method getQryTooth(cQueryType) class PLSOdontoSvc
+
+    Local cSql := ""
+    Local cCodTab := SubStr(self:oRest:procedureId,1,2)
+	Local cCodPro := SubStr(self:oRest:procedureId,3)
+    Local cSubsOperator := iif(self:lDBisSQL, "SUBSTRING", "SUBSTR")
+    Local nTamFilial := Tamsx3("BTU_FILIAL")[1]
+    Default cQueryType := QRY_ORIGINAL
+
+    //Query Antiga
+    if cQueryType == QRY_ORIGINAL
+
+        cSql += " SELECT "
+        cSql += "   COALESCE(BTU_CDTERM,BTQ_CDTERM) AS procCode, "
+        cSql += " 	BR8_CODPAD, "
+        cSql += " 	BR8_CODPSA, "
+        cSql += " 	B05_CODIGO "
+        cSql += " FROM " + RetSqlName("BR8") + " BR8 "
+        cSql += "   LEFT JOIN " + RetSqlName("BTU") + " BTU "
+        cSql += "      ON BTU.BTU_FILIAL = '"+xFilial("BTU")+"' "
+        cSql += "         AND BTU.BTU_VLRSIS = " + iif(self:lDBisSQL,"BR8_FILIAL + BR8_CODPAD + BR8_CODPSA ","BR8_FILIAL || BR8_CODPAD || BR8_CODPSA ")
+        cSql += "         AND BTU.D_E_L_E_T_ = ' ' "
+        cSql += "   LEFT JOIN " + RetSqlName("BTQ") + " BTQ "
+        cSql += "      ON BTQ.BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+        cSql += "         AND BTQ.BTQ_CODTAB = BR8_CODPAD "
+        cSql += "         AND BTQ.BTQ_CDTERM = BR8_CODPSA "
+        cSql += "         AND BTQ.D_E_L_E_T_ = ' ' "
+        cSql += "   INNER JOIN " + RetSqlName("B05") + " B05 "
+        cSql += "       ON B05.B05_FILIAL = '"+xFilial("B05")+"' "
+        cSql += "         AND B05.B05_CODPAD = BR8.BR8_CODPAD "
+        cSql += "         AND B05.B05_CODPSA = BR8.BR8_CODPSA "
+        cSql += "         AND B05.D_E_L_E_T_ = ' ' "
+        cSql += " WHERE "
+        cSql += "   ( BTU_CODTAB IS NULL OR  BTU_CODTAB = '"+cCodTab+"' AND BTU_CDTERM = '"+cCodPro+"' ) "
+        cSql += "   AND ( BTQ_CODTAB IS NULL OR  BTQ_CODTAB = '"+cCodTab+"' AND BTQ_CDTERM = '"+cCodPro+"' ) "
+        cSql += "   AND ( ( BTU_CODTAB IS NOT NULL AND BTU_CDTERM IS NOT NULL ) OR ( BTQ_CODTAB IS NOT NULL AND BTQ_CDTERM IS NOT NULL ) ) "
+        cSql += "   AND BR8_FILIAL = '"+xFilial("BR8")+"' "
+        cSql += "   AND BR8_BENUTL = '1' "
+        cSql += "   AND BR8_ODONTO = '1' "
+        cSql += "   AND BR8.D_E_L_E_T_ = ' ' "
+        cSql += "   ORDER BY "
+        cSql += "      procCode, "
+        cSql += " 	   BR8_CODPAD, "
+        cSql += " 	   BR8_CODPSA, "
+        cSql += " 	   B05_CODIGO "
+        if !self:lPostgres
+            cSql += self:getQryPage()
+        endif
+
+    //BTU
+    elseIf cQueryType == QRY_DEPARA
+
+        cSql += " SELECT "
+        cSql += "     BTU_CDTERM AS procCode, "
+        cSql += "     BR8_CODPAD, "
+        cSql += "     BR8_CODPSA, "
+        cSql += "     B05_CODIGO "
+        cSql += " FROM " + RetSqlName("BTU") + " BTU "
+        cSql += " INNER JOIN " + RetSqlName("BR8") + " BR8 "
+        if Upper(TCGetDB()) $ "POSTGRES"
+            cSql += " 	 ON BR8.BR8_FILIAL = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, 1, "+cValToChar(nTamFilial)+" )) "
+            cSql += " 	 AND BR8.BR8_CODPAD = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 1)+", 2 )) "
+            cSql += " 	 AND BR8.BR8_CODPSA = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 3)+", 16 )) "
+        else
+            cSql += " 	 ON BR8.BR8_FILIAL = "+cSubsOperator+"( BTU.BTU_VLRSIS, 1, "+cValToChar(nTamFilial)+" ) "
+            cSql += " 	 AND BR8.BR8_CODPAD = "+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 1)+", 2 ) "
+            cSql += " 	 AND BR8.BR8_CODPSA = "+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 3)+", 16 ) "
+        endIf
+        cSql += "    AND BR8.BR8_BENUTL = '1' "
+        cSql += "    AND BR8.BR8_ODONTO = '1' "
+        cSql += "    AND BR8.D_E_L_E_T_ = ' ' "
+        cSql += " INNER JOIN " + RetSqlName("B05") + " B05 "
+        cSql += "     ON B05.B05_FILIAL = '"+xFilial("B05")+"' "
+        cSql += "     AND B05.B05_CODPAD = BR8.BR8_CODPAD "
+        cSql += "     AND B05.B05_CODPSA = BR8.BR8_CODPSA "
+        cSql += "     AND B05.D_E_L_E_T_ = ' ' "            
+        cSql += " WHERE BTU_FILIAL = '"+xFilial("BTU")+"' "
+        cSql += "     AND BTU_CODTAB = '"+cCodTab+"' "
+        cSql += "     AND BTU_CDTERM = '"+cCodPro+"' "
+        cSql += "     AND BTU.D_E_L_E_T_ = ' ' "
+
+    //BTQ
+    elseIf cQueryType == QRY_BUSCADIRETA
+
+        cSql += " SELECT "
+        cSql += "    BTQ_CDTERM AS procCode, "
+        cSql += "    BR8_CODPAD, "
+        cSql += "    BR8_CODPSA, "
+        cSql += "    B05_CODIGO "
+        cSql += " FROM " + RetSqlName("BTQ") + " BTQ "
+        cSql += " INNER JOIN " + RetSqlName("BR8") + " BR8 "
+        cSql += " 	  ON BR8.BR8_FILIAL = '"+xFilial("BR8")+"' "
+        cSql += " 	 AND BR8.BR8_CODPAD = BTQ_CODTAB "
+        cSql += " 	 AND BR8.BR8_CODPSA = BTQ_CDTERM "
+        cSql += "    AND BR8.BR8_BENUTL = '1' "
+        cSql += " 	 AND BR8.BR8_ODONTO = '1' "
+        cSql += " 	 AND BR8.D_E_L_E_T_ = ' ' "    
+        cSql += " INNER JOIN " + RetSqlName("B05") + " B05 "
+        cSql += "    ON B05.B05_FILIAL = '"+xFilial("B05")+"' "
+        cSql += "    AND B05.B05_CODPAD = BR8.BR8_CODPAD "
+        cSql += "    AND B05.B05_CODPSA = BR8.BR8_CODPSA "
+        cSql += "    AND B05.D_E_L_E_T_ = ' ' "        
+        cSql += " WHERE BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+        cSql += "    AND BTQ_CODTAB = '"+cCodTab+"' "
+        cSql += "    AND BTQ_CDTERM = '"+cCodPro+"' "
+        cSql += "    AND BTQ.D_E_L_E_T_ = ' ' "
+
+    endIf
+
+Return cSql
+
+Method getQrySurfaces(cQueryType) class PLSOdontoSvc
+
+    Local cSql := ""
+    Local cCodTab := SubStr(self:oRest:procedureId,1,2)
+	Local cCodPro := SubStr(self:oRest:procedureId,3)
+    Local cSubsOperator := iif(self:lDBisSQL, "SUBSTRING", "SUBSTR")
+    Local nTamFilial := Tamsx3("BTU_FILIAL")[1]
+    Default cQueryType := QRY_ORIGINAL
+
+    //Query Antiga
+    if cQueryType == QRY_ORIGINAL
+
+        cSql += " SELECT "
+        cSql += "    COALESCE(BTU_CDTERM,BTQ_CDTERM) AS procCode, "
+        cSql += "    BYL_CODIGO, "
+        cSql += "    B05_CODIGO, "
+        cSql += "    BYL.R_E_C_N_O_ AS BYLRECNO, "
+        cSql += "    BYL_FACE "
+        cSql += " FROM " + RetSqlName("BR8") + " BR8 "
+        cSql += "    LEFT JOIN " + RetSqlName("BTU") + " BTU "
+        cSql += "       ON BTU.BTU_FILIAL = '"+xFilial("BTU")+"' "
+        cSql += "          AND BTU.BTU_VLRSIS = " + iif(self:lDBisSQL,"BR8_FILIAL + BR8_CODPAD + BR8_CODPSA ","BR8_FILIAL || BR8_CODPAD || BR8_CODPSA ")
+        cSql += "          AND BTU.D_E_L_E_T_ = ' ' "
+        cSql += "    LEFT JOIN " + RetSqlName("BTQ") + " BTQ "
+        cSql += "       ON BTQ.BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+        cSql += "          AND BTQ.BTQ_CODTAB = BR8_CODPAD "
+        cSql += "          AND BTQ.BTQ_CDTERM = BR8_CODPSA "
+        cSql += "          AND BTQ.D_E_L_E_T_ = ' ' "
+        cSql += "    INNER JOIN " + RetSqlName("B05") + " B05 "
+        cSql += "       ON B05.B05_FILIAL = '"+xFilial("B05")+"' "
+        cSql += "          AND B05.B05_CODPAD = BR8.BR8_CODPAD "
+        cSql += "          AND B05.B05_CODPSA = BR8.BR8_CODPSA "
+        cSql += "          AND B05.D_E_L_E_T_ = ' ' "
+        cSql += "    INNER JOIN " + RetSqlName("BYL") + " BYL "
+        cSql += "       ON BYL.BYL_FILIAL = '"+xFilial("BYL")+"' "
+        cSql += "          AND BYL.BYL_CODPAD = BR8.BR8_CODPAD "
+        cSql += "          AND BYL.BYL_CODPSA = BR8.BR8_CODPSA "
+        cSql += "          AND BYL.BYL_CODIGO = B05.B05_CODIGO "
+        cSql += "          AND BYL.BYL_TIPO = B05.B05_TIPO "
+        cSql += "          AND BYL.D_E_L_E_T_ = ' ' "
+        cSql += "  WHERE "
+        cSql += "     ( BTU_CODTAB IS NULL OR  BTU_CODTAB = '"+cCodTab+"' AND BTU_CDTERM = '"+cCodPro+"' ) "
+        cSql += "     AND ( BTQ_CODTAB IS NULL OR  BTQ_CODTAB = '"+cCodTab+"' AND BTQ_CDTERM = '"+cCodPro+"' ) "
+        cSql += "     AND ( ( BTU_CODTAB IS NOT NULL AND BTU_CDTERM IS NOT NULL ) OR ( BTQ_CODTAB IS NOT NULL AND BTQ_CDTERM IS NOT NULL ) ) "
+        cSql += "     AND BR8_FILIAL = '"+xFilial("BR8")+"' "
+        cSql += "     AND BR8_BENUTL = '1' "
+        cSql += "     AND BR8_ODONTO = '1' "
+        cSql += "     AND B05_CODIGO = '"+self:oRest:teethRegionId+"' "
+        cSql += "     AND BR8.D_E_L_E_T_ = ' ' "
+        cSql += "   ORDER BY "
+        cSql += "     procCode, "
+        cSql += "     BYL_CODIGO, "
+        cSql += "     B05_CODIGO, "
+        cSql += "     BYLRECNO, "
+        cSql += "     BYL_FACE "
+        if !self:lPostgres
+            cSql += self:getQryPage()
+        endif
+
+    //BTU
+    elseIf cQueryType == QRY_DEPARA
+    
+        cSql += " SELECT "
+        cSql += "     BTU_CDTERM AS procCode, "
+        cSql += "     BYL_CODIGO, "
+        cSql += "     B05_CODIGO, "
+        cSql += "     BYL.R_E_C_N_O_ AS BYLRECNO, "
+        cSql += "     BYL_FACE "
+        cSql += " FROM " + RetSqlName("BTU") + " BTU "
+        cSql += " INNER JOIN " + RetSqlName("BR8") + " BR8 "
+        if Upper(TCGetDB()) $ "POSTGRES"
+            cSql += " 	  ON BR8.BR8_FILIAL = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, 1, "+cValToChar(nTamFilial)+" )) "
+            cSql += " 	  AND BR8.BR8_CODPAD = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 1)+", 2 )) "
+            cSql += " 	  AND BR8.BR8_CODPSA = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 3)+", 16 )) "
+        else
+            cSql += " 	  ON BR8.BR8_FILIAL = "+cSubsOperator+"( BTU.BTU_VLRSIS, 1, "+cValToChar(nTamFilial)+" ) "
+            cSql += " 	  AND BR8.BR8_CODPAD = "+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 1)+", 2 ) "
+            cSql += " 	  AND BR8.BR8_CODPSA = "+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 3)+", 16 ) "
+        endIf
+        cSql += "     AND BR8.BR8_BENUTL = '1' "
+        cSql += "     AND BR8.BR8_ODONTO = '1' "
+        cSql += "     AND BR8.D_E_L_E_T_ = ' ' "
+        cSql += " INNER JOIN " + RetSqlName("B05") + " B05 "
+        cSql += "     ON B05.B05_FILIAL = '"+xFilial("B05")+"' "
+        cSql += "     AND B05.B05_CODPAD = BR8.BR8_CODPAD "
+        cSql += "     AND B05.B05_CODPSA = BR8.BR8_CODPSA "
+        cSql += "     AND B05.B05_CODIGO = '"+self:oRest:teethRegionId+"' "
+        cSql += "     AND B05.D_E_L_E_T_ = ' ' "
+        cSql += " INNER JOIN " + RetSqlName("BYL") + " BYL "
+        cSql += "     ON BYL.BYL_FILIAL = '"+xFilial("BYL")+"' "
+        cSql += "     AND BYL.BYL_CODPAD = BR8.BR8_CODPAD "
+        cSql += "     AND BYL.BYL_CODPSA = BR8.BR8_CODPSA "
+        cSql += "     AND BYL.BYL_CODIGO = B05.B05_CODIGO "
+        cSql += "     AND BYL.BYL_TIPO = B05.B05_TIPO "
+        cSql += "     AND BYL.D_E_L_E_T_ = ' ' "
+        cSql += " WHERE "
+        cSql += "     BTU_FILIAL = '"+xFilial("BTU")+"' "
+        cSql += "     AND BTU_CODTAB = '"+cCodTab+"' "
+        cSql += "     AND BTU_CDTERM = '"+cCodPro+"' "
+        cSql += "     AND BTU.D_E_L_E_T_ = ' ' "
+    
+    //BTQ
+    elseIf cQueryType == QRY_BUSCADIRETA
+
+        cSql += " SELECT "
+        cSql += "     BTQ_CDTERM AS procCode, "
+        cSql += "     BYL_CODIGO, "
+        cSql += "     B05_CODIGO, "
+        cSql += "     BYL.R_E_C_N_O_ AS BYLRECNO, "
+        cSql += "     BYL_FACE "
+        cSql += " FROM " + RetSqlName("BTQ") + " BTQ "
+        cSql += " INNER JOIN " + RetSqlName("BR8") + " BR8 "
+        cSql += "      ON BR8.BR8_FILIAL = '"+xFilial("BR8")+"' "
+        cSql += "     AND BR8.BR8_CODPAD = BTQ_CODTAB "
+        cSql += "     AND BR8.BR8_CODPSA = BTQ_CDTERM "
+        cSql += "     AND BR8.BR8_BENUTL = '1' "
+        cSql += "     AND BR8.BR8_ODONTO = '1' "
+        cSql += "     AND BR8.D_E_L_E_T_ = ' ' "
+        cSql += " INNER JOIN " + RetSqlName("B05") + " B05 "
+        cSql += "      ON B05.B05_FILIAL = '"+xFilial("B05")+"' "
+        cSql += "     AND B05.B05_CODPAD = BR8.BR8_CODPAD "
+        cSql += "     AND B05.B05_CODPSA = BR8.BR8_CODPSA "
+        cSql += "     AND B05.B05_CODIGO = '"+self:oRest:teethRegionId+"' "
+        cSql += "     AND B05.D_E_L_E_T_ = ' ' "
+        cSql += " INNER JOIN " + RetSqlName("BYL") + " BYL " 
+        cSql += "      ON BYL.BYL_FILIAL = '"+xFilial("BYL")+"' "
+        cSql += "     AND BYL.BYL_CODPAD = BR8.BR8_CODPAD "
+        cSql += "     AND BYL.BYL_CODPSA = BR8.BR8_CODPSA "
+        cSql += "     AND BYL.BYL_CODIGO = B05.B05_CODIGO "
+        cSql += "     AND BYL.BYL_TIPO = B05.B05_TIPO "
+        cSql += "     AND BYL.D_E_L_E_T_ = ' ' "
+        cSql += " WHERE "
+        cSql += "     BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+        cSql += "     AND BTQ_CODTAB = '"+cCodTab+"' "
+        cSql += "     AND BTQ_CDTERM = '"+cCodPro+"' "
+        cSql += "     AND BTQ.D_E_L_E_T_ = ' ' "
+
+    endIf
+
+Return cSql
+
+Method getHasSurface() class PLSOdontoSvc
+    
+    Local cSql := ''
+    Local cRet := "0"
+
+    cSql += " SELECT COUNT(R_E_C_N_O_) COUNT FROM " + RetSqlName("BYL")
+    cSql += " WHERE BYL_FILIAL = '"+xFilial("BYL")+"' "
+    cSql += " AND BYL_CODPAD = '" + Alltrim(TRB->BR8_CODPAD) + "' "
+    cSql += " AND BYL_CODPSA = '" + Alltrim(TRB->BR8_CODPSA) + "' "
+    cSql += " AND D_E_L_E_T_ = ' ' "
+
+    dbUseArea(.T.,"TOPCONN",TcGenQry(,,cSql),"TRBBYL",.T.,.F.)        
+    if TRBBYL->COUNT > 0 
+        cRet := "1"
+    endIf
+    TRBBYL->(DbCloseArea())
+
+Return cRet
+
+Method getPermanentDecidous(oItem,cTooth) class PLSOdontoSvc
+
+    if Alltrim(cTooth) $ "11,12,13,14,15,16,17,18,21,22,23,24,25,26,27,28,31,32,33,34,35,36,37,38,41,42,43,44,45,46,47,48"
+        oItem['permanent'] := .T.
+        oItem['deciduous'] := .F.
+    elseif Alltrim(cTooth) $ "51,52,53,54,55,61,62,63,64,65,71,72,73,74,75,81,82,83,84,85"
+        oItem['permanent'] := .F.
+        oItem['deciduous'] := .T.
+    else
+        oItem['permanent'] := .F.
+        oItem['deciduous'] := .F.
+    endIf
+
+Return

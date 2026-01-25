@@ -1,0 +1,518 @@
+#INCLUDE "TOTVS.CH"
+
+#define ELEGIVEL "S"
+#define NAO_ELEGIVEL "N"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLSBenefElegDao
+
+@author    PLSTEAM
+@version   V12
+@since     28/03/2022
+/*/
+//-------------------------------------------------------------------
+class PLSBenefElegDao
+
+    public data cAlias
+    public data cTable
+    public data lPetEligibility
+
+    public data oElegibility as object
+
+    public data aBeneficiaries as array
+    public data aWarnings as array
+    public data aRejectionCauses as array
+
+    public method new() constructor
+    public method searchByCpfOrCardNumber(cCardNumberOrCpf, cAuthType, cEligibilityType)
+
+    protected method elegibility(aDad, cError)
+    protected method healthInsurance(aDad)
+    protected method owner(aDad)
+    protected method beneficiary(aDad)
+    protected method rejectionCauses(aDad, cError)
+    protected method fingers()
+    protected method waitingPeriod(cMatric)
+    protected method waitingPeriodComplement(cMatric)
+    protected method setEligibilityType(cEligibilityType)
+    protected method searchPhotoByCpfOrCardNumber()
+
+endClass
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} new
+    construtor
+
+    @type  class
+    @author PLSTEAM
+    @since 29/03/2022
+/*/
+//------------------------------------------------------------------------------------------
+method new() class PLSBenefElegDao
+
+    ::cAlias := 'BA1'
+    ::cTable := retSqlName(::cAlias)
+
+    ::oElegibility := jsonObject():new()
+
+    ::aBeneficiaries := {}
+    ::aRejectionCauses := {}
+    ::aWarnings := {}
+
+    self:lPetEligibility := .F.
+
+return self
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} searchByCpfOrCardNumber
+    return data user from database
+
+    @type  class
+    @author PLSTEAM
+    @since 29/03/2022
+/*/
+//------------------------------------------------------------------------------------------
+method searchByCpfOrCardNumber(cCardNumberOrCpf, cAuthType) class PLSBenefElegDao
+
+    local nI            := 0
+    local aMatric       := {}
+    local cQuery        := ""
+    local cError        := ''
+    local nBenefPlans   := 0
+
+    //busca por cpf -- mas podem ter casos especificos que o matric tem 11 digitos
+    if len(cCardNumberOrCpf) == 11
+
+        cQuery := " SELECT BA1_CODINT, BA1_CODEMP, BA1_MATRIC, BA1_TIPREG, BA1_DIGITO "
+        cQuery += " FROM " + ::cTable
+        cQuery += " WHERE BA1_FILIAL = '" + xFilial("BA1") + "' "
+        cQuery += " AND ( " + iif(self:lPetEligibility, " BA1_CPFTIT ", " BA1_CPFUSR ") + " = '" + cCardNumberOrCpf + "' OR BA1_MATANT = '" + cCardNumberOrCpf + "')"
+        cQuery += " AND D_E_L_E_T_ = ' ' "
+        cQuery += " ORDER BY BA1_DATBLO ASC "
+
+        dbUseArea(.T.,"TOPCONN",TCGENQRY(,,cQuery),"TrbBEDAO",.F.,.T.)
+
+        if !TrbBEDAO->(eof())
+
+            while !TrbBEDAO->(eof())
+
+                aadd(aMatric, TrbBEDAO->(BA1_CODINT + BA1_CODEMP + BA1_MATRIC + BA1_TIPREG + BA1_DIGITO))
+
+                TrbBEDAO->(dbSkip())
+            endDo
+
+        else
+            cError := 'CPF nao encontrado [' + cCardNumberOrCpf + ']!'
+        endIf
+
+        TrbBEDAO->(dbclosearea())
+
+    else
+        aadd(aMatric, cCardNumberOrCpf)
+    endIf
+
+    if empty(cError)
+
+        //fazer busca pela funcao padrao do beneficiario
+        for nI := 1 to len(aMatric)
+
+            if len(cCardNumberOrCpf) == 11
+                coNout('matricula [' + aMatric[nI] + '] encontrada para o cpf [' + cCardNumberOrCpf + ']')
+            endIf
+
+            ::elegibility( PLVLDUSRP( aMatric[nI],,,"1",,,,,,,, .t., .T., cAuthType) )
+
+        next
+
+    else
+        ::elegibility(nil, cError)
+    endIf
+
+    if existBlock("PBENEAPI")
+		self:aBeneficiaries 	:= execBlock("PBENEAPI",.f.,.f.,{self:aBeneficiaries})
+	endIf
+
+    for nI := 1 to len(self:aBeneficiaries)
+        nBenefPlans++
+    next
+
+    ::oElegibility['beneficiaries']     := self:aBeneficiaries
+    ::oElegibility['numberofplans']     := nBenefPlans
+    ::oElegibility['serviceResponse']   := .t.
+    ::oElegibility['authorizationType'] := nil
+    ::oElegibility['journey']           := nil
+    
+    //Só busca foto p/ elegibilidade pet que tenha encontrado registro
+    if self:lPetEligibility .AND. empty(cError)    
+        ::oElegibility['base64BenefImage'] := self:searchPhotoByCpfOrCardNumber()
+    endif 
+
+return(::oElegibility)
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} elegibility
+
+    @type  class
+    @author PLSTEAM
+    @since 29/03/2023
+/*/
+//------------------------------------------------------------------------------------------
+method elegibility(aDad, cError) class PLSBenefElegDao
+
+    local nPos          := 0
+    local aRejection    := {}
+    local cEleResponse  := ELEGIVEL
+
+    cError := iIf( empty(cError), aDad[2], cError)
+
+    if empty(cError) .and. ( len(aDad) == 4 .and. ( len(aDad[3]) == 0 .or. len(aDad[3,1]) <= 23 ) )
+        cError := 'Ambiente protheus desatualizado ou retorno invalido!'
+    endIf
+
+    aadd(::aBeneficiaries, jsonObject():new())
+
+    nPos := len(::aBeneficiaries)
+
+    if ! empty(cError)
+        aRejection := ::rejectionCauses({}, cError)
+    else
+        aRejection := ::rejectionCauses(aDad[4])
+        ::aBeneficiaries[nPos]['beneficiary'] := ::beneficiary(aDad[3])
+        ::aBeneficiaries[nPos]['waitingPeriod'] := ::waitingPeriod(aDad[3,1,1])
+        ::aBeneficiaries[nPos]['waitingPeriodComplement'] := ::waitingPeriodComplement(aDad[3,1,1])
+    endIf
+
+    if len(aRejection) > 0
+        cEleResponse := NAO_ELEGIVEL
+        ::aBeneficiaries[nPos]['rejectionCauses'] := aRejection
+    endIf
+
+    ::aBeneficiaries[nPos]['warnings']            := {}
+    ::aBeneficiaries[nPos]['elegibilityResponse'] := cEleResponse
+
+return .t.
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} rejectionCauses
+
+    @type  Class
+    @author PLSTEAM
+    @since 29/03/2023
+/*/
+//------------------------------------------------------------------------------------------
+method rejectionCauses(aDad, cError) class PLSBenefElegDao
+    local nI        := 0
+    local nY        := 0
+    local lAlerta   := .f.
+    local cDetail   := ""
+    local cCodGlo   := ""
+    local cDesGlo   := ""
+    local cCodTis   := ""
+    local cDesTis   := ""
+    local aRetCri   := {}
+    local aRejectionCauses := {}
+
+    default cError  := ''
+    default aDad    := {}
+
+    if ! empty(aDad) .or. ! empty(cError)
+
+        if  ! empty(aDad)
+
+            for nI := 1 to len(aDad)
+                
+                cCodGlo := aDad[nI, 1]
+                
+                if ! empty(cCodGlo)
+
+                    aadd(aRejectionCauses, jsonObject():new())
+                    nPos := len(aRejectionCauses)
+
+                    lAlerta := Iif(posicione("BCT", 1, xFilial("BCT") + PlsIntPad() + cCodGlo ,"BCT_ALERTA") == '1', .t., .f.) 
+                    cDesGlo := allTrim(aDad[nI,2])
+
+                    aRetCri := PLSRETCRI( allTrim(cCodGlo) ,, lAlerta )
+                    cCodTis := allTrim( aRetCri[1, 1] )
+                    cDesTis := allTrim( aRetCri[1, 2] )
+
+                    cDetail := ''
+                    for nY := (nI+1) to len(aDad)
+                        
+                        if ! empty(aDad[nY, 1])
+                            exit
+                        endIf   
+
+                        cDetail += allTrim( aDad[nY, 2] ) + '&nbsp;' + allTrim( aDad[nY, 3] ) + '<br>;'  
+
+                    next 
+                    nI := --nY
+
+                    aRejectionCauses[nPos]['code']            := cCodGlo
+                    aRejectionCauses[nPos]['idTiss']          := cCodTis
+                    aRejectionCauses[nPos]['description']     := cDesTis
+                    aRejectionCauses[nPos]['alert']           := lAlerta
+                    aRejectionCauses[nPos]['detail']          := cDetail
+                    aRejectionCauses[nPos]['interchangeCode'] := nil
+
+                endIf    
+
+            next                
+
+        else
+            aadd(aRejectionCauses, jsonObject():new())
+            aRejectionCauses[1]['description'] := cError
+        endIf
+
+    endIf
+    
+return(aRejectionCauses)
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} healthInsurance
+
+    @type  Class
+    @author PLSTEAM
+    @since 29/03/2023
+/*/
+//------------------------------------------------------------------------------------------
+method healthInsurance(aDad,lOwnerAtribute) class PLSBenefElegDao
+
+    local oJson := jsonObject():New()
+    Default lOwnerAtribute := .F.
+
+    oJson['code']             := aDad[1]
+    oJson['description']      := aDad[2]
+    oJson['roomType']         := aDad[3]
+    
+    //Tag do titular nao precisa de descricao (tem que considerar a do dependente)
+    if !lOwnerAtribute .And. len(aDad) > 3
+        oJson['roomDescription']  := aDad[4]
+    endif
+
+return(oJson)
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} owner
+
+    @type  Class
+    @author PLSTEAM
+    @since 29/03/2023
+/*/
+//------------------------------------------------------------------------------------------
+method owner(aDad) class PLSBenefElegDao
+
+    local oJson  := jsonObject():New()
+
+    oJson['gender']            := aDad[1,1]
+    oJson['phoneNumber']       := aDad[1,2]
+    oJson['subscriberId']      := aDad[1,3]
+    oJson['companyName']       := aDad[1,4]
+    oJson['age']               := aDad[1,5]
+    oJson['cardExpiration']    := FWDateTo8601(aDad[1,06])
+    oJson['holderRelationship']:= aDad[1,7]
+    oJson['newbornAttendance'] := iIf(aDad[1,8]=='0', 'N','S')
+    oJson['holderCPF']         := aDad[1,9]
+    oJson['isInterchange']     := aDad[1,10]
+    oJson['whenToCharge']      := aDad[1,11]
+    oJson['birthdate']         := FWDateTo8601(aDad[1,12])
+    oJson['isOwner']           := aDad[1,13]
+    oJson['CNS']               := aDad[1,14]
+    oJson['oldSubscriberId']   := aDad[1,15]
+    oJson['name']              := aDad[1,16]
+    oJson['socialName']        := aDad[1,20]
+    oJson['weight']            := aDad[1,17]
+    oJson['height']            := aDad[1,18]
+    oJson['healthInsurance']   := ::healthInsurance(aDad[1,19],.T.)
+
+return(oJson)
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} beneficiary
+
+    @type  Class
+    @author PLSTEAM
+    @since 29/03/2023
+/*/
+//------------------------------------------------------------------------------------------
+method beneficiary(aDad) class PLSBenefElegDao
+
+    local oJson := jsonObject():New()
+    local lBio  := getNewPar("MV_BIOCONF",.F.)
+
+    if len(aDad) > 0
+    
+        oJson['gender']              := aDad[1,26]
+        oJson['phoneNumber']         := aDad[1,13]
+        oJson['subscriberId']        := aDad[1,01]
+        oJson['companyName']         := aDad[1,15]
+        oJson['age']                 := aDad[1,25]
+        oJson['cardExpiration']      := Iif(!empty(aDad[1,07]),FWDateTo8601(aDad[1,07]),'')
+        oJson['holderRelationship']  := aDad[1,27]
+        oJson['newbornAttendance']   := iIf(aDad[1,28]=='0', 'N','S')
+        oJson['holderCPF']           := aDad[1,29]
+        oJson['isInterchange']       := aDad[1,04]
+        oJson['whenToCharge']        := aDad[1,30]
+        oJson['birthdate']           := Iif(!empty(aDad[1,31]),FWDateTo8601(aDad[1,31]),'')
+        oJson['isOwner']             := aDad[1,32] == 'T'
+        oJson['CNS']                 := aDad[1,08]
+        oJson['oldSubscriberId']     := aDad[1,02]
+        oJson['name']                := aDad[1,03]
+        oJson['socialName']          := aDad[1,38]
+        oJson['weight']              := aDad[1,35]
+        oJson['height']              := aDad[1,36]
+        oJson['healthInsurance']     := ::healthInsurance({ aDad[1,33], aDad[1,06], aDad[1,19], aDad[1,21] })
+        oJson['blockedDate']         := Iif(!empty(aDad[1,22]),FWDateTo8601(aDad[1,22]),'')
+        oJson['originalHealthInsurerCode'] := aDad[1,05]    
+        oJson['contractType']        := iif(len(aDad[1]) >= 39 ,aDad[1,39],'') // alguns casos nao envia a posição 39
+
+        if aDad[1,32] != 'T' .and. !empty(aDad[1,37])
+            oJson['owner'] := ::owner(aDad[1,37])
+        endIf
+
+        oJson['biometry']   := lBio
+        if lBio
+            oJson['fingers']    := self:fingers()
+        endif
+        
+    endIf     
+
+return(oJson)
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} waitingPeriod
+
+    @type  Class
+    @author PLSTEAM
+    @since 29/03/2023
+/*/
+//------------------------------------------------------------------------------------------
+method waitingPeriod(cMatric) class PLSBenefElegDao
+
+    local oJson             := JsonObject():New()
+    local aCar              := {}
+    default cMatric         := ""
+
+    if !Empty(cMatric)
+        //Carências do beneficiário (ambulatorial, hospitalar, parto, odontológica)
+        aCar := PLSA271(cMatric) 
+        if len(aCar) >= 1 .And. len(aCar[1]) >= 24
+            oJson['timeOutpatientProcedures']   := iif(Empty(aCar[1,24]),"Carência Cumprida",aCar[1,24])
+            oJson['waitingHospitalProcedures']  := iif(Empty(aCar[1,25]),"Carência Cumprida",aCar[1,25])
+            oJson['termDeliveryProcedures']     := iif(Empty(aCar[1,26]),"Carência Cumprida",aCar[1,26])
+            oJson['deficiencyDentalProcedures'] := iif(Empty(aCar[1,27]),"Carência Cumprida",aCar[1,27])
+        endIf
+    endIf
+
+return(oJson)
+
+method waitingPeriodComplement(cMatric) class PLSBenefElegDao
+
+    local oJson             := JsonObject():New()
+    local aRetCarenc        := {}
+    local aCarenciasPLSA271 := {}
+    local cFilialBDL        := xFilial('BDL')
+    local cCodInt           := AllTrim(BA1->BA1_CODINT)
+    local nI                := 0
+    default cMatric         := ""
+
+    oJson := {}
+
+    if !Empty(cMatric)
+        //Demais carências 
+        BA1->(DbSetOrder(2))
+        if BA1->(MsSeek(xFilial('BA1')+cMatric))
+
+            AAdd( aCarenciasPLSA271, cFilialBDL + cCodInt + AllTrim( GetNewPar( "MV_PLCLAMB" , "XXX" ) ) )
+            AAdd( aCarenciasPLSA271, cFilialBDL + cCodInt + AllTrim( GetNewPar( "MV_PLCLHOS" , "XXX" ) ) )
+            AAdd( aCarenciasPLSA271, cFilialBDL + cCodInt + AllTrim( GetNewPar( "MV_PLCLPAT" , "XXX" ) ) )
+            AAdd( aCarenciasPLSA271, cFilialBDL + cCodInt + AllTrim( GetNewPar( "MV_PLCLODO" , "XXX" ) ) )
+
+            aRetCarenc := PLSCLACAR(BA1->BA1_CODINT,cMatric,BA1->BA1_DATCAR,,.T.,aCarenciasPLSA271)
+
+            if Len(aRetCarenc) > 0 .And. aRetCarenc[1] 
+                for nI := 1 to len(aRetCarenc)
+                    AAdd( oJson, JsonObject():New() )
+                    oJson[nI]['code']        := aRetCarenc[2,nI,1]
+                    oJson[nI]['description'] := Alltrim(aRetCarenc[2,nI,2])
+                    oJson[nI]['endDate']     := FWDateTo8601(aRetCarenc[2,nI,3])
+                next
+            endif 
+        endif
+    endIf
+
+return(oJson)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fingers
+Dedos da biometria
+
+@author    Lucas Nonato
+@version   V12
+@since     11/09/2019
+/*/
+method fingers(lBio) class PLSBenefElegDao
+
+    local oJson     := jsonObject():New()
+    local cSql      := ''
+        
+    oJson['finger01']   := ''
+    oJson['finger02']   := ''
+    oJson['finger03']   := ''
+    oJson['finger04']   := ''
+    oJson['finger05']   := ''
+    oJson['finger06']   := ''
+    oJson['finger07']   := ''
+    oJson['finger08']   := ''
+    oJson['finger09']   := ''
+    oJson['finger10']   := ''
+
+    cSql += " SELECT BIO_DIG,BIO_DIG1,BIO_DIG3,BIO_DIG5,BIO_DIG7,BIO_DIG9 "
+    cSql += " FROM " + RetSqlName("BIO")
+	cSql += " WHERE BIO_FILIAL = '" + xFilial("BIO") + "' "
+	cSql += " AND BIO_ALIAS = 'BTS' "
+	cSql += " AND BIO_ID = '" + alltrim(BA1->BA1_MATVID) + "' "
+	cSql += " AND D_E_L_E_T_ = ' ' "
+	dbUseArea(.T.,"TOPCONN",TCGENQRY(,,cSql),'TMPBIO',.F.,.T.)    
+
+    while !TMPBIO->(eof())
+        oJson['finger'+strzero(val(cvaltochar(TMPBIO->BIO_DIG)),2)] := AllTrim(TMPBIO->BIO_DIG1)+AllTrim(TMPBIO->BIO_DIG3)+AllTrim(TMPBIO->BIO_DIG5)+AllTrim(TMPBIO->BIO_DIG7)+AllTrim(TMPBIO->BIO_DIG9)
+        TMPBIO->(dbskip())
+    enddo
+
+    TMPBIO->(dbclosearea())
+    
+return(oJson)
+
+method setEligibilityType(cEligibilityType) class PLSBenefElegDao
+    self:lPetEligibility := iif(cEligibilityType == "pet", .T., .F.)
+return 
+
+method searchPhotoByCpfOrCardNumber() class PLSBenefElegDao
+
+	Local cBmpPict := ""
+	Local cPathPict:= GetSrvProfString("Startpath","")
+	Local cBitMap  := ""
+	Local cLeitura := ""
+	Local cExtensao:= ".BMP"
+	Local nHandle  := 0
+	Local aFiles := {} // O array receberá os nomes dos arquivos e do diretório
+	Local aSizes := {} // O array receberá os tamanhos dos arquivos e do diretorio
+
+	BTS->( dbSetOrder(1) )
+	if BTS->( msSeek( xFilial("BTS") + BA1->BA1_MATVID ) )
+		If !Empty( cBmpPict := Upper( AllTrim( BTS->BTS_BITMAP ) ) )
+			If RepExtract(cBmpPict,cPathPict+cBmpPict)
+				nHandle := FOpen(cPathPict+cBmpPict+cExtensao)
+				If nHandle <> 0
+					cLeitura := ""
+					ADir(cPathPict+cBmpPict+cExtensao, aFiles, aSizes)
+					Fread(nHandle,@cLeitura,aSizes[1])
+					cBitMap := Encode64(cLeitura)
+				EndIf
+				FClose(nHandle)
+				Ferase(cPathPict+cBmpPict+cExtensao)
+			EndIf
+		endIf
+	endif
+
+return(cBitMap)

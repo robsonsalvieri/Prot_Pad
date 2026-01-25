@@ -1,0 +1,13494 @@
+unit IManage_TLB;
+
+// ************************************************************************ //
+// WARNING                                                                    
+// -------                                                                    
+// The types declared in this file were generated from data read from a       
+// Type Library. If this type library is explicitly or indirectly (via        
+// another type library referring to this type library) re-imported, or the   
+// 'Refresh' command of the Type Library Editor activated while editing the   
+// Type Library, the contents of this file will be regenerated and all        
+// manual modifications will be lost.                                         
+// ************************************************************************ //
+
+// PASTLWTR : $Revision: 7047 $
+// File generated on 13/08/2004 15:57:29 from Type Library described below.
+
+// *************************************************************************//
+// NOTE:                                                                      
+// Items guarded by $IFDEF_LIVE_SERVER_AT_DESIGN_TIME are used by properties  
+// which return objects that may need to be explicitly created via a function 
+// call prior to any access via the property. These items have been disabled  
+// in order to prevent accidental use from within the object inspector. You   
+// may enable them by defining LIVE_SERVER_AT_DESIGN_TIME or by selectively   
+// removing them from the $IFDEF blocks. However, such items must still be    
+// programmatically created via a method of the appropriate CoClass before    
+// they can be used.                                                          
+// ************************************************************************ //
+// Type Lib: C:\Program Files\Interwoven\WorkSite\IManage.dll (1)
+// IID\LCID: {CF424CA8-866F-45BF-BE09-A239048A3DBD}\0
+// Helpfile: C:\Program Files\Interwoven\WorkSite\imancom.hlp
+// DepndLst: 
+//   (1) v2.0 stdole, (C:\WINNT\System32\Stdole2.tlb)
+// Parent TypeLibrary:
+//   (0) v1.0 IMANEXTLib, (P:\BCSiManage\Units\IManExt.dll)
+// Errors:
+//   Hint: Member 'Type' of 'IManAttributeDefinition' changed to 'Type_'
+//   Hint: Member 'Class' of 'IManWorkspace' changed to 'Class_'
+//   Hint: Member 'Type' of 'IManWorkspace' changed to 'Type_'
+//   Hint: Parameter 'file' of IManWorkspace.UpdateAll changed to 'file_'
+//   Hint: Parameter 'file' of IManWorkspace.UpdateAllWithResults changed to 'file_'
+//   Hint: Member 'Inherited' of 'IManSecurity' changed to 'Inherited_'
+//   Hint: Member 'Type' of 'IManForm' changed to 'Type_'
+//   Hint: Member 'Type' of 'IManControl' changed to 'Type_'
+//   Hint: Member 'Class' of 'IManProfiledContent' changed to 'Class_'
+//   Hint: Member 'Type' of 'IManProfiledContent' changed to 'Type_'
+//   Hint: Parameter 'Type' of IManProfiledContent.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of IManProfiledContent.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of IManProfiledContent.Type changed to 'Type_'
+//   Hint: Member 'Type' of 'IManCustomAttribute' changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTPage' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTPage' changed to 'Type_'
+//   Hint: Member 'Type' of 'INRTDocument' changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTDocument' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTCustomAttribute' changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTTask' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTTask' changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTTask.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTTask.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTTask.Type changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTLink' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTLink' changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTLink.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTLink.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTLink.Type changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTMessage' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTMessage' changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTMessage.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTMessage.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTMessage.Type changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTEvent' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTEvent' changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTEvent.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTEvent.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTEvent.Type changed to 'Type_'
+//   Hint: Member 'Class' of 'INRTIssue' changed to 'Class_'
+//   Hint: Member 'Type' of 'INRTIssue' changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTIssue.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTIssue.Type changed to 'Type_'
+//   Hint: Parameter 'Type' of INRTIssue.Type changed to 'Type_'
+//   Hint: Member 'Type' of 'INRTForm' changed to 'Type_'
+//   Hint: Member 'Type' of 'INRTControl' changed to 'Type_'
+//   Hint: Member 'Type' of 'INRTAttributeDefinition' changed to 'Type_'
+//   Hint: Member 'End' of 'INRTDateRange' changed to 'End_'
+// ************************************************************************ //
+{$TYPEDADDRESS OFF} // Unit must be compiled without type-checked pointers. 
+interface
+
+uses Windows, ActiveX, Classes, Graphics, OleServer, OleCtrls, StdVCL;
+
+// *********************************************************************//
+// GUIDS declared in the TypeLibrary. Following prefixes are used:        
+//   Type Libraries     : LIBID_xxxx                                      
+//   CoClasses          : CLASS_xxxx                                      
+//   DISPInterfaces     : DIID_xxxx                                       
+//   Non-DISP interfaces: IID_xxxx                                        
+// *********************************************************************//
+const
+  // TypeLibrary Major and minor versions
+  IManageMajorVersion = 8;
+  IManageMinorVersion = 0;
+
+  LIBID_IManage: TGUID = '{CF424CA8-866F-45BF-BE09-A239048A3DBD}';
+
+  IID_IManObject: TGUID = '{3B34D56B-4C64-4042-AA07-F7D5A88E38E4}';
+  IID_IManObjectType: TGUID = '{34A9EDB0-ED43-47A9-B511-CB2A2833513F}';
+  IID_IManObjectTypes: TGUID = '{7A053202-739D-451E-9A3D-6F6BCFD41B50}';
+  IID_IManAdditionalProperties: TGUID = '{087EE370-C5F4-4EE1-ADA3-999CA3486C05}';
+  IID_IManAdditionalProperty: TGUID = '{57182871-CE4A-4CA6-AA5D-593E9B6C8EA1}';
+  IID_IManQuery: TGUID = '{50CF36CA-DBCE-4486-81DF-F4F3D80ED7B5}';
+  IID_IManAndQuery: TGUID = '{DCC95D82-3BFB-47A7-AE8A-E5BB86B1319A}';
+  IID_IManQueries: TGUID = '{A373521D-5EDF-47EA-8336-6E8B11F095AC}';
+  IID_IManFieldQuery: TGUID = '{8E2BF8BF-BA64-40C8-B671-F7E4491E045E}';
+  IID_IManStrings: TGUID = '{A19CE0AA-922E-4025-B38C-AB3D5E4F2D02}';
+  IID_IManOrQuery: TGUID = '{619E0181-043A-46F6-B30F-547CD719057C}';
+  IID_IManAttachment: TGUID = '{A707A245-5FFC-4F48-B3C1-13E030AE8B6C}';
+  IID_IManAttachments: TGUID = '{66A2131E-359B-4B39-810D-BDADFCC5A294}';
+  IID_IManAttributeDefinition: TGUID = '{9597F75C-ACA5-4A5D-9407-71D6C1AD2870}';
+  IID_IManAttributeDefinitions: TGUID = '{38AFB5A8-B589-446D-A0AE-DFADF18CB229}';
+  IID_IManAttributeSelections: TGUID = '{7FE71414-0866-4933-8F66-C76A7439DC84}';
+  IID_IManFolder: TGUID = '{18C74385-6359-4E47-9F12-A79454122EF3}';
+  IID_IManContents: TGUID = '{3D98E148-806A-432C-ABA1-2837B0B44715}';
+  IID_IManContent: TGUID = '{8577C616-8A6D-4C18-88DA-2B4C8844FD88}';
+  IID_IManObjectSort: TGUID = '{D80D6CF3-3D8B-43FC-9597-F4C03EF43DAF}';
+  IID_IManDatabase: TGUID = '{1E458DD7-B14D-4539-B1B7-BD2AD0C5E51C}';
+  IID_IManSession: TGUID = '{50034FAA-1B7B-4860-AC19-E67F62280CC7}';
+  IID_IManWorkArea: TGUID = '{F0CCDA4D-ABF2-44C2-9910-D4E5E002E3DD}';
+  IID_IManFavoritesFolder: TGUID = '{6A70CE1C-38B1-43F3-9F1E-C98CAF1B7B0B}';
+  IID_IManSubscriptionFolder: TGUID = '{AA36E0D7-98C2-4FD6-83F5-38106DD2A876}';
+  IID_IManFolderSearchParameters: TGUID = '{CB2E010E-35B0-46B6-8909-5679A2C5918F}';
+  IID_IManSubscriptionFolderSearchParameters: TGUID = '{143B5CBC-BBAC-4F99-A05B-910BFA1D6181}';
+  IID_IManFolderSearchParameter: TGUID = '{C1B8FCE5-33AC-4EA6-8E3A-BE6B1CC32815}';
+  IID_IManFolders: TGUID = '{199A4B65-9600-49B8-BECB-29AD3CF56F37}';
+  IID_IManWorkspaces: TGUID = '{C43501E5-413B-4D75-8ABD-A88B66D801FD}';
+  IID_IManProfiledFolder: TGUID = '{9A79B61C-F44C-4597-9B1D-C61128EBEBA5}';
+  IID_IManWorkspace: TGUID = '{170D30D1-0A0E-483D-805A-D40F2AB1983F}';
+  IID_IManProfile: TGUID = '{7EEE48E2-88D2-4422-86D0-323C9F28EE71}';
+  IID_IManDocumentClass: TGUID = '{5D65E6C4-5C85-46A0-8A9C-08FAC6C1CB57}';
+  IID_IManDocumentClasses: TGUID = '{FB172A09-25BB-4025-A143-C5C15041471C}';
+  IID_IManDocumentType: TGUID = '{61737311-0E3A-4F71-A959-66EF3CBFFE3D}';
+  IID_IManLaunchMethod: TGUID = '{9D60EF36-D001-4D8B-B26C-106E881A66EE}';
+  IID_IManLaunchMethods: TGUID = '{0FDE49DC-4BC8-42F8-B5A0-8DE26F69731C}';
+  IID_IManUser: TGUID = '{D36BDFA4-4381-46A4-A8D4-7E06C966958F}';
+  IID_IManRole: TGUID = '{5F9ED2DE-EE26-4E49-8A2D-FB522F270625}';
+  IID_IManRoleEditCreates: TGUID = '{B14B0819-A10C-4268-9804-E630905584F2}';
+  IID_IManRoleEditCreate: TGUID = '{734F8C91-624C-4532-A679-737DD379BFBB}';
+  IID_IManRoleSearchProfiles: TGUID = '{1B762EE3-B6F8-482D-B3F3-9D4217165D40}';
+  IID_IManRoleSearchProfile: TGUID = '{A3353BD5-714B-4D12-9843-FB749074C856}';
+  IID_IManUsers: TGUID = '{F2A125D1-EBA7-456E-A9BB-9E148EB659C3}';
+  IID_IManSecurityTemplate: TGUID = '{8BC16C2D-A1CC-4124-B8D2-DC06BE93FF8A}';
+  IID_IManSecurity: TGUID = '{81248CD6-126A-4D63-9125-EBE2C7447A60}';
+  IID_IManGroupACLs: TGUID = '{A660ED0C-ABF3-4677-B4A5-0A37F0F2498F}';
+  IID_IManGroupACL: TGUID = '{14CE1CD3-C46C-43E7-9709-A38382265608}';
+  IID_IManGroup: TGUID = '{EC265993-786E-4BC9-950E-E605E319CD3E}';
+  IID_IManUserACLs: TGUID = '{EC017831-15E7-469A-AC09-0E631A11B97C}';
+  IID_IManUserACL: TGUID = '{B6D09A3B-CDB5-4333-B7A1-908909A9281C}';
+  IID_IManSecurityTemplates: TGUID = '{603E7FE9-8970-49F4-A386-F3797942C19B}';
+  IID_IManGroups: TGUID = '{664C1889-26AA-4DEB-B514-E8554C0451BC}';
+  IID_IManHistoryList: TGUID = '{9F9FA65A-8DC9-4DA9-9CFB-02D9DB41C0D7}';
+  IID_IManDocumentHistory: TGUID = '{B8DAA770-1402-4245-9DD6-33CB7EBFBE43}';
+  IID_IManTaskFolders: TGUID = '{9FD2D6D7-6084-4C67-99DD-76636674606F}';
+  IID_IManTaskFolder: TGUID = '{749F4F44-9014-47D1-B821-1F79F1A686D2}';
+  IID_IManMessageFolders: TGUID = '{95C4C7A9-8FE1-4208-B43E-662095FA8EDE}';
+  IID_IManMessageFolder: TGUID = '{C8962615-0088-4BD5-88D9-E55E9E9748A3}';
+  IID_IManEventFolders: TGUID = '{340DF1EC-2252-4A82-880B-700B6FD30ED5}';
+  IID_IManEventFolder: TGUID = '{7BD062FC-C3FA-4798-AD32-7B85AF035DE9}';
+  IID_IManDocumentFolders: TGUID = '{2CD383FB-AE51-4C20-AC8D-F674C6528215}';
+  IID_IManDocumentFolder: TGUID = '{E0A72865-9E79-4AA1-9574-25C6DED1DDC6}';
+  IID_IManConnectorFolders: TGUID = '{8291723C-4096-4926-988D-92D109C7078D}';
+  IID_IManBodiedFolder: TGUID = '{4C59A4BC-C83D-49B4-87AC-55A663651B68}';
+  IID_IManConnectorFolder: TGUID = '{CD92D6A2-E03C-4466-85D6-9C5C0672CC2B}';
+  IID_IManLinkListFolders: TGUID = '{577921CC-D21C-44F1-935D-E4D1CB01E8F2}';
+  IID_IManLinkListFolder: TGUID = '{F1939700-0B85-474F-95BE-960CF829EB5E}';
+  IID_IManNoteFolders: TGUID = '{EC9F6A03-1D7F-49F4-80EC-1B5F46D639C3}';
+  IID_IManNoteFolder: TGUID = '{28FBB673-3FCE-4C0B-B164-F0EC90B01C3F}';
+  IID_IManTabs: TGUID = '{C5B4C4AD-3395-4175-AFBD-4C4AB44563A0}';
+  IID_IManTab: TGUID = '{C9277A0A-C9B2-45A0-A68F-80B70BEA0C58}';
+  IID_IManProfileUpdateResult: TGUID = '{962E16AE-C411-44A6-918D-A5AC7FB9F48C}';
+  IID_IManProfileErrors: TGUID = '{2E993315-0F07-45DE-A04F-A01A518197FE}';
+  IID_IManProfileError: TGUID = '{CF92316D-5670-4934-9067-767C91214F1A}';
+  IID_IManUserPreferences: TGUID = '{8BE146A1-2F06-4777-B626-A6A867629C87}';
+  IID_IManForm: TGUID = '{8D9F0610-19B0-457A-9B8A-EFD85AAD70F6}';
+  IID_IManControls: TGUID = '{20AFD79A-9C5B-48E0-8EC8-3AA7EFB2E7F3}';
+  IID_IManControl: TGUID = '{D0812AE3-5EB4-4FEA-A92A-A93EACC25625}';
+  IID_IManProfileSearchParameters: TGUID = '{BBA41FC1-C28D-40C6-9534-9596604D869A}';
+  IID_IManProfileSearchParameter: TGUID = '{A7CEBB3D-A52F-47B8-8A35-1BC26EA70660}';
+  IID_IManFullTextSearchParameter: TGUID = '{9DA55477-78FC-4CAB-A302-298A82015195}';
+  IID_IManDatabases: TGUID = '{0CBC26A0-BA99-403F-A454-B41028821A56}';
+  IID_IManDMS: TGUID = '{F94677CE-B268-4D65-8BC9-D8FDAB4AD714}';
+  IID_IManWorkspaceSearchParameters: TGUID = '{1A8E26EB-8022-4330-BF91-E6AF17D90EBF}';
+  IID_IManEventSearchParameters: TGUID = '{5B5A6D42-A9DD-41FC-8F4F-9B2C9BB0A91B}';
+  IID_IManEventSearchParameter: TGUID = '{94C8D67E-2AE4-493E-8405-F4618F43B884}';
+  IID_IManTaskSearchParameters: TGUID = '{121564CA-A970-4599-A544-82D6167E4524}';
+  IID_IManTaskSearchParameter: TGUID = '{B41E3D34-E5AF-47EA-97C8-960059DFCDE4}';
+  IID_IManMessageSearchParameters: TGUID = '{33CB30DA-822B-471C-ABBD-C573EAF0E5C2}';
+  IID_IManMessageSearchParameter: TGUID = '{568ECE51-BEC0-49FA-8700-CF98A378F0F1}';
+  IID_IManSessions: TGUID = '{28E58F1A-5936-4178-BA30-FD85571AA739}';
+  IID_IManTabContents: TGUID = '{810DAFE6-C47D-4563-924F-D663348B80BC}';
+  IID_IManDateRange: TGUID = '{59A71135-4904-4955-A7A3-394A9CE4AC7B}';
+  IID_IManRelativeDate: TGUID = '{E63C00B4-2CF8-48FD-8463-67C11E77086D}';
+  IID_IManDate: TGUID = '{FC12FD15-B83B-4D2E-AEED-5CAAB651DEA2}';
+  IID_IManEvents: TGUID = '{D8D9AF40-3FAF-4D15-9AE1-0D5371B2C2AE}';
+  IID_IManProfiledContent: TGUID = '{D4C688E3-3485-4219-8C85-DC7EA0D63C1B}';
+  IID_IManEvent: TGUID = '{3D7E4724-10C5-47EE-89CF-F307ADCB88D9}';
+  IID_IManRules: TGUID = '{80E5FE8C-6EF0-4999-BE45-9DAEAC390E39}';
+  IID_IManRule: TGUID = '{A281A3C5-B940-4FDD-BC22-A29273FE4C8C}';
+  IID_IManRuleHandler: TGUID = '{108F705D-AF48-4B75-8E14-9AAFFEC0C62F}';
+  IID_IManRuleEventTypes: TGUID = '{E487B592-125F-4AD9-92EA-88A4BDC2E77D}';
+  IID_IManRuleEventType: TGUID = '{B44A10B1-68AD-4B81-9E42-550403263A04}';
+  IID_IManTasks: TGUID = '{4F05D0DF-1110-46C7-8E45-412A0F7516B0}';
+  IID_IManTask: TGUID = '{240C26CC-C213-4236-BC70-FA9A4A564674}';
+  IID_IManCancel: TGUID = '{087292EB-B478-460C-975A-37249DAC10D2}';
+  IID_IManMessages: TGUID = '{10E37394-F548-4837-BA89-7063D966644C}';
+  IID_IManMessage: TGUID = '{37A653DE-4F89-4FF3-AA5C-718B7E70D6F3}';
+  IID_IManForms: TGUID = '{6D64CE40-59ED-429D-BD51-967BD9EB8425}';
+  IID_IManRuleHandlers: TGUID = '{A15EFE8B-4F13-4F19-9C12-ADD0BF7F38EA}';
+  IID_IManRoles: TGUID = '{48BD8C0C-AA14-438C-8DB0-8445A1741109}';
+  IID_IManDocument: TGUID = '{68A9B2E3-0E4B-4738-97AB-378A7BD34F58}';
+  IID_IManCustomAttributes: TGUID = '{884EE2A8-5E57-4907-BD5A-F9B51BE9D1B0}';
+  IID_IManCustomAttribute: TGUID = '{F6670B95-3E1D-4E7D-A1D5-B28929D79B32}';
+  IID_IManRelatedDocuments: TGUID = '{15D6EC82-CC9C-47AC-9803-7B8428B5DB4F}';
+  IID_IManSyncResult: TGUID = '{3E821612-0CF1-4D94-BE4D-DA22224EF2F9}';
+  IID_IManCheckinResult: TGUID = '{9FE92CF6-D09D-4129-A1B2-B9C69D6D4151}';
+  IID_IManDocumentTypes: TGUID = '{AF184E91-4C77-44C5-A59C-1465CE63997C}';
+  IID_IManLocation: TGUID = '{C60B468F-2422-4EC5-B351-7A6965B2E168}';
+  IID_IManCustomProperties: TGUID = '{6E9DF06F-7D86-477B-8906-E7DB86EDAA4B}';
+  IID_IManCustomProperty: TGUID = '{908808D0-04E6-4731-B8B2-0B3EBCCB59AC}';
+  IID_IManCaptions: TGUID = '{514BF211-D7B9-4F2C-98F5-3F80FA1242D0}';
+  IID_IManContentShortcut: TGUID = '{DD251D9B-53F3-4461-86ED-9481BBF36EE9}';
+  IID_IManContentShortcuts: TGUID = '{60233534-76FD-404C-99B3-A97A91E6D5D7}';
+  IID_IManContents_Dispatch: TGUID = '{E4913CC2-4861-418E-8332-457FEB24F12C}';
+  IID_IManDocuments: TGUID = '{152F2873-35D3-483B-BF4C-80A5E8AECCEA}';
+  IID_IManDocumentSearchFolder: TGUID = '{32569E0D-EE65-4C13-84CA-77BB652DC180}';
+  IID_IManDocumentSearchFolders: TGUID = '{CF7F6C22-8F37-4FFA-8C1A-71FB00578B54}';
+  IID_IManFavoritesFolders: TGUID = '{0AFDBDE3-B74C-4399-9C4E-F9009B708320}';
+  IID_IManFolderShortcut: TGUID = '{4E64888A-55F5-4F9D-B4FD-64BC15A157AB}';
+  IID_IManFolderShortcuts: TGUID = '{AB688AF5-B821-46C9-90B6-78D64BA8962E}';
+  IID_IManGenericBodiedFolder: TGUID = '{1DD9D0EF-4B2D-4955-96FA-A2B8A91AB07E}';
+  IID_IManGenericBodiedFolders: TGUID = '{67E15D40-F5EA-43EB-A4C7-B4E6F074B29B}';
+  IID_IManHasLocation: TGUID = '{73273934-DCAA-497E-8728-6AB44D8B0C62}';
+  IID_IManHasProfile: TGUID = '{F48A502A-B6E7-44CB-AB6B-616AD7EC0E12}';
+  IID_IManHasProfiles: TGUID = '{7603C6B7-3D94-45C6-8383-030E69FF00E7}';
+  IID_IManObjects: TGUID = '{7E599E34-A820-4667-A833-65194D7DB26B}';
+  IID_IManRudimentary_Dispatch: TGUID = '{5867FF21-2C8C-4AA4-9A30-1B1BA494C266}';
+  IID_IManSessionSearchNotification: TGUID = '{AC5001E6-32C8-4199-AE19-B0224B3F73F0}';
+  IID_IErrorInfo: TGUID = '{1CF2B120-547D-101B-8E65-08002B2BD119}';
+  IID_IManSubscriptionFolders: TGUID = '{874C7C3C-E722-4227-A168-12AF6F6CC3EA}';
+  IID_IManSubscriptionFolderShortcuts: TGUID = '{E5903551-60B9-469C-856A-1D5C78361C56}';
+  IID_IManWorkspaceSearchFolder: TGUID = '{E3F063D4-9AF4-454E-BD46-64D54657B0A7}';
+  IID_IManWorkspaceSearchFolders: TGUID = '{4BC8F524-5415-4263-BB7F-C8A1E79BB197}';
+  IID_IManWorkspaceShortcuts: TGUID = '{628513EB-7539-49B8-9823-A8DAA648BBBA}';
+  IID_INRTIssueFolder: TGUID = '{E5FF9A9A-172C-11D5-810E-00C04F610DBB}';
+  IID_INRTDatabase: TGUID = '{37085B84-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTSession: TGUID = '{37085B82-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTDatabases: TGUID = '{399ECBD9-0C62-11D2-860E-006097BF089C}';
+  IID_INRTDMS: TGUID = '{37085B7E-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTSessions: TGUID = '{37085B80-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTSearchParameters: TGUID = '{399ECC03-0C62-11D2-860E-006097BF089C}';
+  IID_INRTSearchParameter: TGUID = '{19850795-10E8-11D2-8612-006097BF089C}';
+  IID_INRTDiscussionParameters: TGUID = '{0ADCC914-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTDiscussionParameter: TGUID = '{0ADCC912-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTEventParameters: TGUID = '{0ADCC90A-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTEventParameter: TGUID = '{0ADCC907-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTLinkParameters: TGUID = '{0ADCC90E-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTLinkParameter: TGUID = '{0ADCC90C-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTTaskParameters: TGUID = '{0ADCC905-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTTaskParameter: TGUID = '{0ADCC903-963D-11D4-8101-00C04F610DBB}';
+  IID_INRTIssueParameters: TGUID = '{E5FF9A96-172C-11D5-810E-00C04F610DBB}';
+  IID_INRTIssueParameter: TGUID = '{E5FF9A94-172C-11D5-810E-00C04F610DBB}';
+  IID_INRTUserParameters: TGUID = '{DF48B84C-C581-11D4-8107-00C04F610DBB}';
+  IID_INRTUserParameter: TGUID = '{DF48B84A-C581-11D4-8107-00C04F610DBB}';
+  IID_INRTPerformanceSnapshot: TGUID = '{18550587-6D1C-11D2-82F5-00A0C932328D}';
+  IID_INRTMethodCalls: TGUID = '{1855058C-6D1C-11D2-82F5-00A0C932328D}';
+  IID_INRTMethodCall: TGUID = '{37085B9C-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTServerCalls: TGUID = '{68953726-C29F-11D2-83B1-00C04F68A665}';
+  IID_INRTServerCall: TGUID = '{37085B9E-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTObjectData: TGUID = '{1855058E-6D1C-11D2-82F5-00A0C932328D}';
+  IID_INRTObjectDatum: TGUID = '{18550590-6D1C-11D2-82F5-00A0C932328D}';
+  IID_INRTPage: TGUID = '{FC06DD98-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTDocumentClass: TGUID = '{37085B96-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTDocumentClasses: TGUID = '{399ECC18-0C62-11D2-860E-006097BF089C}';
+  IID_INRTAttributeSelections: TGUID = '{C651D7F3-1047-11D2-8612-006097BF089C}';
+  IID_INRTDocumentType: TGUID = '{37085B92-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTLaunchMethod: TGUID = '{10A99B2A-03EB-11D3-8003-00C04F6803E0}';
+  IID_INRTLaunchMethods: TGUID = '{B6ED401D-0185-11D3-BFFD-00C04F6803E0}';
+  IID_INRTUser: TGUID = '{37085B8E-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTRole: TGUID = '{37085B90-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTRoleEditCreates: TGUID = '{CD30C7A7-FCA6-11D2-BCFE-00C04F68A665}';
+  IID_INRTRoleEditCreate: TGUID = '{FC9AC2E5-FC13-11D2-8E9C-006008D2F78B}';
+  IID_INRTStrings: TGUID = '{55223F98-146D-11D3-BD07-00C04F68A665}';
+  IID_INRTRoleSearchProfiles: TGUID = '{CD30C7A9-FCA6-11D2-BCFE-00C04F68A665}';
+  IID_INRTRoleSearchProfile: TGUID = '{8F6C0BE4-FC23-11D2-8E9E-006008D2F78B}';
+  IID_INRTUsers: TGUID = '{399ECC05-0C62-11D2-860E-006097BF089C}';
+  IID_INRTAdditionalProperties: TGUID = '{33642532-52CE-11D4-80F6-00C04F610DBB}';
+  IID_INRTAdditionalProperty: TGUID = '{33642530-52CE-11D4-80F6-00C04F610DBB}';
+  IID_INRTSecurityTemplate: TGUID = '{44350567-03FC-11D3-BD00-00C04F68A665}';
+  IID_INRTSecurity: TGUID = '{399ECBF5-0C62-11D2-860E-006097BF089C}';
+  IID_INRTGroupACLs: TGUID = '{399ECBFF-0C62-11D2-860E-006097BF089C}';
+  IID_INRTGroupACL: TGUID = '{399ECBFD-0C62-11D2-860E-006097BF089C}';
+  IID_INRTGroup: TGUID = '{399ECBF9-0C62-11D2-860E-006097BF089C}';
+  IID_INRTUserACLs: TGUID = '{399ECC01-0C62-11D2-860E-006097BF089C}';
+  IID_INRTUserACL: TGUID = '{399ECBFB-0C62-11D2-860E-006097BF089C}';
+  IID_INRTSecurityTemplates: TGUID = '{99488EEF-03FC-11D3-BD00-00C04F68A665}';
+  IID_INRTGroups: TGUID = '{399ECC07-0C62-11D2-860E-006097BF089C}';
+  IID_INRTFolders: TGUID = '{37085B8C-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTFolder: TGUID = '{37085B88-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTDocuments: TGUID = '{37085B86-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTDocument: TGUID = '{37085B9A-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTCustomAttributes: TGUID = '{9D892CAE-0C6D-11D2-860E-006097BF089C}';
+  IID_INRTCustomAttribute: TGUID = '{A8AC35BA-AB38-11D2-8310-00A0C932328D}';
+  IID_INRTHistoryList: TGUID = '{37085B98-90AC-11D4-8100-00C04F610DBB}';
+  IID_INRTDocumentHistory: TGUID = '{9D892CA1-0C6D-11D2-860E-006097BF089C}';
+  IID_INRTRules: TGUID = '{AD8F4139-43D5-11D4-80F6-00C04F610DBB}';
+  IID_INRTRule: TGUID = '{AD8F4135-43D5-11D4-80F6-00C04F610DBB}';
+  IID_INRTRuleEventTypes: TGUID = '{AD8F413B-43D5-11D4-80F6-00C04F610DBB}';
+  IID_INRTRuleEventType: TGUID = '{AD8F4131-43D5-11D4-80F6-00C04F610DBB}';
+  IID_INRTEventHandler: TGUID = '{AD8F4133-43D5-11D4-80F6-00C04F610DBB}';
+  IID_INRTTaskFolders: TGUID = '{FC06DD9C-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTTaskFolder: TGUID = '{FC06DDEA-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTTasks: TGUID = '{FC06DD9F-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTTask: TGUID = '{FC06DDCD-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTAttachments: TGUID = '{32475FF8-77CE-11D4-80FE-00C04F610DBB}';
+  IID_INRTAttachment: TGUID = '{32475FFF-77CE-11D4-80FE-00C04F610DBB}';
+  IID_INRTLinkFolders: TGUID = '{FC06DDAB-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTLinkFolder: TGUID = '{FC06DDE7-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTLinks: TGUID = '{FC06DDF6-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTLink: TGUID = '{FC06DDD1-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTDiscussionFolders: TGUID = '{FC06DDF4-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTDiscussionFolder: TGUID = '{FC06DDF0-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTMessages: TGUID = '{FC06DDA6-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTMessage: TGUID = '{FC06DDD3-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTEventFolders: TGUID = '{FC06DDA9-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTEventFolder: TGUID = '{FC06DDEC-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTEvents: TGUID = '{FC06DDE1-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTEvent: TGUID = '{FC06DDCF-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTReferenceFolders: TGUID = '{1A916FD9-2E9C-11D5-8112-00C04F610DBB}';
+  IID_INRTReferenceFolder: TGUID = '{1A916FD8-2E9C-11D5-8112-00C04F610DBB}';
+  IID_INRTIssueFolders: TGUID = '{E5FF9A99-172C-11D5-810E-00C04F610DBB}';
+  IID_INRTPages: TGUID = '{FC06DD9A-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTIssues: TGUID = '{E5FF9A9C-172C-11D5-810E-00C04F610DBB}';
+  IID_INRTIssue: TGUID = '{E5FF9A9E-172C-11D5-810E-00C04F610DBB}';
+  IID_INRTForms: TGUID = '{399ECBDD-0C62-11D2-860E-006097BF089C}';
+  IID_INRTForm: TGUID = '{399ECBDF-0C62-11D2-860E-006097BF089C}';
+  IID_INRTControls: TGUID = '{399ECBEF-0C62-11D2-860E-006097BF089C}';
+  IID_INRTControl: TGUID = '{399ECBF1-0C62-11D2-860E-006097BF089C}';
+  IID_INRTAttributeDefinitions: TGUID = '{9D892CAC-0C6D-11D2-860E-006097BF089C}';
+  IID_INRTAttributeDefinition: TGUID = '{9D892CAA-0C6D-11D2-860E-006097BF089C}';
+  IID_INRTDocumentTypes: TGUID = '{399ECC0F-0C62-11D2-860E-006097BF089C}';
+  IID_INRTRoles: TGUID = '{399ECC0B-0C62-11D2-860E-006097BF089C}';
+  IID_INRTEventHandlers: TGUID = '{AD8F4137-43D5-11D4-80F6-00C04F610DBB}';
+  IID_INRTIssueFolder2: TGUID = '{4DFA51D0-C24A-41E1-8B19-2AD874D02923}';
+  IID_INRTLinkFolder2: TGUID = '{D8EB1D35-22C1-4E02-A9BC-6F9148A12AB8}';
+  CLASS_ManStrings: TGUID = '{ABA30C79-84F5-4C2D-96A5-7B4B79C89496}';
+  CLASS_ManAndQuery: TGUID = '{D180B32F-0808-44A3-9EFA-E4723088EA3B}';
+  CLASS_ManOrQuery: TGUID = '{86FE2565-AF07-4394-965C-03352E7C3E6E}';
+  IID_INRTDMS2: TGUID = '{E4A1940C-3852-41F2-9A8F-D1447B27896F}';
+  IID_INRTDMSCancel: TGUID = '{B9F270FA-34CF-4623-AD72-DD82AF36F1D1}';
+  IID_INRTCancel: TGUID = '{5B002BEF-A91F-4164-8C8A-9DAD781D57EC}';
+  IID_INRTSessionSearchNotification: TGUID = '{AE5B4871-B0B3-4E4A-B9AE-060F108DAC81}';
+  IID_INRTSessionControl: TGUID = '{239E79F0-1731-11D2-8622-006097BF089C}';
+  IID_INRTDatabaseMisc: TGUID = '{A8AC35B5-AB38-11D2-8310-00A0C932328D}';
+  IID_INRTDocumentsControl: TGUID = '{418BCF91-2CA6-11D2-8646-006097BF089C}';
+  IID_INRTFolder2: TGUID = '{6BEC0732-EDCC-4684-9D1B-8239B3D78D9D}';
+  IID_INRTFolder3: TGUID = '{355B2901-5B3D-4D4E-8DEA-1E2A489D079E}';
+  IID_INRTFolders2: TGUID = '{BB71726B-ADE4-46B7-AD6D-4624F8A6EB40}';
+  IID_INRTFoldersControl: TGUID = '{0E22EC40-1B2C-11D2-8626-006097BF089C}';
+  IID_INRTUserDomain: TGUID = '{8DEBAA1C-3F7E-11D3-BD1C-00C04F68A665}';
+  IID_INRTUserVeryTransientInterface: TGUID = '{058B2AA5-0A03-11D3-BD02-00C04F68A665}';
+  IID_INRTGroup2: TGUID = '{A06DD4F8-408E-4C8B-8790-3AE62E8AFF8A}';
+  IID_INRTUserACLsWeb: TGUID = '{FA3B0A13-8BC0-11D3-A0BE-00C04F68A665}';
+  IID_INRTGroupACLsWeb: TGUID = '{FA3B0A14-8BC0-11D3-A0BE-00C04F68A665}';
+  IID_INRTUserACLWeb: TGUID = '{FA3B0A15-8BC0-11D3-A0BE-00C04F68A665}';
+  IID_INRTGroupACLWeb: TGUID = '{2C171595-8C70-11D3-A0C0-00C04F68A665}';
+  IID_INRTCollectionDataEnum: TGUID = '{6F482854-1126-11D2-8612-006097BF089C}';
+  IID_INRTObjectDataSort: TGUID = '{91F728CB-0265-40B5-A1AA-32C67338254F}';
+  IID_INRTObjectDataControl: TGUID = '{665DAF01-703B-11D2-82F5-00A0C932328D}';
+  IID_INRTMethodCallsControl: TGUID = '{665DAF02-703B-11D2-82F5-00A0C932328D}';
+  IID_INRTStrings2: TGUID = '{197EB8FD-52D0-11D4-80F6-00C04F610DBB}';
+  IID_INRTProfileError: TGUID = '{D3E5FC81-3D1A-11D2-865E-006097BF089C}';
+  IID_INRTPerformanceCollectionEnum: TGUID = '{1855059A-6D1C-11D2-82F5-00A0C932328D}';
+  IID_INRTCacheCheckpoint: TGUID = '{525EC805-4A3E-4D96-889A-62BCB692373B}';
+  IID_IManThreadInfo: TGUID = '{649E2BCC-5922-4624-BAE3-9F87D2384218}';
+  IID_INRTDMS3: TGUID = '{326DFD76-7E9B-414E-BDDE-6DD31EBB8C7E}';
+  CLASS_NRTDMS: TGUID = '{37085BA2-90AC-11D4-8100-00C04F610DBB}';
+  CLASS_ManDMS: TGUID = '{FDD9199A-1BB4-4433-B9E1-D550D3118676}';
+  IID_ISmartNRTDMS: TGUID = '{F1DAEAFB-636E-424F-B2D1-15BB5E37E1B9}';
+  CLASS_SmartNRTDms: TGUID = '{7221B3B6-047A-4374-9AC3-1343EA94185A}';
+  CLASS_NRTSessions: TGUID = '{03B92F85-06CB-11D2-8609-006097BF089C}';
+  IID_INRTSession2: TGUID = '{25C95479-A5FE-41CB-8776-822A46CCABDE}';
+  CLASS_NRTSession: TGUID = '{399ECBD8-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTDatabases: TGUID = '{4D708969-0C43-11D2-860E-006097BF089C}';
+  IID_INRTDatabase2: TGUID = '{FCB166D0-B530-4866-B1D9-CE306C577537}';
+  CLASS_NRTDatabase: TGUID = '{399ECBDB-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTForms: TGUID = '{399ECBDE-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTForm: TGUID = '{399ECBE0-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTDocuments: TGUID = '{399ECBE2-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTFolder: TGUID = '{399ECBEA-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTFolders: TGUID = '{399ECBEC-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTControls: TGUID = '{399ECBF0-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTControl: TGUID = '{399ECBF2-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTSecurity: TGUID = '{399ECBF6-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTSecurityWeb: TGUID = '{79E4929F-8C9B-11D3-A0C0-00C04F68A665}';
+  CLASS_NRTSecurityTemplate: TGUID = '{8C53C48D-0400-11D3-BD00-00C04F68A665}';
+  CLASS_NRTSecurityTemplates: TGUID = '{8C53C48F-0400-11D3-BD00-00C04F68A665}';
+  CLASS_NRTUser: TGUID = '{399ECBF8-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTGroup: TGUID = '{399ECBFA-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTUserACL: TGUID = '{399ECBFC-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTGroupACL: TGUID = '{399ECBFE-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTGroupACLs: TGUID = '{399ECC00-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTUserACLs: TGUID = '{399ECC02-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTSearchParameters: TGUID = '{399ECC04-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTUsers: TGUID = '{399ECC06-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTGroups: TGUID = '{399ECC08-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTRole: TGUID = '{399ECC0A-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTRoles: TGUID = '{399ECC0C-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTDocumentType: TGUID = '{399ECC0E-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTDocumentTypes: TGUID = '{399ECC10-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTLaunchMethod: TGUID = '{399ECC12-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTLaunchMethods: TGUID = '{34D870BC-0188-11D3-BFFD-00C04F6803E0}';
+  CLASS_NRTDocumentClass: TGUID = '{399ECC17-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTDocumentClasses: TGUID = '{399ECC19-0C62-11D2-860E-006097BF089C}';
+  CLASS_NRTDocumentHistory: TGUID = '{9D892CA2-0C6D-11D2-860E-006097BF089C}';
+  CLASS_NRTHistoryList: TGUID = '{9D892CA4-0C6D-11D2-860E-006097BF089C}';
+  CLASS_NRTAttributeDefinition: TGUID = '{9D892CAB-0C6D-11D2-860E-006097BF089C}';
+  CLASS_NRTAttributeDefinitions: TGUID = '{9D892CAD-0C6D-11D2-860E-006097BF089C}';
+  CLASS_NRTCustomAttributes: TGUID = '{9D892CAF-0C6D-11D2-860E-006097BF089C}';
+  CLASS_NRTCustomAttribute: TGUID = '{9D892CB1-0C6D-11D2-860E-006097BF089C}';
+  CLASS_NRTDocument: TGUID = '{20D54B75-0D30-11D2-860E-006097BF089C}';
+  CLASS_NRTAttributeSelections: TGUID = '{C651D7F4-1047-11D2-8612-006097BF089C}';
+  CLASS_NRTSearchParameter: TGUID = '{21766500-1BED-11D2-8628-006097BF089C}';
+  CLASS_NRTCollectionDataEnum: TGUID = '{6F482855-1126-11D2-8612-006097BF089C}';
+  CLASS_NRTAttributeSelectionsEnum: TGUID = '{D5D26760-2177-11D2-863C-006097BF089C}';
+  CLASS_NRTProfileError: TGUID = '{D3E5FC82-3D1A-11D2-865E-006097BF089C}';
+  CLASS_NRTPerformanceSnapshot: TGUID = '{18550588-6D1C-11D2-82F5-00A0C932328D}';
+  CLASS_NRTMethodCall: TGUID = '{1855058B-6D1C-11D2-82F5-00A0C932328D}';
+  CLASS_NRTMethodCalls: TGUID = '{1855058D-6D1C-11D2-82F5-00A0C932328D}';
+  CLASS_NRTServerCall: TGUID = '{61F26662-C2A6-11D2-83B1-00C04F68A665}';
+  CLASS_NRTServerCalls: TGUID = '{705D1E9A-C2A6-11D2-83B1-00C04F68A665}';
+  CLASS_NRTObjectDatum: TGUID = '{1855058F-6D1C-11D2-82F5-00A0C932328D}';
+  IID_INRTObjectData2: TGUID = '{89F4D8FF-2847-4DA2-8468-E481EB5EC36E}';
+  CLASS_NRTObjectData: TGUID = '{18550591-6D1C-11D2-82F5-00A0C932328D}';
+  CLASS_NRTObjectDataSort: TGUID = '{4396A588-F74F-4E49-B009-400352DA4770}';
+  CLASS_NRTPerformanceCollectionEnum: TGUID = '{1855059B-6D1C-11D2-82F5-00A0C932328D}';
+  CLASS_STLEnumVARIANT: TGUID = '{7C5F77F5-A648-11D2-8691-006097BF089C}';
+  CLASS_NRTRoleEditCreate: TGUID = '{FC9AC2E6-FC13-11D2-8E9C-006008D2F78B}';
+  CLASS_NRTRoleSearchProfile: TGUID = '{8F6C0BE5-FC23-11D2-8E9E-006008D2F78B}';
+  CLASS_NRTRoleEditCreates: TGUID = '{CD30C7A8-FCA6-11D2-BCFE-00C04F68A665}';
+  CLASS_NRTRoleSearchProfiles: TGUID = '{CD30C7AA-FCA6-11D2-BCFE-00C04F68A665}';
+  CLASS_NRTStrings: TGUID = '{64E6ACCA-146D-11D3-BD07-00C04F68A665}';
+  CLASS_NRTUserACLWeb: TGUID = '{FA3B0A17-8BC0-11D3-A0BE-00C04F68A665}';
+  CLASS_NRTUserACLsWeb: TGUID = '{FA3B0A18-8BC0-11D3-A0BE-00C04F68A665}';
+  CLASS_NRTGroupACLWeb: TGUID = '{1564D2D3-8C70-11D3-A0C0-00C04F68A665}';
+  CLASS_NRTGroupACLsWeb: TGUID = '{FA3B0A1A-8BC0-11D3-A0BE-00C04F68A665}';
+  CLASS_NRTRuleEventType: TGUID = '{AD8F4132-43D5-11D4-80F6-00C04F610DBB}';
+  CLASS_NRTEventHandler: TGUID = '{AD8F4134-43D5-11D4-80F6-00C04F610DBB}';
+  CLASS_NRTRule: TGUID = '{AD8F4136-43D5-11D4-80F6-00C04F610DBB}';
+  CLASS_NRTEventHandlers: TGUID = '{AD8F4138-43D5-11D4-80F6-00C04F610DBB}';
+  CLASS_NRTRules: TGUID = '{AD8F413A-43D5-11D4-80F6-00C04F610DBB}';
+  CLASS_NRTRuleEventTypes: TGUID = '{AD8F413C-43D5-11D4-80F6-00C04F610DBB}';
+  CLASS_NRTAdditionalProperties: TGUID = '{5F382E86-5E95-11D4-80F9-00C04F610DBB}';
+  CLASS_NRTAdditionalProperty: TGUID = '{6D058B8A-5E95-11D4-80F9-00C04F610DBB}';
+  CLASS_NRTPages: TGUID = '{FC06DDE5-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTPage2: TGUID = '{45E1B5CD-C502-47DA-9439-46D7A8B99A16}';
+  CLASS_NRTPage: TGUID = '{FC06DDE3-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTTasks: TGUID = '{FC06DDCA-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTTask: TGUID = '{FC06DDC8-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTTaskFolders: TGUID = '{FC06DDF8-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTTaskFolder2: TGUID = '{47C0BDEE-8D88-4933-9F8B-88E2B7A7BA14}';
+  CLASS_NRTTaskFolder: TGUID = '{FC06DDFB-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTEvent: TGUID = '{FC06DDC3-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTEvents: TGUID = '{FC06DDC6-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTEventFolders: TGUID = '{FC06DDFD-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTEventFolder2: TGUID = '{3B5FCAE0-7EE5-423D-A636-DFD9A8318CF4}';
+  CLASS_NRTEventFolder: TGUID = '{FC06DDFF-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTMessage: TGUID = '{FC06DDBD-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTMessages: TGUID = '{FC06DDBA-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTDiscussionFolders: TGUID = '{FC06DE01-6F36-11D4-80FD-00C04F610DBB}';
+  IID_INRTDiscussionFolder2: TGUID = '{16C9F554-B8CF-4033-8CD8-C7C144D253B5}';
+  CLASS_NRTDiscussionFolder: TGUID = '{FC06DE03-6F36-11D4-80FD-00C04F610DBB}';
+  CLASS_NRTAttachment: TGUID = '{32475FFB-77CE-11D4-80FE-00C04F610DBB}';
+  CLASS_NRTAttachments: TGUID = '{32475FFD-77CE-11D4-80FE-00C04F610DBB}';
+  CLASS_NRTTaskParameter: TGUID = '{0ADCC915-963D-11D4-8101-00C04F610DBB}';
+  CLASS_NRTTaskParameters: TGUID = '{0ADCC917-963D-11D4-8101-00C04F610DBB}';
+  CLASS_NRTEventParameter: TGUID = '{0ADCC919-963D-11D4-8101-00C04F610DBB}';
+  CLASS_NRTEventParameters: TGUID = '{0ADCC91B-963D-11D4-8101-00C04F610DBB}';
+  CLASS_NRTDiscussionParameter: TGUID = '{0ADCC922-963D-11D4-8101-00C04F610DBB}';
+  CLASS_NRTDiscussionParameters: TGUID = '{0ADCC924-963D-11D4-8101-00C04F610DBB}';
+  CLASS_NRTUserParameter: TGUID = '{DF48B84E-C581-11D4-8107-00C04F610DBB}';
+  CLASS_NRTUserParameters: TGUID = '{DF48B850-C581-11D4-8107-00C04F610DBB}';
+  IID_INRTStats: TGUID = '{4DE226D1-735C-44E0-B6E9-E2BD381D8599}';
+  CLASS_NRTStats: TGUID = '{4A023DD6-09A6-4C05-AC2A-A840AF57F89F}';
+  IID_INRTTraceInfo: TGUID = '{3ACA5043-8330-4190-9846-27CC19F0F2D0}';
+  CLASS_NRTTraceInfo: TGUID = '{D849A589-FA6C-4D83-BD94-3D4AD6EBD572}';
+  IID_INRTDate: TGUID = '{85CDDE4C-FE2E-476B-A0CC-8604C1BD098B}';
+  CLASS_NRTDate: TGUID = '{478B297D-1DC7-40E1-98AE-BA88AEBB2B78}';
+  IID_INRTDateRange: TGUID = '{8F850ABC-287C-49D2-8BFB-3CD7E0313A20}';
+  CLASS_NRTDateRange: TGUID = '{A7429C8E-487E-4851-910F-0294E255F59D}';
+
+// *********************************************************************//
+// Declaration of Enumerations defined in Type Library                    
+// *********************************************************************//
+// Constants for enum imObjectType
+type
+  imObjectType = TOleEnum;
+const
+  imTypeAdditionalProperties = $00000000;
+  imTypeAdditionalProperty = $00000001;
+  imTypeAndQuery = $00000002;
+  imTypeAttachment = $00000003;
+  imTypeAttachments = $00000004;
+  imTypeAttributeDefinition = $00000005;
+  imTypeAttributeDefinitions = $00000006;
+  imTypeAttributeSelections = $00000007;
+  imTypeBodiedFolder = $00000008;
+  imTypeCancel = $00000009;
+  imTypeCaptions = $0000000A;
+  imTypeCheckinResult = $0000000B;
+  imTypeConnectorFolder = $0000000C;
+  imTypeConnectorFolders = $0000000D;
+  imTypeContent = $0000000E;
+  imTypeContents = $0000000F;
+  imTypeContentShortcut = $00000010;
+  imTypeContentShortcuts = $00000011;
+  imTypeControl = $00000012;
+  imTypeControls = $00000013;
+  imTypeCustomAttribute = $00000014;
+  imTypeCustomAttributes = $00000015;
+  imTypeCustomProperties = $00000016;
+  imTypeCustomProperty = $00000017;
+  imTypeDatabase = $00000018;
+  imTypeDatabases = $00000019;
+  imTypeDate = $0000001A;
+  imTypeDateRange = $0000001B;
+  imTypeDMS = $0000001C;
+  imTypeDocument = $0000001D;
+  imTypeDocumentClass = $0000001E;
+  imTypeDocumentClasses = $0000001F;
+  imTypeDocumentFolder = $00000020;
+  imTypeDocumentFolders = $00000021;
+  imTypeDocumentHistory = $00000022;
+  imTypeDocuments = $00000023;
+  imTypeDocumentSearchFolder = $00000024;
+  imTypeDocumentSearchFolders = $00000025;
+  imTypeDocumentType = $00000026;
+  imTypeDocumentTypes = $00000027;
+  imTypeEvent = $00000028;
+  imTypeEventFolder = $00000029;
+  imTypeEventFolders = $0000002A;
+  imTypeEventHandler = $0000002B;
+  imTypeEventHandlers = $0000002C;
+  imTypeEvents = $0000002D;
+  imTypeEventSearchParameter = $0000002E;
+  imTypeEventSearchParameters = $0000002F;
+  imTypeFavoritesFolder = $00000030;
+  imTypeFavoritesFolders = $00000031;
+  imTypeFieldQuery = $00000032;
+  imTypeFolder = $00000033;
+  imTypeFolders = $00000034;
+  imTypeFolderSearchParameter = $00000035;
+  imTypeFolderSearchParameters = $00000036;
+  imTypeFolderShortcut = $00000037;
+  imTypeFolderShortcuts = $00000038;
+  imTypeForm = $00000039;
+  imTypeForms = $0000003A;
+  imTypeGenericBodiedFolder = $0000003B;
+  imTypeGenericBodiedFolders = $0000003C;
+  imTypeGroup = $0000003D;
+  imTypeGroupACL = $0000003E;
+  imTypeGroupACLs = $0000003F;
+  imTypeGroups = $00000040;
+  imTypeHasLocation = $00000041;
+  imTypeHasProfile = $00000042;
+  imTypeHasProfiles = $00000043;
+  imTypeHistoryList = $00000044;
+  imTypeLaunchMethod = $00000045;
+  imTypeLaunchMethods = $00000046;
+  imTypeLinkListFolder = $00000047;
+  imTypeLinkListFolders = $00000048;
+  imTypeLocation = $00000049;
+  imTypeMessage = $0000004A;
+  imTypeMessageFolder = $0000004B;
+  imTypeMessageFolders = $0000004C;
+  imTypeMessages = $0000004D;
+  imTypeMessageSearchParameter = $0000004E;
+  imTypeMessageSearchParameters = $0000004F;
+  imTypeNoteFolder = $00000050;
+  imTypeNoteFolders = $00000051;
+  imTypeObject = $00000052;
+  imTypeObjects = $00000053;
+  imTypeObjectSort = $00000054;
+  imTypeObjectTypes = $00000055;
+  imTypeOrQuery = $00000056;
+  imTypeProfile = $00000057;
+  imTypeProfiled = $00000058;
+  imTypeProfiledContent = $00000059;
+  imTypeProfiledFolder = $0000005A;
+  imTypeProfileError = $0000005B;
+  imTypeProfileErrors = $0000005C;
+  imTypeProfileFullTextSearchParameter = $0000005D;
+  imTypeProfiles = $0000005E;
+  imTypeProfileSearchParameter = $0000005F;
+  imTypeProfileSearchParameters = $00000060;
+  imTypeProfileUpdateResult = $00000061;
+  imTypeQueries = $00000062;
+  imTypeQuery = $00000063;
+  imTypeRelatedDocuments = $00000064;
+  imTypeRelativeDate = $00000065;
+  imTypeRole = $00000066;
+  imTypeRoleEditCreate = $00000067;
+  imTypeRoleEditCreates = $00000068;
+  imTypeRoles = $00000069;
+  imTypeRoleSearchProfile = $0000006A;
+  imTypeRoleSearchProfiles = $0000006B;
+  imTypeRule = $0000006C;
+  imTypeRuleEventType = $0000006D;
+  imTypeRuleEventTypes = $0000006E;
+  imTypeRules = $0000006F;
+  imTypeSecurity = $00000070;
+  imTypeSecurityTemplate = $00000071;
+  imTypeSecurityTemplates = $00000072;
+  imTypeSession = $00000073;
+  imTypeSessions = $00000074;
+  imTypeSessionSearchNotification = $00000075;
+  imTypeStream = $00000076;
+  imTypeStrings = $00000077;
+  imTypeSubscriptionFolder = $00000078;
+  imTypeSubscriptionFolders = $00000079;
+  imTypeSubscriptionFolderSearchParameters = $0000007A;
+  imTypeSubscriptionFolderShortcuts = $0000007B;
+  imTypeSyncResult = $0000007C;
+  imTypeTab = $0000007D;
+  imTypeTabContents = $0000007E;
+  imTypeTabs = $0000007F;
+  imTypeTask = $00000080;
+  imTypeTaskFolder = $00000081;
+  imTypeTaskFolders = $00000082;
+  imTypeTasks = $00000083;
+  imTypeTaskSearchParameter = $00000084;
+  imTypeTaskSearchParameters = $00000085;
+  imTypeType = $00000086;
+  imTypeUser = $00000087;
+  imTypeUserACL = $00000088;
+  imTypeUserACLs = $00000089;
+  imTypeUserPreferences = $0000008A;
+  imTypeUsers = $0000008B;
+  imTypeWorkArea = $0000008C;
+  imTypeWorkspace = $0000008D;
+  imTypeWorkspaces = $0000008E;
+  imTypeWorkspaceSearchFolder = $0000008F;
+  imTypeWorkspaceSearchFolders = $00000090;
+  imTypeWorkspaceSearchParameters = $00000091;
+  imTypeWorkspaceShortcuts = $00000092;
+  imTypeNone = $00000093;
+
+// Constants for enum imQueryType
+type
+  imQueryType = TOleEnum;
+const
+  imQueryField = $00000000;
+  imQueryAnd = $00000001;
+  imQueryOr = $00000002;
+  imQueryNot = $00000003;
+
+// Constants for enum imProfileAttributeID
+type
+  imProfileAttributeID = TOleEnum;
+const
+  imProfileDatabase = $00000000;
+  imProfileDocNum = $00000001;
+  imProfileVersion = $00000002;
+  imProfileDescription = $00000003;
+  imProfileName = $00000004;
+  imProfileAuthor = $00000005;
+  imProfileOperator = $00000006;
+  imProfileType = $00000007;
+  imProfileClass = $00000008;
+  imProfileSubClass = $00000009;
+  imProfileEditDate = $0000000A;
+  imProfileCreateDate = $0000000B;
+  imProfileRetainDays = $0000000C;
+  imProfileSize = $0000000D;
+  imProfileIndexable = $0000000E;
+  imProfileIsRelated = $0000000F;
+  imProfileLocation = $00000010;
+  imProfileDefaultSecurity = $00000011;
+  imProfileLastUser = $00000012;
+  imProfileInUseBy = $00000013;
+  imProfileNetNode = $00000014;
+  imProfileInUse = $00000015;
+  imProfileCheckedOut = $00000016;
+  imProfileArchived = $00000017;
+  imProfileComment = $00000018;
+  imProfileCustom1 = $00000019;
+  imProfileCustom2 = $0000001A;
+  imProfileCustom3 = $0000001B;
+  imProfileCustom4 = $0000001C;
+  imProfileCustom5 = $0000001D;
+  imProfileCustom6 = $0000001E;
+  imProfileCustom7 = $0000001F;
+  imProfileCustom8 = $00000020;
+  imProfileCustom9 = $00000021;
+  imProfileCustom10 = $00000022;
+  imProfileCustom11 = $00000023;
+  imProfileCustom12 = $00000024;
+  imProfileCustom13 = $00000025;
+  imProfileCustom14 = $00000026;
+  imProfileCustom15 = $00000027;
+  imProfileCustom16 = $00000028;
+  imProfileCustom17 = $00000029;
+  imProfileCustom18 = $0000002A;
+  imProfileCustom19 = $0000002B;
+  imProfileCustom20 = $0000002C;
+  imProfileCustom21 = $0000002D;
+  imProfileCustom22 = $0000002E;
+  imProfileCustom23 = $0000002F;
+  imProfileCustom24 = $00000030;
+  imProfileCustom25 = $00000031;
+  imProfileCustom26 = $00000032;
+  imProfileCustom27 = $00000033;
+  imProfileCustom28 = $00000034;
+  imProfileCustom29 = $00000035;
+  imProfileCustom30 = $00000036;
+  imProfileCustom1Description = $0000003C;
+  imProfileCustom2Description = $0000003D;
+  imProfileCustom3Description = $0000003E;
+  imProfileCustom4Description = $0000003F;
+  imProfileCustom5Description = $00000040;
+  imProfileCustom6Description = $00000041;
+  imProfileCustom7Description = $00000042;
+  imProfileCustom8Description = $00000043;
+  imProfileCustom9Description = $00000044;
+  imProfileCustom10Description = $00000045;
+  imProfileCustom11Description = $00000046;
+  imProfileCustom12Description = $00000047;
+  imProfileCustom29Description = $00000048;
+  imProfileCustom30Description = $00000049;
+  imProfileAuthorDescription = $0000004A;
+  imProfileOperatorDescription = $0000004B;
+  imProfileTypeDescription = $0000004C;
+  imProfileClassDescription = $0000004D;
+  imProfileSubClassDescription = $0000004E;
+  imProfileLastUserDescription = $0000004F;
+  imProfileInUseByDescription = $00000050;
+  imProfileEditTime = $00000051;
+  imProfileExtension = $00000052;
+  imProfileFullText = $00000053;
+  imProfileSubType = $00000054;
+  imProfileEditProfileTime = $00000055;
+  imProfileContainerID = $00000059;
+  imProfileCustom31 = $00000060;
+  imProfileMarkedForArchive = $00000061;
+  imProfileEchoEnabled = $00000062;
+  imProfileAccessTime = $00000063;
+  imProfileMessageUniqueID = $00000064;
+  imProfileIsExternal = $00000065;
+  imProfileHasAttachment = $00000066;
+  imProfileExternalAsNormal = $00000067;
+  imProfileProjectItemSID = $00000068;
+  imProfileProjectItemParentSID = $00000069;
+  imProfileCheckoutPath = $0000006A;
+  imProfileCheckoutDueDate = $0000006B;
+  imProfileCheckoutComments = $0000006C;
+  imProfileCheckoutWhen = $0000006D;
+  imProfileQuickRetrieve = $0000006E;
+
+// Constants for enum imAttributeType
+type
+  imAttributeType = TOleEnum;
+const
+  imEmpty = $00000000;
+  imNull = $00000001;
+  imInteger = $00000002;
+  imLong = $00000003;
+  imSingle = $00000004;
+  imDouble = $00000005;
+  imCurrency = $00000006;
+  imDate = $00000007;
+  imString = $00000008;
+  imObject = $00000009;
+  imError = $0000000A;
+  imBoolean = $0000000B;
+  imVariant = $0000000C;
+  imDataObject = $0000000D;
+  imDecimal = $0000000E;
+  imByte = $00000011;
+  imArray = $00002000;
+
+// Constants for enum imContentsOp
+type
+  imContentsOp = TOleEnum;
+const
+  imAddContentsOp = $00000000;
+  imRemoveContentsOp = $00000001;
+
+// Constants for enum imFolderAttributeID
+type
+  imFolderAttributeID = TOleEnum;
+const
+  imFolderID = $00000000;
+  imFolderParentID = $00000001;
+  imFolderDefaultSecurity = $00000002;
+  imFolderName = $00000003;
+  imFolderOwner = $00000004;
+  imFolderDescription = $00000005;
+  imFolderLocation = $00000006;
+  imFolderType = $00000007;
+  imFolderSubtype = $00000008;
+  imFolderInherits = $00000009;
+  imFolderProfileID = $0000000A;
+  imFolderVersion = $0000000B;
+  imFolderCustom1 = $0000000C;
+  imFolderCustom2 = $0000000D;
+  imFolderCustom3 = $0000000E;
+  imFolderRootFolderID = $0000000F;
+  imFolderRootFolderType = $00000010;
+  imFolderIsContentSearch = $00000011;
+  imFolderIsFolderSearch = $00000012;
+  imFolderEmail = $00000013;
+  imFolderHiddenOnDesktop = $00000014;
+
+// Constants for enum imFoldersOp
+type
+  imFoldersOp = TOleEnum;
+const
+  imAddFoldersOp = $00000000;
+  imRemoveFoldersOp = $00000001;
+
+// Constants for enum imSearchAttributeType
+type
+  imSearchAttributeType = TOleEnum;
+const
+  imSearchID = $00000001;
+  imSearchFullName = $00000002;
+  imSearchBoth = $00000003;
+  imSearchExactMatch = $00000004;
+
+// Constants for enum imSecurityType
+type
+  imSecurityType = TOleEnum;
+const
+  imPrivate = $00000058;
+  imPublic = $00000050;
+  imView = $00000056;
+
+// Constants for enum imIntMode
+type
+  imIntMode = TOleEnum;
+const
+  imIntegrationModeMacro = $00000001;
+  imIntegrationModeODMA = $00000002;
+  imIntegrationModeNonIntegrated = $00000003;
+
+// Constants for enum imNOS
+type
+  imNOS = TOleEnum;
+const
+  imOSNovell = $00000001;
+  imOSVirtual = $00000002;
+  imOSNT = $00000003;
+  imOSNovellNDS = $00000004;
+  imOSExternal = $00000005;
+  imOSNTADS = $00000006;
+  imOSNetscapeDS = $00000007;
+
+// Constants for enum imRoleAttributeID
+type
+  imRoleAttributeID = TOleEnum;
+const
+  imRoleUseAdmin = $00000000;
+  imRoleUseMonitorApp = $00000001;
+  imRoleAdminUseImportApp = $00000002;
+  imRoleExternal = $00000003;
+  imRoleDocumentCheckout = $00000004;
+  imRoleDocumentCreate = $00000005;
+  imRoleDocumentDelete = $00000006;
+  imRoleDocumentFullTextSearch = $00000008;
+  imRoleDocumentReadOnly = $00000009;
+  imRoleDocumentUnlockDocument = $0000000A;
+  imRoleDocumentViewPublicDocument = $0000000B;
+  imRoleFolderCreatePublicFolder = $0000000C;
+  imRoleFolderCreatePublicSearchFolder = $0000000D;
+  imWebRoleSearchWorkspaces = $00000013;
+  imWebRoleAuthorWorkspaces = $00000014;
+  imWebRoleAuthorPublicWorkspaces = $00000015;
+  imWebRoleCreateSystemWorkspaces = $00000018;
+  imRoleWorkspaceDeleteWorkspace = $0000001C;
+
+// Constants for enum imAccessRight
+type
+  imAccessRight = TOleEnum;
+const
+  imRightNone = $00000000;
+  imRightRead = $00000001;
+  imRightReadWrite = $00000002;
+  imRightAll = $00000003;
+
+// Constants for enum imHistEvent
+type
+  imHistEvent = TOleEnum;
+const
+  imHistoryLaunch = $00000000;
+  imHistoryView = $00000001;
+  imHistoryCheckout = $00000002;
+  imHistoryCheckin = $00000003;
+  imHistoryProfileEdit = $00000004;
+  imHistoryClose = $00000005;
+  imHistoryNew = $00000006;
+  imHistoryVersionNew = $00000007;
+  imHistorySecurityChange = $00000008;
+  imHistoryCopy = $00000009;
+  imHistoryPrint = $0000000A;
+  imHistoryMail = $0000000B;
+  imHistoryEchoSync = $0000000C;
+  imHistoryDelete = $0000000D;
+  imHistoryPurge = $0000000E;
+  imHistoryArchive = $0000000F;
+  imHistoryRestore = $00000010;
+  imHistoryRelease = $00000011;
+  imHistoryExport = $00000012;
+  imHistoryModify = $00000013;
+  imHistoryEditTime = $00000014;
+  imHistoryNotLogged = $00000015;
+
+// Constants for enum imWorkspaceOperation
+type
+  imWorkspaceOperation = TOleEnum;
+const
+  imCopyWorkspaceOp = $00000000;
+  imUpdateWorkspaceOp = $00000001;
+  imLockWorkspaceOp = $00000002;
+  imUnlockWorkspaceOp = $00000003;
+  imArchiveWorkspaceOp = $00000004;
+  imRestoreWorkspaceOp = $00000005;
+  imSetSecurityWorkspaceOp = $00000006;
+  imDeleteWorkspaceOp = $00000007;
+  imChangeNameWorkspaceOp = $00000008;
+
+// Constants for enum imProfileErrorCode
+type
+  imProfileErrorCode = TOleEnum;
+const
+  imErrorFieldRequired = $00000001;
+  imErrorFieldDisabled = $00000002;
+  imErrorItemInvalid = $00000003;
+  imFieldErrorRelation = $00000004;
+
+// Constants for enum imWorkspaceSubtype
+type
+  imWorkspaceSubtype = TOleEnum;
+const
+  imWorkspaceWorkSubtype = $00000000;
+  imWorkspaceTemplateSubtype = $00000001;
+  imWorkspaceStartSubtype = $00000002;
+  imWorkspaceConnectorSubtype = $00000003;
+  imWorkspaceAdminSubtype = $00000004;
+  imWorkspacePreferencesSubtype = $00000005;
+  imWorkspaceUnknownSubtype = $00000006;
+
+// Constants for enum imPreferenceType
+type
+  imPreferenceType = TOleEnum;
+const
+  imPreferenceExplorer = $00000000;
+  imPreferenceWorklist = $00000001;
+  imPreferenceCheckedOutDocuments = $00000002;
+  imPreferenceSearchHistory = $00000003;
+  imPreferenceSubscriptions = $00000004;
+  imPreferenceFavorites = $00000005;
+  imPreferenceRecentWorkspaces = $00000006;
+
+// Constants for enum imControlType
+type
+  imControlType = TOleEnum;
+const
+  imLabelWidget = $00000001;
+  imEditWidget = $00000002;
+  imButtonWidget = $00000003;
+  imListWidget = $00000004;
+  imDateWidget = $00000005;
+  imBorButtonWidget = $00000006;
+  imShadeWidget = $00000007;
+  imHDipWidget = $00000008;
+  imVDipWidget = $00000009;
+  imCheckWidget = $0000000A;
+  imRadioWidget = $0000000B;
+  imComboWidget = $0000000C;
+  imActiveLabel = $0000000D;
+
+// Constants for enum imFormType
+type
+  imFormType = TOleEnum;
+const
+  imFormSearchDialog = $00000005;
+  imFormNewProfile = $00000006;
+  imFormNewVersion = $00000007;
+  imFormEditProfile = $00000008;
+  imFormWorkspaceSearch = $00000009;
+  imFormQuickSearch = $0000000A;
+  imFormNewWorkspace = $0000000B;
+  imFormEditWorkspace = $0000000C;
+
+// Constants for enum imFullTextSearchLocation
+type
+  imFullTextSearchLocation = TOleEnum;
+const
+  imFullTextAnywhere = $00000000;
+  imFullTextComment = $00000001;
+  imFullTextDescription = $00000002;
+  imFullTextBody = $00000003;
+  imFullTextCommentDescription = $00000004;
+
+// Constants for enum imSearchEmail
+type
+  imSearchEmail = TOleEnum;
+const
+  imSearchEmailOrDocuments = $00000000;
+  imSearchEmailOnly = $00000001;
+  imSearchDocumentsOnly = $00000002;
+
+// Constants for enum imEventAttributeID
+type
+  imEventAttributeID = TOleEnum;
+const
+  imEventDatabase = $00000000;
+  imEventID = $00000001;
+  imEventSubject = $00000003;
+  imEventOrganizer = $00000005;
+  imEventAssignee = $00000006;
+  imEventType = $00000007;
+  imEventClass = $00000008;
+  imEventSubClass = $00000009;
+  imEventEditDate = $0000000A;
+  imEventCreateDate = $0000000B;
+  imEventRetainDays = $0000000C;
+  imEventIndexable = $0000000E;
+  imEventDefaultSecurity = $00000011;
+  imEventLastUser = $00000012;
+  imEventInUseBy = $00000013;
+  imEventInUse = $00000015;
+  imEventArchived = $00000017;
+  imEventContacts = $00000018;
+  imEventCategories = $00000025;
+  imEventLocation = $00000026;
+  imEventSoundFile = $00000027;
+  imEventAttendee = $00000028;
+  imEventShowTimeAs = $00000029;
+  imEventPriority = $0000002A;
+  imEventAllDayEvent = $0000002B;
+  imEventSynchTime = $0000002D;
+  imEventStartTime = $0000002E;
+  imEventEndTime = $0000002F;
+  imEventReminderTime = $00000030;
+  imEventRecurring = $00000031;
+  imEventReminder = $00000032;
+  imEventPlaySound = $00000033;
+  imEventHasAttachments = $00000034;
+  imEventOrganizerDescription = $0000004A;
+  imEventAssigneeDescription = $0000004B;
+  imEventTypeDescription = $0000004C;
+  imEventClassDescription = $0000004D;
+  imEventSubClassDescription = $0000004E;
+  imEventLastUserDescription = $0000004F;
+  imEventInUseByDescription = $00000050;
+  imEventEditTime = $00000051;
+  imEventFullText = $00000053;
+  imEventMarkedForArchive = $00000061;
+  imEventContainerID = $00000059;
+
+// Constants for enum imTaskAttributeID
+type
+  imTaskAttributeID = TOleEnum;
+const
+  imTaskDatabase = $00000000;
+  imTaskID = $00000001;
+  imTaskSubject = $00000003;
+  imTaskAssignee = $00000005;
+  imTaskOwner = $00000006;
+  imTaskType = $00000007;
+  imTaskClass = $00000008;
+  imTaskSubClass = $00000009;
+  imTaskEditDate = $0000000A;
+  imTaskCreateDate = $0000000B;
+  imTaskRetainDays = $0000000C;
+  imTaskSize = $0000000D;
+  imTaskIndexable = $0000000E;
+  imTaskDefaultSecurity = $00000011;
+  imTaskLastUser = $00000012;
+  imTaskInUseBy = $00000013;
+  imTaskInUse = $00000015;
+  imTaskArchived = $00000017;
+  imTaskContacts = $00000018;
+  imTaskCategories = $00000025;
+  imTaskRecurringPattern = $00000026;
+  imTaskSoundFile = $00000027;
+  imTaskUserProperty1 = $00000028;
+  imTaskStatus = $00000029;
+  imTaskPriority = $0000002A;
+  imTaskPercentageComplete = $0000002B;
+  imTaskTotalWork = $0000002C;
+  imTaskSynchTime = $0000002D;
+  imTaskStartDate = $0000002E;
+  imTaskDateCompleted = $0000002F;
+  imTaskDateDue = $00000030;
+  imTaskRecurring = $00000031;
+  imTaskReminder = $00000032;
+  imTaskPlaySound = $00000033;
+  imTaskHasAttachments = $00000034;
+  imTaskAssigneeDescription = $0000004A;
+  imTaskOwnerDescription = $0000004B;
+  imTaskTypeDescription = $0000004C;
+  imTaskClassDescription = $0000004D;
+  imTaskSubClassDescription = $0000004E;
+  imTaskLastUserDescription = $0000004F;
+  imTaskInUseByDescription = $00000050;
+  imTaskEditTime = $00000051;
+  imTaskFullText = $00000053;
+  imTaskMarkedForArchive = $00000061;
+  imTaskContainerID = $00000059;
+
+// Constants for enum imMessageAttributeID
+type
+  imMessageAttributeID = TOleEnum;
+const
+  imMessageDatabase = $00000000;
+  imMessageID = $00000001;
+  imMessageDescription = $00000003;
+  imMessageAuthor = $00000005;
+  imMessageType = $00000007;
+  imMessageClass = $00000008;
+  imMessageSubClass = $00000009;
+  imMessageEditDate = $0000000A;
+  imMessageCreateDate = $0000000B;
+  imMessageRetainDays = $0000000C;
+  imMessageSize = $0000000D;
+  imMessageIndexable = $0000000E;
+  imMessageDefaultSecurity = $00000011;
+  imMessageLastUser = $00000012;
+  imMessageInUseBy = $00000013;
+  imMessageInUse = $00000015;
+  imMessageArchived = $00000017;
+  imMessageIcon = $00000025;
+  imMessageTarget = $00000026;
+  imMessageEditTime = $00000051;
+  imMessageFullText = $00000053;
+  imMessageMarkedForArchive = $00000061;
+  imMessageContainerID = $00000059;
+
+// Constants for enum imDateRangeType
+type
+  imDateRangeType = TOleEnum;
+const
+  imAbsoluteDateRangeType = $00000000;
+  imRelativeDateRangeType = $00000001;
+
+// Constants for enum imGranularity
+type
+  imGranularity = TOleEnum;
+const
+  eSecond = $00000000;
+  eMinute = $00000001;
+  eHour = $00000002;
+  eDay = $00000003;
+  eWeek = $00000004;
+  eMonth = $00000005;
+  eQuarter = $00000006;
+  eYear = $00000007;
+
+// Constants for enum imCollaborationOperation
+type
+  imCollaborationOperation = TOleEnum;
+const
+  imCheckOutOp = $00000000;
+  imCheckInOp = $00000001;
+  imCopyOp = $00000002;
+  imUpdateOp = $00000003;
+  imLockOp = $00000004;
+  imUnlockOp = $00000005;
+  imArchiveOp = $00000006;
+  imRestoreOp = $00000007;
+  imSetSecurityOp = $00000008;
+  imDeleteOp = $00000009;
+
+// Constants for enum imSearchEnabledDisabled
+type
+  imSearchEnabledDisabled = TOleEnum;
+const
+  imSearchEnabledOnly = $00000400;
+  imSearchDisabledOnly = $00000800;
+  imSearchEnabledOrDisabled = $00000000;
+
+// Constants for enum imCheckinDisposition
+type
+  imCheckinDisposition = TOleEnum;
+const
+  imCheckinNewVersion = $00000000;
+  imCheckinNewDocument = $00000001;
+  imCheckinReplaceOriginal = $00000002;
+  imCheckinReplaceDocumentOnly = $00000003;
+  imCheckinReplaceProfileOnly = $00000004;
+
+// Constants for enum imCheckinOptions
+type
+  imCheckinOptions = TOleEnum;
+const
+  imDontKeepCheckedOut = $00000000;
+  imKeepCheckedOut = $00000001;
+
+// Constants for enum imCheckOutOptions
+type
+  imCheckOutOptions = TOleEnum;
+const
+  imDontReplaceExistingFile = $00000000;
+  imReplaceExistingFile = $00000001;
+
+// Constants for enum imGetCopyOptions
+type
+  imGetCopyOptions = TOleEnum;
+const
+  imNativeFormat = $00000000;
+  imHTMLFormat = $00000001;
+
+// Constants for enum imDocumentSubType
+type
+  imDocumentSubType = TOleEnum;
+const
+  imSubTypeNone = $00000000;
+  imSubTypePreferences = $00000001;
+  imSubTypeView = $00000002;
+  imSubTypeDocumentProfile = $00000003;
+  imSubTypeSearchProfile = $00000004;
+  imSubTypeCompound = $00000005;
+
+// Constants for enum imDocumentOperation
+type
+  imDocumentOperation = TOleEnum;
+const
+  imCheckOutDocumentOp = $00000000;
+  imCheckInDocumentOp = $00000001;
+  imCopyDocumentOp = $00000002;
+  imUpdateDocumentOp = $00000003;
+  imLockDocumentOp = $00000004;
+  imUnlockDocumentOp = $00000005;
+  imArchiveDocumentOp = $00000006;
+  imRestoreDocumentOp = $00000007;
+  imSetSecurityDocumentOp = $00000008;
+  imDeleteDocumentOp = $00000009;
+  imRelateDocumentOp = $0000000A;
+  imSyncDocumentOp = $0000000B;
+
+// Constants for enum imDatabaseOperation
+type
+  imDatabaseOperation = TOleEnum;
+const
+  imDatabaseCreateDocument = $00000000;
+  imDatabaseDeleteDocument = $00000001;
+  imDatabaseSearchFullText = $00000002;
+  imDatabaseCreatePublicFolder = $00000004;
+  imDatabaseCreatePublicSearchFolder = $00000005;
+  imDatabaseSearchWorkspaces = $0000000B;
+  imDatabaseAuthorWorkspaces = $0000000C;
+  imDatabaseAuthorPublicWorkspaces = $0000000D;
+  imDatabaseCreateSystemWorkspace = $00000010;
+  imDatabaseDeleteWorkspace = $00000014;
+
+// Constants for enum imNOSType
+type
+  imNOSType = TOleEnum;
+const
+  imExternalNOS = $00000001;
+  imInternalNOS = $00000002;
+  imAllNOS = $00000003;
+
+// Constants for enum imFolderOp
+type
+  imFolderOp = TOleEnum;
+const
+  imModifyFolderOp = $00000000;
+  imSetSecurityFolderOp = $00000001;
+  imRemoveThisFolderOp = $00000002;
+  imChangeNameFolderOp = $00000003;
+  imModifyLayoutOp = $00000004;
+
+// Constants for enum imHasProfilesOp
+type
+  imHasProfilesOp = TOleEnum;
+const
+  imAddHasProfilesOp = $00000000;
+  imRemoveHasProfilesOp = $00000001;
+
+// Constants for enum AttributeID
+type
+  AttributeID = TOleEnum;
+const
+  nrDatabase = $00000000;
+  nrDocNum = $00000001;
+  nrVersion = $00000002;
+  nrDescription = $00000003;
+  nrName = $00000004;
+  nrAuthor = $00000005;
+  nrOperator = $00000006;
+  nrType = $00000007;
+  nrClass = $00000008;
+  nrSubClass = $00000009;
+  nrEditDate = $0000000A;
+  nrCreateDate = $0000000B;
+  nrRetainDays = $0000000C;
+  nrSize = $0000000D;
+  nrIndexable = $0000000E;
+  nrIsRelated = $0000000F;
+  nrLocation = $00000010;
+  nrDefaultSecurity = $00000011;
+  nrLastUser = $00000012;
+  nrInUseBy = $00000013;
+  nrNetNode = $00000014;
+  nrInUse = $00000015;
+  nrCheckedOut = $00000016;
+  nrArchived = $00000017;
+  nrComment = $00000018;
+  nrCustom1 = $00000019;
+  nrCustom2 = $0000001A;
+  nrCustom3 = $0000001B;
+  nrCustom4 = $0000001C;
+  nrCustom5 = $0000001D;
+  nrCustom6 = $0000001E;
+  nrCustom7 = $0000001F;
+  nrCustom8 = $00000020;
+  nrCustom9 = $00000021;
+  nrCustom10 = $00000022;
+  nrCustom11 = $00000023;
+  nrCustom12 = $00000024;
+  nrCustom13 = $00000025;
+  nrCustom14 = $00000026;
+  nrCustom15 = $00000027;
+  nrCustom16 = $00000028;
+  nrCustom17 = $00000029;
+  nrCustom18 = $0000002A;
+  nrCustom19 = $0000002B;
+  nrCustom20 = $0000002C;
+  nrCustom21 = $0000002D;
+  nrCustom22 = $0000002E;
+  nrCustom23 = $0000002F;
+  nrCustom24 = $00000030;
+  nrCustom25 = $00000031;
+  nrCustom26 = $00000032;
+  nrCustom27 = $00000033;
+  nrCustom28 = $00000034;
+  nrCustom29 = $00000035;
+  nrCustom30 = $00000036;
+  nrCustom1Description = $0000003C;
+  nrCustom2Description = $0000003D;
+  nrCustom3Description = $0000003E;
+  nrCustom4Description = $0000003F;
+  nrCustom5Description = $00000040;
+  nrCustom6Description = $00000041;
+  nrCustom7Description = $00000042;
+  nrCustom8Description = $00000043;
+  nrCustom9Description = $00000044;
+  nrCustom10Description = $00000045;
+  nrCustom11Description = $00000046;
+  nrCustom12Description = $00000047;
+  nrCustom29Description = $00000048;
+  nrCustom30Description = $00000049;
+  nrAuthorDescription = $0000004A;
+  nrOperatorDescription = $0000004B;
+  nrTypeDescription = $0000004C;
+  nrClassDescription = $0000004D;
+  nrSubClassDescription = $0000004E;
+  nrLastUserDescription = $0000004F;
+  nrInUseByDescription = $00000050;
+  nrEditTime = $00000051;
+  nrExtension = $00000052;
+  nrFullText = $00000053;
+  nrSubType = $00000054;
+  nrEditProfileTime = $00000055;
+  nrContainerID = $00000059;
+  nrCustom31 = $00000060;
+  nrMarkedForArchive = $00000061;
+  nrEchoEnabled = $00000062;
+  nrAccessTime = $00000063;
+  nrMessageUniqueID = $00000064;
+
+// Constants for enum DiscussionAttributeID
+type
+  DiscussionAttributeID = TOleEnum;
+const
+  nrDiscussionDatabase = $00000000;
+  nrDiscussionID = $00000001;
+  nrDiscussionSubject = $00000003;
+  nrDiscussionAuthor = $00000005;
+  nrDiscussionType = $00000007;
+  nrDiscussionClass = $00000008;
+  nrDiscussionSubClass = $00000009;
+  nrDiscussionEditDate = $0000000A;
+  nrDiscussionCreateDate = $0000000B;
+  nrDiscussionRetainDays = $0000000C;
+  nrDiscussionSize = $0000000D;
+  nrDiscussionIndexable = $0000000E;
+  nrDiscussionDefaultSecurity = $00000011;
+  nrDiscussionLastUser = $00000012;
+  nrDiscussionInUseBy = $00000013;
+  nrDiscussionInUse = $00000015;
+  nrDiscussionArchived = $00000017;
+  nrDiscussionHasAttachments = $00000034;
+  nrDiscussionEditTime = $00000051;
+  nrDiscussionFullText = $00000053;
+  nrDiscussionMarkedForArchive = $00000061;
+  nrDiscussionContainerID = $00000059;
+
+// Constants for enum EventAttributeID
+type
+  EventAttributeID = TOleEnum;
+const
+  nrEventDatabase = $00000000;
+  nrEventID = $00000001;
+  nrEventSubject = $00000003;
+  nrEventOrganizer = $00000005;
+  nrEventAssignee = $00000006;
+  nrEventType = $00000007;
+  nrEventClass = $00000008;
+  nrEventSubClass = $00000009;
+  nrEventEditDate = $0000000A;
+  nrEventCreateDate = $0000000B;
+  nrEventRetainDays = $0000000C;
+  nrEventIndexable = $0000000E;
+  nrEventDefaultSecurity = $00000011;
+  nrEventLastUser = $00000012;
+  nrEventInUseBy = $00000013;
+  nrEventInUse = $00000015;
+  nrEventArchived = $00000017;
+  nrEventContacts = $00000018;
+  nrEventCategories = $00000025;
+  nrEventLocation = $00000026;
+  nrEventSoundFile = $00000027;
+  nrEventAttendee = $00000028;
+  nrEventShowTimeAs = $00000029;
+  nrEventPriority = $0000002A;
+  nrEventAllDayEvent = $0000002B;
+  nrEventSynchTime = $0000002D;
+  nrEventStartTime = $0000002E;
+  nrEventEndTime = $0000002F;
+  nrEventReminderTime = $00000030;
+  nrEventRecurring = $00000031;
+  nrEventReminder = $00000032;
+  nrEventPlaySound = $00000033;
+  nrEventHasAttachments = $00000034;
+  nrEventOrganizerDescription = $0000004A;
+  nrEventAssigneeDescription = $0000004B;
+  nrEventTypeDescription = $0000004C;
+  nrEventClassDescription = $0000004D;
+  nrEventSubClassDescription = $0000004E;
+  nrEventLastUserDescription = $0000004F;
+  nrEventInUseByDescription = $00000050;
+  nrEventEditTime = $00000051;
+  nrEventFullText = $00000053;
+  nrEventMarkedForArchive = $00000061;
+  nrEventContainerID = $00000059;
+
+// Constants for enum LinkAttributeID
+type
+  LinkAttributeID = TOleEnum;
+const
+  nrLinkDatabase = $00000000;
+  nrLinkID = $00000001;
+  nrLinkDescription = $00000003;
+  nrLinkOwner = $00000005;
+  nrLinkType = $00000007;
+  nrLinkClass = $00000008;
+  nrLinkSubClass = $00000009;
+  nrLinkEditDate = $0000000A;
+  nrLinkCreateDate = $0000000B;
+  nrLinkRetainDays = $0000000C;
+  nrLinkSize = $0000000D;
+  nrLinkIndexable = $0000000E;
+  nrLinkDefaultSecurity = $00000011;
+  nrLinkLastUser = $00000012;
+  nrLinkInUseBy = $00000013;
+  nrLinkInUse = $00000015;
+  nrLinkArchived = $00000017;
+  nrLinkIcon = $00000025;
+  nrLinkTarget = $00000026;
+  nrLinkEditTime = $00000051;
+  nrLinkFullText = $00000053;
+  nrLinkMarkedForArchive = $00000061;
+  nrLinkContainerID = $00000059;
+
+// Constants for enum TaskAttributeID
+type
+  TaskAttributeID = TOleEnum;
+const
+  nrTaskDatabase = $00000000;
+  nrTaskID = $00000001;
+  nrTaskSubject = $00000003;
+  nrTaskAssignee = $00000005;
+  nrTaskOwner = $00000006;
+  nrTaskType = $00000007;
+  nrTaskClass = $00000008;
+  nrTaskSubClass = $00000009;
+  nrTaskEditDate = $0000000A;
+  nrTaskCreateDate = $0000000B;
+  nrTaskRetainDays = $0000000C;
+  nrTaskSize = $0000000D;
+  nrTaskIndexable = $0000000E;
+  nrTaskDefaultSecurity = $00000011;
+  nrTaskLastUser = $00000012;
+  nrTaskInUseBy = $00000013;
+  nrTaskInUse = $00000015;
+  nrTaskArchived = $00000017;
+  nrTaskContacts = $00000018;
+  nrTaskCategories = $00000025;
+  nrTaskRecurringPattern = $00000026;
+  nrTaskSoundFile = $00000027;
+  nrTaskUserProperty1 = $00000028;
+  nrTaskStatus = $00000029;
+  nrTaskPriority = $0000002A;
+  nrTaskPercentageComplete = $0000002B;
+  nrTaskTotalWork = $0000002C;
+  nrTaskSynchTime = $0000002D;
+  nrTaskStartDate = $0000002E;
+  nrTaskDateCompleted = $0000002F;
+  nrTaskDateDue = $00000030;
+  nrTaskRecurring = $00000031;
+  nrTaskReminder = $00000032;
+  nrTaskPlaySound = $00000033;
+  nrTaskHasAttachments = $00000034;
+  nrTaskAssigneeDescription = $0000004A;
+  nrTaskOwnerDescription = $0000004B;
+  nrTaskTypeDescription = $0000004C;
+  nrTaskClassDescription = $0000004D;
+  nrTaskSubClassDescription = $0000004E;
+  nrTaskLastUserDescription = $0000004F;
+  nrTaskInUseByDescription = $00000050;
+  nrTaskEditTime = $00000051;
+  nrTaskFullText = $00000053;
+  nrTaskMarkedForArchive = $00000061;
+  nrTaskContainerID = $00000059;
+
+// Constants for enum IssueAttributeID
+type
+  IssueAttributeID = TOleEnum;
+const
+  nrIssueDatabase = $00000000;
+  nrIssueID = $00000001;
+  nrIssueSubject = $00000003;
+  nrIssueAssignee = $00000005;
+  nrIssueOwner = $00000006;
+  nrIssueType = $00000007;
+  nrIssueClass = $00000008;
+  nrIssueSubClass = $00000009;
+  nrIssueEditDate = $0000000A;
+  nrIssueCreateDate = $0000000B;
+  nrIssueRetainDays = $0000000C;
+  nrIssueSize = $0000000D;
+  nrIssueIndexable = $0000000E;
+  nrIssueDefaultSecurity = $00000011;
+  nrIssueLastUser = $00000012;
+  nrIssueInUseBy = $00000013;
+  nrIssueInUse = $00000015;
+  nrIssueArchived = $00000017;
+  nrIssueContacts = $00000018;
+  nrIssueCategories = $00000025;
+  nrIssueRecurringPattern = $00000026;
+  nrIssueSoundFile = $00000027;
+  nrIssueUserProperty1 = $00000028;
+  nrIssueStatus = $00000029;
+  nrIssuePriority = $0000002A;
+  nrIssuePercentageComplete = $0000002B;
+  nrIssueTotalWork = $0000002C;
+  nrIssueSynchTime = $0000002D;
+  nrIssueStartDate = $0000002E;
+  nrIssueDateCompleted = $0000002F;
+  nrIssueDateDue = $00000030;
+  nrIssueRecurring = $00000031;
+  nrIssueReminder = $00000032;
+  nrIssuePlaySound = $00000033;
+  nrIssueHasAttachments = $00000034;
+  nrIssueAssigneeDescription = $0000004A;
+  nrIssueOwnerDescription = $0000004B;
+  nrIssueTypeDescription = $0000004C;
+  nrIssueClassDescription = $0000004D;
+  nrIssueSubClassDescription = $0000004E;
+  nrIssueLastUserDescription = $0000004F;
+  nrIssueInUseByDescription = $00000050;
+  nrIssueEditTime = $00000051;
+  nrIssueFullText = $00000053;
+  nrIssueMarkedForArchive = $00000061;
+  nrIssueContainerID = $00000059;
+
+// Constants for enum UserAttributeID
+type
+  UserAttributeID = TOleEnum;
+const
+  nrUserName = $00000000;
+  nrUserFullName = $00000001;
+  nrUserLocation = $00000002;
+  nrUserPhone = $00000003;
+  nrUserExtension = $00000004;
+  nrUserLoginEnabled = $00000005;
+  nrUserFax = $00000006;
+  nrUserComments = $00000007;
+  nrUserEmail = $00000008;
+  nrUserPreferredDatabase = $0000000A;
+  nrUserDomainName = $0000000B;
+  nrUserNOS = $0000000C;
+  nrUserEmail2 = $0000000E;
+  nrUserPager = $0000000F;
+  nrUserMobile = $00000010;
+  nrUserOther = $00000011;
+  nrUserCustom1 = $00000012;
+  nrUserCustom2 = $00000013;
+  nrUserCustom3 = $00000014;
+  nrUserEmail3 = $00000015;
+  nrUserEmail4 = $00000016;
+  nrUserEmail5 = $00000017;
+
+// Constants for enum SearchAttributeType
+type
+  SearchAttributeType = TOleEnum;
+const
+  nrSearchID = $00000001;
+  nrSearchFullName = $00000002;
+  nrSearchBoth = $00000003;
+  nrSearchExactMatch = $00000004;
+
+// Constants for enum SecurityType
+type
+  SecurityType = TOleEnum;
+const
+  nrPrivate = $00000058;
+  nrPublic = $00000050;
+  nrView = $00000056;
+  nrInherit = $00000049;
+
+// Constants for enum IntMode
+type
+  IntMode = TOleEnum;
+const
+  nrIntegrationModeMacro = $00000001;
+  nrIntegrationModeODMA = $00000002;
+  nrIntegrationModeNonIntegrated = $00000003;
+
+// Constants for enum RoleAttributeID
+type
+  RoleAttributeID = TOleEnum;
+const
+  nrRoleUseAdmin = $00000000;
+  nrRoleUseMonitorApp = $00000001;
+  nrRoleAdminUseImportApp = $00000002;
+  nrRoleExternal = $00000003;
+  nrRoleDocumentCheckout = $00000004;
+  nrRoleDocumentCreate = $00000005;
+  nrRoleDocumentDelete = $00000006;
+  nrRoleDocumentEditPreviousVersion = $00000007;
+  nrRoleDocumentFullTextSearch = $00000008;
+  nrRoleDocumentReadOnly = $00000009;
+  nrRoleDocumentRelease = $0000000A;
+  nrRoleDocumentViewPublicDocument = $0000000B;
+  nrRoleFolderCreatePublicFolder = $0000000C;
+  nrRoleFolderCreatePublicSearchFolder = $0000000D;
+  nrRoleFolderDeletePublicFolder = $0000000E;
+  nrRoleFolderDeletePublicSearchFolder = $0000000F;
+  nrRoleFolderViewPublicFolder = $00000010;
+  nrRoleFolderViewPublicSearchFolder = $00000011;
+  nrWebRoleBrowsePages = $00000012;
+  nrWebRoleSearchPages = $00000013;
+  nrWebRoleAuthorPages = $00000014;
+  nrWebRoleSharePages = $00000015;
+  nrWebRoleCustomizePersonalViews = $00000016;
+  nrWebRoleCustomizePublicViews = $00000017;
+  nrWebRoleCreateSystemPages = $00000018;
+  nrRoleSecurityAllowExternalUsersInDefaultDocumentCalculation = $00000019;
+  nrRoleSecurityAllowExternalUsersInDefaultFolderCalculation = $0000001A;
+
+// Constants for enum AccessRight
+type
+  AccessRight = TOleEnum;
+const
+  nrRightNone = $00000000;
+  nrRightRead = $00000001;
+  nrRightReadWrite = $00000002;
+  nrRightAll = $00000003;
+
+// Constants for enum HistEvent
+type
+  HistEvent = TOleEnum;
+const
+  nrHistoryLaunch = $00000000;
+  nrHistoryView = $00000001;
+  nrHistoryCheckout = $00000002;
+  nrHistoryCheckin = $00000003;
+  nrHistoryProfileEdit = $00000004;
+  nrHistoryClose = $00000005;
+  nrHistoryNew = $00000006;
+  nrHistoryVersionNew = $00000007;
+  nrHistorySecurityChange = $00000008;
+  nrHistoryCopy = $00000009;
+  nrHistoryPrint = $0000000A;
+  nrHistoryMail = $0000000B;
+  nrHistoryEchoSync = $0000000C;
+  nrHistoryDelete = $0000000D;
+  nrHistoryPurge = $0000000E;
+  nrHistoryArchive = $0000000F;
+  nrHistoryRestore = $00000010;
+  nrHistoryRelease = $00000011;
+  nrHistoryExport = $00000012;
+  nrHistoryModify = $00000013;
+  nrHistoryEditTime = $00000014;
+  nrHistoryNotLogged = $00000015;
+
+// Constants for enum CheckinDisposition
+type
+  CheckinDisposition = TOleEnum;
+const
+  nrNewVersion = $00000000;
+  nrNewDocument = $00000001;
+  nrReplaceOriginal = $00000002;
+  nrReplaceDocumentOnly = $00000003;
+  nrReplaceProfileOnly = $00000004;
+
+// Constants for enum CheckinOptions
+type
+  CheckinOptions = TOleEnum;
+const
+  nrDontKeepCheckedOut = $00000000;
+  nrKeepCheckedOut = $00000001;
+
+// Constants for enum CheckOutOptions
+type
+  CheckOutOptions = TOleEnum;
+const
+  nrDontReplaceExistingFile = $00000000;
+  nrReplaceExistingFile = $00000001;
+
+// Constants for enum GetCopyOptions
+type
+  GetCopyOptions = TOleEnum;
+const
+  nrNativeFormat = $00000000;
+  nrHTMLFormat = $00000001;
+
+// Constants for enum DocumentSubType
+type
+  DocumentSubType = TOleEnum;
+const
+  nrTypeNone = $00000000;
+  nrTypePreferences = $00000001;
+  nrTypeView = $00000002;
+  nrTypeDocumentProfile = $00000003;
+  nrTypeSearchProfile = $00000004;
+  nrTypeCompound = $00000005;
+
+// Constants for enum DocumentOperation
+type
+  DocumentOperation = TOleEnum;
+const
+  nrCheckOutDocumentOp = $00000000;
+  nrCheckInDocumentOp = $00000001;
+  nrCopyDocumentOp = $00000002;
+  nrUpdateDocumentOp = $00000003;
+  nrLockDocumentOp = $00000004;
+  nrUnlockDocumentOp = $00000005;
+  nrArchiveDocumentOp = $00000006;
+  nrRestoreDocumentOp = $00000007;
+  nrSetSecurityDocumentOp = $00000008;
+  nrDeleteDocumentOp = $00000009;
+  nrRelateDocumentOp = $0000000A;
+  nrSyncDocumentOp = $0000000B;
+
+// Constants for enum FolderOperation
+type
+  FolderOperation = TOleEnum;
+const
+  nrModifyFolderOp = $00000000;
+  nrSetSecurityFolderOp = $00000001;
+  nrAddDocumentFolderOp = $00000002;
+  nrCreateSubFolderFolderOp = $00000003;
+  nrRemoveDocumentFolderOp = $00000004;
+  nrRemoveSubFolderFolderOp = $00000005;
+  nrRemoveThisFolderOp = $00000006;
+  nrChangeNameFolderOp = $00000007;
+
+// Constants for enum CollaborationOperation
+type
+  CollaborationOperation = TOleEnum;
+const
+  nrCheckOutOp = $00000000;
+  nrCheckInOp = $00000001;
+  nrCopyOp = $00000002;
+  nrUpdateOp = $00000003;
+  nrLockOp = $00000004;
+  nrUnlockOp = $00000005;
+  nrArchiveOp = $00000006;
+  nrRestoreOp = $00000007;
+  nrSetSecurityOp = $00000008;
+  nrDeleteOp = $00000009;
+
+// Constants for enum PageUpdateOptions
+type
+  PageUpdateOptions = TOleEnum;
+const
+  nrPageUpdateAll = $00000000;
+  nrPageUpdateProfile = $00000001;
+  nrPageUpdateDocument = $00000002;
+
+// Constants for enum PageOperation
+type
+  PageOperation = TOleEnum;
+const
+  nrCopyPageOp = $00000000;
+  nrUpdatePageOp = $00000001;
+  nrLockPageOp = $00000002;
+  nrUnlockPageOp = $00000003;
+  nrArchivePageOp = $00000004;
+  nrRestorePageOp = $00000005;
+  nrSetSecurityPageOp = $00000006;
+  nrDeletePageOp = $00000007;
+  nrChangeNamePageOp = $00000008;
+
+// Constants for enum SessionOperation
+type
+  SessionOperation = TOleEnum;
+const
+  nrSessionFullTextSearch = $00000100;
+  nrSessionPublicDocumentsSearch = $00000101;
+
+// Constants for enum ControlType
+type
+  ControlType = TOleEnum;
+const
+  nrLabelWidget = $00000001;
+  nrEditWidget = $00000002;
+  nrButtonWidget = $00000003;
+  nrListWidget = $00000004;
+  nrDateWidget = $00000005;
+  nrBorButtonWidget = $00000006;
+  nrShadeWidget = $00000007;
+  nrHDipWidget = $00000008;
+  nrVDipWidget = $00000009;
+  nrCheckWidget = $0000000A;
+  nrRadioWidget = $0000000B;
+  nrComboWidget = $0000000C;
+  nrActiveLabel = $0000000D;
+
+// Constants for enum FormType
+type
+  FormType = TOleEnum;
+const
+  nrFormSearchDialog = $00000001;
+  nrFormNewProfile = $00000002;
+  nrFormNewVersion = $00000003;
+  nrFormEditProfile = $00000004;
+
+// Constants for enum AttributeType
+type
+  AttributeType = TOleEnum;
+const
+  nrEmpty = $00000000;
+  nrNull = $00000001;
+  nrInteger = $00000002;
+  nrLong = $00000003;
+  nrSingle = $00000004;
+  nrDouble = $00000005;
+  nrCurrency = $00000006;
+  nrDate = $00000007;
+  nrString = $00000008;
+  nrObject = $00000009;
+  nrError = $0000000A;
+  nrBoolean = $0000000B;
+  nrVariant = $0000000C;
+  nrDataObject = $0000000D;
+  nrDecimal = $0000000E;
+  nrByte = $00000011;
+  nrArray = $00002000;
+
+// Constants for enum DatabaseOperation
+type
+  DatabaseOperation = TOleEnum;
+const
+  nrDatabaseCreateDocument = $00000000;
+  nrDatabaseDeleteDocument = $00000001;
+  nrDatabaseSearchFullText = $00000002;
+  nrDatabaseViewPublicDocument = $00000003;
+  nrDatabaseCreatePublicFolder = $00000004;
+  nrDatabaseCreatePublicSearchFolder = $00000005;
+  nrDatabaseDeletePublicFolder = $00000006;
+  nrDatabaseDeletePublicSearchFolder = $00000007;
+  nrDatabaseViewPublicFolder = $00000008;
+  nrDatabaseViewPublicSearchFolder = $00000009;
+  nrDatabaseBrowsePages = $0000000A;
+  nrDatabaseSearchPages = $0000000B;
+  nrDatabaseAuthorPages = $0000000C;
+  nrDatabaseSharePages = $0000000D;
+  nrDatabaseCustomizePersonalViews = $0000000E;
+  nrDatabaseCustomizePublicViews = $0000000F;
+  nrDatabaseCreateSystemPages = $00000010;
+  nrDatabaseAllowExternalUsersInDefaultDocumentCalculation = $00000011;
+  nrDatabaseAllowExternalUsersInDefaultFolderCalculation = $00000012;
+
+// Constants for enum NOSType
+type
+  NOSType = TOleEnum;
+const
+  nrExternalNOS = $00000001;
+  nrInternalNOS = $00000002;
+  nrAllNOS = $00000003;
+
+// Constants for enum StringSearchAnchor
+type
+  StringSearchAnchor = TOleEnum;
+const
+  nrAnchorStart = $00000001;
+  nrAnchorContains = $00000002;
+  nrAnchorEnd = $00000003;
+
+// Constants for enum SearchAttributeTypeModifier
+type
+  SearchAttributeTypeModifier = TOleEnum;
+const
+  nrSearchEnabledOnly = $00000400;
+  nrSearchDisabledOnly = $00000800;
+  nrSearchEnabledOrDisabled = $00000000;
+
+// Constants for enum ProfileErrorCode
+type
+  ProfileErrorCode = TOleEnum;
+const
+  nrErrorFieldRequired = $00000001;
+  nrErrorFieldDisabled = $00000002;
+  nrErrorItemInvalid = $00000003;
+  nrFieldErrorRelation = $00000004;
+
+// Constants for enum ACLType
+type
+  ACLType = TOleEnum;
+const
+  nrUser = $00000055;
+  nrGroup = $00000047;
+
+// Constants for enum imSpecialFolderIDs
+type
+  imSpecialFolderIDs = TOleEnum;
+const
+  imRootFolderID = $00000000;
+
+type
+
+// *********************************************************************//
+// Forward declaration of types defined in TypeLibrary                    
+// *********************************************************************//
+  IManObject = interface;
+  IManObjectType = interface;
+  IManObjectTypes = interface;
+  IManAdditionalProperties = interface;
+  IManAdditionalProperty = interface;
+  IManQuery = interface;
+  IManAndQuery = interface;
+  IManQueries = interface;
+  IManFieldQuery = interface;
+  IManStrings = interface;
+  IManOrQuery = interface;
+  IManAttachment = interface;
+  IManAttachments = interface;
+  IManAttributeDefinition = interface;
+  IManAttributeDefinitions = interface;
+  IManAttributeSelections = interface;
+  IManFolder = interface;
+  IManContents = interface;
+  IManContent = interface;
+  IManObjectSort = interface;
+  IManDatabase = interface;
+  IManSession = interface;
+  IManWorkArea = interface;
+  IManFavoritesFolder = interface;
+  IManSubscriptionFolder = interface;
+  IManFolderSearchParameters = interface;
+  IManSubscriptionFolderSearchParameters = interface;
+  IManFolderSearchParameter = interface;
+  IManFolders = interface;
+  IManWorkspaces = interface;
+  IManProfiledFolder = interface;
+  IManWorkspace = interface;
+  IManProfile = interface;
+  IManDocumentClass = interface;
+  IManDocumentClasses = interface;
+  IManDocumentType = interface;
+  IManLaunchMethod = interface;
+  IManLaunchMethods = interface;
+  IManUser = interface;
+  IManRole = interface;
+  IManRoleEditCreates = interface;
+  IManRoleEditCreate = interface;
+  IManRoleSearchProfiles = interface;
+  IManRoleSearchProfile = interface;
+  IManUsers = interface;
+  IManSecurityTemplate = interface;
+  IManSecurity = interface;
+  IManGroupACLs = interface;
+  IManGroupACL = interface;
+  IManGroup = interface;
+  IManUserACLs = interface;
+  IManUserACL = interface;
+  IManSecurityTemplates = interface;
+  IManGroups = interface;
+  IManHistoryList = interface;
+  IManDocumentHistory = interface;
+  IManTaskFolders = interface;
+  IManTaskFolder = interface;
+  IManMessageFolders = interface;
+  IManMessageFolder = interface;
+  IManEventFolders = interface;
+  IManEventFolder = interface;
+  IManDocumentFolders = interface;
+  IManDocumentFolder = interface;
+  IManConnectorFolders = interface;
+  IManBodiedFolder = interface;
+  IManConnectorFolder = interface;
+  IManLinkListFolders = interface;
+  IManLinkListFolder = interface;
+  IManNoteFolders = interface;
+  IManNoteFolder = interface;
+  IManTabs = interface;
+  IManTab = interface;
+  IManProfileUpdateResult = interface;
+  IManProfileErrors = interface;
+  IManProfileError = interface;
+  IManUserPreferences = interface;
+  IManForm = interface;
+  IManControls = interface;
+  IManControl = interface;
+  IManProfileSearchParameters = interface;
+  IManProfileSearchParameter = interface;
+  IManFullTextSearchParameter = interface;
+  IManDatabases = interface;
+  IManDMS = interface;
+  IManWorkspaceSearchParameters = interface;
+  IManEventSearchParameters = interface;
+  IManEventSearchParameter = interface;
+  IManTaskSearchParameters = interface;
+  IManTaskSearchParameter = interface;
+  IManMessageSearchParameters = interface;
+  IManMessageSearchParameter = interface;
+  IManSessions = interface;
+  IManTabContents = interface;
+  IManDateRange = interface;
+  IManRelativeDate = interface;
+  IManDate = interface;
+  IManDateDisp = dispinterface;
+  IManEvents = interface;
+  IManProfiledContent = interface;
+  IManEvent = interface;
+  IManRules = interface;
+  IManRule = interface;
+  IManRuleHandler = interface;
+  IManRuleEventTypes = interface;
+  IManRuleEventType = interface;
+  IManTasks = interface;
+  IManTask = interface;
+  IManCancel = interface;
+  IManMessages = interface;
+  IManMessage = interface;
+  IManForms = interface;
+  IManRuleHandlers = interface;
+  IManRoles = interface;
+  IManDocument = interface;
+  IManCustomAttributes = interface;
+  IManCustomAttribute = interface;
+  IManRelatedDocuments = interface;
+  IManSyncResult = interface;
+  IManCheckinResult = interface;
+  IManDocumentTypes = interface;
+  IManLocation = interface;
+  IManCustomProperties = interface;
+  IManCustomProperty = interface;
+  IManCaptions = interface;
+  IManContentShortcut = interface;
+  IManContentShortcuts = interface;
+  IManContents_Dispatch = interface;
+  IManContents_DispatchDisp = dispinterface;
+  IManDocuments = interface;
+  IManDocumentSearchFolder = interface;
+  IManDocumentSearchFolders = interface;
+  IManFavoritesFolders = interface;
+  IManFolderShortcut = interface;
+  IManFolderShortcuts = interface;
+  IManGenericBodiedFolder = interface;
+  IManGenericBodiedFolders = interface;
+  IManHasLocation = interface;
+  IManHasProfile = interface;
+  IManHasProfiles = interface;
+  IManObjects = interface;
+  IManRudimentary_Dispatch = interface;
+  IManRudimentary_DispatchDisp = dispinterface;
+  IManSessionSearchNotification = interface;
+  IErrorInfo = interface;
+  IManSubscriptionFolders = interface;
+  IManSubscriptionFolderShortcuts = interface;
+  IManWorkspaceSearchFolder = interface;
+  IManWorkspaceSearchFolders = interface;
+  IManWorkspaceShortcuts = interface;
+  INRTIssueFolder = interface;
+  INRTIssueFolderDisp = dispinterface;
+  INRTDatabase = interface;
+  INRTDatabaseDisp = dispinterface;
+  INRTSession = interface;
+  INRTSessionDisp = dispinterface;
+  INRTDatabases = interface;
+  INRTDatabasesDisp = dispinterface;
+  INRTDMS = interface;
+  INRTDMSDisp = dispinterface;
+  INRTSessions = interface;
+  INRTSessionsDisp = dispinterface;
+  INRTSearchParameters = interface;
+  INRTSearchParametersDisp = dispinterface;
+  INRTSearchParameter = interface;
+  INRTSearchParameterDisp = dispinterface;
+  INRTDiscussionParameters = interface;
+  INRTDiscussionParametersDisp = dispinterface;
+  INRTDiscussionParameter = interface;
+  INRTDiscussionParameterDisp = dispinterface;
+  INRTEventParameters = interface;
+  INRTEventParametersDisp = dispinterface;
+  INRTEventParameter = interface;
+  INRTEventParameterDisp = dispinterface;
+  INRTLinkParameters = interface;
+  INRTLinkParametersDisp = dispinterface;
+  INRTLinkParameter = interface;
+  INRTLinkParameterDisp = dispinterface;
+  INRTTaskParameters = interface;
+  INRTTaskParametersDisp = dispinterface;
+  INRTTaskParameter = interface;
+  INRTTaskParameterDisp = dispinterface;
+  INRTIssueParameters = interface;
+  INRTIssueParametersDisp = dispinterface;
+  INRTIssueParameter = interface;
+  INRTIssueParameterDisp = dispinterface;
+  INRTUserParameters = interface;
+  INRTUserParametersDisp = dispinterface;
+  INRTUserParameter = interface;
+  INRTUserParameterDisp = dispinterface;
+  INRTPerformanceSnapshot = interface;
+  INRTPerformanceSnapshotDisp = dispinterface;
+  INRTMethodCalls = interface;
+  INRTMethodCallsDisp = dispinterface;
+  INRTMethodCall = interface;
+  INRTMethodCallDisp = dispinterface;
+  INRTServerCalls = interface;
+  INRTServerCallsDisp = dispinterface;
+  INRTServerCall = interface;
+  INRTServerCallDisp = dispinterface;
+  INRTObjectData = interface;
+  INRTObjectDataDisp = dispinterface;
+  INRTObjectDatum = interface;
+  INRTObjectDatumDisp = dispinterface;
+  INRTPage = interface;
+  INRTPageDisp = dispinterface;
+  INRTDocumentClass = interface;
+  INRTDocumentClassDisp = dispinterface;
+  INRTDocumentClasses = interface;
+  INRTDocumentClassesDisp = dispinterface;
+  INRTAttributeSelections = interface;
+  INRTAttributeSelectionsDisp = dispinterface;
+  INRTDocumentType = interface;
+  INRTDocumentTypeDisp = dispinterface;
+  INRTLaunchMethod = interface;
+  INRTLaunchMethodDisp = dispinterface;
+  INRTLaunchMethods = interface;
+  INRTLaunchMethodsDisp = dispinterface;
+  INRTUser = interface;
+  INRTUserDisp = dispinterface;
+  INRTRole = interface;
+  INRTRoleDisp = dispinterface;
+  INRTRoleEditCreates = interface;
+  INRTRoleEditCreatesDisp = dispinterface;
+  INRTRoleEditCreate = interface;
+  INRTRoleEditCreateDisp = dispinterface;
+  INRTStrings = interface;
+  INRTStringsDisp = dispinterface;
+  INRTRoleSearchProfiles = interface;
+  INRTRoleSearchProfilesDisp = dispinterface;
+  INRTRoleSearchProfile = interface;
+  INRTRoleSearchProfileDisp = dispinterface;
+  INRTUsers = interface;
+  INRTUsersDisp = dispinterface;
+  INRTAdditionalProperties = interface;
+  INRTAdditionalPropertiesDisp = dispinterface;
+  INRTAdditionalProperty = interface;
+  INRTAdditionalPropertyDisp = dispinterface;
+  INRTSecurityTemplate = interface;
+  INRTSecurityTemplateDisp = dispinterface;
+  INRTSecurity = interface;
+  INRTSecurityDisp = dispinterface;
+  INRTGroupACLs = interface;
+  INRTGroupACLsDisp = dispinterface;
+  INRTGroupACL = interface;
+  INRTGroupACLDisp = dispinterface;
+  INRTGroup = interface;
+  INRTGroupDisp = dispinterface;
+  INRTUserACLs = interface;
+  INRTUserACLsDisp = dispinterface;
+  INRTUserACL = interface;
+  INRTUserACLDisp = dispinterface;
+  INRTSecurityTemplates = interface;
+  INRTSecurityTemplatesDisp = dispinterface;
+  INRTGroups = interface;
+  INRTGroupsDisp = dispinterface;
+  INRTFolders = interface;
+  INRTFoldersDisp = dispinterface;
+  INRTFolder = interface;
+  INRTFolderDisp = dispinterface;
+  INRTDocuments = interface;
+  INRTDocumentsDisp = dispinterface;
+  INRTDocument = interface;
+  INRTDocumentDisp = dispinterface;
+  INRTCustomAttributes = interface;
+  INRTCustomAttributesDisp = dispinterface;
+  INRTCustomAttribute = interface;
+  INRTCustomAttributeDisp = dispinterface;
+  INRTHistoryList = interface;
+  INRTHistoryListDisp = dispinterface;
+  INRTDocumentHistory = interface;
+  INRTDocumentHistoryDisp = dispinterface;
+  INRTRules = interface;
+  INRTRulesDisp = dispinterface;
+  INRTRule = interface;
+  INRTRuleDisp = dispinterface;
+  INRTRuleEventTypes = interface;
+  INRTRuleEventTypesDisp = dispinterface;
+  INRTRuleEventType = interface;
+  INRTRuleEventTypeDisp = dispinterface;
+  INRTEventHandler = interface;
+  INRTEventHandlerDisp = dispinterface;
+  INRTTaskFolders = interface;
+  INRTTaskFoldersDisp = dispinterface;
+  INRTTaskFolder = interface;
+  INRTTaskFolderDisp = dispinterface;
+  INRTTasks = interface;
+  INRTTasksDisp = dispinterface;
+  INRTTask = interface;
+  INRTTaskDisp = dispinterface;
+  INRTAttachments = interface;
+  INRTAttachmentsDisp = dispinterface;
+  INRTAttachment = interface;
+  INRTAttachmentDisp = dispinterface;
+  INRTLinkFolders = interface;
+  INRTLinkFoldersDisp = dispinterface;
+  INRTLinkFolder = interface;
+  INRTLinkFolderDisp = dispinterface;
+  INRTLinks = interface;
+  INRTLinksDisp = dispinterface;
+  INRTLink = interface;
+  INRTLinkDisp = dispinterface;
+  INRTDiscussionFolders = interface;
+  INRTDiscussionFoldersDisp = dispinterface;
+  INRTDiscussionFolder = interface;
+  INRTDiscussionFolderDisp = dispinterface;
+  INRTMessages = interface;
+  INRTMessagesDisp = dispinterface;
+  INRTMessage = interface;
+  INRTMessageDisp = dispinterface;
+  INRTEventFolders = interface;
+  INRTEventFoldersDisp = dispinterface;
+  INRTEventFolder = interface;
+  INRTEventFolderDisp = dispinterface;
+  INRTEvents = interface;
+  INRTEventsDisp = dispinterface;
+  INRTEvent = interface;
+  INRTEventDisp = dispinterface;
+  INRTReferenceFolders = interface;
+  INRTReferenceFoldersDisp = dispinterface;
+  INRTReferenceFolder = interface;
+  INRTReferenceFolderDisp = dispinterface;
+  INRTIssueFolders = interface;
+  INRTIssueFoldersDisp = dispinterface;
+  INRTPages = interface;
+  INRTPagesDisp = dispinterface;
+  INRTIssues = interface;
+  INRTIssuesDisp = dispinterface;
+  INRTIssue = interface;
+  INRTIssueDisp = dispinterface;
+  INRTForms = interface;
+  INRTFormsDisp = dispinterface;
+  INRTForm = interface;
+  INRTFormDisp = dispinterface;
+  INRTControls = interface;
+  INRTControlsDisp = dispinterface;
+  INRTControl = interface;
+  INRTControlDisp = dispinterface;
+  INRTAttributeDefinitions = interface;
+  INRTAttributeDefinitionsDisp = dispinterface;
+  INRTAttributeDefinition = interface;
+  INRTAttributeDefinitionDisp = dispinterface;
+  INRTDocumentTypes = interface;
+  INRTDocumentTypesDisp = dispinterface;
+  INRTRoles = interface;
+  INRTRolesDisp = dispinterface;
+  INRTEventHandlers = interface;
+  INRTEventHandlersDisp = dispinterface;
+  INRTIssueFolder2 = interface;
+  INRTIssueFolder2Disp = dispinterface;
+  INRTLinkFolder2 = interface;
+  INRTLinkFolder2Disp = dispinterface;
+  INRTDMS2 = interface;
+  INRTDMS2Disp = dispinterface;
+  INRTDMSCancel = interface;
+  INRTCancel = interface;
+  INRTSessionSearchNotification = interface;
+  INRTSessionControl = interface;
+  INRTDatabaseMisc = interface;
+  INRTDocumentsControl = interface;
+  INRTFolder2 = interface;
+  INRTFolder2Disp = dispinterface;
+  INRTFolder3 = interface;
+  INRTFolder3Disp = dispinterface;
+  INRTFolders2 = interface;
+  INRTFolders2Disp = dispinterface;
+  INRTFoldersControl = interface;
+  INRTUserDomain = interface;
+  INRTUserVeryTransientInterface = interface;
+  INRTGroup2 = interface;
+  INRTGroup2Disp = dispinterface;
+  INRTUserACLsWeb = interface;
+  INRTUserACLsWebDisp = dispinterface;
+  INRTGroupACLsWeb = interface;
+  INRTGroupACLsWebDisp = dispinterface;
+  INRTUserACLWeb = interface;
+  INRTUserACLWebDisp = dispinterface;
+  INRTGroupACLWeb = interface;
+  INRTGroupACLWebDisp = dispinterface;
+  INRTCollectionDataEnum = interface;
+  INRTObjectDataSort = interface;
+  INRTObjectDataControl = interface;
+  INRTMethodCallsControl = interface;
+  INRTStrings2 = interface;
+  INRTStrings2Disp = dispinterface;
+  INRTProfileError = interface;
+  INRTProfileErrorDisp = dispinterface;
+  INRTPerformanceCollectionEnum = interface;
+  INRTCacheCheckpoint = interface;
+  INRTCacheCheckpointDisp = dispinterface;
+  IManThreadInfo = interface;
+  INRTDMS3 = interface;
+  INRTDMS3Disp = dispinterface;
+  ISmartNRTDMS = interface;
+  ISmartNRTDMSDisp = dispinterface;
+  INRTSession2 = interface;
+  INRTSession2Disp = dispinterface;
+  INRTDatabase2 = interface;
+  INRTDatabase2Disp = dispinterface;
+  INRTObjectData2 = interface;
+  INRTObjectData2Disp = dispinterface;
+  INRTPage2 = interface;
+  INRTPage2Disp = dispinterface;
+  INRTTaskFolder2 = interface;
+  INRTTaskFolder2Disp = dispinterface;
+  INRTEventFolder2 = interface;
+  INRTEventFolder2Disp = dispinterface;
+  INRTDiscussionFolder2 = interface;
+  INRTDiscussionFolder2Disp = dispinterface;
+  INRTStats = interface;
+  INRTStatsDisp = dispinterface;
+  INRTTraceInfo = interface;
+  INRTTraceInfoDisp = dispinterface;
+  INRTDate = interface;
+  INRTDateDisp = dispinterface;
+  INRTDateRange = interface;
+  INRTDateRangeDisp = dispinterface;
+
+// *********************************************************************//
+// Declaration of CoClasses defined in Type Library                       
+// (NOTE: Here we map each CoClass to its Default Interface)              
+// *********************************************************************//
+  ManStrings = IManStrings;
+  ManAndQuery = IManAndQuery;
+  ManOrQuery = IManOrQuery;
+  NRTDMS = INRTDMS3;
+  ManDMS = IManDMS;
+  SmartNRTDms = ISmartNRTDMS;
+  NRTSessions = INRTSessions;
+  NRTSession = INRTSession2;
+  NRTDatabases = INRTDatabases;
+  NRTDatabase = INRTDatabase2;
+  NRTForms = INRTForms;
+  NRTForm = INRTForm;
+  NRTDocuments = INRTDocuments;
+  NRTFolder = INRTFolder2;
+  NRTFolders = INRTFolders;
+  NRTControls = INRTControls;
+  NRTControl = INRTControl;
+  NRTSecurity = INRTSecurity;
+  NRTSecurityWeb = INRTSecurity;
+  NRTSecurityTemplate = INRTSecurityTemplate;
+  NRTSecurityTemplates = INRTSecurityTemplates;
+  NRTUser = INRTUser;
+  NRTGroup = INRTGroup;
+  NRTUserACL = INRTUserACL;
+  NRTGroupACL = INRTGroupACL;
+  NRTGroupACLs = INRTGroupACLs;
+  NRTUserACLs = INRTUserACLs;
+  NRTSearchParameters = INRTSearchParameters;
+  NRTUsers = INRTUsers;
+  NRTGroups = INRTGroups;
+  NRTRole = INRTRole;
+  NRTRoles = INRTRoles;
+  NRTDocumentType = INRTDocumentType;
+  NRTDocumentTypes = INRTDocumentTypes;
+  NRTLaunchMethod = INRTLaunchMethod;
+  NRTLaunchMethods = INRTLaunchMethods;
+  NRTDocumentClass = INRTDocumentClass;
+  NRTDocumentClasses = INRTDocumentClasses;
+  NRTDocumentHistory = INRTDocumentHistory;
+  NRTHistoryList = INRTHistoryList;
+  NRTAttributeDefinition = INRTAttributeDefinition;
+  NRTAttributeDefinitions = INRTAttributeDefinitions;
+  NRTCustomAttributes = INRTCustomAttributes;
+  NRTCustomAttribute = INRTCustomAttribute;
+  NRTDocument = INRTDocument;
+  NRTAttributeSelections = INRTAttributeSelections;
+  NRTSearchParameter = INRTSearchParameter;
+  NRTCollectionDataEnum = INRTCollectionDataEnum;
+  NRTAttributeSelectionsEnum = IEnumVARIANT;
+  NRTProfileError = INRTProfileError;
+  NRTPerformanceSnapshot = INRTPerformanceSnapshot;
+  NRTMethodCall = INRTMethodCall;
+  NRTMethodCalls = INRTMethodCalls;
+  NRTServerCall = INRTServerCall;
+  NRTServerCalls = INRTServerCalls;
+  NRTObjectDatum = INRTObjectDatum;
+  NRTObjectData = INRTObjectData2;
+  NRTObjectDataSort = INRTObjectDataSort;
+  NRTPerformanceCollectionEnum = INRTPerformanceCollectionEnum;
+  STLEnumVARIANT = IEnumVARIANT;
+  NRTRoleEditCreate = INRTRoleEditCreate;
+  NRTRoleSearchProfile = INRTRoleSearchProfile;
+  NRTRoleEditCreates = INRTRoleEditCreates;
+  NRTRoleSearchProfiles = INRTRoleSearchProfiles;
+  NRTStrings = INRTStrings;
+  NRTUserACLWeb = INRTUserACLWeb;
+  NRTUserACLsWeb = INRTUserACLsWeb;
+  NRTGroupACLWeb = INRTGroupACLWeb;
+  NRTGroupACLsWeb = INRTGroupACLsWeb;
+  NRTRuleEventType = INRTRuleEventType;
+  NRTEventHandler = INRTEventHandler;
+  NRTRule = INRTRule;
+  NRTEventHandlers = INRTEventHandlers;
+  NRTRules = INRTRules;
+  NRTRuleEventTypes = INRTRuleEventTypes;
+  NRTAdditionalProperties = INRTAdditionalProperties;
+  NRTAdditionalProperty = INRTAdditionalProperty;
+  NRTPages = INRTPages;
+  NRTPage = INRTPage2;
+  NRTTasks = INRTTasks;
+  NRTTask = INRTTask;
+  NRTTaskFolders = INRTTaskFolders;
+  NRTTaskFolder = INRTTaskFolder2;
+  NRTEvent = INRTEvent;
+  NRTEvents = INRTEvents;
+  NRTEventFolders = INRTEventFolders;
+  NRTEventFolder = INRTEventFolder2;
+  NRTMessage = INRTMessage;
+  NRTMessages = INRTMessages;
+  NRTDiscussionFolders = INRTDiscussionFolders;
+  NRTDiscussionFolder = INRTDiscussionFolder2;
+  NRTAttachment = INRTAttachment;
+  NRTAttachments = INRTAttachments;
+  NRTTaskParameter = INRTTaskParameter;
+  NRTTaskParameters = INRTTaskParameters;
+  NRTEventParameter = INRTEventParameter;
+  NRTEventParameters = INRTEventParameters;
+  NRTDiscussionParameter = INRTDiscussionParameter;
+  NRTDiscussionParameters = INRTDiscussionParameters;
+  NRTUserParameter = INRTUserParameter;
+  NRTUserParameters = INRTUserParameters;
+  NRTStats = INRTStats;
+  NRTTraceInfo = INRTTraceInfo;
+  NRTDate = INRTDate;
+  NRTDateRange = INRTDateRange;
+
+
+// *********************************************************************//
+// Interface: IManObject
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {3B34D56B-4C64-4042-AA07-F7D5A88E38E4}
+// *********************************************************************//
+  IManObject = interface(IUnknown)
+    ['{3B34D56B-4C64-4042-AA07-F7D5A88E38E4}']
+    function  Get_ObjectType(out pVal: IManObjectType): HResult; stdcall;
+    function  Get_HasObjectID(out pVal: WordBool): HResult; stdcall;
+    function  Get_ObjectID(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManObjectType
+// Flags:     (4480) NonExtensible OleAutomation Dispatchable
+// GUID:      {34A9EDB0-ED43-47A9-B511-CB2A2833513F}
+// *********************************************************************//
+  IManObjectType = interface(IDispatch)
+    ['{34A9EDB0-ED43-47A9-B511-CB2A2833513F}']
+    function  Get_ObjectType(out pVal: imObjectType): HResult; stdcall;
+    function  Get_SupportedTypes(out pVal: IManObjectTypes): HResult; stdcall;
+    function  SupportsType(ObjectTypeEnum: imObjectType; out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManObjectTypes
+// Flags:     (4480) NonExtensible OleAutomation Dispatchable
+// GUID:      {7A053202-739D-451E-9A3D-6F6BCFD41B50}
+// *********************************************************************//
+  IManObjectTypes = interface(IDispatch)
+    ['{7A053202-739D-451E-9A3D-6F6BCFD41B50}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Contains(ObjectType: imObjectType; out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: imObjectType): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAdditionalProperties
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {087EE370-C5F4-4EE1-ADA3-999CA3486C05}
+// *********************************************************************//
+  IManAdditionalProperties = interface(IManObject)
+    ['{087EE370-C5F4-4EE1-ADA3-999CA3486C05}']
+    function  ItemByIndex(val: Integer; out pVal: IManAdditionalProperty): HResult; stdcall;
+    function  ItemByName(const val: WideString; out pVal: IManAdditionalProperty): HResult; stdcall;
+    function  ContainsByName(const val: WideString; out pVal: WordBool): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Add(const Name: WideString; const val: WideString; out event: IManAdditionalProperty): HResult; stdcall;
+    function  RemoveByIndex(val: Integer): HResult; stdcall;
+    function  RemoveByName(const val: WideString): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAdditionalProperty
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {57182871-CE4A-4CA6-AA5D-593E9B6C8EA1}
+// *********************************************************************//
+  IManAdditionalProperty = interface(IManObject)
+    ['{57182871-CE4A-4CA6-AA5D-593E9B6C8EA1}']
+    function  Get_Name(out Name: WideString): HResult; stdcall;
+    function  Set_Name(const Name: WideString): HResult; stdcall;
+    function  Get_Value(out val: WideString): HResult; stdcall;
+    function  Set_Value(const val: WideString): HResult; stdcall;
+    function  Get_Number(out val: Integer): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManQuery
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {50CF36CA-DBCE-4486-81DF-F4F3D80ED7B5}
+// *********************************************************************//
+  IManQuery = interface(IManObject)
+    ['{50CF36CA-DBCE-4486-81DF-F4F3D80ED7B5}']
+    function  Get_QueryType(out pVal: imQueryType): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAndQuery
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {DCC95D82-3BFB-47A7-AE8A-E5BB86B1319A}
+// *********************************************************************//
+  IManAndQuery = interface(IManQuery)
+    ['{DCC95D82-3BFB-47A7-AE8A-E5BB86B1319A}']
+    function  Get_Values(out pVal: IManQueries): HResult; stdcall;
+    function  AddFieldQuery(Attr: imProfileAttributeID; out pVal: IManFieldQuery): HResult; stdcall;
+    function  AddAndQuery(out pVal: IManAndQuery): HResult; stdcall;
+    function  AddOrQuery(out pVal: IManOrQuery): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManQueries
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A373521D-5EDF-47EA-8336-6E8B11F095AC}
+// *********************************************************************//
+  IManQueries = interface(IManObject)
+    ['{A373521D-5EDF-47EA-8336-6E8B11F095AC}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManQuery): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFieldQuery
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {8E2BF8BF-BA64-40C8-B671-F7E4491E045E}
+// *********************************************************************//
+  IManFieldQuery = interface(IManQuery)
+    ['{8E2BF8BF-BA64-40C8-B671-F7E4491E045E}']
+    function  Get_AttributeID(out pVal: imProfileAttributeID): HResult; stdcall;
+    function  Get_Values(out pVal: IManStrings): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManStrings
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A19CE0AA-922E-4025-B38C-AB3D5E4F2D02}
+// *********************************************************************//
+  IManStrings = interface(IManObject)
+    ['{A19CE0AA-922E-4025-B38C-AB3D5E4F2D02}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: WideString): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Contains(const TargetString: WideString; out pVal: WordBool): HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByString(const ValueToRemove: WideString): HResult; stdcall;
+    function  Add(const newVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManOrQuery
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {619E0181-043A-46F6-B30F-547CD719057C}
+// *********************************************************************//
+  IManOrQuery = interface(IManQuery)
+    ['{619E0181-043A-46F6-B30F-547CD719057C}']
+    function  Get_Values(out pVal: IManQueries): HResult; stdcall;
+    function  AddFieldQuery(Attr: imProfileAttributeID; out pVal: IManFieldQuery): HResult; stdcall;
+    function  AddAndQuery(out pVal: IManAndQuery): HResult; stdcall;
+    function  AddOrQuery(out pVal: IManOrQuery): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAttachment
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A707A245-5FFC-4F48-B3C1-13E030AE8B6C}
+// *********************************************************************//
+  IManAttachment = interface(IManObject)
+    ['{A707A245-5FFC-4F48-B3C1-13E030AE8B6C}']
+    function  Get_Name(out Name: WideString): HResult; stdcall;
+    function  Set_Name(const Name: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAttachments
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {66A2131E-359B-4B39-810D-BDADFCC5A294}
+// *********************************************************************//
+  IManAttachments = interface(IManObject)
+    ['{66A2131E-359B-4B39-810D-BDADFCC5A294}']
+    function  Item(Index: OleVariant; out pVal: IManAttachment): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Add(const val: WideString; out pVal: IManAttachment): HResult; stdcall;
+    function  Remove(Index: OleVariant): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAttributeDefinition
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9597F75C-ACA5-4A5D-9407-71D6C1AD2870}
+// *********************************************************************//
+  IManAttributeDefinition = interface(IManObject)
+    ['{9597F75C-ACA5-4A5D-9407-71D6C1AD2870}']
+    function  Get_Caption(out pVal: WideString): HResult; stdcall;
+    function  Set_Caption(const pVal: WideString): HResult; stdcall;
+    function  Get_FieldName(out pVal: WideString): HResult; stdcall;
+    function  Get_Size(out pVal: Integer): HResult; stdcall;
+    function  Get_Type_(out pVal: imAttributeType): HResult; stdcall;
+    function  Get_AttrID(out pVal: imProfileAttributeID): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAttributeDefinitions
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {38AFB5A8-B589-446D-A0AE-DFADF18CB229}
+// *********************************************************************//
+  IManAttributeDefinitions = interface(IManObject)
+    ['{38AFB5A8-B589-446D-A0AE-DFADF18CB229}']
+    function  Item(Index: OleVariant; out pvarRet: IManAttributeDefinition): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  ItemByID(val: imProfileAttributeID; out pvarRet: IManAttributeDefinition): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManAttributeSelections
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {7FE71414-0866-4933-8F66-C76A7439DC84}
+// *********************************************************************//
+  IManAttributeSelections = interface(IManObject)
+    ['{7FE71414-0866-4933-8F66-C76A7439DC84}']
+    function  Item(Index: imProfileAttributeID; out pvarRet: WordBool): HResult; stdcall;
+    function  Add(Index: imProfileAttributeID): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Remove(Index: imProfileAttributeID): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {18C74385-6359-4E47-9F12-A79454122EF3}
+// *********************************************************************//
+  IManFolder = interface(IManObject)
+    ['{18C74385-6359-4E47-9F12-A79454122EF3}']
+    function  Get_AdditionalProperties(out pVal: IManAdditionalProperties): HResult; stdcall;
+    function  Get_Contents(out pVal: IManContents): HResult; stdcall;
+    function  Get_Database(out pVal: IManDatabase): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Set_Description(const pVal: WideString): HResult; stdcall;
+    function  Get_FullEmail(out pVal: WideString): HResult; stdcall;
+    function  Get_EmailPrefix(out pVal: WideString): HResult; stdcall;
+    function  Set_EmailPrefix(const pVal: WideString): HResult; stdcall;
+    function  Get_FolderID(out pVal: Integer): HResult; stdcall;
+    function  Get_IsRootLevelFolder(out pVal: WordBool): HResult; stdcall;
+    function  Get_Location(out pVal: IManLocation): HResult; stdcall;
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Set_Name(const pVal: WideString): HResult; stdcall;
+    function  Get_Owner(out pVal: IManUser): HResult; stdcall;
+    function  Set_Owner(const pVal: IManUser): HResult; stdcall;
+    function  Get_Workspace(out pVal: IManWorkspace): HResult; stdcall;
+    function  Get_Parent(out pVal: IManFolder): HResult; stdcall;
+    function  Get_Rules(out pVal: IManRules): HResult; stdcall;
+    function  Get_Security(out pVal: IManSecurity): HResult; stdcall;
+    function  Get_SubFolders(out pVal: IManFolders): HResult; stdcall;
+    function  Get_CustomProperties(out pVal: IManCustomProperties): HResult; stdcall;
+    function  Get_View(out pVal: WideString): HResult; stdcall;
+    function  Set_View(const pVal: WideString): HResult; stdcall;
+    function  Get_EffectiveAccess(out pVal: imAccessRight): HResult; stdcall;
+    function  Get_Hidden(out pVal: WordBool): HResult; stdcall;
+    function  Set_Hidden(pVal: WordBool): HResult; stdcall;
+    function  IsOperationAllowed(Operation: imFolderOp; out pVal: WordBool): HResult; stdcall;
+    function  LogEvent(const evntType: IManRuleEventType; const customData: WideString): HResult; stdcall;
+    function  MoveTo(const pDestinationFoldersCollection: IManFolders): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  Update: HResult; stdcall;
+    function  Get_Path(out pVal: IManFolders): HResult; stdcall;
+    function  Get_IsRoot(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManContents
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {3D98E148-806A-432C-ABA1-2837B0B44715}
+// *********************************************************************//
+  IManContents = interface(IManObject)
+    ['{3D98E148-806A-432C-ABA1-2837B0B44715}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByObject(const ContentToRemove: IManContent): HResult; stdcall;
+    function  Contains(const ContentToTestFor: IManContent; out pVal: WordBool): HResult; stdcall;
+    function  Sort(const __MIDL_0020: IManObjectSort): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  CanContain(ObjectType: imObjectType; out __MIDL_0021: WordBool): HResult; stdcall;
+    function  IsOperationAllowed(Operation: imContentsOp; out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManContent): HResult; stdcall;
+    function  ItemByID(const ID: WideString; out pVal: IManContent): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManContent
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {8577C616-8A6D-4C18-88DA-2B4C8844FD88}
+// *********************************************************************//
+  IManContent = interface(IManObject)
+    ['{8577C616-8A6D-4C18-88DA-2B4C8844FD88}']
+    function  Update: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManObjectSort
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {D80D6CF3-3D8B-43FC-9597-F4C03EF43DAF}
+// *********************************************************************//
+  IManObjectSort = interface(IUnknown)
+    ['{D80D6CF3-3D8B-43FC-9597-F4C03EF43DAF}']
+    function  Less(const object1: IManObject; const object2: IManObject; out IsLess: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDatabase
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {1E458DD7-B14D-4539-B1B7-BD2AD0C5E51C}
+// *********************************************************************//
+  IManDatabase = interface(IManObject)
+    ['{1E458DD7-B14D-4539-B1B7-BD2AD0C5E51C}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_Session(out pVal: IManSession): HResult; stdcall;
+    function  Get_SubscriptionFolders(out pVal: IManFolders): HResult; stdcall;
+    function  Get_FavoritesFolders(out pVal: IManFolders): HResult; stdcall;
+    function  CreateWorkspace(out pVal: IManWorkspace): HResult; stdcall;
+    function  SearchWorkspaces(const profparams: IManProfileSearchParameters; 
+                               const params: IManWorkspaceSearchParameters; out ret: IManFolders): HResult; stdcall;
+    function  SearchEvents(const profparams: IManEventSearchParameters; searchtree: WordBool; 
+                           out Events: IManEvents): HResult; stdcall;
+    function  SearchTasks(const profparams: IManTaskSearchParameters; searchtree: WordBool; 
+                          out Tasks: IManTasks): HResult; stdcall;
+    function  SearchDocuments(const profparams: IManProfileSearchParameters; searchtree: WordBool; 
+                              out Documents: IManContents): HResult; stdcall;
+    function  SearchMessages(const profparams: IManMessageSearchParameters; searchtree: WordBool; 
+                             out ppVal: IManMessages): HResult; stdcall;
+    function  Get_Forms(out pVal: IManForms): HResult; stdcall;
+    function  Get_AttributeDefinitions(out __MIDL_0030: IManAttributeDefinitions): HResult; stdcall;
+    function  Get_Root(out pVal: IManFolder): HResult; stdcall;
+    function  Get_RuleEventTypes(out eventList: IManRuleEventTypes): HResult; stdcall;
+    function  Get_RuleHandlers(out responses: IManRuleHandlers): HResult; stdcall;
+    function  Get_PrimaryApplications(out ppRetVal: IManLaunchMethods): HResult; stdcall;
+    function  Get_NonPrimaryApplications(out ppRetVal: IManLaunchMethods): HResult; stdcall;
+    function  Get_Roles(out pVal: IManRoles): HResult; stdcall;
+    function  Get_CheckedOutList(out pVal: IManContents): HResult; stdcall;
+    function  Get_Worklist(out pVal: IManContents): HResult; stdcall;
+    function  Get_Workspaces(out pVal: IManWorkspaces): HResult; stdcall;
+    function  CreateDocument(out __MIDL_0031: IManDocument): HResult; stdcall;
+    function  DeleteDocument(docNumber: Integer; Version: Integer; out pVal: WordBool): HResult; stdcall;
+    function  SearchUsers(const SearchCriteria: WideString; searchType: imSearchAttributeType; 
+                          SearchAtBegin: WordBool; out userlist: IManUsers): HResult; stdcall;
+    function  SearchGroups(const SearchCriteria: WideString; searchType: imSearchAttributeType; 
+                           SearchAtBegin: WordBool; out grouplist: IManGroups): HResult; stdcall;
+    function  SearchCustomAttributes(const SearchCriteria: WideString; 
+                                     tableType: imProfileAttributeID; 
+                                     searchType: imSearchAttributeType; 
+                                     EnabledOrDisabled: imSearchEnabledDisabled; 
+                                     SearchAtBegin: WordBool; 
+                                     out customdatalist: IManCustomAttributes): HResult; stdcall;
+    function  SearchDocumentTypes(const SearchCriteria: WideString; 
+                                  searchType: imSearchAttributeType; SearchAtBegin: WordBool; 
+                                  out documenttypelist: IManDocumentTypes): HResult; stdcall;
+    function  SearchDocumentClasses(const SearchCriteria: WideString; 
+                                    searchType: imSearchAttributeType; SearchAtBegin: WordBool; 
+                                    out documentclasslist: IManDocumentClasses): HResult; stdcall;
+    function  GetDocumentTypeFromPath(const DocumentPath: WideString; 
+                                      out DocumentType: IManDocumentType): HResult; stdcall;
+    function  IsOperationAllowed(TheOperation: imDatabaseOperation; out OperationIsAllowed: WordBool): HResult; stdcall;
+    function  GetUser(const userName: WideString; out __MIDL_0032: IManUser): HResult; stdcall;
+    function  SearchUsersEx(const SearchCriteria: WideString; searchType: imSearchAttributeType; 
+                            SearchAtBegin: WordBool; sVal: imNOSType; out userlist: IManUsers): HResult; stdcall;
+    function  SearchGroupsEx(const SearchCriteria: WideString; searchType: imSearchAttributeType; 
+                             SearchAtBegin: WordBool; sVal: imNOSType; out grouplist: IManGroups): HResult; stdcall;
+    function  DeleteWorkspace(WorkspaceID: Integer): HResult; stdcall;
+    function  GetDocument(Number: Integer; vers: Integer; out ret: IManDocument): HResult; stdcall;
+    function  GetFolder(FolderID: Integer; out ret: IManFolder): HResult; stdcall;
+    function  Get_ConfigurationData(out pVal: IManAdditionalProperties): HResult; stdcall;
+    function  CreateBlankProfile(out pVal: IManProfile): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSession
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {50034FAA-1B7B-4860-AC19-E67F62280CC7}
+// *********************************************************************//
+  IManSession = interface(IManObject)
+    ['{50034FAA-1B7B-4860-AC19-E67F62280CC7}']
+    function  Get_WorkArea(out pVal: IManWorkArea): HResult; stdcall;
+    function  Get_ServerName(out pVal: WideString): HResult; stdcall;
+    function  Get_Alias(out pVal: WideString): HResult; stdcall;
+    function  Set_Alias(const pVal: WideString): HResult; stdcall;
+    function  Get_UserID(out pVal: WideString): HResult; stdcall;
+    function  Get_Password(out pVal: WideString): HResult; stdcall;
+    function  Get_PasswordExpired(out val: WordBool): HResult; stdcall;
+    function  Get_Databases(out pVal: IManDatabases): HResult; stdcall;
+    function  Get_WebDatabases(out pVal: IManDatabases): HResult; stdcall;
+    function  Get_MaxRowsForSearch(out pVal: Integer): HResult; stdcall;
+    function  Set_MaxRowsForSearch(pVal: Integer): HResult; stdcall;
+    function  Get_DMS(out pVal: IManDMS): HResult; stdcall;
+    function  Get_Connected(out pVal: WordBool): HResult; stdcall;
+    function  Set_Timeout(pVal: Integer): HResult; stdcall;
+    function  Get_Timeout(out pVal: Integer): HResult; stdcall;
+    function  Get_AllVersions(out pVal: WordBool): HResult; stdcall;
+    function  Set_AllVersions(pVal: WordBool): HResult; stdcall;
+    function  Get_PreferredDatabase(out pVal: IManDatabase): HResult; stdcall;
+    function  Login(const UserID: WideString; const Password: WideString): HResult; stdcall;
+    function  TrustedLogin: HResult; stdcall;
+    function  Logout: HResult; stdcall;
+    function  ChangePassword(const oldpassword: WideString; const newpassword: WideString): HResult; stdcall;
+    function  SearchWorkspaces(const dblist: IManStrings; 
+                               const profparams: IManProfileSearchParameters; 
+                               const params: IManWorkspaceSearchParameters; out ret: IManFolders): HResult; stdcall;
+    function  SearchEvents(const dblist: IManStrings; const profparams: IManEventSearchParameters; 
+                           searchtree: WordBool; out Events: IManEvents): HResult; stdcall;
+    function  SearchTasks(const dblist: IManStrings; const profparams: IManTaskSearchParameters; 
+                          searchtree: WordBool; out Tasks: IManTasks): HResult; stdcall;
+    function  SearchDocuments(const dblist: IManStrings; 
+                              const profparams: IManProfileSearchParameters; searchtree: WordBool; 
+                              out Documents: IManContents): HResult; stdcall;
+    function  SearchDocumentsWithNotification(const dblist: IManStrings; 
+                                              const profparams: IManProfileSearchParameters; 
+                                              searchtree: WordBool; const Canceller: IManCancel; 
+                                              out Documents: IManContents): HResult; stdcall;
+    function  TrustedLogin2(AccessToken: Integer): HResult; stdcall;
+    function  SearchMessages(const dblist: IManStrings; 
+                             const profparams: IManMessageSearchParameters; searchtree: WordBool; 
+                             out ppVal: IManMessages): HResult; stdcall;
+    function  Get_ConfigurationData(out pVal: IManAdditionalProperties): HResult; stdcall;
+    function  Get_SetOCRCompareFilter(out pVal: WordBool): HResult; stdcall;
+    function  Set_SetOCRCompareFilter(pVal: WordBool): HResult; stdcall;
+    function  Get_MaxRowsNonSearch(out pVal: Integer): HResult; stdcall;
+    function  Set_MaxRowsNonSearch(pVal: Integer): HResult; stdcall;
+    function  InvalidateDatabaseMembers: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkArea
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {F0CCDA4D-ABF2-44C2-9910-D4E5E002E3DD}
+// *********************************************************************//
+  IManWorkArea = interface(IManObject)
+    ['{F0CCDA4D-ABF2-44C2-9910-D4E5E002E3DD}']
+    function  Get_Available(out pVal: WordBool): HResult; stdcall;
+    function  Get_CheckedOutList(out pVal: IManContents): HResult; stdcall;
+    function  Get_FavoritesFolder(out pVal: IManFavoritesFolder): HResult; stdcall;
+    function  Get_SubscriptionFolder(out pVal: IManSubscriptionFolder): HResult; stdcall;
+    function  Get_RecentWorkspaces(out pVal: IManWorkspaces): HResult; stdcall;
+    function  Get_UserPreferences(out pVal: IManUserPreferences): HResult; stdcall;
+    function  Get_WorkAreaForm(out pVal: IManForm): HResult; stdcall;
+    function  Get_Worklist(out pVal: IManContents): HResult; stdcall;
+    function  Get_Session(out pVal: IManSession): HResult; stdcall;
+    function  SearchFolders(const dblist: IManStrings; const params: IManFolderSearchParameters; 
+                            out pVal: IManFolders): HResult; stdcall;
+    function  SearchDocuments(const dblist: IManStrings; 
+                              const profparams: IManProfileSearchParameters; searchtree: WordBool; 
+                              out pVal: IManContents): HResult; stdcall;
+    function  SearchDocumentsEx(const dblist: IManStrings; const query: IManQuery; 
+                                out pVal: IManContents): HResult; stdcall;
+    function  SearchProfiledFolders(const dblist: IManStrings; 
+                                    const proparams: IManProfileSearchParameters; 
+                                    const params: IManFolderSearchParameters; out pVal: IManFolders): HResult; stdcall;
+    function  SearchProfiledFoldersEx(const dblist: IManStrings; const query: IManQuery; 
+                                      const params: IManFolderSearchParameters; 
+                                      out pVal: IManFolders): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFavoritesFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {6A70CE1C-38B1-43F3-9F1E-C98CAF1B7B0B}
+// *********************************************************************//
+  IManFavoritesFolder = interface(IManFolder)
+    ['{6A70CE1C-38B1-43F3-9F1E-C98CAF1B7B0B}']
+  end;
+
+// *********************************************************************//
+// Interface: IManSubscriptionFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {AA36E0D7-98C2-4FD6-83F5-38106DD2A876}
+// *********************************************************************//
+  IManSubscriptionFolder = interface(IManFolder)
+    ['{AA36E0D7-98C2-4FD6-83F5-38106DD2A876}']
+    function  FindRootSubscriptionFoldersNotSubscribedTo(const DatabaseNames: IManStrings; 
+                                                         const SearchParms: IManSubscriptionFolderSearchParameters; 
+                                                         out pVal: IManFolders): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFolderSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {CB2E010E-35B0-46B6-8909-5679A2C5918F}
+// *********************************************************************//
+  IManFolderSearchParameters = interface(IManObject)
+    ['{CB2E010E-35B0-46B6-8909-5679A2C5918F}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByAttribute(Attribute: imFolderAttributeID; out pVal: IManFolderSearchParameter): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManFolderSearchParameter): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByAttribute(Index: imFolderAttributeID): HResult; stdcall;
+    function  RemoveByObject(const ParameterToRemove: IManFolderSearchParameter): HResult; stdcall;
+    function  Contains(AttributeToTestFor: imFolderAttributeID; out pVal: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Add(AttributeToAdd: imFolderAttributeID; const ValueToAdd: WideString; 
+                  out pVal: IManFolderSearchParameter): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSubscriptionFolderSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {143B5CBC-BBAC-4F99-A05B-910BFA1D6181}
+// *********************************************************************//
+  IManSubscriptionFolderSearchParameters = interface(IManFolderSearchParameters)
+    ['{143B5CBC-BBAC-4F99-A05B-910BFA1D6181}']
+  end;
+
+// *********************************************************************//
+// Interface: IManFolderSearchParameter
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {C1B8FCE5-33AC-4EA6-8E3A-BE6B1CC32815}
+// *********************************************************************//
+  IManFolderSearchParameter = interface(IManObject)
+    ['{C1B8FCE5-33AC-4EA6-8E3A-BE6B1CC32815}']
+    function  Get_Attribute(out pVal: imFolderAttributeID): HResult; stdcall;
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {199A4B65-9600-49B8-BECB-29AD3CF56F37}
+// *********************************************************************//
+  IManFolders = interface(IManObject)
+    ['{199A4B65-9600-49B8-BECB-29AD3CF56F37}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  CanContain(ObjectType: imObjectType; out __MIDL_0018: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Contains(const FolderToTestFor: IManFolder; out pVal: WordBool): HResult; stdcall;
+    function  IsOperationAllowed(Operation: imFoldersOp; out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByObject(const FolderToRemove: IManFolder): HResult; stdcall;
+    function  Sort(const __MIDL_0019: IManObjectSort): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkspaces
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {C43501E5-413B-4D75-8ABD-A88B66D801FD}
+// *********************************************************************//
+  IManWorkspaces = interface(IManFolders)
+    ['{C43501E5-413B-4D75-8ABD-A88B66D801FD}']
+    function  AddWorkspace(const pageToAdd: IManWorkspace): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfiledFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9A79B61C-F44C-4597-9B1D-C61128EBEBA5}
+// *********************************************************************//
+  IManProfiledFolder = interface(IManFolder)
+    ['{9A79B61C-F44C-4597-9B1D-C61128EBEBA5}']
+    function  Get_Profile(out pVal: IManProfile): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkspace
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {170D30D1-0A0E-483D-805A-D40F2AB1983F}
+// *********************************************************************//
+  IManWorkspace = interface(IManProfiledFolder)
+    ['{170D30D1-0A0E-483D-805A-D40F2AB1983F}']
+    function  Get_Class_(out cls: IManDocumentClass): HResult; stdcall;
+    function  _Set_Class_(const cls: IManDocumentClass): HResult; stdcall;
+    function  Set_Class_(const cls: IManDocumentClass): HResult; stdcall;
+    function  Get_SubClass(out pVal: IManDocumentClass): HResult; stdcall;
+    function  _Set_SubClass(const pVal: IManDocumentClass): HResult; stdcall;
+    function  Set_SubClass(const pVal: IManDocumentClass): HResult; stdcall;
+    function  Get_Type_(out pVal: IManDocumentType): HResult; stdcall;
+    function  _Set_Type_(const pVal: IManDocumentType): HResult; stdcall;
+    function  Set_Type_(const pVal: IManDocumentType): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_WorkspaceID(out pVal: Integer): HResult; stdcall;
+    function  Get_Size(out pVal: Integer): HResult; stdcall;
+    function  Get_CreationDate(out dt: TDateTime): HResult; stdcall;
+    function  Get_DateModified(out dt: TDateTime): HResult; stdcall;
+    function  Get_LastUser(out pVal: IManUser): HResult; stdcall;
+    function  Get_InUseBy(out pVal: IManUser): HResult; stdcall;
+    function  Get_HistoryList(out pVal: IManHistoryList): HResult; stdcall;
+    function  GetCopy(const Path: WideString): HResult; stdcall;
+    function  IsWorkspaceOperationAllowed(TheOperation: imWorkspaceOperation; out pVal: WordBool): HResult; stdcall;
+    function  AddToRecentWorkspaces: HResult; stdcall;
+    function  Get_TaskFolders(out pVal: IManTaskFolders): HResult; stdcall;
+    function  Get_MessageFolders(out pVal: IManMessageFolders): HResult; stdcall;
+    function  Get_EventFolders(out pVal: IManEventFolders): HResult; stdcall;
+    function  Get_DocumentFolders(out pVal: IManDocumentFolders): HResult; stdcall;
+    function  Get_ConnectorFolders(out pVal: IManConnectorFolders): HResult; stdcall;
+    function  Get_LinkListFolders(out pVal: IManLinkListFolders): HResult; stdcall;
+    function  Get_NoteFolders(out pVal: IManNoteFolders): HResult; stdcall;
+    function  Get_Tabs(out pVal: IManTabs): HResult; stdcall;
+    function  Get_SubType(out pVal: WideString): HResult; stdcall;
+    function  Set_SubType(const pVal: WideString): HResult; stdcall;
+    function  UpdateAll(const file_: WideString; var errors: OleVariant): HResult; stdcall;
+    function  UpdateAllWithResults(const file_: WideString; out pVal: IManProfileUpdateResult): HResult; stdcall;
+    function  GetAttributeByID(Attribute: imProfileAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  SetAttributeByID(Attribute: imProfileAttributeID; pVal: OleVariant): HResult; stdcall;
+    function  GetAttributeValueByID(Attribute: imProfileAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  Get_SubTypeEnum(out pVal: imWorkspaceSubtype): HResult; stdcall;
+    function  Set_SubTypeEnum(pVal: imWorkspaceSubtype): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfile
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {7EEE48E2-88D2-4422-86D0-323C9F28EE71}
+// *********************************************************************//
+  IManProfile = interface(IManObject)
+    ['{7EEE48E2-88D2-4422-86D0-323C9F28EE71}']
+    function  GetAttributeByID(Attribute: imProfileAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  SetAttributeByID(Attribute: imProfileAttributeID; pVal: OleVariant): HResult; stdcall;
+    function  GetAttributeValueByID(Attribute: imProfileAttributeID; out pVal: OleVariant): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentClass
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {5D65E6C4-5C85-46A0-8A9C-08FAC6C1CB57}
+// *********************************************************************//
+  IManDocumentClass = interface(IManObject)
+    ['{5D65E6C4-5C85-46A0-8A9C-08FAC6C1CB57}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_Echo(out pVal: WordBool): HResult; stdcall;
+    function  Get_Indexable(out pVal: WordBool): HResult; stdcall;
+    function  GetSubClasses(const SearchCriteria: WideString; searchType: imSearchAttributeType; 
+                            SearchAtBegin: WordBool; out pVal: IManDocumentClasses): HResult; stdcall;
+    function  Get_DefaultSecurity(out pVal: imSecurityType): HResult; stdcall;
+    function  Get_RequiredFields(out pVal: IManAttributeSelections): HResult; stdcall;
+    function  Get_SubClassRequired(out pVal: WordBool): HResult; stdcall;
+    function  Get_RetentionDays(out pVal: Integer): HResult; stdcall;
+    function  Get_IsSubclass(out pVal: WordBool): HResult; stdcall;
+    function  Get_Parent(out pVal: IManDocumentClass): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentClasses
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {FB172A09-25BB-4025-A143-C5C15041471C}
+// *********************************************************************//
+  IManDocumentClasses = interface(IManObject)
+    ['{FB172A09-25BB-4025-A143-C5C15041471C}']
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  ItemByName(const Name: WideString; out pvarRet: IManDocumentClass): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pvarRet: IManDocumentClass): HResult; stdcall;
+    function  Contains(const Name: WideString; out pvarRet: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pvarRet: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentType
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {61737311-0E3A-4F71-A959-66EF3CBFFE3D}
+// *********************************************************************//
+  IManDocumentType = interface(IManObject)
+    ['{61737311-0E3A-4F71-A959-66EF3CBFFE3D}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_Indexable(out pVal: WordBool): HResult; stdcall;
+    function  Get_ApplicationExtension(out pVal: WideString): HResult; stdcall;
+    function  Get_DMSExtension(out pVal: WideString): HResult; stdcall;
+    function  Get_Viewmethod(out pVal: IManLaunchMethod): HResult; stdcall;
+    function  Get_Openmethod(out pVal: IManLaunchMethod): HResult; stdcall;
+    function  Get_OtherApplications(out ppRetVal: IManLaunchMethods): HResult; stdcall;
+    function  Get_AutoDetect(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManLaunchMethod
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9D60EF36-D001-4D8B-B26C-106E881A66EE}
+// *********************************************************************//
+  IManLaunchMethod = interface(IManObject)
+    ['{9D60EF36-D001-4D8B-B26C-106E881A66EE}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Set_Name(const pVal: WideString): HResult; stdcall;
+    function  Get_Path(out pVal: WideString): HResult; stdcall;
+    function  Set_Path(const pVal: WideString): HResult; stdcall;
+    function  Get_UseDDE(out pVal: WordBool): HResult; stdcall;
+    function  Set_UseDDE(pVal: WordBool): HResult; stdcall;
+    function  Get_DDEName(out pVal: WideString): HResult; stdcall;
+    function  Set_DDEName(const pVal: WideString): HResult; stdcall;
+    function  Get_DDETopic(out pVal: WideString): HResult; stdcall;
+    function  Set_DDETopic(const pVal: WideString): HResult; stdcall;
+    function  Get_DDEOpen(out pVal: WideString): HResult; stdcall;
+    function  Set_DDEOpen(const pVal: WideString): HResult; stdcall;
+    function  Get_DDEOpenReadOnly(out pVal: WideString): HResult; stdcall;
+    function  Set_DDEOpenReadOnly(const pVal: WideString): HResult; stdcall;
+    function  Get_DDEPrint(out pVal: WideString): HResult; stdcall;
+    function  Set_DDEPrint(const pVal: WideString): HResult; stdcall;
+    function  Get_DDEPrintAndExit(out pVal: WideString): HResult; stdcall;
+    function  Set_DDEPrintAndExit(const pVal: WideString): HResult; stdcall;
+    function  Get_IntegrationMode(out pVal: imIntMode): HResult; stdcall;
+    function  Set_IntegrationMode(pVal: imIntMode): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Set_Description(const pVal: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManLaunchMethods
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {0FDE49DC-4BC8-42F8-B5A0-8DE26F69731C}
+// *********************************************************************//
+  IManLaunchMethods = interface(IManObject)
+    ['{0FDE49DC-4BC8-42F8-B5A0-8DE26F69731C}']
+    function  Item(Index: OleVariant; out pvarRet: IManLaunchMethod): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Add(out ppAdded: IManLaunchMethod): HResult; stdcall;
+    function  Remove(IdOrIndexOrObject: OleVariant): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManUser
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {D36BDFA4-4381-46A4-A8D4-7E06C966958F}
+// *********************************************************************//
+  IManUser = interface(IManObject)
+    ['{D36BDFA4-4381-46A4-A8D4-7E06C966958F}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_FullName(out pVal: WideString): HResult; stdcall;
+    function  Get_Password(out pVal: WideString): HResult; stdcall;
+    function  Get_LoginEnabled(out pVal: WordBool): HResult; stdcall;
+    function  Get_Location(out pVal: WideString): HResult; stdcall;
+    function  Get_Phone(out pVal: WideString): HResult; stdcall;
+    function  Get_Extension(out pVal: WideString): HResult; stdcall;
+    function  Get_Fax(out pVal: WideString): HResult; stdcall;
+    function  Get_Email(out pVal: WideString): HResult; stdcall;
+    function  Get_Email2(out pVal: WideString): HResult; stdcall;
+    function  Get_Email3(out pVal: WideString): HResult; stdcall;
+    function  Get_Email4(out pVal: WideString): HResult; stdcall;
+    function  Get_Email5(out pVal: WideString): HResult; stdcall;
+    function  Get_Mobile(out pVal: WideString): HResult; stdcall;
+    function  Get_Pager(out pVal: WideString): HResult; stdcall;
+    function  Get_Other(out pVal: WideString): HResult; stdcall;
+    function  Get_Custom1(out pVal: WideString): HResult; stdcall;
+    function  Get_Custom2(out pVal: WideString): HResult; stdcall;
+    function  Get_Custom3(out pVal: WideString): HResult; stdcall;
+    function  Get_DomainName(out pVal: WideString): HResult; stdcall;
+    function  Get_NOS(out pVal: imNOS): HResult; stdcall;
+    function  Get_IsExternal(out pVal: WordBool): HResult; stdcall;
+    function  Get_PasswordExpires(out pVal: WordBool): HResult; stdcall;
+    function  Get_HasPreferredDatabase(out pVal: WordBool): HResult; stdcall;
+    function  Get_PreferredDatabase(out pVal: IManDatabase): HResult; stdcall;
+    function  Get_HasPreferredFileServer(out pVal: WordBool): HResult; stdcall;
+    function  Get_PreferredFileServer(out pVal: WideString): HResult; stdcall;
+    function  Get_Role(out pVal: IManRole): HResult; stdcall;
+    function  Get_Supervisor(out pVal: WordBool): HResult; stdcall;
+    function  Get_DefaultSecurityTemplate(out pVal: IManSecurityTemplate): HResult; stdcall;
+    function  Get_SecurityTemplates(out pVal: IManSecurityTemplates): HResult; stdcall;
+    function  Get_Groups(out pVal: IManGroups): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRole
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {5F9ED2DE-EE26-4E49-8A2D-FB522F270625}
+// *********************************************************************//
+  IManRole = interface(IManObject)
+    ['{5F9ED2DE-EE26-4E49-8A2D-FB522F270625}']
+    function  Get_Alias(out pVal: WideString): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_FieldValues(out pVal: IManRoleEditCreates): HResult; stdcall;
+    function  Get_SearchValues(out pVal: IManRoleSearchProfiles): HResult; stdcall;
+    function  Get_Users(out pVal: IManUsers): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_AdditionalProperties(out props: IManAdditionalProperties): HResult; stdcall;
+    function  GetRoleValueByID(RoleID: imRoleAttributeID; out pVal: OleVariant): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRoleEditCreates
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {B14B0819-A10C-4268-9804-E630905584F2}
+// *********************************************************************//
+  IManRoleEditCreates = interface(IManObject)
+    ['{B14B0819-A10C-4268-9804-E630905584F2}']
+    function  Item(Index: OleVariant; out pVal: IManRoleEditCreate): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRoleEditCreate
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {734F8C91-624C-4532-A679-737DD379BFBB}
+// *********************************************************************//
+  IManRoleEditCreate = interface(IManObject)
+    ['{734F8C91-624C-4532-A679-737DD379BFBB}']
+    function  Get_FieldID(out pVal: imProfileAttributeID): HResult; stdcall;
+    function  Get_FieldName(out pVal: WideString): HResult; stdcall;
+    function  Get_LegalValues(out pVal: IManStrings): HResult; stdcall;
+    function  Get_RestrictedToLegalValues(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRoleSearchProfiles
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {1B762EE3-B6F8-482D-B3F3-9D4217165D40}
+// *********************************************************************//
+  IManRoleSearchProfiles = interface(IManObject)
+    ['{1B762EE3-B6F8-482D-B3F3-9D4217165D40}']
+    function  Item(Index: OleVariant; out pVal: IManRoleSearchProfile): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRoleSearchProfile
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A3353BD5-714B-4D12-9843-FB749074C856}
+// *********************************************************************//
+  IManRoleSearchProfile = interface(IManObject)
+    ['{A3353BD5-714B-4D12-9843-FB749074C856}']
+    function  Get_FieldID(out pVal: imProfileAttributeID): HResult; stdcall;
+    function  Get_FieldName(out pVal: WideString): HResult; stdcall;
+    function  Get_LegalValues(out pVal: IManStrings): HResult; stdcall;
+    function  Get_Writeable(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManUsers
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {F2A125D1-EBA7-456E-A9BB-9E148EB659C3}
+// *********************************************************************//
+  IManUsers = interface(IManObject)
+    ['{F2A125D1-EBA7-456E-A9BB-9E148EB659C3}']
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(val: Integer; out pvarRet: IManUser): HResult; stdcall;
+    function  ItemByName(const val: WideString; out pvarRet: IManUser): HResult; stdcall;
+    function  Contains(const val: WideString; out pvarRet: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSecurityTemplate
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {8BC16C2D-A1CC-4124-B8D2-DC06BE93FF8A}
+// *********************************************************************//
+  IManSecurityTemplate = interface(IManObject)
+    ['{8BC16C2D-A1CC-4124-B8D2-DC06BE93FF8A}']
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_Security(out pVal: IManSecurity): HResult; stdcall;
+    function  PopulateSecurityObjectFromTemplate(const SecurityObjectToPopulate: IManSecurity): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSecurity
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {81248CD6-126A-4D63-9125-EBE2C7447A60}
+// *********************************************************************//
+  IManSecurity = interface(IManObject)
+    ['{81248CD6-126A-4D63-9125-EBE2C7447A60}']
+    function  Get_Inherited_(out pVal: WordBool): HResult; stdcall;
+    function  Set_Inherited_(pVal: WordBool): HResult; stdcall;
+    function  Get_DefaultVisibility(out pVal: imSecurityType): HResult; stdcall;
+    function  Set_DefaultVisibility(pVal: imSecurityType): HResult; stdcall;
+    function  Get_GroupACLs(out pVal: IManGroupACLs): HResult; stdcall;
+    function  Get_UserACLs(out pVal: IManUserACLs): HResult; stdcall;
+    function  Get_ExternallyVisible(out pVal: WordBool): HResult; stdcall;
+    function  Get_IncludeExternalUsersInDefaultSecurity(out pVal: WordBool): HResult; stdcall;
+    function  Set_IncludeExternalUsersInDefaultSecurity(pVal: WordBool): HResult; stdcall;
+    function  Get_TargetObject(out pVal: IManObject): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManGroupACLs
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A660ED0C-ABF3-4677-B4A5-0A37F0F2498F}
+// *********************************************************************//
+  IManGroupACLs = interface(IManObject)
+    ['{A660ED0C-ABF3-4677-B4A5-0A37F0F2498F}']
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get_Empty(out pi4: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pi4: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByObject(const ContentToRemove: IManGroupACL): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Sort(const __MIDL_0017: IManObjectSort): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pvarRet: IManGroupACL): HResult; stdcall;
+    function  ItemByName(const val: WideString; out pvarRet: IManGroupACL): HResult; stdcall;
+    function  Contains(const val: WideString; out pVal: WordBool): HResult; stdcall;
+    function  Add(const groupName: WideString; accRight: imAccessRight; out pRet: IManGroupACL): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManGroupACL
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {14CE1CD3-C46C-43E7-9709-A38382265608}
+// *********************************************************************//
+  IManGroupACL = interface(IManObject)
+    ['{14CE1CD3-C46C-43E7-9709-A38382265608}']
+    function  Get_Group(out pVal: IManGroup): HResult; stdcall;
+    function  _Set_Group(const pVal: IManGroup): HResult; stdcall;
+    function  Set_Group(const pVal: IManGroup): HResult; stdcall;
+    function  Get_Right(out pVal: imAccessRight): HResult; stdcall;
+    function  Set_Right(pVal: imAccessRight): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManGroup
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {EC265993-786E-4BC9-950E-E605E319CD3E}
+// *********************************************************************//
+  IManGroup = interface(IManObject)
+    ['{EC265993-786E-4BC9-950E-E605E319CD3E}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_FullName(out pVal: WideString): HResult; stdcall;
+    function  Get_Enabled(out pVal: WordBool): HResult; stdcall;
+    function  Get_GroupNumber(out pVal: Integer): HResult; stdcall;
+    function  Get_Users(out pVal: IManUsers): HResult; stdcall;
+    function  Get_DomainName(out pVal: WideString): HResult; stdcall;
+    function  Get_NOS(out pVal: imNOS): HResult; stdcall;
+    function  Get_IsExternal(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManUserACLs
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {EC017831-15E7-469A-AC09-0E631A11B97C}
+// *********************************************************************//
+  IManUserACLs = interface(IManObject)
+    ['{EC017831-15E7-469A-AC09-0E631A11B97C}']
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get_Empty(out pi4: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pi4: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByObject(const ContentToRemove: IManUserACL): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Sort(const __MIDL_0016: IManObjectSort): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pvarRet: IManUserACL): HResult; stdcall;
+    function  ItemByName(const val: WideString; out pvarRet: IManUserACL): HResult; stdcall;
+    function  Contains(const val: WideString; out pVal: WordBool): HResult; stdcall;
+    function  Add(const userName: WideString; accRight: imAccessRight; out pRet: IManUserACL): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManUserACL
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {B6D09A3B-CDB5-4333-B7A1-908909A9281C}
+// *********************************************************************//
+  IManUserACL = interface(IManObject)
+    ['{B6D09A3B-CDB5-4333-B7A1-908909A9281C}']
+    function  Get_User(out pVal: IManUser): HResult; stdcall;
+    function  _Set_User(const pVal: IManUser): HResult; stdcall;
+    function  Set_User(const pVal: IManUser): HResult; stdcall;
+    function  Get_Right(out pVal: imAccessRight): HResult; stdcall;
+    function  Set_Right(pVal: imAccessRight): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSecurityTemplates
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {603E7FE9-8970-49F4-A386-F3797942C19B}
+// *********************************************************************//
+  IManSecurityTemplates = interface(IManObject)
+    ['{603E7FE9-8970-49F4-A386-F3797942C19B}']
+    function  ItemByIndex(Index: Integer; out returnedvalue: IManSecurityTemplate): HResult; stdcall;
+    function  ItemByName(const val: WideString; out returnedvalue: IManSecurityTemplate): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManGroups
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {664C1889-26AA-4DEB-B514-E8554C0451BC}
+// *********************************************************************//
+  IManGroups = interface(IManObject)
+    ['{664C1889-26AA-4DEB-B514-E8554C0451BC}']
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(val: Integer; out pvarRet: IManGroup): HResult; stdcall;
+    function  ItemByName(const val: WideString; out pvarRet: IManGroup): HResult; stdcall;
+    function  Contains(const val: WideString; out pvarRet: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManHistoryList
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9F9FA65A-8DC9-4DA9-9CFB-02D9DB41C0D7}
+// *********************************************************************//
+  IManHistoryList = interface(IManObject)
+    ['{9F9FA65A-8DC9-4DA9-9CFB-02D9DB41C0D7}']
+    function  ItemByIndex(Index: Integer; out pvarRet: IManDocumentHistory): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Add(Activity: imHistEvent; Duration: Integer; PagesPrinted: Integer; 
+                  const Application: WideString; const Comment: WideString; 
+                  const Location: WideString; const CustomString1: WideString; 
+                  const CustomString2: WideString; CustomNumber1: OleVariant; 
+                  CustomNumber2: OleVariant; CustomNumber3: OleVariant): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentHistory
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {B8DAA770-1402-4245-9DD6-33CB7EBFBE43}
+// *********************************************************************//
+  IManDocumentHistory = interface(IManObject)
+    ['{B8DAA770-1402-4245-9DD6-33CB7EBFBE43}']
+    function  Get_Operation(out pVal: WideString): HResult; stdcall;
+    function  Get_Date(out pVal: TDateTime): HResult; stdcall;
+    function  Get_Comment(out pVal: WideString): HResult; stdcall;
+    function  Get_PagesPrinted(out pVal: Integer): HResult; stdcall;
+    function  Get_Application(out pVal: WideString): HResult; stdcall;
+    function  Get_Duration(out pVal: Integer): HResult; stdcall;
+    function  Get_Version(out pVal: WideString): HResult; stdcall;
+    function  Get_Number(out pVal: WideString): HResult; stdcall;
+    function  Get_User(out pVal: WideString): HResult; stdcall;
+    function  Get_Location(out pVal: WideString): HResult; stdcall;
+    function  Get_UserProperty1(out pVal: WideString): HResult; stdcall;
+    function  Get_UserProperty2(out pVal: WideString): HResult; stdcall;
+    function  Get_UserNumberProperty1(out pVal: OleVariant): HResult; stdcall;
+    function  Get_UserNumberProperty2(out pVal: OleVariant): HResult; stdcall;
+    function  Get_UserNumberProperty3(out pVal: OleVariant): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTaskFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9FD2D6D7-6084-4C67-99DD-76636674606F}
+// *********************************************************************//
+  IManTaskFolders = interface(IManFolders)
+    ['{9FD2D6D7-6084-4C67-99DD-76636674606F}']
+    function  AddNewTaskFolder(const Name: WideString; const Description: WideString; 
+                               out pVal: IManTaskFolder): HResult; stdcall;
+    function  AddNewTaskFolderInheriting(const Name: WideString; const Description: WideString; 
+                                         out pVal: IManTaskFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTaskFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {749F4F44-9014-47D1-B821-1F79F1A686D2}
+// *********************************************************************//
+  IManTaskFolder = interface(IManFolder)
+    ['{749F4F44-9014-47D1-B821-1F79F1A686D2}']
+  end;
+
+// *********************************************************************//
+// Interface: IManMessageFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {95C4C7A9-8FE1-4208-B43E-662095FA8EDE}
+// *********************************************************************//
+  IManMessageFolders = interface(IManFolders)
+    ['{95C4C7A9-8FE1-4208-B43E-662095FA8EDE}']
+    function  AddNewMessageFolder(const Name: WideString; const Description: WideString; 
+                                  out pVal: IManMessageFolder): HResult; stdcall;
+    function  AddNewMessageFolderInheriting(const Name: WideString; const Description: WideString; 
+                                            out pVal: IManMessageFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManMessageFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {C8962615-0088-4BD5-88D9-E55E9E9748A3}
+// *********************************************************************//
+  IManMessageFolder = interface(IManFolder)
+    ['{C8962615-0088-4BD5-88D9-E55E9E9748A3}']
+  end;
+
+// *********************************************************************//
+// Interface: IManEventFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {340DF1EC-2252-4A82-880B-700B6FD30ED5}
+// *********************************************************************//
+  IManEventFolders = interface(IManFolders)
+    ['{340DF1EC-2252-4A82-880B-700B6FD30ED5}']
+    function  AddNewEventFolder(const Name: WideString; const Description: WideString; 
+                                out pVal: IManEventFolder): HResult; stdcall;
+    function  AddNewEventFolderInheriting(const Name: WideString; const Description: WideString; 
+                                          out pVal: IManEventFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManEventFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {7BD062FC-C3FA-4798-AD32-7B85AF035DE9}
+// *********************************************************************//
+  IManEventFolder = interface(IManFolder)
+    ['{7BD062FC-C3FA-4798-AD32-7B85AF035DE9}']
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {2CD383FB-AE51-4C20-AC8D-F674C6528215}
+// *********************************************************************//
+  IManDocumentFolders = interface(IManFolders)
+    ['{2CD383FB-AE51-4C20-AC8D-F674C6528215}']
+    function  AddNewDocumentFolder(const Name: WideString; const Description: WideString; 
+                                   out pVal: IManDocumentFolder): HResult; stdcall;
+    function  AddNewDocumentFolderInheriting(const Name: WideString; const Description: WideString; 
+                                             out pVal: IManDocumentFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {E0A72865-9E79-4AA1-9574-25C6DED1DDC6}
+// *********************************************************************//
+  IManDocumentFolder = interface(IManFolder)
+    ['{E0A72865-9E79-4AA1-9574-25C6DED1DDC6}']
+  end;
+
+// *********************************************************************//
+// Interface: IManConnectorFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {8291723C-4096-4926-988D-92D109C7078D}
+// *********************************************************************//
+  IManConnectorFolders = interface(IManFolders)
+    ['{8291723C-4096-4926-988D-92D109C7078D}']
+    function  AddNewConnectorFolder(const Name: WideString; const Description: WideString; 
+                                    out pVal: IManConnectorFolder): HResult; stdcall;
+    function  AddNewConnectorFolderInheriting(const Name: WideString; 
+                                              const Description: WideString; 
+                                              out pVal: IManConnectorFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManBodiedFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {4C59A4BC-C83D-49B4-87AC-55A663651B68}
+// *********************************************************************//
+  IManBodiedFolder = interface(IManFolder)
+    ['{4C59A4BC-C83D-49B4-87AC-55A663651B68}']
+    function  Get_Body(out pVal: WideString): HResult; stdcall;
+    function  Set_Body(const pVal: WideString): HResult; stdcall;
+    function  Get_EditDate(out pVal: TDateTime): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManConnectorFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {CD92D6A2-E03C-4466-85D6-9C5C0672CC2B}
+// *********************************************************************//
+  IManConnectorFolder = interface(IManBodiedFolder)
+    ['{CD92D6A2-E03C-4466-85D6-9C5C0672CC2B}']
+  end;
+
+// *********************************************************************//
+// Interface: IManLinkListFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {577921CC-D21C-44F1-935D-E4D1CB01E8F2}
+// *********************************************************************//
+  IManLinkListFolders = interface(IManFolders)
+    ['{577921CC-D21C-44F1-935D-E4D1CB01E8F2}']
+    function  AddNewLinkListFolder(const Name: WideString; const Description: WideString; 
+                                   out pVal: IManLinkListFolder): HResult; stdcall;
+    function  AddNewLinkListFolderInheriting(const Name: WideString; const Description: WideString; 
+                                             out pVal: IManLinkListFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManLinkListFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {F1939700-0B85-474F-95BE-960CF829EB5E}
+// *********************************************************************//
+  IManLinkListFolder = interface(IManBodiedFolder)
+    ['{F1939700-0B85-474F-95BE-960CF829EB5E}']
+  end;
+
+// *********************************************************************//
+// Interface: IManNoteFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {EC9F6A03-1D7F-49F4-80EC-1B5F46D639C3}
+// *********************************************************************//
+  IManNoteFolders = interface(IManFolders)
+    ['{EC9F6A03-1D7F-49F4-80EC-1B5F46D639C3}']
+    function  AddNewNoteFolder(const Name: WideString; const Description: WideString; 
+                               out pVal: IManNoteFolder): HResult; stdcall;
+    function  AddNewNoteFolderInheriting(const Name: WideString; const Description: WideString; 
+                                         out pVal: IManNoteFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManNoteFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {28FBB673-3FCE-4C0B-B164-F0EC90B01C3F}
+// *********************************************************************//
+  IManNoteFolder = interface(IManBodiedFolder)
+    ['{28FBB673-3FCE-4C0B-B164-F0EC90B01C3F}']
+  end;
+
+// *********************************************************************//
+// Interface: IManTabs
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {C5B4C4AD-3395-4175-AFBD-4C4AB44563A0}
+// *********************************************************************//
+  IManTabs = interface(IManFolders)
+    ['{C5B4C4AD-3395-4175-AFBD-4C4AB44563A0}']
+    function  AddNewTab(const Name: WideString; const Description: WideString; out pVal: IManTab): HResult; stdcall;
+    function  AddNewTabInheriting(const Name: WideString; const Description: WideString; 
+                                  out pVal: IManTab): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTab
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {C9277A0A-C9B2-45A0-A68F-80B70BEA0C58}
+// *********************************************************************//
+  IManTab = interface(IManFolder)
+    ['{C9277A0A-C9B2-45A0-A68F-80B70BEA0C58}']
+    function  Get_TaskFolders(out pVal: IManTaskFolders): HResult; stdcall;
+    function  Get_MessageFolders(out pVal: IManMessageFolders): HResult; stdcall;
+    function  Get_EventFolders(out pVal: IManEventFolders): HResult; stdcall;
+    function  Get_DocumentFolders(out pVal: IManDocumentFolders): HResult; stdcall;
+    function  Get_ConnectorFolders(out pVal: IManConnectorFolders): HResult; stdcall;
+    function  Get_LinkListFolders(out pVal: IManLinkListFolders): HResult; stdcall;
+    function  Get_NoteFolders(out pVal: IManNoteFolders): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfileUpdateResult
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {962E16AE-C411-44A6-918D-A5AC7FB9F48C}
+// *********************************************************************//
+  IManProfileUpdateResult = interface(IManObject)
+    ['{962E16AE-C411-44A6-918D-A5AC7FB9F48C}']
+    function  Get_Succeeded(out pVal: WordBool): HResult; stdcall;
+    function  Get_ErrorList(out pVal: IManProfileErrors): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfileErrors
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {2E993315-0F07-45DE-A04F-A01A518197FE}
+// *********************************************************************//
+  IManProfileErrors = interface(IManObject)
+    ['{2E993315-0F07-45DE-A04F-A01A518197FE}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManProfileError): HResult; stdcall;
+    function  ItemByField(Field: Integer; out pVal: IManProfileError): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfileError
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {CF92316D-5670-4934-9067-767C91214F1A}
+// *********************************************************************//
+  IManProfileError = interface(IManObject)
+    ['{CF92316D-5670-4934-9067-767C91214F1A}']
+    function  Get_AttribID(out pVal: imProfileAttributeID): HResult; stdcall;
+    function  Get_ErrorCode(out pVal: imProfileErrorCode): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManUserPreferences
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {8BE146A1-2F06-4777-B626-A6A867629C87}
+// *********************************************************************//
+  IManUserPreferences = interface(IManObject)
+    ['{8BE146A1-2F06-4777-B626-A6A867629C87}']
+    function  Get_WorkAreaCaption(out pVal: WideString): HResult; stdcall;
+    function  GetModifiableByID(idx: imPreferenceType; out __MIDL_0033: WordBool): HResult; stdcall;
+    function  GetCaptionByID(idx: imPreferenceType; out __MIDL_0034: WideString): HResult; stdcall;
+    function  GetVisibleByID(idx: imPreferenceType; out __MIDL_0035: WordBool): HResult; stdcall;
+    function  SetVisibleByID(idx: imPreferenceType; newVal: WordBool): HResult; stdcall;
+    function  Update: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManForm
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {8D9F0610-19B0-457A-9B8A-EFD85AAD70F6}
+// *********************************************************************//
+  IManForm = interface(IManObject)
+    ['{8D9F0610-19B0-457A-9B8A-EFD85AAD70F6}']
+    function  Get_Caption(out pVal: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_X(out pVal: Integer): HResult; stdcall;
+    function  Get_Y(out pVal: Integer): HResult; stdcall;
+    function  Get_Controls(out pVal: IManControls): HResult; stdcall;
+    function  Get_Width(out pVal: Integer): HResult; stdcall;
+    function  Get_Height(out pVal: Integer): HResult; stdcall;
+    function  Get_Type_(out pVal: imFormType): HResult; stdcall;
+    function  Get_FormID(out pVal: Integer): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_BackColor(out pVal: Integer): HResult; stdcall;
+    function  Get_ForeColor(out pVal: Integer): HResult; stdcall;
+    function  Get_UserProperty1(out pVal: WideString): HResult; stdcall;
+    function  Get_UserProperty2(out pVal: WideString): HResult; stdcall;
+    function  Get_UserProperty3(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManControls
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {20AFD79A-9C5B-48E0-8EC8-3AA7EFB2E7F3}
+// *********************************************************************//
+  IManControls = interface(IManObject)
+    ['{20AFD79A-9C5B-48E0-8EC8-3AA7EFB2E7F3}']
+    function  Item(Index: OleVariant; out pvarRet: IManControl): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManControl
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {D0812AE3-5EB4-4FEA-A92A-A93EACC25625}
+// *********************************************************************//
+  IManControl = interface(IManObject)
+    ['{D0812AE3-5EB4-4FEA-A92A-A93EACC25625}']
+    function  Get_Caption(out pVal: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Type_(out pVal: imControlType): HResult; stdcall;
+    function  Get_TabOrder(out pVal: Integer): HResult; stdcall;
+    function  Get_Left(out pVal: Integer): HResult; stdcall;
+    function  Get_Right(out pVal: Integer): HResult; stdcall;
+    function  Get_Top(out pVal: Integer): HResult; stdcall;
+    function  Get_Bottom(out pVal: Integer): HResult; stdcall;
+    function  Get_ControlID(out pVal: Integer): HResult; stdcall;
+    function  Get_ProgID(out pVal: WideString): HResult; stdcall;
+    function  Get_ActiveXProperties(out pVal: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfileSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {BBA41FC1-C28D-40C6-9534-9596604D869A}
+// *********************************************************************//
+  IManProfileSearchParameters = interface(IManObject)
+    ['{BBA41FC1-C28D-40C6-9534-9596604D869A}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByAttribute(Attribute: imProfileAttributeID; out pVal: IManProfileSearchParameter): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManProfileSearchParameter): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByAttribute(Index: imProfileAttributeID): HResult; stdcall;
+    function  RemoveByObject(const ParameterToRemove: IManProfileSearchParameter): HResult; stdcall;
+    function  Contains(AttributeToTestFor: imProfileAttributeID; out pVal: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Add(AttributeToAdd: imProfileAttributeID; const ValueToAdd: WideString; 
+                  out pVal: IManProfileSearchParameter): HResult; stdcall;
+    function  AddFullTextSearch(const ValueToAdd: WideString; Location: imFullTextSearchLocation; 
+                                out pVal: IManFullTextSearchParameter): HResult; stdcall;
+    function  Get_SearchEmail(out pVal: imSearchEmail): HResult; stdcall;
+    function  Set_SearchEmail(pVal: imSearchEmail): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfileSearchParameter
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A7CEBB3D-A52F-47B8-8A35-1BC26EA70660}
+// *********************************************************************//
+  IManProfileSearchParameter = interface(IManObject)
+    ['{A7CEBB3D-A52F-47B8-8A35-1BC26EA70660}']
+    function  Get_Attribute(out pVal: imProfileAttributeID): HResult; stdcall;
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFullTextSearchParameter
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9DA55477-78FC-4CAB-A302-298A82015195}
+// *********************************************************************//
+  IManFullTextSearchParameter = interface(IManProfileSearchParameter)
+    ['{9DA55477-78FC-4CAB-A302-298A82015195}']
+    function  Get_SearchLocation(out pRet: imFullTextSearchLocation): HResult; stdcall;
+    function  Set_SearchLocation(pRet: imFullTextSearchLocation): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDatabases
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {0CBC26A0-BA99-403F-A454-B41028821A56}
+// *********************************************************************//
+  IManDatabases = interface(IManObject)
+    ['{0CBC26A0-BA99-403F-A454-B41028821A56}']
+    function  ItemByIndex(Index: Integer; out pvarRet: IManDatabase): HResult; stdcall;
+    function  ItemByName(const Index: WideString; out pvarRet: IManDatabase): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDMS
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {F94677CE-B268-4D65-8BC9-D8FDAB4AD714}
+// *********************************************************************//
+  IManDMS = interface(IManObject)
+    ['{F94677CE-B268-4D65-8BC9-D8FDAB4AD714}']
+    function  CreateSubscriptionFolderSearchParameters(out pVal: IManSubscriptionFolderSearchParameters): HResult; stdcall;
+    function  CreateFolderSearchParameters(out pVal: IManFolderSearchParameters): HResult; stdcall;
+    function  CreateWorkspaceSearchParameters(out pVal: IManWorkspaceSearchParameters): HResult; stdcall;
+    function  CreateProfileSearchParameters(out pVal: IManProfileSearchParameters): HResult; stdcall;
+    function  CreateEventSearchParameters(out pVal: IManEventSearchParameters): HResult; stdcall;
+    function  CreateTaskSearchParameters(out pVal: IManTaskSearchParameters): HResult; stdcall;
+    function  CreateMessageSearchParameters(out pVal: IManMessageSearchParameters): HResult; stdcall;
+    function  Get_Sessions(out pVal: IManSessions): HResult; stdcall;
+    function  GetObjectByID(const ObjectID: WideString; out obj: IDispatch): HResult; stdcall;
+    function  GetObjectBySID(const ObjectID: WideString; out obj: IDispatch): HResult; stdcall;
+    function  GetTabWithContentsBySID(const ObjectID: WideString; out obj: IManTabContents): HResult; stdcall;
+    function  Get_LocaleID(out pVal: Integer): HResult; stdcall;
+    function  Set_LocaleID(pVal: Integer): HResult; stdcall;
+    function  Get_TimezoneOffset(out pVal: Integer): HResult; stdcall;
+    function  Set_TimezoneOffset(pVal: Integer): HResult; stdcall;
+    function  Get_ComputerName(out pVal: WideString): HResult; stdcall;
+    function  Set_ComputerName(const pVal: WideString): HResult; stdcall;
+    function  Close: HResult; stdcall;
+    function  Get_ConfigurationData(out pVal: IManAdditionalProperties): HResult; stdcall;
+    function  Get_ApplicationName(out pVal: WideString): HResult; stdcall;
+    function  Set_ApplicationName(const pVal: WideString): HResult; stdcall;
+    function  CreateDateRange(out pVal: IManDateRange): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkspaceSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {1A8E26EB-8022-4330-BF91-E6AF17D90EBF}
+// *********************************************************************//
+  IManWorkspaceSearchParameters = interface(IManFolderSearchParameters)
+    ['{1A8E26EB-8022-4330-BF91-E6AF17D90EBF}']
+  end;
+
+// *********************************************************************//
+// Interface: IManEventSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {5B5A6D42-A9DD-41FC-8F4F-9B2C9BB0A91B}
+// *********************************************************************//
+  IManEventSearchParameters = interface(IManObject)
+    ['{5B5A6D42-A9DD-41FC-8F4F-9B2C9BB0A91B}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByAttribute(Attribute: imEventAttributeID; out pVal: IManEventSearchParameter): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManEventSearchParameter): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByAttribute(Index: imEventAttributeID): HResult; stdcall;
+    function  RemoveByObject(const ParameterToRemove: IManEventSearchParameter): HResult; stdcall;
+    function  Contains(AttributeToTestFor: imEventAttributeID; out pVal: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Add(AttributeToAdd: imEventAttributeID; const ValueToAdd: WideString; 
+                  out pVal: IManEventSearchParameter): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManEventSearchParameter
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {94C8D67E-2AE4-493E-8405-F4618F43B884}
+// *********************************************************************//
+  IManEventSearchParameter = interface(IManObject)
+    ['{94C8D67E-2AE4-493E-8405-F4618F43B884}']
+    function  Get_Attribute(out pVal: imEventAttributeID): HResult; stdcall;
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTaskSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {121564CA-A970-4599-A544-82D6167E4524}
+// *********************************************************************//
+  IManTaskSearchParameters = interface(IManObject)
+    ['{121564CA-A970-4599-A544-82D6167E4524}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByAttribute(Attribute: imTaskAttributeID; out pVal: IManTaskSearchParameter): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManTaskSearchParameter): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByAttribute(Index: imTaskAttributeID): HResult; stdcall;
+    function  RemoveByObject(const ParameterToRemove: IManTaskSearchParameter): HResult; stdcall;
+    function  Contains(AttributeToTestFor: imTaskAttributeID; out pVal: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Add(AttributeToAdd: imTaskAttributeID; const ValueToAdd: WideString; 
+                  out pVal: IManTaskSearchParameter): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTaskSearchParameter
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {B41E3D34-E5AF-47EA-97C8-960059DFCDE4}
+// *********************************************************************//
+  IManTaskSearchParameter = interface(IManObject)
+    ['{B41E3D34-E5AF-47EA-97C8-960059DFCDE4}']
+    function  Get_Attribute(out pVal: imTaskAttributeID): HResult; stdcall;
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManMessageSearchParameters
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {33CB30DA-822B-471C-ABBD-C573EAF0E5C2}
+// *********************************************************************//
+  IManMessageSearchParameters = interface(IManObject)
+    ['{33CB30DA-822B-471C-ABBD-C573EAF0E5C2}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  ItemByAttribute(Attribute: imMessageAttributeID; out pVal: IManMessageSearchParameter): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManMessageSearchParameter): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByAttribute(Index: imMessageAttributeID): HResult; stdcall;
+    function  RemoveByObject(const ParameterToRemove: IManMessageSearchParameter): HResult; stdcall;
+    function  Contains(AttributeToTestFor: imMessageAttributeID; out pVal: WordBool): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Add(AttributeToAdd: imMessageAttributeID; const ValueToAdd: WideString; 
+                  out pVal: IManMessageSearchParameter): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManMessageSearchParameter
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {568ECE51-BEC0-49FA-8700-CF98A378F0F1}
+// *********************************************************************//
+  IManMessageSearchParameter = interface(IManObject)
+    ['{568ECE51-BEC0-49FA-8700-CF98A378F0F1}']
+    function  Get_Attribute(out pVal: imMessageAttributeID): HResult; stdcall;
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSessions
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {28E58F1A-5936-4178-BA30-FD85571AA739}
+// *********************************************************************//
+  IManSessions = interface(IManObject)
+    ['{28E58F1A-5936-4178-BA30-FD85571AA739}']
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pvarRet: IManSession): HResult; stdcall;
+    function  ItemByName(const Index: WideString; out pvarRet: IManSession): HResult; stdcall;
+    function  Add(const ServerName: WideString; out pvarRet: IManSession): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByName(const Index: WideString): HResult; stdcall;
+    function  RemoveByObject(const Index: IManSession): HResult; stdcall;
+    function  Sort(const __MIDL_0036: IManObjectSort): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTabContents
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {810DAFE6-C47D-4563-924F-D663348B80BC}
+// *********************************************************************//
+  IManTabContents = interface(IManObject)
+    ['{810DAFE6-C47D-4563-924F-D663348B80BC}']
+    function  Get_Tab(out ppVal: IManTab): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDateRange
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {59A71135-4904-4955-A7A3-394A9CE4AC7B}
+// *********************************************************************//
+  IManDateRange = interface(IManObject)
+    ['{59A71135-4904-4955-A7A3-394A9CE4AC7B}']
+    function  Get_DateRangeType(out pVal: imDateRangeType): HResult; stdcall;
+    function  Set_DateRangeType(pVal: imDateRangeType): HResult; stdcall;
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+    function  Get_RelativeStartDate(out pVal: IManRelativeDate): HResult; stdcall;
+    function  Get_RelativeEndDate(out pVal: IManRelativeDate): HResult; stdcall;
+    function  Get_RelativeGranularity(out pVal: imGranularity): HResult; stdcall;
+    function  Set_RelativeGranularity(pVal: imGranularity): HResult; stdcall;
+    function  Get_AbsoluteStartDate(out pVal: IManDate): HResult; stdcall;
+    function  Get_AbsoluteEndDate(out pVal: IManDate): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRelativeDate
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {E63C00B4-2CF8-48FD-8463-67C11E77086D}
+// *********************************************************************//
+  IManRelativeDate = interface(IManObject)
+    ['{E63C00B4-2CF8-48FD-8463-67C11E77086D}']
+    function  Get_IsSet(out pVal: WordBool): HResult; stdcall;
+    function  Set_IsSet(pVal: WordBool): HResult; stdcall;
+    function  Get_Value(out pVal: Integer): HResult; stdcall;
+    function  Set_Value(pVal: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDate
+// Flags:     (320) Dual OleAutomation
+// GUID:      {FC12FD15-B83B-4D2E-AEED-5CAAB651DEA2}
+// *********************************************************************//
+  IManDate = interface(IManObject)
+    ['{FC12FD15-B83B-4D2E-AEED-5CAAB651DEA2}']
+    function  Get_Value: TDateTime; safecall;
+    procedure Set_Value(pVal: TDateTime); safecall;
+    function  Get_IsSet: WordBool; safecall;
+    procedure Clear; safecall;
+    property Value: TDateTime read Get_Value write Set_Value;
+    property IsSet: WordBool read Get_IsSet;
+  end;
+
+// *********************************************************************//
+// DispIntf:  IManDateDisp
+// Flags:     (320) Dual OleAutomation
+// GUID:      {FC12FD15-B83B-4D2E-AEED-5CAAB651DEA2}
+// *********************************************************************//
+  IManDateDisp = dispinterface
+    ['{FC12FD15-B83B-4D2E-AEED-5CAAB651DEA2}']
+    property Value: TDateTime dispid 0;
+    property IsSet: WordBool readonly dispid 1610743810;
+    procedure Clear; dispid 1610743811;
+    property ObjectType: IManObjectType readonly dispid 1610678272;
+    property HasObjectID: WordBool readonly dispid 1610678273;
+    property ObjectID: WideString readonly dispid 1610678274;
+  end;
+
+// *********************************************************************//
+// Interface: IManEvents
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {D8D9AF40-3FAF-4D15-9AE1-0D5371B2C2AE}
+// *********************************************************************//
+  IManEvents = interface(IManContents)
+    ['{D8D9AF40-3FAF-4D15-9AE1-0D5371B2C2AE}']
+    function  AddNewEvent(out pVal: IManEvent): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManProfiledContent
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {D4C688E3-3485-4219-8C85-DC7EA0D63C1B}
+// *********************************************************************//
+  IManProfiledContent = interface(IManContent)
+    ['{D4C688E3-3485-4219-8C85-DC7EA0D63C1B}']
+    function  Get_Database(out pVal: IManDatabase): HResult; stdcall;
+    function  Get_InUseBy(out pVal: IManUser): HResult; stdcall;
+    function  Get_MarkedForArchive(out marked: WordBool): HResult; stdcall;
+    function  Set_MarkedForArchive(marked: WordBool): HResult; stdcall;
+    function  Get_Locked(out pVal: WordBool): HResult; stdcall;
+    function  Get_Archived(out pVal: WordBool): HResult; stdcall;
+    function  Get_Profile(out pVal: IManProfile): HResult; stdcall;
+    function  Get_Class_(out cls: IManDocumentClass): HResult; stdcall;
+    function  _Set_Class_(const cls: IManDocumentClass): HResult; stdcall;
+    function  Set_Class_(const cls: IManDocumentClass): HResult; stdcall;
+    function  Get_SubClass(out pVal: IManDocumentClass): HResult; stdcall;
+    function  _Set_SubClass(const pVal: IManDocumentClass): HResult; stdcall;
+    function  Set_SubClass(const pVal: IManDocumentClass): HResult; stdcall;
+    function  Get_Type_(out Type_: IManDocumentType): HResult; stdcall;
+    function  _Set_Type_(const Type_: IManDocumentType): HResult; stdcall;
+    function  Set_Type_(const Type_: IManDocumentType): HResult; stdcall;
+    function  Get_HistoryList(out pVal: IManHistoryList): HResult; stdcall;
+    function  Get_Security(out sec: IManSecurity): HResult; stdcall;
+    function  Get_Rules(out pVal: IManRules): HResult; stdcall;
+    function  Get_Attachments(out val: IManAttachments): HResult; stdcall;
+    function  Get_HasAttachments(out val: WordBool): HResult; stdcall;
+    function  Set_HasAttachments(val: WordBool): HResult; stdcall;
+    function  Get_EffectiveAccess(out pVal: imAccessRight): HResult; stdcall;
+    function  LogEvent(const evntType: IManRuleEventType; const customData: WideString): HResult; stdcall;
+    function  UpdateWithResults(out pVal: IManProfileUpdateResult): HResult; stdcall;
+    function  RestoreFromArchive: HResult; stdcall;
+    function  LockContent(RefreshProfile: WordBool; out Succeeded: WordBool): HResult; stdcall;
+    function  UnlockContent(out ret: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManEvent
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {3D7E4724-10C5-47EE-89CF-F307ADCB88D9}
+// *********************************************************************//
+  IManEvent = interface(IManProfiledContent)
+    ['{3D7E4724-10C5-47EE-89CF-F307ADCB88D9}']
+    function  Get_Subject(out sub: WideString): HResult; stdcall;
+    function  Set_Subject(const sub: WideString): HResult; stdcall;
+    function  Get_Body(out val: WideString): HResult; stdcall;
+    function  Set_Body(const val: WideString): HResult; stdcall;
+    function  Get_Workspace(out pg: IManWorkspace): HResult; stdcall;
+    function  Get_EventID(out nm: Integer): HResult; stdcall;
+    function  Get_Organizer(out val: IManUser): HResult; stdcall;
+    function  _Set_Organizer(const val: IManUser): HResult; stdcall;
+    function  Set_Organizer(const val: IManUser): HResult; stdcall;
+    function  Get_Assignee(out val: IManUser): HResult; stdcall;
+    function  _Set_Assignee(const val: IManUser): HResult; stdcall;
+    function  Set_Assignee(const val: IManUser): HResult; stdcall;
+    function  Get_Categories(out val: WideString): HResult; stdcall;
+    function  Set_Categories(const val: WideString): HResult; stdcall;
+    function  Get_RecurringPattern(out val: WideString): HResult; stdcall;
+    function  Set_RecurringPattern(const val: WideString): HResult; stdcall;
+    function  Get_SoundFile(out val: WideString): HResult; stdcall;
+    function  Set_SoundFile(const val: WideString): HResult; stdcall;
+    function  Get_Contacts(out val: WideString): HResult; stdcall;
+    function  Set_Contacts(const val: WideString): HResult; stdcall;
+    function  Get_Attendee(out val: WideString): HResult; stdcall;
+    function  Set_Attendee(const val: WideString): HResult; stdcall;
+    function  Get_Location(out val: WideString): HResult; stdcall;
+    function  Set_Location(const val: WideString): HResult; stdcall;
+    function  Get_StartTime(out val: TDateTime): HResult; stdcall;
+    function  Set_StartTime(val: TDateTime): HResult; stdcall;
+    function  Get_EndTime(out val: TDateTime): HResult; stdcall;
+    function  Set_EndTime(val: TDateTime): HResult; stdcall;
+    function  Get_CreateDate(out val: TDateTime): HResult; stdcall;
+    function  Get_DateModified(out val: TDateTime): HResult; stdcall;
+    function  Get_SynchTime(out val: TDateTime): HResult; stdcall;
+    function  Set_SynchTime(val: TDateTime): HResult; stdcall;
+    function  Get_ReminderTime(out val: TDateTime): HResult; stdcall;
+    function  Set_ReminderTime(val: TDateTime): HResult; stdcall;
+    function  Get_ShowTimeAs(out val: Integer): HResult; stdcall;
+    function  Set_ShowTimeAs(val: Integer): HResult; stdcall;
+    function  Get_AllDayEvent(out pVal: WordBool): HResult; stdcall;
+    function  Set_AllDayEvent(pVal: WordBool): HResult; stdcall;
+    function  Get_Priority(out val: Integer): HResult; stdcall;
+    function  Set_Priority(val: Integer): HResult; stdcall;
+    function  Get_Duration(out pVal: Single): HResult; stdcall;
+    function  Get_Recurring(out pVal: WordBool): HResult; stdcall;
+    function  Set_Recurring(pVal: WordBool): HResult; stdcall;
+    function  Get_Reminder(out sdur: WordBool): HResult; stdcall;
+    function  Set_Reminder(sdur: WordBool): HResult; stdcall;
+    function  Get_PlaySound(out pVal: WordBool): HResult; stdcall;
+    function  Set_PlaySound(pVal: WordBool): HResult; stdcall;
+    function  Get_LastUser(out pVal: IManUser): HResult; stdcall;
+    function  Get_Folder(out fldr: IManEventFolder): HResult; stdcall;
+    function  GetAttributeByID(idx: imEventAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  SetAttributeByID(idx: imEventAttributeID; newVal: OleVariant): HResult; stdcall;
+    function  GetAttributeValueByID(idx: imEventAttributeID; out pVal: OleVariant): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRules
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {80E5FE8C-6EF0-4999-BE45-9DAEAC390E39}
+// *********************************************************************//
+  IManRules = interface(IManObject)
+    ['{80E5FE8C-6EF0-4999-BE45-9DAEAC390E39}']
+    function  ItemByIndex(Index: Integer; out pVal: IManRule): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Add(const descr: WideString; const RuleActionData: WideString; 
+                  const Handler: IManRuleHandler; const Locator: WideString; 
+                  const EmailSubject: WideString; out pVal: IManRule): HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Sort(const Sorter: IManObjectSort): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRule
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A281A3C5-B940-4FDD-BC22-A29273FE4C8C}
+// *********************************************************************//
+  IManRule = interface(IManObject)
+    ['{A281A3C5-B940-4FDD-BC22-A29273FE4C8C}']
+    function  Get_Description(out descr: WideString): HResult; stdcall;
+    function  Set_Description(const descr: WideString): HResult; stdcall;
+    function  Get_Enabled(out val: WordBool): HResult; stdcall;
+    function  Set_Enabled(val: WordBool): HResult; stdcall;
+    function  Get_RuleActionData(out ruledata: WideString): HResult; stdcall;
+    function  Set_RuleActionData(const ruledata: WideString): HResult; stdcall;
+    function  Get_RuleHandler(out pVal: IManRuleHandler): HResult; stdcall;
+    function  Set_RuleHandler(const pVal: IManRuleHandler): HResult; stdcall;
+    function  Get_Locator(out loc: WideString): HResult; stdcall;
+    function  Set_Locator(const loc: WideString): HResult; stdcall;
+    function  Get_EmailSubject(out emailsub: WideString): HResult; stdcall;
+    function  Set_EmailSubject(const emailsub: WideString): HResult; stdcall;
+    function  Get_Number(out pVal: Integer): HResult; stdcall;
+    function  Get_RuleEventTypes(out evnts: IManRuleEventTypes): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Update: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRuleHandler
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {108F705D-AF48-4B75-8E14-9AAFFEC0C62F}
+// *********************************************************************//
+  IManRuleHandler = interface(IManObject)
+    ['{108F705D-AF48-4B75-8E14-9AAFFEC0C62F}']
+    function  Get_Name(out Name: WideString): HResult; stdcall;
+    function  Get_Description(out descr: WideString): HResult; stdcall;
+    function  Get_Enabled(out Enabled: WordBool): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_HandlerID(out pVal: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRuleEventTypes
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {E487B592-125F-4AD9-92EA-88A4BDC2E77D}
+// *********************************************************************//
+  IManRuleEventTypes = interface(IManObject)
+    ['{E487B592-125F-4AD9-92EA-88A4BDC2E77D}']
+    function  Item(Index: Integer; out pVal: IManRuleEventType): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Add(const event: IManRuleEventType): HResult; stdcall;
+    function  Remove(IdOrIndexOrObject: OleVariant): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRuleEventType
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {B44A10B1-68AD-4B81-9E42-550403263A04}
+// *********************************************************************//
+  IManRuleEventType = interface(IManObject)
+    ['{B44A10B1-68AD-4B81-9E42-550403263A04}']
+    function  Get_EventType(out EventType: Integer): HResult; stdcall;
+    function  Get_Description(out descr: WideString): HResult; stdcall;
+    function  Get_Enabled(out Enabled: WordBool): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTasks
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {4F05D0DF-1110-46C7-8E45-412A0F7516B0}
+// *********************************************************************//
+  IManTasks = interface(IManContents)
+    ['{4F05D0DF-1110-46C7-8E45-412A0F7516B0}']
+    function  AddNewTask(out pVal: IManTask): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManTask
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {240C26CC-C213-4236-BC70-FA9A4A564674}
+// *********************************************************************//
+  IManTask = interface(IManProfiledContent)
+    ['{240C26CC-C213-4236-BC70-FA9A4A564674}']
+    function  Get_Subject(out sub: WideString): HResult; stdcall;
+    function  Set_Subject(const sub: WideString): HResult; stdcall;
+    function  Get_Body(out val: WideString): HResult; stdcall;
+    function  Set_Body(const val: WideString): HResult; stdcall;
+    function  Get_Owner(out val: IManUser): HResult; stdcall;
+    function  _Set_Owner(const val: IManUser): HResult; stdcall;
+    function  Set_Owner(const val: IManUser): HResult; stdcall;
+    function  Get_Workspace(out pg: IManWorkspace): HResult; stdcall;
+    function  Get_TaskID(out nm: Integer): HResult; stdcall;
+    function  Get_Assignee(out ppVal: IManUser): HResult; stdcall;
+    function  _Set_Assignee(const ppVal: IManUser): HResult; stdcall;
+    function  Set_Assignee(const ppVal: IManUser): HResult; stdcall;
+    function  Get_Categories(out val: WideString): HResult; stdcall;
+    function  Set_Categories(const val: WideString): HResult; stdcall;
+    function  Get_RecurringPattern(out val: WideString): HResult; stdcall;
+    function  Set_RecurringPattern(const val: WideString): HResult; stdcall;
+    function  Get_SoundFile(out val: WideString): HResult; stdcall;
+    function  Set_SoundFile(const val: WideString): HResult; stdcall;
+    function  Get_Contacts(out val: WideString): HResult; stdcall;
+    function  Set_Contacts(const val: WideString): HResult; stdcall;
+    function  Get_UserProperty1(out val: WideString): HResult; stdcall;
+    function  Set_UserProperty1(const val: WideString): HResult; stdcall;
+    function  Get_StartDate(out val: TDateTime): HResult; stdcall;
+    function  Set_StartDate(val: TDateTime): HResult; stdcall;
+    function  Get_DateCompleted(out val: TDateTime): HResult; stdcall;
+    function  Set_DateCompleted(val: TDateTime): HResult; stdcall;
+    function  Get_DateDue(out pVal: TDateTime): HResult; stdcall;
+    function  Set_DateDue(pVal: TDateTime): HResult; stdcall;
+    function  Get_CreateDate(out val: TDateTime): HResult; stdcall;
+    function  Get_DateModified(out val: TDateTime): HResult; stdcall;
+    function  Get_SynchTime(out val: TDateTime): HResult; stdcall;
+    function  Set_SynchTime(val: TDateTime): HResult; stdcall;
+    function  Get_ReminderTime(out val: TDateTime): HResult; stdcall;
+    function  Set_ReminderTime(val: TDateTime): HResult; stdcall;
+    function  Get_Status(out val: Integer): HResult; stdcall;
+    function  Set_Status(val: Integer): HResult; stdcall;
+    function  Get_Priority(out pVal: Integer): HResult; stdcall;
+    function  Set_Priority(pVal: Integer): HResult; stdcall;
+    function  Get_PercentageComplete(out pVal: Single): HResult; stdcall;
+    function  Set_PercentageComplete(pVal: Single): HResult; stdcall;
+    function  Get_ActualWork(out work: Single): HResult; stdcall;
+    function  Set_ActualWork(work: Single): HResult; stdcall;
+    function  Get_TotalWork(out pVal: Single): HResult; stdcall;
+    function  Set_TotalWork(pVal: Single): HResult; stdcall;
+    function  Get_Recurring(out pVal: WordBool): HResult; stdcall;
+    function  Set_Recurring(pVal: WordBool): HResult; stdcall;
+    function  Get_Reminder(out sdur: WordBool): HResult; stdcall;
+    function  Set_Reminder(sdur: WordBool): HResult; stdcall;
+    function  Get_PlaySound(out pVal: WordBool): HResult; stdcall;
+    function  Set_PlaySound(pVal: WordBool): HResult; stdcall;
+    function  Get_IsComplete(out sdur: WordBool): HResult; stdcall;
+    function  Get_LastUser(out pVal: IManUser): HResult; stdcall;
+    function  Get_Folder(out fldr: IManTaskFolder): HResult; stdcall;
+    function  IsOperationAllowed(TheOperation: imCollaborationOperation; 
+                                 out OperationIsAllowed: WordBool): HResult; stdcall;
+    function  GetAttributeByID(idx: imTaskAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  GetAttributeValueByID(idx: imTaskAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  SetAttributeByID(idx: imTaskAttributeID; newVal: OleVariant): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCancel
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {087292EB-B478-460C-975A-37249DAC10D2}
+// *********************************************************************//
+  IManCancel = interface(IUnknown)
+    ['{087292EB-B478-460C-975A-37249DAC10D2}']
+    function  GetCancelStatus(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManMessages
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {10E37394-F548-4837-BA89-7063D966644C}
+// *********************************************************************//
+  IManMessages = interface(IManContents)
+    ['{10E37394-F548-4837-BA89-7063D966644C}']
+    function  AddNewMessage(out pVal: IManMessage): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManMessage
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {37A653DE-4F89-4FF3-AA5C-718B7E70D6F3}
+// *********************************************************************//
+  IManMessage = interface(IManProfiledContent)
+    ['{37A653DE-4F89-4FF3-AA5C-718B7E70D6F3}']
+    function  Get_MessageID(out nm: Integer): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Subject(out pVal: WideString): HResult; stdcall;
+    function  Set_Subject(const pVal: WideString): HResult; stdcall;
+    function  Get_Body(out pVal: WideString): HResult; stdcall;
+    function  Set_Body(const pVal: WideString): HResult; stdcall;
+    function  Get_Workspace(out pVal: IManWorkspace): HResult; stdcall;
+    function  Get_Author(out ppVal: IManUser): HResult; stdcall;
+    function  Set_Author(const ppVal: IManUser): HResult; stdcall;
+    function  _Set_Author(const ppVal: IManUser): HResult; stdcall;
+    function  Get_Parent(out pVal: IManMessage): HResult; stdcall;
+    function  Get_EmailParentOnResponse(out pVal: WordBool): HResult; stdcall;
+    function  Set_EmailParentOnResponse(pVal: WordBool): HResult; stdcall;
+    function  Get_CreateDate(out pVal: TDateTime): HResult; stdcall;
+    function  Get_EditDate(out pVal: TDateTime): HResult; stdcall;
+    function  Get_Replies(out pVal: IManMessages): HResult; stdcall;
+    function  Get_AllDescendants(out pVal: IManMessages): HResult; stdcall;
+    function  Get_ThreadID(out pVal: Integer): HResult; stdcall;
+    function  Get_Folder(out fldr: IManMessageFolder): HResult; stdcall;
+    function  Get_Root(out rootMessage: IManMessage): HResult; stdcall;
+    function  Get_InheritSecurity(out pVal: WordBool): HResult; stdcall;
+    function  Set_InheritSecurity(pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  IsOperationAllowed(TheOperation: imCollaborationOperation; 
+                                 out OperationIsAllowed: WordBool): HResult; stdcall;
+    function  GetAttributeByID(idx: imMessageAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  SetAttributeByID(idx: imMessageAttributeID; newVal: OleVariant): HResult; stdcall;
+    function  GetAttributeValueByID(idx: imMessageAttributeID; out pVal: OleVariant): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManForms
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {6D64CE40-59ED-429D-BD51-967BD9EB8425}
+// *********************************************************************//
+  IManForms = interface(IManObject)
+    ['{6D64CE40-59ED-429D-BD51-967BD9EB8425}']
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  ItemByFormType(val: imFormType; out pvarRet: IManForm): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRuleHandlers
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {A15EFE8B-4F13-4F19-9C12-ADD0BF7F38EA}
+// *********************************************************************//
+  IManRuleHandlers = interface(IManObject)
+    ['{A15EFE8B-4F13-4F19-9C12-ADD0BF7F38EA}']
+    function  Item(Index: Integer; out pVal: IManRuleHandler): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRoles
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {48BD8C0C-AA14-438C-8DB0-8445A1741109}
+// *********************************************************************//
+  IManRoles = interface(IManObject)
+    ['{48BD8C0C-AA14-438C-8DB0-8445A1741109}']
+    function  Item(Index: OleVariant; out pvarRet: IManRole): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocument
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {68A9B2E3-0E4B-4738-97AB-378A7BD34F58}
+// *********************************************************************//
+  IManDocument = interface(IManProfiledContent)
+    ['{68A9B2E3-0E4B-4738-97AB-378A7BD34F58}']
+    function  Get_Number(out pVal: Integer): HResult; stdcall;
+    function  Get_Version(out pVal: Integer): HResult; stdcall;
+    function  Get_Size(out pVal: Integer): HResult; stdcall;
+    function  Get_EditDate(out pVal: TDateTime): HResult; stdcall;
+    function  Get_CreationDate(out pVal: TDateTime): HResult; stdcall;
+    function  Get_LastUser(out pVal: IManUser): HResult; stdcall;
+    function  Get_Extension(out pVal: WideString): HResult; stdcall;
+    function  Get_RetentionDays(out pVal: Integer): HResult; stdcall;
+    function  Get_Indexable(out pVal: WordBool): HResult; stdcall;
+    function  Set_Indexable(pVal: WordBool): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Set_Description(const pVal: WideString): HResult; stdcall;
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Set_Name(const pVal: WideString): HResult; stdcall;
+    function  Get_Author(out pVal: IManUser): HResult; stdcall;
+    function  _Set_Author(const pVal: IManUser): HResult; stdcall;
+    function  Set_Author(const pVal: IManUser): HResult; stdcall;
+    function  Get_Operator(out pVal: IManUser): HResult; stdcall;
+    function  _Set_Operator(const pVal: IManUser): HResult; stdcall;
+    function  Set_Operator(const pVal: IManUser): HResult; stdcall;
+    function  Get_Comment(out pVal: WideString): HResult; stdcall;
+    function  Set_Comment(const pVal: WideString): HResult; stdcall;
+    function  Get_CustomAttributes(out pVal: IManCustomAttributes): HResult; stdcall;
+    function  Get_RelatedDocuments(out pVal: IManRelatedDocuments): HResult; stdcall;
+    function  Get_CheckoutPath(out pVal: WideString): HResult; stdcall;
+    function  Set_CheckoutPath(const pVal: WideString): HResult; stdcall;
+    function  CheckIn(const filename: WideString; action: imCheckinDisposition; 
+                      options: imCheckinOptions; var ErrorResults: OleVariant; 
+                      out __MIDL_0024: IManDocument): HResult; stdcall;
+    function  CheckOut(const filename: WideString; options: imCheckOutOptions; duedate: TDateTime; 
+                       const comments: WideString): HResult; stdcall;
+    function  GetCopy(const Path: WideString; options: imGetCopyOptions): HResult; stdcall;
+    function  Get_CheckedOut(out pVal: WordBool): HResult; stdcall;
+    function  Get_Versions(out pVal: IManContents): HResult; stdcall;
+    function  Get_CheckoutDueDate(out pVal: TDateTime): HResult; stdcall;
+    function  Get_CheckoutComment(out pVal: WideString): HResult; stdcall;
+    function  Get_SubType(out pVal: imDocumentSubType): HResult; stdcall;
+    function  Set_SubType(pVal: imDocumentSubType): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  IsOperationAllowed(TheOperation: imDocumentOperation; out pVal: WordBool): HResult; stdcall;
+    function  CheckInEx(const filename: WideString; action: imCheckinDisposition; 
+                        options: imCheckinOptions; RecordedEvent: imHistEvent; 
+                        const PerformingApplication: WideString; const Comment: WideString; 
+                        const Location: WideString; var ErrorResults: OleVariant; 
+                        out __MIDL_0025: IManDocument): HResult; stdcall;
+    function  CheckOutEx(const filename: WideString; options: imCheckOutOptions; 
+                         duedate: TDateTime; const CheckoutComments: WideString; 
+                         CurrentActivity: imHistEvent; const GeneratingApplication: WideString; 
+                         const Location: WideString): HResult; stdcall;
+    function  Sync(const DocumentPath: WideString; HowToCheckIn: imCheckinDisposition; 
+                   EchoEditDateTime: TDateTime; var ErrorResults: OleVariant; 
+                   out __MIDL_0026: IManDocument): HResult; stdcall;
+    function  SyncWithResults(const DocumentPath: WideString; HowToCheckIn: imCheckinDisposition; 
+                              EchoEditDateTime: TDateTime; out __MIDL_0027: IManSyncResult): HResult; stdcall;
+    function  Get_LatestVersion(out pVal: IManDocument): HResult; stdcall;
+    function  Get_IsLatestVersion(out IsLatest: WordBool): HResult; stdcall;
+    function  Get_IsAnyVersionCheckedOut(out pVal: WordBool): HResult; stdcall;
+    function  Get_AdditionalProperties(out props: IManAdditionalProperties): HResult; stdcall;
+    function  Get_Folders(out pVal: IManFolders): HResult; stdcall;
+    function  Get_EditProfileTime(out pVal: TDateTime): HResult; stdcall;
+    function  Get_AccessTime(out pVal: TDateTime): HResult; stdcall;
+    function  Get_CheckoutTime(out pVal: TDateTime): HResult; stdcall;
+    function  Get_CheckoutLocation(out pVal: WideString): HResult; stdcall;
+    function  GetAttributeByID(Attribute: imProfileAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  SetAttributeByID(Attribute: imProfileAttributeID; pVal: OleVariant): HResult; stdcall;
+    function  GetAttributeValueByID(Attribute: imProfileAttributeID; out pVal: OleVariant): HResult; stdcall;
+    function  Refile(const Profile: IManProfile; const Security: IManSecurity; 
+                     out pRet: IManProfileUpdateResult): HResult; stdcall;
+    function  CheckInWithResults(const filename: WideString; action: imCheckinDisposition; 
+                                 options: imCheckinOptions; out __MIDL_0028: IManCheckinResult): HResult; stdcall;
+    function  CheckInExWithResults(const filename: WideString; action: imCheckinDisposition; 
+                                   options: imCheckinOptions; RecordedEvent: imHistEvent; 
+                                   const PerformingApplication: WideString; 
+                                   const Comment: WideString; const Location: WideString; 
+                                   out __MIDL_0029: IManCheckinResult): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCustomAttributes
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {884EE2A8-5E57-4907-BD5A-F9B51BE9D1B0}
+// *********************************************************************//
+  IManCustomAttributes = interface(IManObject)
+    ['{884EE2A8-5E57-4907-BD5A-F9B51BE9D1B0}']
+    function  ItemByIndex(Index: Integer; out pvarRet: IManCustomAttribute): HResult; stdcall;
+    function  ItemByName(const Index: WideString; out pvarRet: IManCustomAttribute): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Sort(const __MIDL_0015: IManObjectSort): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCustomAttribute
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {F6670B95-3E1D-4E7D-A1D5-B28929D79B32}
+// *********************************************************************//
+  IManCustomAttribute = interface(IManObject)
+    ['{F6670B95-3E1D-4E7D-A1D5-B28929D79B32}']
+    function  Get_Name(out pVal: WideString): HResult; stdcall;
+    function  Get_ID(out pVal: WideString): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Get_Enabled(out pVal: WordBool): HResult; stdcall;
+    function  Get_Parent(out pVal: IManCustomAttribute): HResult; stdcall;
+    function  GetChildList(const SearchCriteria: WideString; searchType: imSearchAttributeType; 
+                           EnabledOrDisabled: imSearchEnabledDisabled; SearchAtBegin: WordBool; 
+                           out pVal: IManCustomAttributes): HResult; stdcall;
+    function  Get_Type_(out pVal: imProfileAttributeID): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManRelatedDocuments
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {15D6EC82-CC9C-47AC-9803-7B8428B5DB4F}
+// *********************************************************************//
+  IManRelatedDocuments = interface(IManContents)
+    ['{15D6EC82-CC9C-47AC-9803-7B8428B5DB4F}']
+    function  AddRelation(docnum: Integer; const comments: WideString; out Succeeded: WordBool): HResult; stdcall;
+    function  RemoveRelation(docNumber: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSyncResult
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {3E821612-0CF1-4D94-BE4D-DA22224EF2F9}
+// *********************************************************************//
+  IManSyncResult = interface(IManObject)
+    ['{3E821612-0CF1-4D94-BE4D-DA22224EF2F9}']
+    function  Get_Succeeded(out pVal: WordBool): HResult; stdcall;
+    function  Get_ErrorCode(out pVal: Integer): HResult; stdcall;
+    function  Get_ErrorMessage(out pVal: WideString): HResult; stdcall;
+    function  Get_ErrorList(out pVal: IManProfileErrors): HResult; stdcall;
+    function  Get_Result(out pVal: IManDocument): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCheckinResult
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {9FE92CF6-D09D-4129-A1B2-B9C69D6D4151}
+// *********************************************************************//
+  IManCheckinResult = interface(IManObject)
+    ['{9FE92CF6-D09D-4129-A1B2-B9C69D6D4151}']
+    function  Get_Succeeded(out pVal: WordBool): HResult; stdcall;
+    function  Get_ErrorCode(out pVal: Integer): HResult; stdcall;
+    function  Get_ErrorMessage(out pVal: WideString): HResult; stdcall;
+    function  Get_ErrorList(out pVal: IManProfileErrors): HResult; stdcall;
+    function  Get_Result(out pVal: IManDocument): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentTypes
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {AF184E91-4C77-44C5-A59C-1465CE63997C}
+// *********************************************************************//
+  IManDocumentTypes = interface(IManObject)
+    ['{AF184E91-4C77-44C5-A59C-1465CE63997C}']
+    function  Item(Index: OleVariant; out pvarRet: IManDocumentType): HResult; stdcall;
+    function  Get_Count(out pi4: Integer): HResult; stdcall;
+    function  Get__NewEnum(out pUnk: IUnknown): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManLocation
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {C60B468F-2422-4EC5-B351-7A6965B2E168}
+// *********************************************************************//
+  IManLocation = interface(IManObject)
+    ['{C60B468F-2422-4EC5-B351-7A6965B2E168}']
+    function  Get_Cell(out pVal: WideString): HResult; stdcall;
+    function  Set_Cell(const pVal: WideString): HResult; stdcall;
+    function  Get_Order(out pVal: Integer): HResult; stdcall;
+    function  Set_Order(pVal: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCustomProperties
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {6E9DF06F-7D86-477B-8906-E7DB86EDAA4B}
+// *********************************************************************//
+  IManCustomProperties = interface(IManObject)
+    ['{6E9DF06F-7D86-477B-8906-E7DB86EDAA4B}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManCustomProperty): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCustomProperty
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {908808D0-04E6-4731-B8B2-0B3EBCCB59AC}
+// *********************************************************************//
+  IManCustomProperty = interface(IManObject)
+    ['{908808D0-04E6-4731-B8B2-0B3EBCCB59AC}']
+    function  Get_Value(out pVal: WideString): HResult; stdcall;
+    function  Set_Value(const pVal: WideString): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManCaptions
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {514BF211-D7B9-4F2C-98F5-3F80FA1242D0}
+// *********************************************************************//
+  IManCaptions = interface(IManObject)
+    ['{514BF211-D7B9-4F2C-98F5-3F80FA1242D0}']
+  end;
+
+// *********************************************************************//
+// Interface: IManContentShortcut
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {DD251D9B-53F3-4461-86ED-9481BBF36EE9}
+// *********************************************************************//
+  IManContentShortcut = interface(IManContent)
+    ['{DD251D9B-53F3-4461-86ED-9481BBF36EE9}']
+    function  Resolve(out pVal: IManContent): HResult; stdcall;
+    function  Get_TargetNumber(out pVal: Integer): HResult; stdcall;
+    function  Get_TargetVersion(out pVal: Integer): HResult; stdcall;
+    function  Get_Description(out pVal: WideString): HResult; stdcall;
+    function  Set_Description(const pVal: WideString): HResult; stdcall;
+    function  Get_TargetDatabaseName(out pVal: WideString): HResult; stdcall;
+    function  Get_TargetType(out pVal: IManObjectType): HResult; stdcall;
+    function  Get_TargetDocumentType(out pVal: IManDocumentType): HResult; stdcall;
+    function  Get_Offline(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManContentShortcuts
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {60233534-76FD-404C-99B3-A97A91E6D5D7}
+// *********************************************************************//
+  IManContentShortcuts = interface(IManContents)
+    ['{60233534-76FD-404C-99B3-A97A91E6D5D7}']
+    function  AddNewContentShortcut(const Target: IManProfiledContent; out pVal: IManContentShortcut): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManContents_Dispatch
+// Flags:     (4432) Hidden Dual OleAutomation Dispatchable
+// GUID:      {E4913CC2-4861-418E-8332-457FEB24F12C}
+// *********************************************************************//
+  IManContents_Dispatch = interface(IDispatch)
+    ['{E4913CC2-4861-418E-8332-457FEB24F12C}']
+    function  Get__NewEnum: IUnknown; safecall;
+    function  ItemByIndex(Index: Integer): IManContent; safecall;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  IManContents_DispatchDisp
+// Flags:     (4432) Hidden Dual OleAutomation Dispatchable
+// GUID:      {E4913CC2-4861-418E-8332-457FEB24F12C}
+// *********************************************************************//
+  IManContents_DispatchDisp = dispinterface
+    ['{E4913CC2-4861-418E-8332-457FEB24F12C}']
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  ItemByIndex(Index: Integer): IManContent; dispid 1610743809;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocuments
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {152F2873-35D3-483B-BF4C-80A5E8AECCEA}
+// *********************************************************************//
+  IManDocuments = interface(IManContents)
+    ['{152F2873-35D3-483B-BF4C-80A5E8AECCEA}']
+    function  AddDocumentReference(const Target: IManDocument; out pVal: IManContent): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentSearchFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {32569E0D-EE65-4C13-84CA-77BB652DC180}
+// *********************************************************************//
+  IManDocumentSearchFolder = interface(IManFolder)
+    ['{32569E0D-EE65-4C13-84CA-77BB652DC180}']
+    function  Get_AllDatabases(out pVal: WordBool): HResult; stdcall;
+    function  Set_AllDatabases(pVal: WordBool): HResult; stdcall;
+    function  Get_DatabaseNames(out pVal: IManStrings): HResult; stdcall;
+    function  Get_ProfileSearchParameters(out pVal: IManProfileSearchParameters): HResult; stdcall;
+    function  Get_FolderSearchParameters(out pVal: IManFolderSearchParameters): HResult; stdcall;
+    function  Get_ProfileSearchParameters2(out pVal: IManQuery): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManDocumentSearchFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {CF7F6C22-8F37-4FFA-8C1A-71FB00578B54}
+// *********************************************************************//
+  IManDocumentSearchFolders = interface(IManFolders)
+    ['{CF7F6C22-8F37-4FFA-8C1A-71FB00578B54}']
+    function  AddNewDocumentSearchFolder(const Name: WideString; const Description: WideString; 
+                                         const DatabaseNames: IManStrings; 
+                                         const SearchParams: IManProfileSearchParameters; 
+                                         out pVal: IManDocumentSearchFolder): HResult; stdcall;
+    function  AddNewDocumentSearchFolderEx(const Name: WideString; const Description: WideString; 
+                                           const DatabaseNames: IManStrings; 
+                                           const query: IManQuery; 
+                                           out pVal: IManDocumentSearchFolder): HResult; stdcall;
+    function  AddNewDocumentSearchFolderInheriting(const Name: WideString; 
+                                                   const Description: WideString; 
+                                                   const DatabaseNames: IManStrings; 
+                                                   const SearchParams: IManProfileSearchParameters; 
+                                                   out pVal: IManDocumentSearchFolder): HResult; stdcall;
+    function  AddNewDocumentSearchFolderInheritingEx(const Name: WideString; 
+                                                     const Description: WideString; 
+                                                     const DatabaseNames: IManStrings; 
+                                                     const query: IManQuery; 
+                                                     out pVal: IManDocumentSearchFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFavoritesFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {0AFDBDE3-B74C-4399-9C4E-F9009B708320}
+// *********************************************************************//
+  IManFavoritesFolders = interface(IManFolders)
+    ['{0AFDBDE3-B74C-4399-9C4E-F9009B708320}']
+    function  AddNewFavoritesFolder(const Name: WideString; const Description: WideString; 
+                                    out pVal: IManFavoritesFolder): HResult; stdcall;
+    function  AddNewFavoritesFolderInheriting(const Name: WideString; 
+                                              const Description: WideString; 
+                                              out pVal: IManFavoritesFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFolderShortcut
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {4E64888A-55F5-4F9D-B4FD-64BC15A157AB}
+// *********************************************************************//
+  IManFolderShortcut = interface(IManFolder)
+    ['{4E64888A-55F5-4F9D-B4FD-64BC15A157AB}']
+    function  Resolve(out pVal: IManFolder): HResult; stdcall;
+    function  Get_Offline(out pVal: WordBool): HResult; stdcall;
+    function  Get_TargetType(out pVal: IManObjectType): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManFolderShortcuts
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {AB688AF5-B821-46C9-90B6-78D64BA8962E}
+// *********************************************************************//
+  IManFolderShortcuts = interface(IManFolders)
+    ['{AB688AF5-B821-46C9-90B6-78D64BA8962E}']
+    function  AddNewFolderShortcut(const Target: IManFolder; out pVal: IManFolderShortcut): HResult; stdcall;
+    function  AddNewFolderShortcutInheriting(const Target: IManFolder; out pVal: IManFolderShortcut): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManGenericBodiedFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {1DD9D0EF-4B2D-4955-96FA-A2B8A91AB07E}
+// *********************************************************************//
+  IManGenericBodiedFolder = interface(IManBodiedFolder)
+    ['{1DD9D0EF-4B2D-4955-96FA-A2B8A91AB07E}']
+  end;
+
+// *********************************************************************//
+// Interface: IManGenericBodiedFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {67E15D40-F5EA-43EB-A4C7-B4E6F074B29B}
+// *********************************************************************//
+  IManGenericBodiedFolders = interface(IManFolders)
+    ['{67E15D40-F5EA-43EB-A4C7-B4E6F074B29B}']
+    function  AddNewGenericBodiedFolder(const Name: WideString; const Description: WideString; 
+                                        out pVal: IManGenericBodiedFolder): HResult; stdcall;
+    function  AddNewGenericBodiedFolderInheriting(const Name: WideString; 
+                                                  const Description: WideString; 
+                                                  out pVal: IManGenericBodiedFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManHasLocation
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {73273934-DCAA-497E-8728-6AB44D8B0C62}
+// *********************************************************************//
+  IManHasLocation = interface(IUnknown)
+    ['{73273934-DCAA-497E-8728-6AB44D8B0C62}']
+    function  Get_Location(out pVal: IManLocation): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManHasProfile
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {F48A502A-B6E7-44CB-AB6B-616AD7EC0E12}
+// *********************************************************************//
+  IManHasProfile = interface(IManObject)
+    ['{F48A502A-B6E7-44CB-AB6B-616AD7EC0E12}']
+  end;
+
+// *********************************************************************//
+// Interface: IManHasProfiles
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {7603C6B7-3D94-45C6-8383-030E69FF00E7}
+// *********************************************************************//
+  IManHasProfiles = interface(IManObject)
+    ['{7603C6B7-3D94-45C6-8383-030E69FF00E7}']
+    function  Get__NewEnum(out pVal: IUnknown): HResult; stdcall;
+    function  Get_Count(out pVal: Integer): HResult; stdcall;
+    function  Get_Empty(out pVal: WordBool): HResult; stdcall;
+    function  Get_Overflow(out pVal: WordBool): HResult; stdcall;
+    function  Refresh: HResult; stdcall;
+    function  RemoveByIndex(Index: Integer): HResult; stdcall;
+    function  RemoveByObject(const ProfileToRemove: IManHasProfile): HResult; stdcall;
+    function  Contains(const ProfileToTestFor: IManHasProfile; out pVal: WordBool): HResult; stdcall;
+    function  Sort(const __MIDL_0022: IManObjectSort): HResult; stdcall;
+    function  Clear: HResult; stdcall;
+    function  CanContain(ObjectType: imObjectType; out __MIDL_0023: WordBool): HResult; stdcall;
+    function  IsOperationAllowed(Operation: imHasProfilesOp; out pVal: WordBool): HResult; stdcall;
+    function  ItemByIndex(Index: Integer; out pVal: IManHasProfile): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManObjects
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {7E599E34-A820-4667-A833-65194D7DB26B}
+// *********************************************************************//
+  IManObjects = interface(IManObject)
+    ['{7E599E34-A820-4667-A833-65194D7DB26B}']
+  end;
+
+// *********************************************************************//
+// Interface: IManRudimentary_Dispatch
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {5867FF21-2C8C-4AA4-9A30-1B1BA494C266}
+// *********************************************************************//
+  IManRudimentary_Dispatch = interface(IDispatch)
+    ['{5867FF21-2C8C-4AA4-9A30-1B1BA494C266}']
+  end;
+
+// *********************************************************************//
+// DispIntf:  IManRudimentary_DispatchDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {5867FF21-2C8C-4AA4-9A30-1B1BA494C266}
+// *********************************************************************//
+  IManRudimentary_DispatchDisp = dispinterface
+    ['{5867FF21-2C8C-4AA4-9A30-1B1BA494C266}']
+  end;
+
+// *********************************************************************//
+// Interface: IManSessionSearchNotification
+// Flags:     (128) NonExtensible
+// GUID:      {AC5001E6-32C8-4199-AE19-B0224B3F73F0}
+// *********************************************************************//
+  IManSessionSearchNotification = interface(IUnknown)
+    ['{AC5001E6-32C8-4199-AE19-B0224B3F73F0}']
+    function  BeginSearchDatabase(const DatabaseName: WideString): HResult; stdcall;
+    function  EndSearchDatabase(const DatabaseName: WideString; nResults: Integer; 
+                                const ErrInfo: IErrorInfo): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IErrorInfo
+// Flags:     (0)
+// GUID:      {1CF2B120-547D-101B-8E65-08002B2BD119}
+// *********************************************************************//
+  IErrorInfo = interface(IUnknown)
+    ['{1CF2B120-547D-101B-8E65-08002B2BD119}']
+    function  GetGUID(out pGUID: TGUID): HResult; stdcall;
+    function  GetSource(out pBstrSource: WideString): HResult; stdcall;
+    function  GetDescription(out pBstrDescription: WideString): HResult; stdcall;
+    function  GetHelpFile(out pBstrHelpFile: WideString): HResult; stdcall;
+    function  GetHelpContext(out pdwHelpContext: LongWord): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSubscriptionFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {874C7C3C-E722-4227-A168-12AF6F6CC3EA}
+// *********************************************************************//
+  IManSubscriptionFolders = interface(IManFolders)
+    ['{874C7C3C-E722-4227-A168-12AF6F6CC3EA}']
+    function  AddNewSubscriptionFolder(const Name: WideString; const Description: WideString; 
+                                       out pVal: IManSubscriptionFolder): HResult; stdcall;
+    function  AddNewSubscriptionFolderInheriting(const Name: WideString; 
+                                                 const Description: WideString; 
+                                                 out pVal: IManSubscriptionFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManSubscriptionFolderShortcuts
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {E5903551-60B9-469C-856A-1D5C78361C56}
+// *********************************************************************//
+  IManSubscriptionFolderShortcuts = interface(IManFolders)
+    ['{E5903551-60B9-469C-856A-1D5C78361C56}']
+    function  AddNewSubscriptionFolderShortcut(const Target: IManSubscriptionFolder; 
+                                               out pVal: IManFolderShortcut): HResult; stdcall;
+    function  AddNewSubscriptionFolderShortcutInheriting(const Target: IManSubscriptionFolder; 
+                                                         out pVal: IManFolderShortcut): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkspaceSearchFolder
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {E3F063D4-9AF4-454E-BD46-64D54657B0A7}
+// *********************************************************************//
+  IManWorkspaceSearchFolder = interface(IManFolder)
+    ['{E3F063D4-9AF4-454E-BD46-64D54657B0A7}']
+    function  Get_AllDatabases(out pVal: WordBool): HResult; stdcall;
+    function  Set_AllDatabases(pVal: WordBool): HResult; stdcall;
+    function  Get_DatabaseNames(out pVal: IManStrings): HResult; stdcall;
+    function  Get_ProfileSearchParameters(out pVal: IManProfileSearchParameters): HResult; stdcall;
+    function  Get_WorkspaceSearchParameters(out pVal: IManWorkspaceSearchParameters): HResult; stdcall;
+    function  Get_ProfileSearchParameters2(out pVal: IManQuery): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkspaceSearchFolders
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {4BC8F524-5415-4263-BB7F-C8A1E79BB197}
+// *********************************************************************//
+  IManWorkspaceSearchFolders = interface(IManFolders)
+    ['{4BC8F524-5415-4263-BB7F-C8A1E79BB197}']
+    function  AddNewWorkspaceSearchFolder(const Name: WideString; const Description: WideString; 
+                                          const DatabaseNames: IManStrings; 
+                                          const SearchParams: IManProfileSearchParameters; 
+                                          const PageSearchParms: IManWorkspaceSearchParameters; 
+                                          out pVal: IManWorkspaceSearchFolder): HResult; stdcall;
+    function  AddNewWorkspaceSearchFolderEx(const Name: WideString; const Description: WideString; 
+                                            const DatabaseNames: IManStrings; 
+                                            const query: IManQuery; 
+                                            const PageSearchParms: IManWorkspaceSearchParameters; 
+                                            out pVal: IManWorkspaceSearchFolder): HResult; stdcall;
+    function  AddNewWorkspaceSearchFolderInheriting(const Name: WideString; 
+                                                    const Description: WideString; 
+                                                    const DatabaseNames: IManStrings; 
+                                                    const SearchParams: IManProfileSearchParameters; 
+                                                    const PageSearchParms: IManWorkspaceSearchParameters; 
+                                                    out pVal: IManWorkspaceSearchFolder): HResult; stdcall;
+    function  AddNewWorkspaceSearchFolderInheritingEx(const Name: WideString; 
+                                                      const Description: WideString; 
+                                                      const DatabaseNames: IManStrings; 
+                                                      const query: IManQuery; 
+                                                      const PageSearchParms: IManWorkspaceSearchParameters; 
+                                                      out pVal: IManWorkspaceSearchFolder): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: IManWorkspaceShortcuts
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {628513EB-7539-49B8-9823-A8DAA648BBBA}
+// *********************************************************************//
+  IManWorkspaceShortcuts = interface(IManFolders)
+    ['{628513EB-7539-49B8-9823-A8DAA648BBBA}']
+    function  AddNewWorkspaceShortcut(const Target: IManWorkspace; out pVal: IManFolderShortcut): HResult; stdcall;
+    function  AddNewWorkspaceShortcutInheriting(const Target: IManWorkspace; 
+                                                out pVal: IManFolderShortcut): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssueFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A9A-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueFolder = interface(IDispatch)
+    ['{E5FF9A9A-172C-11D5-810E-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_FolderID: Integer; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Parent: INRTIssueFolder; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const pVal: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const pVal: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_IssueFolders: INRTIssueFolders; safecall;
+    function  Get_Issues: INRTIssues; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; safecall;
+    procedure Refresh; safecall;
+    procedure Update; safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property ID: WideString read Get_ID;
+    property FolderID: Integer read Get_FolderID;
+    property Database: INRTDatabase read Get_Database;
+    property Owner: INRTUser read Get_Owner;
+    property Parent: INRTIssueFolder read Get_Parent;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property IssueFolders: INRTIssueFolders read Get_IssueFolders;
+    property Issues: INRTIssues read Get_Issues;
+    property Page: INRTPage read Get_Page;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property Security: INRTSecurity read Get_Security;
+    property Rules: INRTRules read Get_Rules;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssueFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A9A-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueFolderDisp = dispinterface
+    ['{E5FF9A9A-172C-11D5-810E-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTIssueFolder readonly dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property IssueFolders: INRTIssueFolders readonly dispid 11;
+    property Issues: INRTIssues readonly dispid 12;
+    property Page: INRTPage readonly dispid 13;
+    property InheritSecurity: WordBool dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 16;
+    procedure Refresh; dispid 17;
+    procedure Update; dispid 18;
+    property Rules: INRTRules readonly dispid 19;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 20;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDatabase
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B84-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDatabase = interface(IDispatch)
+    ['{37085B84-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Session: INRTSession; safecall;
+    function  Get_Forms: INRTForms; safecall;
+    function  Get_AttributeDefinitions: INRTAttributeDefinitions; safecall;
+    function  Get_Root: INRTFolder; safecall;
+    function  CreateDocument: INRTDocument; safecall;
+    function  GetDocument(Number: Integer; vers: Integer): INRTDocument; safecall;
+    function  DeleteDocument(docNumber: Integer; Version: Integer): WordBool; safecall;
+    function  SearchDocuments(const SearchCriteria: INRTSearchParameters; var oflow: OleVariant; 
+                              vtSearchTree: WordBool): INRTDocuments; safecall;
+    function  SearchUsers(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                          SearchAtBegin: WordBool; var oflow: OleVariant): INRTUsers; safecall;
+    function  SearchGroups(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                           SearchAtBegin: WordBool; var oflow: OleVariant): INRTGroups; safecall;
+    function  SearchCustomAttributes(const SearchCriteria: WideString; tableType: AttributeID; 
+                                     searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                     var oflow: OleVariant): INRTCustomAttributes; safecall;
+    function  SearchDocumentTypes(const SearchCriteria: WideString; 
+                                  searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                  var oflow: OleVariant): INRTDocumentTypes; safecall;
+    function  SearchDocumentClasses(const SearchCriteria: WideString; 
+                                    searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                    var oflow: OleVariant): INRTDocumentClasses; safecall;
+    function  Get_ID: WideString; safecall;
+    function  GetDocumentTypeFromPath(const DocumentPath: WideString): INRTDocumentType; safecall;
+    function  IsOperationAllowed(TheOperation: DatabaseOperation): WordBool; safecall;
+    function  Get_PrimaryApplications: INRTLaunchMethods; safecall;
+    function  Get_NonPrimaryApplications: INRTLaunchMethods; safecall;
+    function  GetUser(const userName: WideString): INRTUser; safecall;
+    function  Get_Roles: INRTRoles; safecall;
+    function  SearchUsersEx(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                            SearchAtBegin: WordBool; sVal: NOSType; var oflow: OleVariant): INRTUsers; safecall;
+    function  FindUsers(const SearchCriteria: INRTUserParameters; var oflow: OleVariant): INRTUsers; safecall;
+    function  SearchGroupsEx(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                             SearchAtBegin: WordBool; sVal: NOSType; var oflow: OleVariant): INRTGroups; safecall;
+    function  Get_Worklist: INRTDocuments; safecall;
+    function  Get_CheckedOutDocuments: INRTDocuments; safecall;
+    function  Get_Pages: INRTPages; safecall;
+    function  CreatePage: INRTPage; safecall;
+    procedure DeletePage(PageID: Integer); safecall;
+    function  Get_RuleEventTypes: INRTRuleEventTypes; safecall;
+    function  Get_EventHandlers: INRTEventHandlers; safecall;
+    function  SearchPages(const Name: WideString; const desc: WideString; const Owner: WideString; 
+                          const SubType: WideString; const Custom1: WideString; 
+                          const Custom2: WideString; const Custom3: WideString; 
+                          const params: INRTSearchParameters; var Overflow: OleVariant): INRTPages; safecall;
+    function  SearchTasks(const SearchCriteria: INRTTaskParameters; var oflow: OleVariant; 
+                          vtSearchTree: WordBool): INRTTasks; safecall;
+    function  SearchEvents(const SearchCriteria: INRTEventParameters; var oflow: OleVariant; 
+                           vtSearchTree: WordBool): INRTEvents; safecall;
+    function  SearchLinks(const SearchCriteria: INRTLinkParameters; var oflow: OleVariant; 
+                          vtSearchTree: WordBool): INRTLinks; safecall;
+    function  SearchDiscussions(const SearchCriteria: INRTDiscussionParameters; 
+                                var oflow: OleVariant): INRTMessages; safecall;
+    function  SearchIssues(const SearchCriteria: INRTIssueParameters; var oflow: OleVariant; 
+                           vtSearchTree: WordBool): INRTIssues; safecall;
+    property Name: WideString read Get_Name;
+    property Description: WideString read Get_Description;
+    property Session: INRTSession read Get_Session;
+    property Forms: INRTForms read Get_Forms;
+    property AttributeDefinitions: INRTAttributeDefinitions read Get_AttributeDefinitions;
+    property Root: INRTFolder read Get_Root;
+    property ID: WideString read Get_ID;
+    property PrimaryApplications: INRTLaunchMethods read Get_PrimaryApplications;
+    property NonPrimaryApplications: INRTLaunchMethods read Get_NonPrimaryApplications;
+    property Roles: INRTRoles read Get_Roles;
+    property Worklist: INRTDocuments read Get_Worklist;
+    property CheckedOutDocuments: INRTDocuments read Get_CheckedOutDocuments;
+    property Pages: INRTPages read Get_Pages;
+    property RuleEventTypes: INRTRuleEventTypes read Get_RuleEventTypes;
+    property EventHandlers: INRTEventHandlers read Get_EventHandlers;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDatabaseDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B84-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDatabaseDisp = dispinterface
+    ['{37085B84-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString readonly dispid 0;
+    property Description: WideString readonly dispid 1;
+    property Session: INRTSession readonly dispid 2;
+    property Forms: INRTForms readonly dispid 3;
+    property AttributeDefinitions: INRTAttributeDefinitions readonly dispid 4;
+    property Root: INRTFolder readonly dispid 6;
+    function  CreateDocument: INRTDocument; dispid 7;
+    function  GetDocument(Number: Integer; vers: Integer): INRTDocument; dispid 8;
+    function  DeleteDocument(docNumber: Integer; Version: Integer): WordBool; dispid 10;
+    function  SearchDocuments(const SearchCriteria: INRTSearchParameters; var oflow: OleVariant; 
+                              vtSearchTree: WordBool): INRTDocuments; dispid 11;
+    function  SearchUsers(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                          SearchAtBegin: WordBool; var oflow: OleVariant): INRTUsers; dispid 12;
+    function  SearchGroups(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                           SearchAtBegin: WordBool; var oflow: OleVariant): INRTGroups; dispid 13;
+    function  SearchCustomAttributes(const SearchCriteria: WideString; tableType: AttributeID; 
+                                     searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                     var oflow: OleVariant): INRTCustomAttributes; dispid 14;
+    function  SearchDocumentTypes(const SearchCriteria: WideString; 
+                                  searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                  var oflow: OleVariant): INRTDocumentTypes; dispid 15;
+    function  SearchDocumentClasses(const SearchCriteria: WideString; 
+                                    searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                    var oflow: OleVariant): INRTDocumentClasses; dispid 16;
+    property ID: WideString readonly dispid 17;
+    function  GetDocumentTypeFromPath(const DocumentPath: WideString): INRTDocumentType; dispid 18;
+    function  IsOperationAllowed(TheOperation: DatabaseOperation): WordBool; dispid 19;
+    property PrimaryApplications: INRTLaunchMethods readonly dispid 20;
+    property NonPrimaryApplications: INRTLaunchMethods readonly dispid 21;
+    function  GetUser(const userName: WideString): INRTUser; dispid 22;
+    property Roles: INRTRoles readonly dispid 23;
+    function  SearchUsersEx(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                            SearchAtBegin: WordBool; sVal: NOSType; var oflow: OleVariant): INRTUsers; dispid 24;
+    function  FindUsers(const SearchCriteria: INRTUserParameters; var oflow: OleVariant): INRTUsers; dispid 25;
+    function  SearchGroupsEx(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                             SearchAtBegin: WordBool; sVal: NOSType; var oflow: OleVariant): INRTGroups; dispid 26;
+    property Worklist: INRTDocuments readonly dispid 27;
+    property CheckedOutDocuments: INRTDocuments readonly dispid 28;
+    property Pages: INRTPages readonly dispid 29;
+    function  CreatePage: INRTPage; dispid 30;
+    procedure DeletePage(PageID: Integer); dispid 31;
+    property RuleEventTypes: INRTRuleEventTypes readonly dispid 32;
+    property EventHandlers: INRTEventHandlers readonly dispid 33;
+    function  SearchPages(const Name: WideString; const desc: WideString; const Owner: WideString; 
+                          const SubType: WideString; const Custom1: WideString; 
+                          const Custom2: WideString; const Custom3: WideString; 
+                          const params: INRTSearchParameters; var Overflow: OleVariant): INRTPages; dispid 34;
+    function  SearchTasks(const SearchCriteria: INRTTaskParameters; var oflow: OleVariant; 
+                          vtSearchTree: WordBool): INRTTasks; dispid 35;
+    function  SearchEvents(const SearchCriteria: INRTEventParameters; var oflow: OleVariant; 
+                           vtSearchTree: WordBool): INRTEvents; dispid 36;
+    function  SearchLinks(const SearchCriteria: INRTLinkParameters; var oflow: OleVariant; 
+                          vtSearchTree: WordBool): INRTLinks; dispid 37;
+    function  SearchDiscussions(const SearchCriteria: INRTDiscussionParameters; 
+                                var oflow: OleVariant): INRTMessages; dispid 38;
+    function  SearchIssues(const SearchCriteria: INRTIssueParameters; var oflow: OleVariant; 
+                           vtSearchTree: WordBool): INRTIssues; dispid 39;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSession
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B82-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTSession = interface(IDispatch)
+    ['{37085B82-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_ServerName: WideString; safecall;
+    function  Get_Alias: WideString; safecall;
+    procedure Set_Alias(const pVal: WideString); safecall;
+    function  Get_UserID: WideString; safecall;
+    function  Get_Password: WideString; safecall;
+    function  Get_PasswordExpired: WordBool; safecall;
+    function  Get_Databases: INRTDatabases; safecall;
+    function  Get_WebDatabases: INRTDatabases; safecall;
+    function  Get_MaxRowsForSearch: Integer; safecall;
+    procedure Set_MaxRowsForSearch(pVal: Integer); safecall;
+    function  Get_NRTDMS: INRTDMS; safecall;
+    function  Get_Connected: WordBool; safecall;
+    procedure Set_Timeout(pVal: Integer); safecall;
+    function  Get_Timeout: Integer; safecall;
+    function  Get_DefaultAttributeSelections: INRTAttributeSelections; safecall;
+    function  Get_AllVersions: WordBool; safecall;
+    procedure Set_AllVersions(pVal: WordBool); safecall;
+    function  Get_PreferredDatabase: INRTDatabase; safecall;
+    procedure Login(const UserID: WideString; const Password: WideString); safecall;
+    procedure TrustedLogin; safecall;
+    procedure Logout; safecall;
+    procedure ChangePassword(const oldpassword: WideString; const newpassword: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Worklist: INRTDocuments; safecall;
+    function  Get_CheckedOutDocuments: INRTDocuments; safecall;
+    function  IsOperationAllowed(TheOperation: SessionOperation): WordBool; safecall;
+    function  SearchDocuments(ArrayOfDatabases: OleVariant; 
+                              const SearchCriteria: INRTSearchParameters; var oflow: OleVariant; 
+                              vtSearchTree: WordBool): INRTDocuments; safecall;
+    function  SearchPages(ArrayOfDatabases: OleVariant; const Name: WideString; 
+                          const desc: WideString; const Owner: WideString; 
+                          const SubType: WideString; const Custom1: WideString; 
+                          const Custom2: WideString; const Custom3: WideString; 
+                          const params: INRTSearchParameters; var Overflow: OleVariant): INRTPages; safecall;
+    function  SearchTasks(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTTaskParameters; 
+                          var oflow: OleVariant; vtSearchTree: WordBool): INRTTasks; safecall;
+    function  SearchEvents(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTEventParameters; 
+                           var oflow: OleVariant; vtSearchTree: WordBool): INRTEvents; safecall;
+    function  SearchLinks(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTLinkParameters; 
+                          var oflow: OleVariant; vtSearchTree: WordBool): INRTLinks; safecall;
+    function  SearchDiscussions(ArrayOfDatabases: OleVariant; 
+                                const SearchCriteria: INRTDiscussionParameters; 
+                                var oflow: OleVariant): INRTMessages; safecall;
+    function  SearchIssues(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTIssueParameters; 
+                           var oflow: OleVariant; vtSearchTree: WordBool): INRTIssues; safecall;
+    property ServerName: WideString read Get_ServerName;
+    property Alias: WideString read Get_Alias write Set_Alias;
+    property UserID: WideString read Get_UserID;
+    property Password: WideString read Get_Password;
+    property PasswordExpired: WordBool read Get_PasswordExpired;
+    property Databases: INRTDatabases read Get_Databases;
+    property WebDatabases: INRTDatabases read Get_WebDatabases;
+    property MaxRowsForSearch: Integer read Get_MaxRowsForSearch write Set_MaxRowsForSearch;
+    property NRTDMS: INRTDMS read Get_NRTDMS;
+    property Connected: WordBool read Get_Connected;
+    property Timeout: Integer read Get_Timeout write Set_Timeout;
+    property DefaultAttributeSelections: INRTAttributeSelections read Get_DefaultAttributeSelections;
+    property AllVersions: WordBool read Get_AllVersions write Set_AllVersions;
+    property PreferredDatabase: INRTDatabase read Get_PreferredDatabase;
+    property ID: WideString read Get_ID;
+    property Worklist: INRTDocuments read Get_Worklist;
+    property CheckedOutDocuments: INRTDocuments read Get_CheckedOutDocuments;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSessionDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B82-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTSessionDisp = dispinterface
+    ['{37085B82-90AC-11D4-8100-00C04F610DBB}']
+    property ServerName: WideString readonly dispid 0;
+    property Alias: WideString dispid 1;
+    property UserID: WideString readonly dispid 2;
+    property Password: WideString readonly dispid 3;
+    property PasswordExpired: WordBool readonly dispid 4;
+    property Databases: INRTDatabases readonly dispid 5;
+    property WebDatabases: INRTDatabases readonly dispid 6;
+    property MaxRowsForSearch: Integer dispid 7;
+    property NRTDMS: INRTDMS readonly dispid 8;
+    property Connected: WordBool readonly dispid 9;
+    property Timeout: Integer dispid 10;
+    property DefaultAttributeSelections: INRTAttributeSelections readonly dispid 11;
+    property AllVersions: WordBool dispid 12;
+    property PreferredDatabase: INRTDatabase readonly dispid 13;
+    procedure Login(const UserID: WideString; const Password: WideString); dispid 14;
+    procedure TrustedLogin; dispid 15;
+    procedure Logout; dispid 16;
+    procedure ChangePassword(const oldpassword: WideString; const newpassword: WideString); dispid 17;
+    property ID: WideString readonly dispid 18;
+    property Worklist: INRTDocuments readonly dispid 19;
+    property CheckedOutDocuments: INRTDocuments readonly dispid 20;
+    function  IsOperationAllowed(TheOperation: SessionOperation): WordBool; dispid 21;
+    function  SearchDocuments(ArrayOfDatabases: OleVariant; 
+                              const SearchCriteria: INRTSearchParameters; var oflow: OleVariant; 
+                              vtSearchTree: WordBool): INRTDocuments; dispid 22;
+    function  SearchPages(ArrayOfDatabases: OleVariant; const Name: WideString; 
+                          const desc: WideString; const Owner: WideString; 
+                          const SubType: WideString; const Custom1: WideString; 
+                          const Custom2: WideString; const Custom3: WideString; 
+                          const params: INRTSearchParameters; var Overflow: OleVariant): INRTPages; dispid 23;
+    function  SearchTasks(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTTaskParameters; 
+                          var oflow: OleVariant; vtSearchTree: WordBool): INRTTasks; dispid 24;
+    function  SearchEvents(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTEventParameters; 
+                           var oflow: OleVariant; vtSearchTree: WordBool): INRTEvents; dispid 25;
+    function  SearchLinks(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTLinkParameters; 
+                          var oflow: OleVariant; vtSearchTree: WordBool): INRTLinks; dispid 26;
+    function  SearchDiscussions(ArrayOfDatabases: OleVariant; 
+                                const SearchCriteria: INRTDiscussionParameters; 
+                                var oflow: OleVariant): INRTMessages; dispid 27;
+    function  SearchIssues(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTIssueParameters; 
+                           var oflow: OleVariant; vtSearchTree: WordBool): INRTIssues; dispid 28;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDatabases
+// Flags:     (4544) Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBD9-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDatabases = interface(IDispatch)
+    ['{399ECBD9-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTDatabase; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDatabasesDisp
+// Flags:     (4544) Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBD9-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDatabasesDisp = dispinterface
+    ['{399ECBD9-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTDatabase; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDMS
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B7E-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDMS = interface(IDispatch)
+    ['{37085B7E-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Sessions: INRTSessions; safecall;
+    function  Get_ID: WideString; safecall;
+    procedure CloseApplication; safecall;
+    function  CreateSearchParameters: INRTSearchParameters; safecall;
+    function  CreateDiscussionParameters: INRTDiscussionParameters; safecall;
+    function  CreateEventParameters: INRTEventParameters; safecall;
+    function  CreateLinkParameters: INRTLinkParameters; safecall;
+    function  CreateTaskParameters: INRTTaskParameters; safecall;
+    function  CreateIssueParameters: INRTIssueParameters; safecall;
+    function  CreateUserParameters: INRTUserParameters; safecall;
+    function  GetPerformanceSnapshot: INRTPerformanceSnapshot; safecall;
+    function  GetObjectByID(const ObjectID: WideString): IDispatch; safecall;
+    function  GetObjectBySID(const ObjectID: WideString): IDispatch; safecall;
+    function  GetPageWithContentsBySID(const ObjectID: WideString): INRTPage; safecall;
+    function  Get_LocaleID: Integer; safecall;
+    procedure Set_LocaleID(pVal: Integer); safecall;
+    function  Get_TimezoneOffset: Integer; safecall;
+    procedure Set_TimezoneOffset(pVal: Integer); safecall;
+    function  Get_ComputerName: WideString; safecall;
+    procedure Set_ComputerName(const pVal: WideString); safecall;
+    property Sessions: INRTSessions read Get_Sessions;
+    property ID: WideString read Get_ID;
+    property LocaleID: Integer read Get_LocaleID write Set_LocaleID;
+    property TimezoneOffset: Integer read Get_TimezoneOffset write Set_TimezoneOffset;
+    property ComputerName: WideString read Get_ComputerName write Set_ComputerName;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDMSDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B7E-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDMSDisp = dispinterface
+    ['{37085B7E-90AC-11D4-8100-00C04F610DBB}']
+    property Sessions: INRTSessions readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    procedure CloseApplication; dispid 2;
+    function  CreateSearchParameters: INRTSearchParameters; dispid 3;
+    function  CreateDiscussionParameters: INRTDiscussionParameters; dispid 4;
+    function  CreateEventParameters: INRTEventParameters; dispid 5;
+    function  CreateLinkParameters: INRTLinkParameters; dispid 6;
+    function  CreateTaskParameters: INRTTaskParameters; dispid 7;
+    function  CreateIssueParameters: INRTIssueParameters; dispid 8;
+    function  CreateUserParameters: INRTUserParameters; dispid 9;
+    function  GetPerformanceSnapshot: INRTPerformanceSnapshot; dispid 10;
+    function  GetObjectByID(const ObjectID: WideString): IDispatch; dispid 11;
+    function  GetObjectBySID(const ObjectID: WideString): IDispatch; dispid 12;
+    function  GetPageWithContentsBySID(const ObjectID: WideString): INRTPage; dispid 13;
+    property LocaleID: Integer dispid 14;
+    property TimezoneOffset: Integer dispid 15;
+    property ComputerName: WideString dispid 16;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSessions
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B80-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTSessions = interface(IDispatch)
+    ['{37085B80-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTSession; safecall;
+    function  Add(const ServerName: WideString; Before: OleVariant; After: OleVariant): INRTSession; safecall;
+    function  Get_Count: Integer; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Get_PortableSession: INRTSession; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+    property PortableSession: INRTSession read Get_PortableSession;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSessionsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B80-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTSessionsDisp = dispinterface
+    ['{37085B80-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTSession; dispid 0;
+    function  Add(const ServerName: WideString; Before: OleVariant; After: OleVariant): INRTSession; dispid 1;
+    property Count: Integer readonly dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+    property PortableSession: INRTSession readonly dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSearchParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC03-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTSearchParameters = interface(IDispatch)
+    ['{399ECC03-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: Integer): INRTSearchParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: AttributeID; const fieldValue: WideString): INRTSearchParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSearchParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC03-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTSearchParametersDisp = dispinterface
+    ['{399ECC03-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: Integer): INRTSearchParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: AttributeID; const fieldValue: WideString): INRTSearchParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSearchParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {19850795-10E8-11D2-8612-006097BF089C}
+// *********************************************************************//
+  INRTSearchParameter = interface(IDispatch)
+    ['{19850795-10E8-11D2-8612-006097BF089C}']
+    function  Get_Attribute: AttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: AttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSearchParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {19850795-10E8-11D2-8612-006097BF089C}
+// *********************************************************************//
+  INRTSearchParameterDisp = dispinterface
+    ['{19850795-10E8-11D2-8612-006097BF089C}']
+    property Attribute: AttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDiscussionParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC914-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionParameters = interface(IDispatch)
+    ['{0ADCC914-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTDiscussionParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: DiscussionAttributeID; const fieldValue: WideString): INRTDiscussionParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDiscussionParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC914-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionParametersDisp = dispinterface
+    ['{0ADCC914-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTDiscussionParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: DiscussionAttributeID; const fieldValue: WideString): INRTDiscussionParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDiscussionParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC912-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionParameter = interface(IDispatch)
+    ['{0ADCC912-963D-11D4-8101-00C04F610DBB}']
+    function  Get_Attribute: DiscussionAttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: DiscussionAttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDiscussionParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC912-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionParameterDisp = dispinterface
+    ['{0ADCC912-963D-11D4-8101-00C04F610DBB}']
+    property Attribute: DiscussionAttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC90A-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTEventParameters = interface(IDispatch)
+    ['{0ADCC90A-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTEventParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: EventAttributeID; const fieldValue: WideString): INRTEventParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC90A-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTEventParametersDisp = dispinterface
+    ['{0ADCC90A-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTEventParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: EventAttributeID; const fieldValue: WideString): INRTEventParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC907-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTEventParameter = interface(IDispatch)
+    ['{0ADCC907-963D-11D4-8101-00C04F610DBB}']
+    function  Get_Attribute: EventAttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: EventAttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC907-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTEventParameterDisp = dispinterface
+    ['{0ADCC907-963D-11D4-8101-00C04F610DBB}']
+    property Attribute: EventAttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLinkParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC90E-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkParameters = interface(IDispatch)
+    ['{0ADCC90E-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTLinkParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: LinkAttributeID; const fieldValue: WideString): INRTLinkParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinkParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC90E-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkParametersDisp = dispinterface
+    ['{0ADCC90E-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTLinkParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: LinkAttributeID; const fieldValue: WideString): INRTLinkParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLinkParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC90C-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkParameter = interface(IDispatch)
+    ['{0ADCC90C-963D-11D4-8101-00C04F610DBB}']
+    function  Get_Attribute: LinkAttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: LinkAttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinkParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC90C-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkParameterDisp = dispinterface
+    ['{0ADCC90C-963D-11D4-8101-00C04F610DBB}']
+    property Attribute: LinkAttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTaskParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC905-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskParameters = interface(IDispatch)
+    ['{0ADCC905-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTTaskParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: TaskAttributeID; const fieldValue: WideString): INRTTaskParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTaskParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC905-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskParametersDisp = dispinterface
+    ['{0ADCC905-963D-11D4-8101-00C04F610DBB}']
+    function  Item(Index: Integer): INRTTaskParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: TaskAttributeID; const fieldValue: WideString): INRTTaskParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTaskParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC903-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskParameter = interface(IDispatch)
+    ['{0ADCC903-963D-11D4-8101-00C04F610DBB}']
+    function  Get_Attribute: TaskAttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: TaskAttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTaskParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {0ADCC903-963D-11D4-8101-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskParameterDisp = dispinterface
+    ['{0ADCC903-963D-11D4-8101-00C04F610DBB}']
+    property Attribute: TaskAttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssueParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A96-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueParameters = interface(IDispatch)
+    ['{E5FF9A96-172C-11D5-810E-00C04F610DBB}']
+    function  Item(Index: Integer): INRTIssueParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: IssueAttributeID; const fieldValue: WideString): INRTIssueParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssueParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A96-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueParametersDisp = dispinterface
+    ['{E5FF9A96-172C-11D5-810E-00C04F610DBB}']
+    function  Item(Index: Integer): INRTIssueParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: IssueAttributeID; const fieldValue: WideString): INRTIssueParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssueParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A94-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueParameter = interface(IDispatch)
+    ['{E5FF9A94-172C-11D5-810E-00C04F610DBB}']
+    function  Get_Attribute: IssueAttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: IssueAttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssueParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A94-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueParameterDisp = dispinterface
+    ['{E5FF9A94-172C-11D5-810E-00C04F610DBB}']
+    property Attribute: IssueAttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserParameters
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {DF48B84C-C581-11D4-8107-00C04F610DBB}
+// *********************************************************************//
+  INRTUserParameters = interface(IDispatch)
+    ['{DF48B84C-C581-11D4-8107-00C04F610DBB}']
+    function  Item(Index: Integer): INRTUserParameter; safecall;
+    procedure Clear; safecall;
+    function  Add(Attribute: UserAttributeID; const fieldValue: WideString): INRTUserParameter; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserParametersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {DF48B84C-C581-11D4-8107-00C04F610DBB}
+// *********************************************************************//
+  INRTUserParametersDisp = dispinterface
+    ['{DF48B84C-C581-11D4-8107-00C04F610DBB}']
+    function  Item(Index: Integer): INRTUserParameter; dispid 0;
+    procedure Clear; dispid 1;
+    function  Add(Attribute: UserAttributeID; const fieldValue: WideString): INRTUserParameter; dispid 2;
+    property Count: Integer readonly dispid 3;
+    property ID: WideString readonly dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserParameter
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {DF48B84A-C581-11D4-8107-00C04F610DBB}
+// *********************************************************************//
+  INRTUserParameter = interface(IDispatch)
+    ['{DF48B84A-C581-11D4-8107-00C04F610DBB}']
+    function  Get_Attribute: UserAttributeID; safecall;
+    function  Get_SearchValue: WideString; safecall;
+    procedure Set_SearchValue(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Attribute: UserAttributeID read Get_Attribute;
+    property SearchValue: WideString read Get_SearchValue write Set_SearchValue;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserParameterDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {DF48B84A-C581-11D4-8107-00C04F610DBB}
+// *********************************************************************//
+  INRTUserParameterDisp = dispinterface
+    ['{DF48B84A-C581-11D4-8107-00C04F610DBB}']
+    property Attribute: UserAttributeID readonly dispid 0;
+    property SearchValue: WideString dispid 1;
+    property ID: WideString readonly dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTPerformanceSnapshot
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {18550587-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTPerformanceSnapshot = interface(IDispatch)
+    ['{18550587-6D1C-11D2-82F5-00A0C932328D}']
+    procedure Start; safecall;
+    procedure Stop; safecall;
+    function  Get_MethodCalls: INRTMethodCalls; safecall;
+    function  Get_ObjectDeltas: INRTObjectData; safecall;
+    function  Get_ObjectTotals: INRTObjectData; safecall;
+    function  Get_ServerLockCount: Integer; safecall;
+    procedure Update; safecall;
+    function  Get_Comment: WideString; safecall;
+    procedure Set_Comment(const pVal: WideString); safecall;
+    function  Get_Duration: Double; safecall;
+    property MethodCalls: INRTMethodCalls read Get_MethodCalls;
+    property ObjectDeltas: INRTObjectData read Get_ObjectDeltas;
+    property ObjectTotals: INRTObjectData read Get_ObjectTotals;
+    property ServerLockCount: Integer read Get_ServerLockCount;
+    property Comment: WideString read Get_Comment write Set_Comment;
+    property Duration: Double read Get_Duration;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTPerformanceSnapshotDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {18550587-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTPerformanceSnapshotDisp = dispinterface
+    ['{18550587-6D1C-11D2-82F5-00A0C932328D}']
+    procedure Start; dispid 1;
+    procedure Stop; dispid 2;
+    property MethodCalls: INRTMethodCalls readonly dispid 3;
+    property ObjectDeltas: INRTObjectData readonly dispid 4;
+    property ObjectTotals: INRTObjectData readonly dispid 5;
+    property ServerLockCount: Integer readonly dispid 6;
+    procedure Update; dispid 7;
+    property Comment: WideString dispid 8;
+    property Duration: Double readonly dispid 9;
+  end;
+
+// *********************************************************************//
+// Interface: INRTMethodCalls
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1855058C-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTMethodCalls = interface(IDispatch)
+    ['{1855058C-6D1C-11D2-82F5-00A0C932328D}']
+    function  Item(Index: Integer): INRTMethodCall; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTMethodCallsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1855058C-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTMethodCallsDisp = dispinterface
+    ['{1855058C-6D1C-11D2-82F5-00A0C932328D}']
+    function  Item(Index: Integer): INRTMethodCall; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTMethodCall
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B9C-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTMethodCall = interface(IDispatch)
+    ['{37085B9C-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_Duration: Double; safecall;
+    function  Get_ServerCalls: INRTServerCalls; safecall;
+    function  Get_ServerTime: Double; safecall;
+    function  Get_SystemTime: Double; safecall;
+    function  Get_UserTime: Double; safecall;
+    function  Get_CPUTime: Double; safecall;
+    property Name: WideString read Get_Name;
+    property Duration: Double read Get_Duration;
+    property ServerCalls: INRTServerCalls read Get_ServerCalls;
+    property ServerTime: Double read Get_ServerTime;
+    property SystemTime: Double read Get_SystemTime;
+    property UserTime: Double read Get_UserTime;
+    property CPUTime: Double read Get_CPUTime;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTMethodCallDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B9C-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTMethodCallDisp = dispinterface
+    ['{37085B9C-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString readonly dispid 0;
+    property Duration: Double readonly dispid 1;
+    property ServerCalls: INRTServerCalls readonly dispid 2;
+    property ServerTime: Double readonly dispid 3;
+    property SystemTime: Double readonly dispid 4;
+    property UserTime: Double readonly dispid 5;
+    property CPUTime: Double readonly dispid 6;
+  end;
+
+// *********************************************************************//
+// Interface: INRTServerCalls
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {68953726-C29F-11D2-83B1-00C04F68A665}
+// *********************************************************************//
+  INRTServerCalls = interface(IDispatch)
+    ['{68953726-C29F-11D2-83B1-00C04F68A665}']
+    function  Item(Index: Integer): INRTServerCall; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTServerCallsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {68953726-C29F-11D2-83B1-00C04F68A665}
+// *********************************************************************//
+  INRTServerCallsDisp = dispinterface
+    ['{68953726-C29F-11D2-83B1-00C04F68A665}']
+    function  Item(Index: Integer): INRTServerCall; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTServerCall
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B9E-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTServerCall = interface(IDispatch)
+    ['{37085B9E-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_Duration: Double; safecall;
+    function  Get_ItemsReturned: Integer; safecall;
+    function  Get_SystemTime: Double; safecall;
+    function  Get_UserTime: Double; safecall;
+    function  Get_CPUTime: Double; safecall;
+    property Name: WideString read Get_Name;
+    property Duration: Double read Get_Duration;
+    property ItemsReturned: Integer read Get_ItemsReturned;
+    property SystemTime: Double read Get_SystemTime;
+    property UserTime: Double read Get_UserTime;
+    property CPUTime: Double read Get_CPUTime;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTServerCallDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B9E-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTServerCallDisp = dispinterface
+    ['{37085B9E-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString readonly dispid 1;
+    property Duration: Double readonly dispid 2;
+    property ItemsReturned: Integer readonly dispid 3;
+    property SystemTime: Double readonly dispid 4;
+    property UserTime: Double readonly dispid 5;
+    property CPUTime: Double readonly dispid 6;
+  end;
+
+// *********************************************************************//
+// Interface: INRTObjectData
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1855058E-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTObjectData = interface(IDispatch)
+    ['{1855058E-6D1C-11D2-82F5-00A0C932328D}']
+    function  Item(idx: Integer): INRTObjectDatum; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTObjectDataDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1855058E-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTObjectDataDisp = dispinterface
+    ['{1855058E-6D1C-11D2-82F5-00A0C932328D}']
+    function  Item(idx: Integer): INRTObjectDatum; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTObjectDatum
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {18550590-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTObjectDatum = interface(IDispatch)
+    ['{18550590-6D1C-11D2-82F5-00A0C932328D}']
+    function  Get_Name: WideString; safecall;
+    function  Get_Created: Integer; safecall;
+    function  Get_Deleted: Integer; safecall;
+    function  Get_OutStanding: Integer; safecall;
+    property Name: WideString read Get_Name;
+    property Created: Integer read Get_Created;
+    property Deleted: Integer read Get_Deleted;
+    property OutStanding: Integer read Get_OutStanding;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTObjectDatumDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {18550590-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTObjectDatumDisp = dispinterface
+    ['{18550590-6D1C-11D2-82F5-00A0C932328D}']
+    property Name: WideString readonly dispid 0;
+    property Created: Integer readonly dispid 1;
+    property Deleted: Integer readonly dispid 2;
+    property OutStanding: Integer readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTPage
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD98-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTPage = interface(IDispatch)
+    ['{FC06DD98-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const nm: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const desc: WideString); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const cls: INRTDocumentClass); safecall;
+    procedure Set_Class_(const cls: INRTDocumentClass); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const pVal: INRTDocumentType); safecall;
+    procedure Set_Type_(const pVal: INRTDocumentType); safecall;
+    function  Get_SubType: WideString; safecall;
+    procedure Set_SubType(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_PageID: Integer; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Size: Integer; safecall;
+    function  Get_CreationDate: TDateTime; safecall;
+    function  Get_DateModified: TDateTime; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const prop1: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const prop2: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_DocumentFolders: INRTFolders; safecall;
+    function  Get_TaskFolders: INRTTaskFolders; safecall;
+    function  Get_LinkFolders: INRTLinkFolders; safecall;
+    function  Get_DiscussionFolders: INRTDiscussionFolders; safecall;
+    function  Get_EventFolders: INRTEventFolders; safecall;
+    function  Get_ReferenceFolders: INRTReferenceFolders; safecall;
+    function  Get_IssueFolders: INRTIssueFolders; safecall;
+    function  Get_LastUser: INRTUser; safecall;
+    function  Get_InUseBy: INRTUser; safecall;
+    function  Get_HistoryList: INRTHistoryList; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    procedure GetCopy(const Path: WideString); safecall;
+    procedure Update(const Path: WideString; options: PageUpdateOptions; var errors: OleVariant); safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: PageOperation): WordBool; safecall;
+    function  GetAttributeByID(idx: AttributeID): OleVariant; safecall;
+    procedure SetAttributeValueByID(idx: AttributeID; newVal: OleVariant); safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property Database: INRTDatabase read Get_Database;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property SubType: WideString read Get_SubType write Set_SubType;
+    property ID: WideString read Get_ID;
+    property PageID: Integer read Get_PageID;
+    property Owner: INRTUser read Get_Owner;
+    property Size: Integer read Get_Size;
+    property CreationDate: TDateTime read Get_CreationDate;
+    property DateModified: TDateTime read Get_DateModified;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property DocumentFolders: INRTFolders read Get_DocumentFolders;
+    property TaskFolders: INRTTaskFolders read Get_TaskFolders;
+    property LinkFolders: INRTLinkFolders read Get_LinkFolders;
+    property DiscussionFolders: INRTDiscussionFolders read Get_DiscussionFolders;
+    property EventFolders: INRTEventFolders read Get_EventFolders;
+    property ReferenceFolders: INRTReferenceFolders read Get_ReferenceFolders;
+    property IssueFolders: INRTIssueFolders read Get_IssueFolders;
+    property LastUser: INRTUser read Get_LastUser;
+    property InUseBy: INRTUser read Get_InUseBy;
+    property HistoryList: INRTHistoryList read Get_HistoryList;
+    property Security: INRTSecurity read Get_Security;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property Rules: INRTRules read Get_Rules;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTPageDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD98-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTPageDisp = dispinterface
+    ['{FC06DD98-6F36-11D4-80FD-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property Database: INRTDatabase readonly dispid 2;
+    property Class_: INRTDocumentClass dispid 3;
+    property SubClass: INRTDocumentClass dispid 4;
+    property Type_: INRTDocumentType dispid 5;
+    property SubType: WideString dispid 7;
+    property ID: WideString readonly dispid 8;
+    property PageID: Integer readonly dispid 9;
+    property Owner: INRTUser readonly dispid 10;
+    property Size: Integer readonly dispid 11;
+    property CreationDate: TDateTime readonly dispid 12;
+    property DateModified: TDateTime readonly dispid 13;
+    property UserProperty1: WideString dispid 14;
+    property UserProperty2: WideString dispid 15;
+    property UserProperty3: WideString dispid 16;
+    property DocumentFolders: INRTFolders readonly dispid 17;
+    property TaskFolders: INRTTaskFolders readonly dispid 18;
+    property LinkFolders: INRTLinkFolders readonly dispid 19;
+    property DiscussionFolders: INRTDiscussionFolders readonly dispid 20;
+    property EventFolders: INRTEventFolders readonly dispid 21;
+    property ReferenceFolders: INRTReferenceFolders readonly dispid 22;
+    property IssueFolders: INRTIssueFolders readonly dispid 23;
+    property LastUser: INRTUser readonly dispid 24;
+    property InUseBy: INRTUser readonly dispid 25;
+    property HistoryList: INRTHistoryList readonly dispid 26;
+    property Security: INRTSecurity readonly dispid 27;
+    property EffectiveRights: AccessRight readonly dispid 28;
+    procedure GetCopy(const Path: WideString); dispid 29;
+    procedure Update(const Path: WideString; options: PageUpdateOptions; var errors: OleVariant); dispid 30;
+    procedure Refresh; dispid 31;
+    function  IsOperationAllowed(TheOperation: PageOperation): WordBool; dispid 32;
+    function  GetAttributeByID(idx: AttributeID): OleVariant; dispid 33;
+    procedure SetAttributeValueByID(idx: AttributeID; newVal: OleVariant); dispid 34;
+    property Rules: INRTRules readonly dispid 35;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 36;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocumentClass
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B96-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocumentClass = interface(IDispatch)
+    ['{37085B96-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Echo: WordBool; safecall;
+    function  Get_Indexable: WordBool; safecall;
+    function  GetSubClasses(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                            SearchAtBegin: WordBool; var oflow: OleVariant): INRTDocumentClasses; safecall;
+    function  Get_DefaultSecurity: SecurityType; safecall;
+    function  Get_RequiredFields: INRTAttributeSelections; safecall;
+    function  Get_SubClassRequired: WordBool; safecall;
+    function  Get_RetentionDays: Integer; safecall;
+    property Name: WideString read Get_Name;
+    property ID: WideString read Get_ID;
+    property Description: WideString read Get_Description;
+    property Echo: WordBool read Get_Echo;
+    property Indexable: WordBool read Get_Indexable;
+    property DefaultSecurity: SecurityType read Get_DefaultSecurity;
+    property RequiredFields: INRTAttributeSelections read Get_RequiredFields;
+    property SubClassRequired: WordBool read Get_SubClassRequired;
+    property RetentionDays: Integer read Get_RetentionDays;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentClassDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B96-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocumentClassDisp = dispinterface
+    ['{37085B96-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Description: WideString readonly dispid 2;
+    property Echo: WordBool readonly dispid 3;
+    property Indexable: WordBool readonly dispid 4;
+    function  GetSubClasses(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                            SearchAtBegin: WordBool; var oflow: OleVariant): INRTDocumentClasses; dispid 5;
+    property DefaultSecurity: SecurityType readonly dispid 6;
+    property RequiredFields: INRTAttributeSelections readonly dispid 7;
+    property SubClassRequired: WordBool readonly dispid 8;
+    property RetentionDays: Integer readonly dispid 9;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocumentClasses
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC18-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDocumentClasses = interface(IDispatch)
+    ['{399ECC18-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTDocumentClass; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentClassesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC18-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDocumentClassesDisp = dispinterface
+    ['{399ECC18-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTDocumentClass; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAttributeSelections
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {C651D7F3-1047-11D2-8612-006097BF089C}
+// *********************************************************************//
+  INRTAttributeSelections = interface(IDispatch)
+    ['{C651D7F3-1047-11D2-8612-006097BF089C}']
+    function  Item(Index: AttributeID): WordBool; safecall;
+    procedure Add(Index: AttributeID); safecall;
+    function  Get_Count: Integer; safecall;
+    procedure Remove(Index: AttributeID); safecall;
+    procedure Clear; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAttributeSelectionsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {C651D7F3-1047-11D2-8612-006097BF089C}
+// *********************************************************************//
+  INRTAttributeSelectionsDisp = dispinterface
+    ['{C651D7F3-1047-11D2-8612-006097BF089C}']
+    function  Item(Index: AttributeID): WordBool; dispid 0;
+    procedure Add(Index: AttributeID); dispid 1;
+    property Count: Integer readonly dispid 2;
+    procedure Remove(Index: AttributeID); dispid 3;
+    procedure Clear; dispid 4;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocumentType
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B92-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocumentType = interface(IDispatch)
+    ['{37085B92-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Indexable: WordBool; safecall;
+    function  Get_ApplicationExtension: WideString; safecall;
+    function  Get_DMSExtension: WideString; safecall;
+    function  Get_Viewmethod: INRTLaunchMethod; safecall;
+    function  Get_Openmethod: INRTLaunchMethod; safecall;
+    function  Get_OtherApplications: INRTLaunchMethods; safecall;
+    function  Get_AutoDetect: WordBool; safecall;
+    property Name: WideString read Get_Name;
+    property ID: WideString read Get_ID;
+    property Description: WideString read Get_Description;
+    property Indexable: WordBool read Get_Indexable;
+    property ApplicationExtension: WideString read Get_ApplicationExtension;
+    property DMSExtension: WideString read Get_DMSExtension;
+    property Viewmethod: INRTLaunchMethod read Get_Viewmethod;
+    property Openmethod: INRTLaunchMethod read Get_Openmethod;
+    property OtherApplications: INRTLaunchMethods read Get_OtherApplications;
+    property AutoDetect: WordBool read Get_AutoDetect;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentTypeDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B92-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocumentTypeDisp = dispinterface
+    ['{37085B92-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Description: WideString readonly dispid 2;
+    property Indexable: WordBool readonly dispid 3;
+    property ApplicationExtension: WideString readonly dispid 4;
+    property DMSExtension: WideString readonly dispid 5;
+    property Viewmethod: INRTLaunchMethod readonly dispid 6;
+    property Openmethod: INRTLaunchMethod readonly dispid 7;
+    property OtherApplications: INRTLaunchMethods readonly dispid 8;
+    property AutoDetect: WordBool readonly dispid 9;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLaunchMethod
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {10A99B2A-03EB-11D3-8003-00C04F6803E0}
+// *********************************************************************//
+  INRTLaunchMethod = interface(IDispatch)
+    ['{10A99B2A-03EB-11D3-8003-00C04F6803E0}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Path: WideString; safecall;
+    procedure Set_Path(const pVal: WideString); safecall;
+    function  Get_UseDDE: WordBool; safecall;
+    procedure Set_UseDDE(pVal: WordBool); safecall;
+    function  Get_DDEName: WideString; safecall;
+    procedure Set_DDEName(const pVal: WideString); safecall;
+    function  Get_DDETopic: WideString; safecall;
+    procedure Set_DDETopic(const pVal: WideString); safecall;
+    function  Get_DDEOpen: WideString; safecall;
+    procedure Set_DDEOpen(const pVal: WideString); safecall;
+    function  Get_DDEOpenReadOnly: WideString; safecall;
+    procedure Set_DDEOpenReadOnly(const pVal: WideString); safecall;
+    function  Get_DDEPrint: WideString; safecall;
+    procedure Set_DDEPrint(const pVal: WideString); safecall;
+    function  Get_DDEPrintAndExit: WideString; safecall;
+    procedure Set_DDEPrintAndExit(const pVal: WideString); safecall;
+    function  Get_IntegrationMode: IntMode; safecall;
+    procedure Set_IntegrationMode(pVal: IntMode); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Path: WideString read Get_Path write Set_Path;
+    property UseDDE: WordBool read Get_UseDDE write Set_UseDDE;
+    property DDEName: WideString read Get_DDEName write Set_DDEName;
+    property DDETopic: WideString read Get_DDETopic write Set_DDETopic;
+    property DDEOpen: WideString read Get_DDEOpen write Set_DDEOpen;
+    property DDEOpenReadOnly: WideString read Get_DDEOpenReadOnly write Set_DDEOpenReadOnly;
+    property DDEPrint: WideString read Get_DDEPrint write Set_DDEPrint;
+    property DDEPrintAndExit: WideString read Get_DDEPrintAndExit write Set_DDEPrintAndExit;
+    property IntegrationMode: IntMode read Get_IntegrationMode write Set_IntegrationMode;
+    property Description: WideString read Get_Description write Set_Description;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLaunchMethodDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {10A99B2A-03EB-11D3-8003-00C04F6803E0}
+// *********************************************************************//
+  INRTLaunchMethodDisp = dispinterface
+    ['{10A99B2A-03EB-11D3-8003-00C04F6803E0}']
+    property Name: WideString dispid 0;
+    property Path: WideString dispid 1;
+    property UseDDE: WordBool dispid 2;
+    property DDEName: WideString dispid 3;
+    property DDETopic: WideString dispid 4;
+    property DDEOpen: WideString dispid 5;
+    property DDEOpenReadOnly: WideString dispid 6;
+    property DDEPrint: WideString dispid 7;
+    property DDEPrintAndExit: WideString dispid 8;
+    property IntegrationMode: IntMode dispid 9;
+    property Description: WideString dispid 10;
+    property ID: WideString readonly dispid 11;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLaunchMethods
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {B6ED401D-0185-11D3-BFFD-00C04F6803E0}
+// *********************************************************************//
+  INRTLaunchMethods = interface(IDispatch)
+    ['{B6ED401D-0185-11D3-BFFD-00C04F6803E0}']
+    function  Item(Index: OleVariant): INRTLaunchMethod; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Add: INRTLaunchMethod; safecall;
+    procedure Remove(IdOrIndexOrObject: OleVariant); safecall;
+    procedure Clear; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLaunchMethodsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {B6ED401D-0185-11D3-BFFD-00C04F6803E0}
+// *********************************************************************//
+  INRTLaunchMethodsDisp = dispinterface
+    ['{B6ED401D-0185-11D3-BFFD-00C04F6803E0}']
+    function  Item(Index: OleVariant): INRTLaunchMethod; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property ID: WideString readonly dispid 2;
+    function  Add: INRTLaunchMethod; dispid 3;
+    procedure Remove(IdOrIndexOrObject: OleVariant); dispid 4;
+    procedure Clear; dispid 5;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUser
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B8E-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTUser = interface(IDispatch)
+    ['{37085B8E-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_FullName: WideString; safecall;
+    function  Get_Password: WideString; safecall;
+    function  Get_LoginEnabled: WordBool; safecall;
+    function  Get_Location: WideString; safecall;
+    function  Get_Phone: WideString; safecall;
+    function  Get_Extension: WideString; safecall;
+    function  Get_Fax: WideString; safecall;
+    function  Get_Email: WideString; safecall;
+    function  Get_Email2: WideString; safecall;
+    function  Get_Email3: WideString; safecall;
+    function  Get_Email4: WideString; safecall;
+    function  Get_Email5: WideString; safecall;
+    function  Get_Mobile: WideString; safecall;
+    function  Get_Pager: WideString; safecall;
+    function  Get_Other: WideString; safecall;
+    function  Get_Comment: WideString; safecall;
+    function  Get_Custom1: WideString; safecall;
+    function  Get_Custom2: WideString; safecall;
+    function  Get_Custom3: WideString; safecall;
+    function  Get_DomainName: WideString; safecall;
+    function  Get_NOS: Integer; safecall;
+    function  Get_PasswordExpires: WordBool; safecall;
+    function  Get_HasPreferredDatabase: WordBool; safecall;
+    function  Get_PreferredDatabase: INRTDatabase; safecall;
+    function  Get_Role: INRTRole; safecall;
+    function  Get_Supervisor: WordBool; safecall;
+    function  Get_DefaultSecurityTemplate: INRTSecurityTemplate; safecall;
+    function  Get_SecurityTemplates: INRTSecurityTemplates; safecall;
+    function  Get_Groups: INRTGroups; safecall;
+    property Name: WideString read Get_Name;
+    property ID: WideString read Get_ID;
+    property FullName: WideString read Get_FullName;
+    property Password: WideString read Get_Password;
+    property LoginEnabled: WordBool read Get_LoginEnabled;
+    property Location: WideString read Get_Location;
+    property Phone: WideString read Get_Phone;
+    property Extension: WideString read Get_Extension;
+    property Fax: WideString read Get_Fax;
+    property Email: WideString read Get_Email;
+    property Email2: WideString read Get_Email2;
+    property Email3: WideString read Get_Email3;
+    property Email4: WideString read Get_Email4;
+    property Email5: WideString read Get_Email5;
+    property Mobile: WideString read Get_Mobile;
+    property Pager: WideString read Get_Pager;
+    property Other: WideString read Get_Other;
+    property Comment: WideString read Get_Comment;
+    property Custom1: WideString read Get_Custom1;
+    property Custom2: WideString read Get_Custom2;
+    property Custom3: WideString read Get_Custom3;
+    property DomainName: WideString read Get_DomainName;
+    property NOS: Integer read Get_NOS;
+    property PasswordExpires: WordBool read Get_PasswordExpires;
+    property HasPreferredDatabase: WordBool read Get_HasPreferredDatabase;
+    property PreferredDatabase: INRTDatabase read Get_PreferredDatabase;
+    property Role: INRTRole read Get_Role;
+    property Supervisor: WordBool read Get_Supervisor;
+    property DefaultSecurityTemplate: INRTSecurityTemplate read Get_DefaultSecurityTemplate;
+    property SecurityTemplates: INRTSecurityTemplates read Get_SecurityTemplates;
+    property Groups: INRTGroups read Get_Groups;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B8E-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTUserDisp = dispinterface
+    ['{37085B8E-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property FullName: WideString readonly dispid 2;
+    property Password: WideString readonly dispid 3;
+    property LoginEnabled: WordBool readonly dispid 4;
+    property Location: WideString readonly dispid 5;
+    property Phone: WideString readonly dispid 6;
+    property Extension: WideString readonly dispid 7;
+    property Fax: WideString readonly dispid 8;
+    property Email: WideString readonly dispid 9;
+    property Email2: WideString readonly dispid 10;
+    property Email3: WideString readonly dispid 11;
+    property Email4: WideString readonly dispid 12;
+    property Email5: WideString readonly dispid 13;
+    property Mobile: WideString readonly dispid 14;
+    property Pager: WideString readonly dispid 15;
+    property Other: WideString readonly dispid 16;
+    property Comment: WideString readonly dispid 17;
+    property Custom1: WideString readonly dispid 18;
+    property Custom2: WideString readonly dispid 19;
+    property Custom3: WideString readonly dispid 20;
+    property DomainName: WideString readonly dispid 21;
+    property NOS: Integer readonly dispid 22;
+    property PasswordExpires: WordBool readonly dispid 23;
+    property HasPreferredDatabase: WordBool readonly dispid 24;
+    property PreferredDatabase: INRTDatabase readonly dispid 25;
+    property Role: INRTRole readonly dispid 26;
+    property Supervisor: WordBool readonly dispid 27;
+    property DefaultSecurityTemplate: INRTSecurityTemplate readonly dispid 28;
+    property SecurityTemplates: INRTSecurityTemplates readonly dispid 29;
+    property Groups: INRTGroups readonly dispid 30;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRole
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B90-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTRole = interface(IDispatch)
+    ['{37085B90-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Alias: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Privilege: Integer; safecall;
+    function  GetRoleValueByID(RoleID: RoleAttributeID): OleVariant; safecall;
+    function  Get_FieldValues: INRTRoleEditCreates; safecall;
+    function  Get_SearchValues: INRTRoleSearchProfiles; safecall;
+    function  Get_Users: INRTUsers; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_AdditionalProperties: INRTAdditionalProperties; safecall;
+    property Alias: WideString read Get_Alias;
+    property Description: WideString read Get_Description;
+    property Privilege: Integer read Get_Privilege;
+    property FieldValues: INRTRoleEditCreates read Get_FieldValues;
+    property SearchValues: INRTRoleSearchProfiles read Get_SearchValues;
+    property Users: INRTUsers read Get_Users;
+    property ID: WideString read Get_ID;
+    property AdditionalProperties: INRTAdditionalProperties read Get_AdditionalProperties;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRoleDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B90-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTRoleDisp = dispinterface
+    ['{37085B90-90AC-11D4-8100-00C04F610DBB}']
+    property Alias: WideString readonly dispid 0;
+    property Description: WideString readonly dispid 1;
+    property Privilege: Integer readonly dispid 2;
+    function  GetRoleValueByID(RoleID: RoleAttributeID): OleVariant; dispid 3;
+    property FieldValues: INRTRoleEditCreates readonly dispid 4;
+    property SearchValues: INRTRoleSearchProfiles readonly dispid 5;
+    property Users: INRTUsers readonly dispid 6;
+    property ID: WideString readonly dispid 7;
+    property AdditionalProperties: INRTAdditionalProperties readonly dispid 8;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRoleEditCreates
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {CD30C7A7-FCA6-11D2-BCFE-00C04F68A665}
+// *********************************************************************//
+  INRTRoleEditCreates = interface(IDispatch)
+    ['{CD30C7A7-FCA6-11D2-BCFE-00C04F68A665}']
+    function  Item(Index: OleVariant): INRTRoleEditCreate; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRoleEditCreatesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {CD30C7A7-FCA6-11D2-BCFE-00C04F68A665}
+// *********************************************************************//
+  INRTRoleEditCreatesDisp = dispinterface
+    ['{CD30C7A7-FCA6-11D2-BCFE-00C04F68A665}']
+    function  Item(Index: OleVariant): INRTRoleEditCreate; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRoleEditCreate
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC9AC2E5-FC13-11D2-8E9C-006008D2F78B}
+// *********************************************************************//
+  INRTRoleEditCreate = interface(IDispatch)
+    ['{FC9AC2E5-FC13-11D2-8E9C-006008D2F78B}']
+    function  Get_FieldID: AttributeID; safecall;
+    function  Get_FieldName: WideString; safecall;
+    function  Get_LegalValues: INRTStrings; safecall;
+    function  Get_RestrictedToLegalValues: WordBool; safecall;
+    property FieldID: AttributeID read Get_FieldID;
+    property FieldName: WideString read Get_FieldName;
+    property LegalValues: INRTStrings read Get_LegalValues;
+    property RestrictedToLegalValues: WordBool read Get_RestrictedToLegalValues;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRoleEditCreateDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC9AC2E5-FC13-11D2-8E9C-006008D2F78B}
+// *********************************************************************//
+  INRTRoleEditCreateDisp = dispinterface
+    ['{FC9AC2E5-FC13-11D2-8E9C-006008D2F78B}']
+    property FieldID: AttributeID readonly dispid 1;
+    property FieldName: WideString readonly dispid 2;
+    property LegalValues: INRTStrings readonly dispid 3;
+    property RestrictedToLegalValues: WordBool readonly dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTStrings
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {55223F98-146D-11D3-BD07-00C04F68A665}
+// *********************************************************************//
+  INRTStrings = interface(IDispatch)
+    ['{55223F98-146D-11D3-BD07-00C04F68A665}']
+    function  Item(idx: OleVariant): WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Get_Count: Integer; safecall;
+    property _NewEnum: IUnknown read Get__NewEnum;
+    property Count: Integer read Get_Count;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTStringsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {55223F98-146D-11D3-BD07-00C04F68A665}
+// *********************************************************************//
+  INRTStringsDisp = dispinterface
+    ['{55223F98-146D-11D3-BD07-00C04F68A665}']
+    function  Item(idx: OleVariant): WideString; dispid 0;
+    property _NewEnum: IUnknown readonly dispid -4;
+    property Count: Integer readonly dispid 1;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRoleSearchProfiles
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {CD30C7A9-FCA6-11D2-BCFE-00C04F68A665}
+// *********************************************************************//
+  INRTRoleSearchProfiles = interface(IDispatch)
+    ['{CD30C7A9-FCA6-11D2-BCFE-00C04F68A665}']
+    function  Item(Index: OleVariant): INRTRoleSearchProfile; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRoleSearchProfilesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {CD30C7A9-FCA6-11D2-BCFE-00C04F68A665}
+// *********************************************************************//
+  INRTRoleSearchProfilesDisp = dispinterface
+    ['{CD30C7A9-FCA6-11D2-BCFE-00C04F68A665}']
+    function  Item(Index: OleVariant): INRTRoleSearchProfile; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRoleSearchProfile
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {8F6C0BE4-FC23-11D2-8E9E-006008D2F78B}
+// *********************************************************************//
+  INRTRoleSearchProfile = interface(IDispatch)
+    ['{8F6C0BE4-FC23-11D2-8E9E-006008D2F78B}']
+    function  Get_FieldID: AttributeID; safecall;
+    function  Get_FieldName: WideString; safecall;
+    function  Get_LegalValues: INRTStrings; safecall;
+    function  Get_Writeable: WordBool; safecall;
+    property FieldID: AttributeID read Get_FieldID;
+    property FieldName: WideString read Get_FieldName;
+    property LegalValues: INRTStrings read Get_LegalValues;
+    property Writeable: WordBool read Get_Writeable;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRoleSearchProfileDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {8F6C0BE4-FC23-11D2-8E9E-006008D2F78B}
+// *********************************************************************//
+  INRTRoleSearchProfileDisp = dispinterface
+    ['{8F6C0BE4-FC23-11D2-8E9E-006008D2F78B}']
+    property FieldID: AttributeID readonly dispid 1;
+    property FieldName: WideString readonly dispid 2;
+    property LegalValues: INRTStrings readonly dispid 3;
+    property Writeable: WordBool readonly dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUsers
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC05-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTUsers = interface(IDispatch)
+    ['{399ECC05-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTUser; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUsersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC05-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTUsersDisp = dispinterface
+    ['{399ECC05-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTUser; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAdditionalProperties
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {33642532-52CE-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTAdditionalProperties = interface(IDispatch)
+    ['{33642532-52CE-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTAdditionalProperty; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const Name: WideString; const val: WideString): INRTAdditionalProperty; safecall;
+    procedure Remove(IdOrIndexOrObject: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAdditionalPropertiesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {33642532-52CE-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTAdditionalPropertiesDisp = dispinterface
+    ['{33642532-52CE-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTAdditionalProperty; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const Name: WideString; const val: WideString): INRTAdditionalProperty; dispid 2;
+    procedure Remove(IdOrIndexOrObject: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAdditionalProperty
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {33642530-52CE-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTAdditionalProperty = interface(IDispatch)
+    ['{33642530-52CE-11D4-80F6-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const Name: WideString); safecall;
+    function  Get_Value: WideString; safecall;
+    procedure Set_Value(const val: WideString); safecall;
+    function  Get_Number: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Value: WideString read Get_Value write Set_Value;
+    property Number: Integer read Get_Number;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAdditionalPropertyDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {33642530-52CE-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTAdditionalPropertyDisp = dispinterface
+    ['{33642530-52CE-11D4-80F6-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Value: WideString dispid 1;
+    property Number: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSecurityTemplate
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {44350567-03FC-11D3-BD00-00C04F68A665}
+// *********************************************************************//
+  INRTSecurityTemplate = interface(IDispatch)
+    ['{44350567-03FC-11D3-BD00-00C04F68A665}']
+    function  Get_ID: WideString; safecall;
+    function  Get_Name: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    procedure PopulateSecurityObjectFromTemplate(const SecurityObjectToPopulate: INRTSecurity); safecall;
+    property ID: WideString read Get_ID;
+    property Name: WideString read Get_Name;
+    property Description: WideString read Get_Description;
+    property Security: INRTSecurity read Get_Security;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSecurityTemplateDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {44350567-03FC-11D3-BD00-00C04F68A665}
+// *********************************************************************//
+  INRTSecurityTemplateDisp = dispinterface
+    ['{44350567-03FC-11D3-BD00-00C04F68A665}']
+    property ID: WideString readonly dispid 1;
+    property Name: WideString readonly dispid 0;
+    property Description: WideString readonly dispid 2;
+    property Security: INRTSecurity readonly dispid 3;
+    procedure PopulateSecurityObjectFromTemplate(const SecurityObjectToPopulate: INRTSecurity); dispid 13;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSecurity
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBF5-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTSecurity = interface(IDispatch)
+    ['{399ECBF5-0C62-11D2-860E-006097BF089C}']
+    function  Get_DefaultSecurity: SecurityType; safecall;
+    procedure Set_DefaultSecurity(pVal: SecurityType); safecall;
+    function  Get_GroupACLs: INRTGroupACLs; safecall;
+    function  Get_UserACLs: INRTUserACLs; safecall;
+    property DefaultSecurity: SecurityType read Get_DefaultSecurity write Set_DefaultSecurity;
+    property GroupACLs: INRTGroupACLs read Get_GroupACLs;
+    property UserACLs: INRTUserACLs read Get_UserACLs;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSecurityDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBF5-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTSecurityDisp = dispinterface
+    ['{399ECBF5-0C62-11D2-860E-006097BF089C}']
+    property DefaultSecurity: SecurityType dispid 0;
+    property GroupACLs: INRTGroupACLs readonly dispid 1;
+    property UserACLs: INRTUserACLs readonly dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroupACLs
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBFF-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroupACLs = interface(IDispatch)
+    ['{399ECBFF-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTGroupACL; safecall;
+    procedure Add(const groupName: WideString; accRight: AccessRight); safecall;
+    function  Get_Count: Integer; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroupACLsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBFF-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroupACLsDisp = dispinterface
+    ['{399ECBFF-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTGroupACL; dispid 0;
+    procedure Add(const groupName: WideString; accRight: AccessRight); dispid 1;
+    property Count: Integer readonly dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroupACL
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBFD-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroupACL = interface(IDispatch)
+    ['{399ECBFD-0C62-11D2-860E-006097BF089C}']
+    function  Get_Group: INRTGroup; safecall;
+    procedure _Set_Group(const pVal: INRTGroup); safecall;
+    procedure Set_Group(const pVal: INRTGroup); safecall;
+    function  Get_Right: AccessRight; safecall;
+    procedure Set_Right(pVal: AccessRight); safecall;
+    property Group: INRTGroup read Get_Group write _Set_Group;
+    property Right: AccessRight read Get_Right write Set_Right;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroupACLDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBFD-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroupACLDisp = dispinterface
+    ['{399ECBFD-0C62-11D2-860E-006097BF089C}']
+    property Group: INRTGroup dispid 1;
+    property Right: AccessRight dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroup
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBF9-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroup = interface(IDispatch)
+    ['{399ECBF9-0C62-11D2-860E-006097BF089C}']
+    function  Get_Name: WideString; safecall;
+    function  Get_ID: Integer; safecall;
+    function  Get_Users: INRTUsers; safecall;
+    function  Get_FullName: WideString; safecall;
+    property Name: WideString read Get_Name;
+    property ID: Integer read Get_ID;
+    property Users: INRTUsers read Get_Users;
+    property FullName: WideString read Get_FullName;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroupDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBF9-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroupDisp = dispinterface
+    ['{399ECBF9-0C62-11D2-860E-006097BF089C}']
+    property Name: WideString readonly dispid 0;
+    property ID: Integer readonly dispid 2;
+    property Users: INRTUsers readonly dispid 1;
+    property FullName: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserACLs
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC01-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTUserACLs = interface(IDispatch)
+    ['{399ECC01-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTUserACL; safecall;
+    procedure Add(const userName: WideString; accRight: AccessRight); safecall;
+    function  Get_Count: Integer; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserACLsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC01-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTUserACLsDisp = dispinterface
+    ['{399ECC01-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTUserACL; dispid 0;
+    procedure Add(const userName: WideString; accRight: AccessRight); dispid 1;
+    property Count: Integer readonly dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserACL
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBFB-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTUserACL = interface(IDispatch)
+    ['{399ECBFB-0C62-11D2-860E-006097BF089C}']
+    function  Get_User: INRTUser; safecall;
+    procedure _Set_User(const pVal: INRTUser); safecall;
+    procedure Set_User(const pVal: INRTUser); safecall;
+    function  Get_Right: AccessRight; safecall;
+    procedure Set_Right(pVal: AccessRight); safecall;
+    property User: INRTUser read Get_User write _Set_User;
+    property Right: AccessRight read Get_Right write Set_Right;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserACLDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBFB-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTUserACLDisp = dispinterface
+    ['{399ECBFB-0C62-11D2-860E-006097BF089C}']
+    property User: INRTUser dispid 1;
+    property Right: AccessRight dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSecurityTemplates
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {99488EEF-03FC-11D3-BD00-00C04F68A665}
+// *********************************************************************//
+  INRTSecurityTemplates = interface(IDispatch)
+    ['{99488EEF-03FC-11D3-BD00-00C04F68A665}']
+    function  Item(IntegralIndex: OleVariant): INRTSecurityTemplate; safecall;
+    procedure Refresh; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSecurityTemplatesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {99488EEF-03FC-11D3-BD00-00C04F68A665}
+// *********************************************************************//
+  INRTSecurityTemplatesDisp = dispinterface
+    ['{99488EEF-03FC-11D3-BD00-00C04F68A665}']
+    function  Item(IntegralIndex: OleVariant): INRTSecurityTemplate; dispid 0;
+    procedure Refresh; dispid 1;
+    property Count: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroups
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC07-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroups = interface(IDispatch)
+    ['{399ECC07-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTGroup; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroupsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC07-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTGroupsDisp = dispinterface
+    ['{399ECC07-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTGroup; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B8C-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTFolders = interface(IDispatch)
+    ['{37085B8C-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Add(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                  DefaultSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; safecall;
+    procedure Remove(IdOrIndexOrObject: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  AddEx(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                    const Custom1: WideString; const Custom2: WideString; 
+                    const Custom3: WideString; DefaultSecurity: SecurityType; 
+                    const SearchParms: INRTSearchParameters): INRTFolder; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B8C-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTFoldersDisp = dispinterface
+    ['{37085B8C-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTFolder; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 4;
+    function  Add(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                  DefaultSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; dispid 5;
+    procedure Remove(IdOrIndexOrObject: OleVariant); dispid 6;
+    procedure Clear; dispid 7;
+    procedure Refresh; dispid 8;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  AddEx(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                    const Custom1: WideString; const Custom2: WideString; 
+                    const Custom3: WideString; DefaultSecurity: SecurityType; 
+                    const SearchParms: INRTSearchParameters): INRTFolder; dispid 10;
+  end;
+
+// *********************************************************************//
+// Interface: INRTFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B88-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTFolder = interface(IDispatch)
+    ['{37085B88-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Folders: INRTFolders; safecall;
+    function  Get_Documents: INRTDocuments; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    procedure Update; safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; safecall;
+    procedure MoveTo(const DestinationFolderCollection: INRTFolders); safecall;
+    procedure CopyTo(const DestinationFoldersCollection: INRTFolders; CopyOnlyDocuments: WordBool); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_FolderID: Integer; safecall;
+    function  Get_SearchParameters: INRTSearchParameters; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Overflow: WordBool; safecall;
+    procedure AddDocument(const doc: INRTDocument); safecall;
+    procedure RemoveDocument(const docobj: INRTDocument); safecall;
+    function  CreateSubFolder(const Name: WideString; const descr: WideString; 
+                              defSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; safecall;
+    procedure RemoveSubFolder(const fldr: INRTFolder); safecall;
+    procedure Refresh; safecall;
+    function  Get_IsSearch: WordBool; safecall;
+    function  Get_IsRootLevelFolder: WordBool; safecall;
+    function  Get_Parent: INRTFolder; safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_Rules: INRTRules; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const pVal: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const pVal: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_AdditionalProperties: INRTAdditionalProperties; safecall;
+    function  CreateSubFolderEx(const NewFolderName: WideString; 
+                                const NewFolderDescription: WideString; const Custom1: WideString; 
+                                const Custom2: WideString; const Custom3: WideString; 
+                                DefaultSecurity: SecurityType; 
+                                const SearchParms: INRTSearchParameters): INRTFolder; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Folders: INRTFolders read Get_Folders;
+    property Documents: INRTDocuments read Get_Documents;
+    property Security: INRTSecurity read Get_Security;
+    property Description: WideString read Get_Description write Set_Description;
+    property ID: WideString read Get_ID;
+    property FolderID: Integer read Get_FolderID;
+    property SearchParameters: INRTSearchParameters read Get_SearchParameters;
+    property Database: INRTDatabase read Get_Database;
+    property Owner: INRTUser read Get_Owner;
+    property Overflow: WordBool read Get_Overflow;
+    property IsSearch: WordBool read Get_IsSearch;
+    property IsRootLevelFolder: WordBool read Get_IsRootLevelFolder;
+    property Parent: INRTFolder read Get_Parent;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property Rules: INRTRules read Get_Rules;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property Page: INRTPage read Get_Page;
+    property AdditionalProperties: INRTAdditionalProperties read Get_AdditionalProperties;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B88-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTFolderDisp = dispinterface
+    ['{37085B88-90AC-11D4-8100-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Folders: INRTFolders readonly dispid 1;
+    property Documents: INRTDocuments readonly dispid 2;
+    property Security: INRTSecurity readonly dispid 3;
+    procedure Update; dispid 4;
+    property Description: WideString dispid 6;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 7;
+    procedure MoveTo(const DestinationFolderCollection: INRTFolders); dispid 8;
+    procedure CopyTo(const DestinationFoldersCollection: INRTFolders; CopyOnlyDocuments: WordBool); dispid 9;
+    property ID: WideString readonly dispid 11;
+    property FolderID: Integer readonly dispid 12;
+    property SearchParameters: INRTSearchParameters readonly dispid 13;
+    property Database: INRTDatabase readonly dispid 14;
+    property Owner: INRTUser readonly dispid 15;
+    property Overflow: WordBool readonly dispid 16;
+    procedure AddDocument(const doc: INRTDocument); dispid 17;
+    procedure RemoveDocument(const docobj: INRTDocument); dispid 18;
+    function  CreateSubFolder(const Name: WideString; const descr: WideString; 
+                              defSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; dispid 19;
+    procedure RemoveSubFolder(const fldr: INRTFolder); dispid 20;
+    procedure Refresh; dispid 21;
+    property IsSearch: WordBool readonly dispid 22;
+    property IsRootLevelFolder: WordBool readonly dispid 23;
+    property Parent: INRTFolder readonly dispid 24;
+    property InheritSecurity: WordBool dispid 25;
+    property Rules: INRTRules readonly dispid 26;
+    property UserProperty1: WideString dispid 27;
+    property UserProperty2: WideString dispid 28;
+    property UserProperty3: WideString dispid 29;
+    property Page: INRTPage readonly dispid 30;
+    property AdditionalProperties: INRTAdditionalProperties readonly dispid 31;
+    function  CreateSubFolderEx(const NewFolderName: WideString; 
+                                const NewFolderDescription: WideString; const Custom1: WideString; 
+                                const Custom2: WideString; const Custom3: WideString; 
+                                DefaultSecurity: SecurityType; 
+                                const SearchParms: INRTSearchParameters): INRTFolder; dispid 32;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 33;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocuments
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B86-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocuments = interface(IDispatch)
+    ['{37085B86-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTDocument; safecall;
+    function  Get_Overflow: WordBool; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    procedure Add(const DocumentToAdd: INRTDocument); safecall;
+    procedure Remove(IdOrIndexOrObject: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Overflow: WordBool read Get_Overflow;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B86-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocumentsDisp = dispinterface
+    ['{37085B86-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTDocument; dispid 0;
+    property Overflow: WordBool readonly dispid 1;
+    property Count: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 4;
+    procedure Add(const DocumentToAdd: INRTDocument); dispid 5;
+    procedure Remove(IdOrIndexOrObject: OleVariant); dispid 6;
+    procedure Clear; dispid 7;
+    procedure Refresh; dispid 8;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocument
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B9A-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocument = interface(IDispatch)
+    ['{37085B9A-90AC-11D4-8100-00C04F610DBB}']
+    function  Get_Number: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Version: Integer; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Size: Integer; safecall;
+    function  Get_EditDate: TDateTime; safecall;
+    function  Get_CreationDate: TDateTime; safecall;
+    function  Get_LastUser: INRTUser; safecall;
+    function  Get_Extension: WideString; safecall;
+    function  Get_InUseBy: INRTUser; safecall;
+    function  Get_RetentionDays: Integer; safecall;
+    function  Get_Indexable: WordBool; safecall;
+    procedure Set_Indexable(pVal: WordBool); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Author: INRTUser; safecall;
+    procedure _Set_Author(const pVal: INRTUser); safecall;
+    procedure Set_Author(const pVal: INRTUser); safecall;
+    function  Get_Operator: INRTUser; safecall;
+    procedure _Set_Operator(const pVal: INRTUser); safecall;
+    procedure Set_Operator(const pVal: INRTUser); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const pVal: INRTDocumentType); safecall;
+    procedure Set_Type_(const pVal: INRTDocumentType); safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const pVal: INRTDocumentClass); safecall;
+    procedure Set_Class_(const pVal: INRTDocumentClass); safecall;
+    function  Get_Comment: WideString; safecall;
+    procedure Set_Comment(const pVal: WideString); safecall;
+    function  Get_CustomAttributes: INRTCustomAttributes; safecall;
+    function  Get_HistoryList: INRTHistoryList; safecall;
+    function  Get_RelatedDocuments: INRTDocuments; safecall;
+    function  Get_CheckoutPath: WideString; safecall;
+    procedure Set_CheckoutPath(const pVal: WideString); safecall;
+    function  CheckIn(const filename: WideString; action: CheckinDisposition; 
+                      options: CheckinOptions; var ErrorResults: OleVariant): INRTDocument; safecall;
+    procedure CheckOut(const filename: WideString; options: CheckOutOptions; duedate: TDateTime; 
+                       const comments: WideString); safecall;
+    procedure UpdateProfile(var errs: OleVariant); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    procedure GetCopy(const Path: WideString; options: GetCopyOptions); safecall;
+    function  Get_MarkedForArchive: WordBool; safecall;
+    procedure Set_MarkedForArchive(marked: WordBool); safecall;
+    procedure RestoreFromArchive; safecall;
+    function  GetAttributeByID(AttributeNumber: AttributeID): OleVariant; safecall;
+    function  LockDocument(RefreshProfile: WordBool): WordBool; safecall;
+    function  Get_CheckedOut: WordBool; safecall;
+    function  Get_Locked: WordBool; safecall;
+    function  UnlockDocument: WordBool; safecall;
+    function  Get_Versions: INRTDocuments; safecall;
+    procedure SetAttributeValueByID(AttributeNumber: AttributeID; NewValue: OleVariant); safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  RelateDocument(docnum: Integer; const comments: WideString): WordBool; safecall;
+    procedure RemoveRelation(docNumber: Integer); safecall;
+    function  Get_CheckoutDueDate: TDateTime; safecall;
+    function  Get_CheckoutComment: WideString; safecall;
+    function  Get_Archived: WordBool; safecall;
+    function  Get_SubType: DocumentSubType; safecall;
+    procedure Set_SubType(pVal: DocumentSubType); safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: DocumentOperation): WordBool; safecall;
+    function  CheckInEx(const filename: WideString; action: CheckinDisposition; 
+                        options: CheckinOptions; RecordedEvent: HistEvent; 
+                        const PerformingApplication: WideString; const Comment: WideString; 
+                        const Location: WideString; var ErrorResults: OleVariant): INRTDocument; safecall;
+    procedure CheckOutEx(const filename: WideString; options: CheckOutOptions; duedate: TDateTime; 
+                         const CheckoutComments: WideString; CurrentActivity: HistEvent; 
+                         const GeneratingApplication: WideString; const Location: WideString); safecall;
+    function  Sync(const DocumentPath: WideString; HowToCheckIn: CheckinDisposition; 
+                   EchoEditDateTime: TDateTime; var ErrorResults: OleVariant): INRTDocument; safecall;
+    function  Get_LatestVersion: INRTDocument; safecall;
+    function  Get_IsLatestVersion: WordBool; safecall;
+    function  Get_IsAnyVersionCheckedOut: WordBool; safecall;
+    function  Get_AdditionalProperties: INRTAdditionalProperties; safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    function  Get_Folders: INRTFolders; safecall;
+    function  Get_EditProfileTime: TDateTime; safecall;
+    function  Get_AccessTime: TDateTime; safecall;
+    function  Get_CheckoutTime: TDateTime; safecall;
+    function  Get_CheckoutLocation: WideString; safecall;
+    property Number: Integer read Get_Number;
+    property ID: WideString read Get_ID;
+    property Version: Integer read Get_Version;
+    property Database: INRTDatabase read Get_Database;
+    property Size: Integer read Get_Size;
+    property EditDate: TDateTime read Get_EditDate;
+    property CreationDate: TDateTime read Get_CreationDate;
+    property LastUser: INRTUser read Get_LastUser;
+    property Extension: WideString read Get_Extension;
+    property InUseBy: INRTUser read Get_InUseBy;
+    property RetentionDays: Integer read Get_RetentionDays;
+    property Indexable: WordBool read Get_Indexable write Set_Indexable;
+    property Description: WideString read Get_Description write Set_Description;
+    property Name: WideString read Get_Name write Set_Name;
+    property Author: INRTUser read Get_Author write _Set_Author;
+    property Operator: INRTUser read Get_Operator write _Set_Operator;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property Comment: WideString read Get_Comment write Set_Comment;
+    property CustomAttributes: INRTCustomAttributes read Get_CustomAttributes;
+    property HistoryList: INRTHistoryList read Get_HistoryList;
+    property RelatedDocuments: INRTDocuments read Get_RelatedDocuments;
+    property CheckoutPath: WideString read Get_CheckoutPath write Set_CheckoutPath;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property MarkedForArchive: WordBool read Get_MarkedForArchive write Set_MarkedForArchive;
+    property CheckedOut: WordBool read Get_CheckedOut;
+    property Locked: WordBool read Get_Locked;
+    property Versions: INRTDocuments read Get_Versions;
+    property Security: INRTSecurity read Get_Security;
+    property CheckoutDueDate: TDateTime read Get_CheckoutDueDate;
+    property CheckoutComment: WideString read Get_CheckoutComment;
+    property Archived: WordBool read Get_Archived;
+    property SubType: DocumentSubType read Get_SubType write Set_SubType;
+    property LatestVersion: INRTDocument read Get_LatestVersion;
+    property IsLatestVersion: WordBool read Get_IsLatestVersion;
+    property IsAnyVersionCheckedOut: WordBool read Get_IsAnyVersionCheckedOut;
+    property AdditionalProperties: INRTAdditionalProperties read Get_AdditionalProperties;
+    property Rules: INRTRules read Get_Rules;
+    property Folders: INRTFolders read Get_Folders;
+    property EditProfileTime: TDateTime read Get_EditProfileTime;
+    property AccessTime: TDateTime read Get_AccessTime;
+    property CheckoutTime: TDateTime read Get_CheckoutTime;
+    property CheckoutLocation: WideString read Get_CheckoutLocation;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B9A-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTDocumentDisp = dispinterface
+    ['{37085B9A-90AC-11D4-8100-00C04F610DBB}']
+    property Number: Integer readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Version: Integer readonly dispid 2;
+    property Database: INRTDatabase readonly dispid 3;
+    property Size: Integer readonly dispid 4;
+    property EditDate: TDateTime readonly dispid 5;
+    property CreationDate: TDateTime readonly dispid 6;
+    property LastUser: INRTUser readonly dispid 7;
+    property Extension: WideString readonly dispid 8;
+    property InUseBy: INRTUser readonly dispid 9;
+    property RetentionDays: Integer readonly dispid 10;
+    property Indexable: WordBool dispid 11;
+    property Description: WideString dispid 12;
+    property Name: WideString dispid 13;
+    property Author: INRTUser dispid 14;
+    property Operator: INRTUser dispid 15;
+    property Type_: INRTDocumentType dispid 16;
+    property Class_: INRTDocumentClass dispid 17;
+    property Comment: WideString dispid 18;
+    property CustomAttributes: INRTCustomAttributes readonly dispid 19;
+    property HistoryList: INRTHistoryList readonly dispid 20;
+    property RelatedDocuments: INRTDocuments readonly dispid 21;
+    property CheckoutPath: WideString dispid 22;
+    function  CheckIn(const filename: WideString; action: CheckinDisposition; 
+                      options: CheckinOptions; var ErrorResults: OleVariant): INRTDocument; dispid 23;
+    procedure CheckOut(const filename: WideString; options: CheckOutOptions; duedate: TDateTime; 
+                       const comments: WideString); dispid 24;
+    procedure UpdateProfile(var errs: OleVariant); dispid 25;
+    property SubClass: INRTDocumentClass dispid 26;
+    property EffectiveRights: AccessRight readonly dispid 27;
+    procedure GetCopy(const Path: WideString; options: GetCopyOptions); dispid 28;
+    property MarkedForArchive: WordBool dispid 29;
+    procedure RestoreFromArchive; dispid 30;
+    function  GetAttributeByID(AttributeNumber: AttributeID): OleVariant; dispid 31;
+    function  LockDocument(RefreshProfile: WordBool): WordBool; dispid 32;
+    property CheckedOut: WordBool readonly dispid 33;
+    property Locked: WordBool readonly dispid 34;
+    function  UnlockDocument: WordBool; dispid 35;
+    property Versions: INRTDocuments readonly dispid 36;
+    procedure SetAttributeValueByID(AttributeNumber: AttributeID; NewValue: OleVariant); dispid 37;
+    property Security: INRTSecurity readonly dispid 38;
+    function  RelateDocument(docnum: Integer; const comments: WideString): WordBool; dispid 39;
+    procedure RemoveRelation(docNumber: Integer); dispid 40;
+    property CheckoutDueDate: TDateTime readonly dispid 41;
+    property CheckoutComment: WideString readonly dispid 42;
+    property Archived: WordBool readonly dispid 43;
+    property SubType: DocumentSubType dispid 44;
+    procedure Refresh; dispid 45;
+    function  IsOperationAllowed(TheOperation: DocumentOperation): WordBool; dispid 46;
+    function  CheckInEx(const filename: WideString; action: CheckinDisposition; 
+                        options: CheckinOptions; RecordedEvent: HistEvent; 
+                        const PerformingApplication: WideString; const Comment: WideString; 
+                        const Location: WideString; var ErrorResults: OleVariant): INRTDocument; dispid 47;
+    procedure CheckOutEx(const filename: WideString; options: CheckOutOptions; duedate: TDateTime; 
+                         const CheckoutComments: WideString; CurrentActivity: HistEvent; 
+                         const GeneratingApplication: WideString; const Location: WideString); dispid 48;
+    function  Sync(const DocumentPath: WideString; HowToCheckIn: CheckinDisposition; 
+                   EchoEditDateTime: TDateTime; var ErrorResults: OleVariant): INRTDocument; dispid 49;
+    property LatestVersion: INRTDocument readonly dispid 50;
+    property IsLatestVersion: WordBool readonly dispid 51;
+    property IsAnyVersionCheckedOut: WordBool readonly dispid 52;
+    property AdditionalProperties: INRTAdditionalProperties readonly dispid 53;
+    property Rules: INRTRules readonly dispid 54;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 55;
+    property Folders: INRTFolders readonly dispid 56;
+    property EditProfileTime: TDateTime readonly dispid 57;
+    property AccessTime: TDateTime readonly dispid 58;
+    property CheckoutTime: TDateTime readonly dispid 59;
+    property CheckoutLocation: WideString readonly dispid 60;
+  end;
+
+// *********************************************************************//
+// Interface: INRTCustomAttributes
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CAE-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTCustomAttributes = interface(IDispatch)
+    ['{9D892CAE-0C6D-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTCustomAttribute; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTCustomAttributesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CAE-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTCustomAttributesDisp = dispinterface
+    ['{9D892CAE-0C6D-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTCustomAttribute; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTCustomAttribute
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {A8AC35BA-AB38-11D2-8310-00A0C932328D}
+// *********************************************************************//
+  INRTCustomAttribute = interface(IDispatch)
+    ['{A8AC35BA-AB38-11D2-8310-00A0C932328D}']
+    function  Get_Name: OleVariant; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Enabled: WordBool; safecall;
+    function  Get_Parent: INRTCustomAttribute; safecall;
+    function  GetChildList(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                           SearchAtBegin: WordBool; var oflow: OleVariant): INRTCustomAttributes; safecall;
+    function  Get_Type_: AttributeID; safecall;
+    property Name: OleVariant read Get_Name;
+    property ID: WideString read Get_ID;
+    property Description: WideString read Get_Description;
+    property Enabled: WordBool read Get_Enabled;
+    property Parent: INRTCustomAttribute read Get_Parent;
+    property Type_: AttributeID read Get_Type_;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTCustomAttributeDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {A8AC35BA-AB38-11D2-8310-00A0C932328D}
+// *********************************************************************//
+  INRTCustomAttributeDisp = dispinterface
+    ['{A8AC35BA-AB38-11D2-8310-00A0C932328D}']
+    property Name: OleVariant readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Description: WideString readonly dispid 2;
+    property Enabled: WordBool readonly dispid 3;
+    property Parent: INRTCustomAttribute readonly dispid 4;
+    function  GetChildList(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                           SearchAtBegin: WordBool; var oflow: OleVariant): INRTCustomAttributes; dispid 5;
+    property Type_: AttributeID readonly dispid 6;
+  end;
+
+// *********************************************************************//
+// Interface: INRTHistoryList
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B98-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTHistoryList = interface(IDispatch)
+    ['{37085B98-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTDocumentHistory; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    procedure Add(Activity: HistEvent; Duration: Integer; PagesPrinted: Integer; 
+                  const Application: WideString; const Comment: WideString; 
+                  const Location: WideString; const CustomString1: WideString; 
+                  const CustomString2: WideString; CustomNumber1: OleVariant; 
+                  CustomNumber2: OleVariant; CustomNumber3: OleVariant); safecall;
+    procedure Refresh; safecall;
+    property ID: WideString read Get_ID;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTHistoryListDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {37085B98-90AC-11D4-8100-00C04F610DBB}
+// *********************************************************************//
+  INRTHistoryListDisp = dispinterface
+    ['{37085B98-90AC-11D4-8100-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTDocumentHistory; dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+    procedure Add(Activity: HistEvent; Duration: Integer; PagesPrinted: Integer; 
+                  const Application: WideString; const Comment: WideString; 
+                  const Location: WideString; const CustomString1: WideString; 
+                  const CustomString2: WideString; CustomNumber1: OleVariant; 
+                  CustomNumber2: OleVariant; CustomNumber3: OleVariant); dispid 3;
+    procedure Refresh; dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocumentHistory
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CA1-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDocumentHistory = interface(IDispatch)
+    ['{9D892CA1-0C6D-11D2-860E-006097BF089C}']
+    function  Get_Operation: WideString; safecall;
+    function  Get_Date: TDateTime; safecall;
+    function  Get_Comment: WideString; safecall;
+    function  Get_PagesPrinted: Integer; safecall;
+    function  Get_Application: WideString; safecall;
+    function  Get_Duration: Integer; safecall;
+    function  Get_Version: WideString; safecall;
+    function  Get_Number: WideString; safecall;
+    function  Get_User: WideString; safecall;
+    function  Get_Location: WideString; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    function  Get_UserNumberProperty1: OleVariant; safecall;
+    function  Get_UserNumberProperty2: OleVariant; safecall;
+    function  Get_UserNumberProperty3: OleVariant; safecall;
+    property Operation: WideString read Get_Operation;
+    property Date: TDateTime read Get_Date;
+    property Comment: WideString read Get_Comment;
+    property PagesPrinted: Integer read Get_PagesPrinted;
+    property Application: WideString read Get_Application;
+    property Duration: Integer read Get_Duration;
+    property Version: WideString read Get_Version;
+    property Number: WideString read Get_Number;
+    property User: WideString read Get_User;
+    property Location: WideString read Get_Location;
+    property UserProperty1: WideString read Get_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2;
+    property UserNumberProperty1: OleVariant read Get_UserNumberProperty1;
+    property UserNumberProperty2: OleVariant read Get_UserNumberProperty2;
+    property UserNumberProperty3: OleVariant read Get_UserNumberProperty3;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentHistoryDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CA1-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDocumentHistoryDisp = dispinterface
+    ['{9D892CA1-0C6D-11D2-860E-006097BF089C}']
+    property Operation: WideString readonly dispid 0;
+    property Date: TDateTime readonly dispid 1;
+    property Comment: WideString readonly dispid 2;
+    property PagesPrinted: Integer readonly dispid 3;
+    property Application: WideString readonly dispid 5;
+    property Duration: Integer readonly dispid 6;
+    property Version: WideString readonly dispid 7;
+    property Number: WideString readonly dispid 8;
+    property User: WideString readonly dispid 9;
+    property Location: WideString readonly dispid 10;
+    property UserProperty1: WideString readonly dispid 11;
+    property UserProperty2: WideString readonly dispid 12;
+    property UserNumberProperty1: OleVariant readonly dispid 13;
+    property UserNumberProperty2: OleVariant readonly dispid 14;
+    property UserNumberProperty3: OleVariant readonly dispid 15;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRules
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4139-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRules = interface(IDispatch)
+    ['{AD8F4139-43D5-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: Integer): INRTRule; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const descr: WideString; const RuleActionData: WideString; 
+                  const Handler: INRTEventHandler; const Locator: WideString; 
+                  const EmailSubject: WideString): INRTRule; safecall;
+    procedure Remove(indext: Integer); safecall;
+    procedure Clear; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRulesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4139-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRulesDisp = dispinterface
+    ['{AD8F4139-43D5-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: Integer): INRTRule; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const descr: WideString; const RuleActionData: WideString; 
+                  const Handler: INRTEventHandler; const Locator: WideString; 
+                  const EmailSubject: WideString): INRTRule; dispid 2;
+    procedure Remove(indext: Integer); dispid 3;
+    procedure Clear; dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRule
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4135-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRule = interface(IDispatch)
+    ['{AD8F4135-43D5-11D4-80F6-00C04F610DBB}']
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const descr: WideString); safecall;
+    function  Get_Enabled: WordBool; safecall;
+    procedure Set_Enabled(val: WordBool); safecall;
+    function  Get_RuleActionData: WideString; safecall;
+    procedure Set_RuleActionData(const ruledata: WideString); safecall;
+    function  Get_EventHandler: OleVariant; safecall;
+    procedure Set_EventHandler(pVal: OleVariant); safecall;
+    function  Get_Locator: WideString; safecall;
+    procedure Set_Locator(const loc: WideString); safecall;
+    function  Get_EmailSubject: WideString; safecall;
+    procedure Set_EmailSubject(const emailsub: WideString); safecall;
+    function  Get_Number: Integer; safecall;
+    function  Get_RuleEventTypes: INRTRuleEventTypes; safecall;
+    function  Get_ID: WideString; safecall;
+    procedure Update; safecall;
+    property Description: WideString read Get_Description write Set_Description;
+    property Enabled: WordBool read Get_Enabled write Set_Enabled;
+    property RuleActionData: WideString read Get_RuleActionData write Set_RuleActionData;
+    property EventHandler: OleVariant read Get_EventHandler write Set_EventHandler;
+    property Locator: WideString read Get_Locator write Set_Locator;
+    property EmailSubject: WideString read Get_EmailSubject write Set_EmailSubject;
+    property Number: Integer read Get_Number;
+    property RuleEventTypes: INRTRuleEventTypes read Get_RuleEventTypes;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRuleDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4135-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRuleDisp = dispinterface
+    ['{AD8F4135-43D5-11D4-80F6-00C04F610DBB}']
+    property Description: WideString dispid 0;
+    property Enabled: WordBool dispid 1;
+    property RuleActionData: WideString dispid 2;
+    property EventHandler: OleVariant dispid 3;
+    property Locator: WideString dispid 4;
+    property EmailSubject: WideString dispid 5;
+    property Number: Integer readonly dispid 6;
+    property RuleEventTypes: INRTRuleEventTypes readonly dispid 7;
+    property ID: WideString readonly dispid 8;
+    procedure Update; dispid 9;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRuleEventTypes
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F413B-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRuleEventTypes = interface(IDispatch)
+    ['{AD8F413B-43D5-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: Integer): INRTRuleEventType; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    procedure Add(const event: INRTRuleEventType); safecall;
+    procedure Remove(IdOrIndexOrObject: OleVariant); safecall;
+    procedure Clear; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRuleEventTypesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F413B-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRuleEventTypesDisp = dispinterface
+    ['{AD8F413B-43D5-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: Integer): INRTRuleEventType; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    procedure Add(const event: INRTRuleEventType); dispid 2;
+    procedure Remove(IdOrIndexOrObject: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRuleEventType
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4131-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRuleEventType = interface(IDispatch)
+    ['{AD8F4131-43D5-11D4-80F6-00C04F610DBB}']
+    function  Get_EventType: Integer; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Enabled: WordBool; safecall;
+    function  Get_ID: WideString; safecall;
+    property EventType: Integer read Get_EventType;
+    property Description: WideString read Get_Description;
+    property Enabled: WordBool read Get_Enabled;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRuleEventTypeDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4131-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTRuleEventTypeDisp = dispinterface
+    ['{AD8F4131-43D5-11D4-80F6-00C04F610DBB}']
+    property EventType: Integer readonly dispid 0;
+    property Description: WideString readonly dispid 1;
+    property Enabled: WordBool readonly dispid 2;
+    property ID: WideString readonly dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventHandler
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4133-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTEventHandler = interface(IDispatch)
+    ['{AD8F4133-43D5-11D4-80F6-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_Enabled: WordBool; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_HandlerID: Integer; safecall;
+    property Name: WideString read Get_Name;
+    property Description: WideString read Get_Description;
+    property Enabled: WordBool read Get_Enabled;
+    property ID: WideString read Get_ID;
+    property HandlerID: Integer read Get_HandlerID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventHandlerDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4133-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTEventHandlerDisp = dispinterface
+    ['{AD8F4133-43D5-11D4-80F6-00C04F610DBB}']
+    property Name: WideString readonly dispid 0;
+    property Description: WideString readonly dispid 1;
+    property Enabled: WordBool readonly dispid 2;
+    property ID: WideString readonly dispid 3;
+    property HandlerID: Integer readonly dispid 4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTaskFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD9C-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskFolders = interface(IDispatch)
+    ['{FC06DD9C-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTTaskFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTTaskFolder; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTaskFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD9C-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskFoldersDisp = dispinterface
+    ['{FC06DD9C-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTTaskFolder; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTTaskFolder; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTaskFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDEA-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskFolder = interface(IDispatch)
+    ['{FC06DDEA-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_FolderID: Integer; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Parent: INRTTaskFolder; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const pVal: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const pVal: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_TaskFolders: INRTTaskFolders; safecall;
+    function  Get_Tasks: INRTTasks; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; safecall;
+    procedure Refresh; safecall;
+    procedure Update; safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property ID: WideString read Get_ID;
+    property FolderID: Integer read Get_FolderID;
+    property Database: INRTDatabase read Get_Database;
+    property Owner: INRTUser read Get_Owner;
+    property Parent: INRTTaskFolder read Get_Parent;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property TaskFolders: INRTTaskFolders read Get_TaskFolders;
+    property Tasks: INRTTasks read Get_Tasks;
+    property Page: INRTPage read Get_Page;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property Security: INRTSecurity read Get_Security;
+    property Rules: INRTRules read Get_Rules;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTaskFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDEA-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskFolderDisp = dispinterface
+    ['{FC06DDEA-6F36-11D4-80FD-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTTaskFolder readonly dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property TaskFolders: INRTTaskFolders readonly dispid 11;
+    property Tasks: INRTTasks readonly dispid 12;
+    property Page: INRTPage readonly dispid 13;
+    property InheritSecurity: WordBool dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 16;
+    procedure Refresh; dispid 17;
+    procedure Update; dispid 18;
+    property Rules: INRTRules readonly dispid 19;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 20;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTasks
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD9F-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTasks = interface(IDispatch)
+    ['{FC06DD9F-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTTask; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Create: INRTTask; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTasksDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD9F-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTasksDisp = dispinterface
+    ['{FC06DD9F-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTTask; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Create: INRTTask; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTask
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDCD-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTask = interface(IDispatch)
+    ['{FC06DDCD-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Subject: WideString; safecall;
+    procedure Set_Subject(const sub: WideString); safecall;
+    function  Get_Body: WideString; safecall;
+    procedure Set_Body(const val: WideString); safecall;
+    function  Get_Owner: INRTUser; safecall;
+    procedure _Set_Owner(const val: INRTUser); safecall;
+    procedure Set_Owner(const val: INRTUser); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_TaskID: Integer; safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const cls: INRTDocumentClass); safecall;
+    procedure Set_Class_(const cls: INRTDocumentClass); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const Type_: INRTDocumentType); safecall;
+    procedure Set_Type_(const Type_: INRTDocumentType); safecall;
+    function  Get_Assignee: INRTUser; safecall;
+    procedure _Set_Assignee(const ppVal: INRTUser); safecall;
+    procedure Set_Assignee(const ppVal: INRTUser); safecall;
+    function  Get_Attachments: INRTAttachments; safecall;
+    function  Get_Categories: WideString; safecall;
+    procedure Set_Categories(const val: WideString); safecall;
+    function  Get_RecurringPattern: WideString; safecall;
+    procedure Set_RecurringPattern(const val: WideString); safecall;
+    function  Get_SoundFile: WideString; safecall;
+    procedure Set_SoundFile(const val: WideString); safecall;
+    function  Get_Contacts: WideString; safecall;
+    procedure Set_Contacts(const val: WideString); safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const val: WideString); safecall;
+    function  Get_StartDate: TDateTime; safecall;
+    procedure Set_StartDate(val: TDateTime); safecall;
+    function  Get_DateCompleted: TDateTime; safecall;
+    procedure Set_DateCompleted(val: TDateTime); safecall;
+    function  Get_DateDue: TDateTime; safecall;
+    procedure Set_DateDue(pVal: TDateTime); safecall;
+    function  Get_CreateDate: TDateTime; safecall;
+    function  Get_DateModified: TDateTime; safecall;
+    function  Get_SynchTime: TDateTime; safecall;
+    procedure Set_SynchTime(val: TDateTime); safecall;
+    function  Get_ReminderTime: TDateTime; safecall;
+    procedure Set_ReminderTime(val: TDateTime); safecall;
+    function  Get_Status: Integer; safecall;
+    procedure Set_Status(val: Integer); safecall;
+    function  Get_Priority: Integer; safecall;
+    procedure Set_Priority(pVal: Integer); safecall;
+    function  Get_PercentageComplete: Single; safecall;
+    procedure Set_PercentageComplete(pVal: Single); safecall;
+    function  Get_ActualWork: Single; safecall;
+    procedure Set_ActualWork(work: Single); safecall;
+    function  Get_TotalWork: Single; safecall;
+    procedure Set_TotalWork(pVal: Single); safecall;
+    function  Get_Recurring: WordBool; safecall;
+    procedure Set_Recurring(pVal: WordBool); safecall;
+    function  Get_Reminder: WordBool; safecall;
+    procedure Set_Reminder(sdur: WordBool); safecall;
+    function  Get_PlaySound: WordBool; safecall;
+    procedure Set_PlaySound(pVal: WordBool); safecall;
+    function  Get_HasAttachments: WordBool; safecall;
+    function  Get_IsComplete: WordBool; safecall;
+    function  Get_MarkedForArchive: WordBool; safecall;
+    procedure Set_MarkedForArchive(mf: WordBool); safecall;
+    procedure RestoreFromArchive; safecall;
+    function  LockTask(RefreshProfile: WordBool): WordBool; safecall;
+    function  UnlockTask: WordBool; safecall;
+    function  Get_Locked: WordBool; safecall;
+    function  Get_Archived: WordBool; safecall;
+    function  Get_LastUser: INRTUser; safecall;
+    function  Get_InUseBy: INRTUser; safecall;
+    function  Get_HistoryList: INRTHistoryList; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    function  Get_Folder: INRTTaskFolder; safecall;
+    procedure Update(var errors: OleVariant); safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; safecall;
+    function  GetAttributeByID(idx: TaskAttributeID): OleVariant; safecall;
+    procedure SetAttributeValueByID(idx: TaskAttributeID; newVal: OleVariant); safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    property Subject: WideString read Get_Subject write Set_Subject;
+    property Body: WideString read Get_Body write Set_Body;
+    property Owner: INRTUser read Get_Owner write _Set_Owner;
+    property Database: INRTDatabase read Get_Database;
+    property Page: INRTPage read Get_Page;
+    property ID: WideString read Get_ID;
+    property TaskID: Integer read Get_TaskID;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property Assignee: INRTUser read Get_Assignee write _Set_Assignee;
+    property Attachments: INRTAttachments read Get_Attachments;
+    property Categories: WideString read Get_Categories write Set_Categories;
+    property RecurringPattern: WideString read Get_RecurringPattern write Set_RecurringPattern;
+    property SoundFile: WideString read Get_SoundFile write Set_SoundFile;
+    property Contacts: WideString read Get_Contacts write Set_Contacts;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property StartDate: TDateTime read Get_StartDate write Set_StartDate;
+    property DateCompleted: TDateTime read Get_DateCompleted write Set_DateCompleted;
+    property DateDue: TDateTime read Get_DateDue write Set_DateDue;
+    property CreateDate: TDateTime read Get_CreateDate;
+    property DateModified: TDateTime read Get_DateModified;
+    property SynchTime: TDateTime read Get_SynchTime write Set_SynchTime;
+    property ReminderTime: TDateTime read Get_ReminderTime write Set_ReminderTime;
+    property Status: Integer read Get_Status write Set_Status;
+    property Priority: Integer read Get_Priority write Set_Priority;
+    property PercentageComplete: Single read Get_PercentageComplete write Set_PercentageComplete;
+    property ActualWork: Single read Get_ActualWork write Set_ActualWork;
+    property TotalWork: Single read Get_TotalWork write Set_TotalWork;
+    property Recurring: WordBool read Get_Recurring write Set_Recurring;
+    property Reminder: WordBool read Get_Reminder write Set_Reminder;
+    property PlaySound: WordBool read Get_PlaySound write Set_PlaySound;
+    property HasAttachments: WordBool read Get_HasAttachments;
+    property IsComplete: WordBool read Get_IsComplete;
+    property MarkedForArchive: WordBool read Get_MarkedForArchive write Set_MarkedForArchive;
+    property Locked: WordBool read Get_Locked;
+    property Archived: WordBool read Get_Archived;
+    property LastUser: INRTUser read Get_LastUser;
+    property InUseBy: INRTUser read Get_InUseBy;
+    property HistoryList: INRTHistoryList read Get_HistoryList;
+    property Security: INRTSecurity read Get_Security;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property Folder: INRTTaskFolder read Get_Folder;
+    property Rules: INRTRules read Get_Rules;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTaskDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDCD-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTTaskDisp = dispinterface
+    ['{FC06DDCD-6F36-11D4-80FD-00C04F610DBB}']
+    property Subject: WideString dispid 0;
+    property Body: WideString dispid 1;
+    property Owner: INRTUser dispid 2;
+    property Database: INRTDatabase readonly dispid 3;
+    property Page: INRTPage readonly dispid 4;
+    property ID: WideString readonly dispid 5;
+    property TaskID: Integer readonly dispid 6;
+    property Class_: INRTDocumentClass dispid 7;
+    property SubClass: INRTDocumentClass dispid 8;
+    property Type_: INRTDocumentType dispid 9;
+    property Assignee: INRTUser dispid 10;
+    property Attachments: INRTAttachments readonly dispid 11;
+    property Categories: WideString dispid 12;
+    property RecurringPattern: WideString dispid 13;
+    property SoundFile: WideString dispid 14;
+    property Contacts: WideString dispid 15;
+    property UserProperty1: WideString dispid 16;
+    property StartDate: TDateTime dispid 17;
+    property DateCompleted: TDateTime dispid 18;
+    property DateDue: TDateTime dispid 19;
+    property CreateDate: TDateTime readonly dispid 20;
+    property DateModified: TDateTime readonly dispid 21;
+    property SynchTime: TDateTime dispid 22;
+    property ReminderTime: TDateTime dispid 23;
+    property Status: Integer dispid 24;
+    property Priority: Integer dispid 25;
+    property PercentageComplete: Single dispid 26;
+    property ActualWork: Single dispid 27;
+    property TotalWork: Single dispid 28;
+    property Recurring: WordBool dispid 29;
+    property Reminder: WordBool dispid 30;
+    property PlaySound: WordBool dispid 31;
+    property HasAttachments: WordBool readonly dispid 32;
+    property IsComplete: WordBool readonly dispid 33;
+    property MarkedForArchive: WordBool dispid 34;
+    procedure RestoreFromArchive; dispid 35;
+    function  LockTask(RefreshProfile: WordBool): WordBool; dispid 36;
+    function  UnlockTask: WordBool; dispid 37;
+    property Locked: WordBool readonly dispid 38;
+    property Archived: WordBool readonly dispid 39;
+    property LastUser: INRTUser readonly dispid 40;
+    property InUseBy: INRTUser readonly dispid 41;
+    property HistoryList: INRTHistoryList readonly dispid 42;
+    property Security: INRTSecurity readonly dispid 43;
+    property EffectiveRights: AccessRight readonly dispid 44;
+    property Folder: INRTTaskFolder readonly dispid 45;
+    procedure Update(var errors: OleVariant); dispid 47;
+    procedure Refresh; dispid 48;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; dispid 49;
+    function  GetAttributeByID(idx: TaskAttributeID): OleVariant; dispid 50;
+    procedure SetAttributeValueByID(idx: TaskAttributeID; newVal: OleVariant); dispid 51;
+    property Rules: INRTRules readonly dispid 52;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 53;
+    property InheritSecurity: WordBool dispid 54;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAttachments
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {32475FF8-77CE-11D4-80FE-00C04F610DBB}
+// *********************************************************************//
+  INRTAttachments = interface(IDispatch)
+    ['{32475FF8-77CE-11D4-80FE-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTAttachment; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const val: WideString): INRTAttachment; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAttachmentsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {32475FF8-77CE-11D4-80FE-00C04F610DBB}
+// *********************************************************************//
+  INRTAttachmentsDisp = dispinterface
+    ['{32475FF8-77CE-11D4-80FE-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTAttachment; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const val: WideString): INRTAttachment; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAttachment
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {32475FFF-77CE-11D4-80FE-00C04F610DBB}
+// *********************************************************************//
+  INRTAttachment = interface(IDispatch)
+    ['{32475FFF-77CE-11D4-80FE-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const Name: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property ID: WideString read Get_ID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAttachmentDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {32475FFF-77CE-11D4-80FE-00C04F610DBB}
+// *********************************************************************//
+  INRTAttachmentDisp = dispinterface
+    ['{32475FFF-77CE-11D4-80FE-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property ID: WideString readonly dispid 1;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLinkFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDAB-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkFolders = interface(IDispatch)
+    ['{FC06DDAB-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTLinkFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTLinkFolder; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinkFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDAB-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkFoldersDisp = dispinterface
+    ['{FC06DDAB-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTLinkFolder; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTLinkFolder; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLinkFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDE7-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkFolder = interface(IDispatch)
+    ['{FC06DDE7-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_FolderID: Integer; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Parent: INRTLinkFolder; safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const pVal: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const pVal: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_LinkFolders: INRTLinkFolders; safecall;
+    function  Get_Links: INRTLinks; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    procedure Update; safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property ID: WideString read Get_ID;
+    property FolderID: Integer read Get_FolderID;
+    property Database: INRTDatabase read Get_Database;
+    property Owner: INRTUser read Get_Owner;
+    property Parent: INRTLinkFolder read Get_Parent;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property LinkFolders: INRTLinkFolders read Get_LinkFolders;
+    property Links: INRTLinks read Get_Links;
+    property Page: INRTPage read Get_Page;
+    property Security: INRTSecurity read Get_Security;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinkFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDE7-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkFolderDisp = dispinterface
+    ['{FC06DDE7-6F36-11D4-80FD-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTLinkFolder readonly dispid 7;
+    property InheritSecurity: WordBool dispid 8;
+    property UserProperty1: WideString dispid 9;
+    property UserProperty2: WideString dispid 10;
+    property UserProperty3: WideString dispid 11;
+    property LinkFolders: INRTLinkFolders readonly dispid 12;
+    property Links: INRTLinks readonly dispid 13;
+    property Page: INRTPage readonly dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    procedure Update; dispid 16;
+    procedure Refresh; dispid 17;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 18;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLinks
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDF6-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinks = interface(IDispatch)
+    ['{FC06DDF6-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTLink; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Create: INRTLink; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinksDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDF6-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinksDisp = dispinterface
+    ['{FC06DDF6-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTLink; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Create: INRTLink; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLink
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDD1-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLink = interface(IDispatch)
+    ['{FC06DDD1-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_URL: WideString; safecall;
+    procedure Set_URL(const nm: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const nm: WideString); safecall;
+    function  Get_Icon: WideString; safecall;
+    procedure Set_Icon(const Icon: WideString); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_LinkID: Integer; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    procedure _Set_Owner(const User: INRTUser); safecall;
+    procedure Set_Owner(const User: INRTUser); safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const cls: INRTDocumentClass); safecall;
+    procedure Set_Class_(const cls: INRTDocumentClass); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const Type_: INRTDocumentType); safecall;
+    procedure Set_Type_(const Type_: INRTDocumentType); safecall;
+    procedure Update(var errors: OleVariant); safecall;
+    procedure Refresh; safecall;
+    function  Get_MarkedForArchive: WordBool; safecall;
+    procedure Set_MarkedForArchive(mf: WordBool); safecall;
+    procedure RestoreFromArchive; safecall;
+    function  LockLink(RefreshProfile: WordBool): WordBool; safecall;
+    function  UnlockLink: WordBool; safecall;
+    function  Get_Locked: WordBool; safecall;
+    function  Get_Archived: WordBool; safecall;
+    function  Get_LastUser: INRTUser; safecall;
+    function  Get_InUseBy: INRTUser; safecall;
+    function  Get_HistoryList: INRTHistoryList; safecall;
+    function  Get_Folder: INRTLinkFolder; safecall;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  GetAttributeByID(idx: LinkAttributeID): OleVariant; safecall;
+    procedure SetAttributeValueByID(idx: LinkAttributeID; newVal: OleVariant); safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_Target: WideString; safecall;
+    procedure Set_Target(const pVal: WideString); safecall;
+    property URL: WideString read Get_URL write Set_URL;
+    property Description: WideString read Get_Description write Set_Description;
+    property Icon: WideString read Get_Icon write Set_Icon;
+    property Database: INRTDatabase read Get_Database;
+    property Page: INRTPage read Get_Page;
+    property ID: WideString read Get_ID;
+    property LinkID: Integer read Get_LinkID;
+    property Owner: INRTUser read Get_Owner write _Set_Owner;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property MarkedForArchive: WordBool read Get_MarkedForArchive write Set_MarkedForArchive;
+    property Locked: WordBool read Get_Locked;
+    property Archived: WordBool read Get_Archived;
+    property LastUser: INRTUser read Get_LastUser;
+    property InUseBy: INRTUser read Get_InUseBy;
+    property HistoryList: INRTHistoryList read Get_HistoryList;
+    property Folder: INRTLinkFolder read Get_Folder;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property Security: INRTSecurity read Get_Security;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property Target: WideString read Get_Target write Set_Target;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinkDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDD1-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTLinkDisp = dispinterface
+    ['{FC06DDD1-6F36-11D4-80FD-00C04F610DBB}']
+    property URL: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property Icon: WideString dispid 2;
+    property Database: INRTDatabase readonly dispid 3;
+    property Page: INRTPage readonly dispid 4;
+    property ID: WideString readonly dispid 5;
+    property LinkID: Integer readonly dispid 6;
+    property Owner: INRTUser dispid 7;
+    property Class_: INRTDocumentClass dispid 8;
+    property SubClass: INRTDocumentClass dispid 9;
+    property Type_: INRTDocumentType dispid 10;
+    procedure Update(var errors: OleVariant); dispid 12;
+    procedure Refresh; dispid 13;
+    property MarkedForArchive: WordBool dispid 14;
+    procedure RestoreFromArchive; dispid 15;
+    function  LockLink(RefreshProfile: WordBool): WordBool; dispid 16;
+    function  UnlockLink: WordBool; dispid 17;
+    property Locked: WordBool readonly dispid 18;
+    property Archived: WordBool readonly dispid 19;
+    property LastUser: INRTUser readonly dispid 20;
+    property InUseBy: INRTUser readonly dispid 21;
+    property HistoryList: INRTHistoryList readonly dispid 22;
+    property Folder: INRTLinkFolder readonly dispid 23;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; dispid 24;
+    property EffectiveRights: AccessRight readonly dispid 25;
+    property Security: INRTSecurity readonly dispid 26;
+    function  GetAttributeByID(idx: LinkAttributeID): OleVariant; dispid 27;
+    procedure SetAttributeValueByID(idx: LinkAttributeID; newVal: OleVariant); dispid 28;
+    property InheritSecurity: WordBool dispid 29;
+    property Target: WideString dispid 30;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDiscussionFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDF4-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionFolders = interface(IDispatch)
+    ['{FC06DDF4-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTDiscussionFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTDiscussionFolder; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDiscussionFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDF4-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionFoldersDisp = dispinterface
+    ['{FC06DDF4-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTDiscussionFolder; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTDiscussionFolder; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDiscussionFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDF0-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionFolder = interface(IDispatch)
+    ['{FC06DDF0-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_FolderID: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Parent: INRTDiscussionFolder; safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const pVal: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const pVal: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_DiscussionFolders: INRTDiscussionFolders; safecall;
+    function  Get_DiscussionTopics: INRTMessages; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    procedure Update; safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property FolderID: Integer read Get_FolderID;
+    property ID: WideString read Get_ID;
+    property Database: INRTDatabase read Get_Database;
+    property Owner: INRTUser read Get_Owner;
+    property Parent: INRTDiscussionFolder read Get_Parent;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property DiscussionFolders: INRTDiscussionFolders read Get_DiscussionFolders;
+    property DiscussionTopics: INRTMessages read Get_DiscussionTopics;
+    property Page: INRTPage read Get_Page;
+    property Security: INRTSecurity read Get_Security;
+    property Rules: INRTRules read Get_Rules;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDiscussionFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDF0-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTDiscussionFolderDisp = dispinterface
+    ['{FC06DDF0-6F36-11D4-80FD-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property FolderID: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 3;
+    property Database: INRTDatabase readonly dispid 4;
+    property Owner: INRTUser readonly dispid 5;
+    property Parent: INRTDiscussionFolder readonly dispid 6;
+    property InheritSecurity: WordBool dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property DiscussionFolders: INRTDiscussionFolders readonly dispid 11;
+    property DiscussionTopics: INRTMessages readonly dispid 12;
+    property Page: INRTPage readonly dispid 13;
+    property Security: INRTSecurity readonly dispid 14;
+    procedure Update; dispid 15;
+    procedure Refresh; dispid 16;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 17;
+    property Rules: INRTRules readonly dispid 18;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 19;
+  end;
+
+// *********************************************************************//
+// Interface: INRTMessages
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDA6-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTMessages = interface(IDispatch)
+    ['{FC06DDA6-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTMessage; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Create: INRTMessage; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTMessagesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDA6-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTMessagesDisp = dispinterface
+    ['{FC06DDA6-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTMessage; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Create: INRTMessage; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTMessage
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDD3-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTMessage = interface(IDispatch)
+    ['{FC06DDD3-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_MessageID: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Subject: WideString; safecall;
+    procedure Set_Subject(const pVal: WideString); safecall;
+    function  Get_Body: WideString; safecall;
+    procedure Set_Body(const pVal: WideString); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_Author: INRTUser; safecall;
+    procedure Set_Author(const ppVal: INRTUser); safecall;
+    procedure _Set_Author(const ppVal: INRTUser); safecall;
+    function  Get_Parent: INRTMessage; safecall;
+    function  Get_EmailParentOnResponse: WordBool; safecall;
+    procedure Set_EmailParentOnResponse(pVal: WordBool); safecall;
+    function  Get_CreateDate: TDateTime; safecall;
+    function  Get_EditDate: TDateTime; safecall;
+    function  Get_Attachments: INRTAttachments; safecall;
+    function  Get_HasAttachments: WordBool; safecall;
+    function  Get_Replies: INRTMessages; safecall;
+    function  Get_AllDescendants: INRTMessages; safecall;
+    function  Get_MarkedForArchive: WordBool; safecall;
+    procedure Set_MarkedForArchive(mf: WordBool); safecall;
+    procedure RestoreFromArchive; safecall;
+    function  Get_Archived: WordBool; safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const cls: INRTDocumentClass); safecall;
+    procedure Set_Class_(const cls: INRTDocumentClass); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const Type_: INRTDocumentType); safecall;
+    procedure Set_Type_(const Type_: INRTDocumentType); safecall;
+    function  Get_ThreadID: Integer; safecall;
+    function  Get_Folder: INRTDiscussionFolder; safecall;
+    function  Get_Root: INRTMessage; safecall;
+    procedure Refresh; safecall;
+    procedure Update(var errors: OleVariant); safecall;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    function  GetAttributeByID(idx: DiscussionAttributeID): OleVariant; safecall;
+    procedure SetAttributeValueByID(idx: DiscussionAttributeID; newVal: OleVariant); safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    property MessageID: Integer read Get_MessageID;
+    property ID: WideString read Get_ID;
+    property Subject: WideString read Get_Subject write Set_Subject;
+    property Body: WideString read Get_Body write Set_Body;
+    property Database: INRTDatabase read Get_Database;
+    property Page: INRTPage read Get_Page;
+    property Author: INRTUser read Get_Author write _Set_Author;
+    property Parent: INRTMessage read Get_Parent;
+    property EmailParentOnResponse: WordBool read Get_EmailParentOnResponse write Set_EmailParentOnResponse;
+    property CreateDate: TDateTime read Get_CreateDate;
+    property EditDate: TDateTime read Get_EditDate;
+    property Attachments: INRTAttachments read Get_Attachments;
+    property HasAttachments: WordBool read Get_HasAttachments;
+    property Replies: INRTMessages read Get_Replies;
+    property AllDescendants: INRTMessages read Get_AllDescendants;
+    property MarkedForArchive: WordBool read Get_MarkedForArchive write Set_MarkedForArchive;
+    property Archived: WordBool read Get_Archived;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property ThreadID: Integer read Get_ThreadID;
+    property Folder: INRTDiscussionFolder read Get_Folder;
+    property Root: INRTMessage read Get_Root;
+    property Security: INRTSecurity read Get_Security;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTMessageDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDD3-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTMessageDisp = dispinterface
+    ['{FC06DDD3-6F36-11D4-80FD-00C04F610DBB}']
+    property MessageID: Integer readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Subject: WideString dispid 2;
+    property Body: WideString dispid 3;
+    property Database: INRTDatabase readonly dispid 4;
+    property Page: INRTPage readonly dispid 5;
+    property Author: INRTUser dispid 6;
+    property Parent: INRTMessage readonly dispid 8;
+    property EmailParentOnResponse: WordBool dispid 9;
+    property CreateDate: TDateTime readonly dispid 10;
+    property EditDate: TDateTime readonly dispid 11;
+    property Attachments: INRTAttachments readonly dispid 12;
+    property HasAttachments: WordBool readonly dispid 13;
+    property Replies: INRTMessages readonly dispid 14;
+    property AllDescendants: INRTMessages readonly dispid 15;
+    property MarkedForArchive: WordBool dispid 16;
+    procedure RestoreFromArchive; dispid 17;
+    property Archived: WordBool readonly dispid 18;
+    property Class_: INRTDocumentClass dispid 19;
+    property SubClass: INRTDocumentClass dispid 20;
+    property Type_: INRTDocumentType dispid 21;
+    property ThreadID: Integer readonly dispid 22;
+    property Folder: INRTDiscussionFolder readonly dispid 23;
+    property Root: INRTMessage readonly dispid 24;
+    procedure Refresh; dispid 26;
+    procedure Update(var errors: OleVariant); dispid 27;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; dispid 28;
+    property Security: INRTSecurity readonly dispid 29;
+    property EffectiveRights: AccessRight readonly dispid 30;
+    function  GetAttributeByID(idx: DiscussionAttributeID): OleVariant; dispid 31;
+    procedure SetAttributeValueByID(idx: DiscussionAttributeID; newVal: OleVariant); dispid 32;
+    property InheritSecurity: WordBool dispid 33;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDA9-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEventFolders = interface(IDispatch)
+    ['{FC06DDA9-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTEventFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTEventFolder; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDA9-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEventFoldersDisp = dispinterface
+    ['{FC06DDA9-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTEventFolder; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTEventFolder; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDEC-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEventFolder = interface(IDispatch)
+    ['{FC06DDEC-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const pVal: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const pVal: WideString); safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_FolderID: Integer; safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Owner: INRTUser; safecall;
+    function  Get_Parent: INRTEventFolder; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const pVal: WideString); safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    procedure Set_UserProperty2(const pVal: WideString); safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    procedure Set_UserProperty3(const pVal: WideString); safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    function  Get_EventFolders: INRTEventFolders; safecall;
+    function  Get_Events: INRTEvents; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    procedure Update; safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property ID: WideString read Get_ID;
+    property FolderID: Integer read Get_FolderID;
+    property Database: INRTDatabase read Get_Database;
+    property Owner: INRTUser read Get_Owner;
+    property Parent: INRTEventFolder read Get_Parent;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2 write Set_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3 write Set_UserProperty3;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+    property EventFolders: INRTEventFolders read Get_EventFolders;
+    property Events: INRTEvents read Get_Events;
+    property Page: INRTPage read Get_Page;
+    property Security: INRTSecurity read Get_Security;
+    property Rules: INRTRules read Get_Rules;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDEC-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEventFolderDisp = dispinterface
+    ['{FC06DDEC-6F36-11D4-80FD-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTEventFolder readonly dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property InheritSecurity: WordBool dispid 11;
+    property EventFolders: INRTEventFolders readonly dispid 12;
+    property Events: INRTEvents readonly dispid 13;
+    property Page: INRTPage readonly dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    procedure Update; dispid 16;
+    procedure Refresh; dispid 17;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 18;
+    property Rules: INRTRules readonly dispid 19;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 20;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEvents
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDE1-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEvents = interface(IDispatch)
+    ['{FC06DDE1-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTEvent; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Create: INRTEvent; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDE1-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEventsDisp = dispinterface
+    ['{FC06DDE1-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTEvent; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Create: INRTEvent; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEvent
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDCF-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEvent = interface(IDispatch)
+    ['{FC06DDCF-6F36-11D4-80FD-00C04F610DBB}']
+    function  Get_Subject: WideString; safecall;
+    procedure Set_Subject(const sub: WideString); safecall;
+    function  Get_Body: WideString; safecall;
+    procedure Set_Body(const val: WideString); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_EventID: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Organizer: INRTUser; safecall;
+    procedure _Set_Organizer(const val: INRTUser); safecall;
+    procedure Set_Organizer(const val: INRTUser); safecall;
+    function  Get_Assignee: INRTUser; safecall;
+    procedure _Set_Assignee(const val: INRTUser); safecall;
+    procedure Set_Assignee(const val: INRTUser); safecall;
+    function  Get_Attachments: INRTAttachments; safecall;
+    function  Get_Categories: WideString; safecall;
+    procedure Set_Categories(const val: WideString); safecall;
+    function  Get_RecurringPattern: WideString; safecall;
+    procedure Set_RecurringPattern(const val: WideString); safecall;
+    function  Get_SoundFile: WideString; safecall;
+    procedure Set_SoundFile(const val: WideString); safecall;
+    function  Get_Contacts: WideString; safecall;
+    procedure Set_Contacts(const val: WideString); safecall;
+    function  Get_Attendee: WideString; safecall;
+    procedure Set_Attendee(const val: WideString); safecall;
+    function  Get_Location: WideString; safecall;
+    procedure Set_Location(const val: WideString); safecall;
+    function  Get_StartTime: TDateTime; safecall;
+    procedure Set_StartTime(val: TDateTime); safecall;
+    function  Get_EndTime: TDateTime; safecall;
+    procedure Set_EndTime(val: TDateTime); safecall;
+    function  Get_CreateDate: TDateTime; safecall;
+    function  Get_DateModified: TDateTime; safecall;
+    function  Get_SynchTime: TDateTime; safecall;
+    procedure Set_SynchTime(val: TDateTime); safecall;
+    function  Get_ReminderTime: TDateTime; safecall;
+    procedure Set_ReminderTime(val: TDateTime); safecall;
+    function  Get_ShowTimeAs: Integer; safecall;
+    procedure Set_ShowTimeAs(val: Integer); safecall;
+    function  Get_AllDayEvent: WordBool; safecall;
+    procedure Set_AllDayEvent(pVal: WordBool); safecall;
+    function  Get_Priority: Integer; safecall;
+    procedure Set_Priority(val: Integer); safecall;
+    function  Get_Duration: Single; safecall;
+    function  Get_Recurring: WordBool; safecall;
+    procedure Set_Recurring(pVal: WordBool); safecall;
+    function  Get_Reminder: WordBool; safecall;
+    procedure Set_Reminder(sdur: WordBool); safecall;
+    function  Get_PlaySound: WordBool; safecall;
+    procedure Set_PlaySound(pVal: WordBool); safecall;
+    function  Get_HasAttachments: WordBool; safecall;
+    function  Get_MarkedForArchive: WordBool; safecall;
+    procedure Set_MarkedForArchive(mf: WordBool); safecall;
+    procedure RestoreFromArchive; safecall;
+    function  LockEvent(RefreshProfile: WordBool): WordBool; safecall;
+    function  UnlockEvent: WordBool; safecall;
+    function  Get_Locked: WordBool; safecall;
+    function  Get_Archived: WordBool; safecall;
+    function  Get_LastUser: INRTUser; safecall;
+    function  Get_InUseBy: INRTUser; safecall;
+    function  Get_HistoryList: INRTHistoryList; safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const cls: INRTDocumentClass); safecall;
+    procedure Set_Class_(const cls: INRTDocumentClass); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const Type_: INRTDocumentType); safecall;
+    procedure Set_Type_(const Type_: INRTDocumentType); safecall;
+    function  Get_Folder: INRTEventFolder; safecall;
+    procedure Update(var errors: OleVariant); safecall;
+    procedure Refresh; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; safecall;
+    function  GetAttributeByID(idx: EventAttributeID): OleVariant; safecall;
+    procedure SetAttributeValueByID(idx: EventAttributeID; newVal: OleVariant); safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    function  Get_InheritSecurity: WordBool; safecall;
+    procedure Set_InheritSecurity(pVal: WordBool); safecall;
+    property Subject: WideString read Get_Subject write Set_Subject;
+    property Body: WideString read Get_Body write Set_Body;
+    property Database: INRTDatabase read Get_Database;
+    property Page: INRTPage read Get_Page;
+    property EventID: Integer read Get_EventID;
+    property ID: WideString read Get_ID;
+    property Organizer: INRTUser read Get_Organizer write _Set_Organizer;
+    property Assignee: INRTUser read Get_Assignee write _Set_Assignee;
+    property Attachments: INRTAttachments read Get_Attachments;
+    property Categories: WideString read Get_Categories write Set_Categories;
+    property RecurringPattern: WideString read Get_RecurringPattern write Set_RecurringPattern;
+    property SoundFile: WideString read Get_SoundFile write Set_SoundFile;
+    property Contacts: WideString read Get_Contacts write Set_Contacts;
+    property Attendee: WideString read Get_Attendee write Set_Attendee;
+    property Location: WideString read Get_Location write Set_Location;
+    property StartTime: TDateTime read Get_StartTime write Set_StartTime;
+    property EndTime: TDateTime read Get_EndTime write Set_EndTime;
+    property CreateDate: TDateTime read Get_CreateDate;
+    property DateModified: TDateTime read Get_DateModified;
+    property SynchTime: TDateTime read Get_SynchTime write Set_SynchTime;
+    property ReminderTime: TDateTime read Get_ReminderTime write Set_ReminderTime;
+    property ShowTimeAs: Integer read Get_ShowTimeAs write Set_ShowTimeAs;
+    property AllDayEvent: WordBool read Get_AllDayEvent write Set_AllDayEvent;
+    property Priority: Integer read Get_Priority write Set_Priority;
+    property Duration: Single read Get_Duration;
+    property Recurring: WordBool read Get_Recurring write Set_Recurring;
+    property Reminder: WordBool read Get_Reminder write Set_Reminder;
+    property PlaySound: WordBool read Get_PlaySound write Set_PlaySound;
+    property HasAttachments: WordBool read Get_HasAttachments;
+    property MarkedForArchive: WordBool read Get_MarkedForArchive write Set_MarkedForArchive;
+    property Locked: WordBool read Get_Locked;
+    property Archived: WordBool read Get_Archived;
+    property LastUser: INRTUser read Get_LastUser;
+    property InUseBy: INRTUser read Get_InUseBy;
+    property HistoryList: INRTHistoryList read Get_HistoryList;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property Folder: INRTEventFolder read Get_Folder;
+    property Security: INRTSecurity read Get_Security;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property Rules: INRTRules read Get_Rules;
+    property InheritSecurity: WordBool read Get_InheritSecurity write Set_InheritSecurity;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DDCF-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTEventDisp = dispinterface
+    ['{FC06DDCF-6F36-11D4-80FD-00C04F610DBB}']
+    property Subject: WideString dispid 0;
+    property Body: WideString dispid 1;
+    property Database: INRTDatabase readonly dispid 2;
+    property Page: INRTPage readonly dispid 3;
+    property EventID: Integer readonly dispid 4;
+    property ID: WideString readonly dispid 5;
+    property Organizer: INRTUser dispid 6;
+    property Assignee: INRTUser dispid 7;
+    property Attachments: INRTAttachments readonly dispid 8;
+    property Categories: WideString dispid 9;
+    property RecurringPattern: WideString dispid 10;
+    property SoundFile: WideString dispid 11;
+    property Contacts: WideString dispid 12;
+    property Attendee: WideString dispid 13;
+    property Location: WideString dispid 14;
+    property StartTime: TDateTime dispid 15;
+    property EndTime: TDateTime dispid 16;
+    property CreateDate: TDateTime readonly dispid 17;
+    property DateModified: TDateTime readonly dispid 18;
+    property SynchTime: TDateTime dispid 19;
+    property ReminderTime: TDateTime dispid 20;
+    property ShowTimeAs: Integer dispid 21;
+    property AllDayEvent: WordBool dispid 22;
+    property Priority: Integer dispid 23;
+    property Duration: Single readonly dispid 24;
+    property Recurring: WordBool dispid 25;
+    property Reminder: WordBool dispid 26;
+    property PlaySound: WordBool dispid 27;
+    property HasAttachments: WordBool readonly dispid 28;
+    property MarkedForArchive: WordBool dispid 29;
+    procedure RestoreFromArchive; dispid 30;
+    function  LockEvent(RefreshProfile: WordBool): WordBool; dispid 31;
+    function  UnlockEvent: WordBool; dispid 32;
+    property Locked: WordBool readonly dispid 33;
+    property Archived: WordBool readonly dispid 34;
+    property LastUser: INRTUser readonly dispid 35;
+    property InUseBy: INRTUser readonly dispid 36;
+    property HistoryList: INRTHistoryList readonly dispid 37;
+    property Class_: INRTDocumentClass dispid 38;
+    property SubClass: INRTDocumentClass dispid 39;
+    property Type_: INRTDocumentType dispid 40;
+    property Folder: INRTEventFolder readonly dispid 41;
+    procedure Update(var errors: OleVariant); dispid 43;
+    procedure Refresh; dispid 44;
+    property Security: INRTSecurity readonly dispid 45;
+    property EffectiveRights: AccessRight readonly dispid 46;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; dispid 47;
+    function  GetAttributeByID(idx: EventAttributeID): OleVariant; dispid 48;
+    procedure SetAttributeValueByID(idx: EventAttributeID; newVal: OleVariant); dispid 49;
+    property Rules: INRTRules readonly dispid 50;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 51;
+    property InheritSecurity: WordBool dispid 52;
+  end;
+
+// *********************************************************************//
+// Interface: INRTReferenceFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1A916FD9-2E9C-11D5-8112-00C04F610DBB}
+// *********************************************************************//
+  INRTReferenceFolders = interface(IDispatch)
+    ['{1A916FD9-2E9C-11D5-8112-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTReferenceFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const fldr: INRTFolder): INRTReferenceFolder; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTReferenceFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1A916FD9-2E9C-11D5-8112-00C04F610DBB}
+// *********************************************************************//
+  INRTReferenceFoldersDisp = dispinterface
+    ['{1A916FD9-2E9C-11D5-8112-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTReferenceFolder; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const fldr: INRTFolder): INRTReferenceFolder; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTReferenceFolder
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1A916FD8-2E9C-11D5-8112-00C04F610DBB}
+// *********************************************************************//
+  INRTReferenceFolder = interface(IDispatch)
+    ['{1A916FD8-2E9C-11D5-8112-00C04F610DBB}']
+    function  Get_Name: WideString; safecall;
+    procedure Set_Name(const nm: WideString); safecall;
+    function  Get_Description: WideString; safecall;
+    procedure Set_Description(const nm: WideString); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_RefererenceID: WideString; safecall;
+    property Name: WideString read Get_Name write Set_Name;
+    property Description: WideString read Get_Description write Set_Description;
+    property Database: INRTDatabase read Get_Database;
+    property Page: INRTPage read Get_Page;
+    property ID: WideString read Get_ID;
+    property RefererenceID: WideString read Get_RefererenceID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTReferenceFolderDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {1A916FD8-2E9C-11D5-8112-00C04F610DBB}
+// *********************************************************************//
+  INRTReferenceFolderDisp = dispinterface
+    ['{1A916FD8-2E9C-11D5-8112-00C04F610DBB}']
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property Database: INRTDatabase readonly dispid 3;
+    property Page: INRTPage readonly dispid 4;
+    property ID: WideString readonly dispid 5;
+    property RefererenceID: WideString readonly dispid 6;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssueFolders
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A99-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueFolders = interface(IDispatch)
+    ['{E5FF9A99-172C-11D5-810E-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTIssueFolder; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTIssueFolder; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssueFoldersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A99-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueFoldersDisp = dispinterface
+    ['{E5FF9A99-172C-11D5-810E-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTIssueFolder; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Add(const Name: WideString; const Description: WideString; 
+                  const UserProp1: WideString; const UserProp2: WideString; 
+                  const UserProp3: WideString; DefaultSecurity: SecurityType): INRTIssueFolder; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTPages
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD9A-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTPages = interface(IDispatch)
+    ['{FC06DD9A-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(idx: OleVariant): INRTPage; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    procedure Add(const newpage: INRTPage); safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTPagesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FC06DD9A-6F36-11D4-80FD-00C04F610DBB}
+// *********************************************************************//
+  INRTPagesDisp = dispinterface
+    ['{FC06DD9A-6F36-11D4-80FD-00C04F610DBB}']
+    function  Item(idx: OleVariant): INRTPage; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    procedure Add(const newpage: INRTPage); dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssues
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A9C-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssues = interface(IDispatch)
+    ['{E5FF9A9C-172C-11D5-810E-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTIssue; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    function  Create: INRTIssue; safecall;
+    procedure Remove(Index: OleVariant); safecall;
+    procedure Clear; safecall;
+    procedure Refresh; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssuesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A9C-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssuesDisp = dispinterface
+    ['{E5FF9A9C-172C-11D5-810E-00C04F610DBB}']
+    function  Item(Index: OleVariant): INRTIssue; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  Create: INRTIssue; dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    procedure Clear; dispid 4;
+    procedure Refresh; dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssue
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A9E-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssue = interface(IDispatch)
+    ['{E5FF9A9E-172C-11D5-810E-00C04F610DBB}']
+    function  Get_Subject: WideString; safecall;
+    procedure Set_Subject(const sub: WideString); safecall;
+    function  Get_Body: WideString; safecall;
+    procedure Set_Body(const val: WideString); safecall;
+    function  Get_Owner: INRTUser; safecall;
+    procedure _Set_Owner(const val: INRTUser); safecall;
+    procedure Set_Owner(const val: INRTUser); safecall;
+    function  Get_Database: INRTDatabase; safecall;
+    function  Get_Page: INRTPage; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_IssueID: Integer; safecall;
+    function  Get_Class_: INRTDocumentClass; safecall;
+    procedure _Set_Class_(const cls: INRTDocumentClass); safecall;
+    procedure Set_Class_(const cls: INRTDocumentClass); safecall;
+    function  Get_SubClass: INRTDocumentClass; safecall;
+    procedure _Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    procedure Set_SubClass(const pVal: INRTDocumentClass); safecall;
+    function  Get_Type_: INRTDocumentType; safecall;
+    procedure _Set_Type_(const Type_: INRTDocumentType); safecall;
+    procedure Set_Type_(const Type_: INRTDocumentType); safecall;
+    function  Get_Assignee: INRTUser; safecall;
+    procedure _Set_Assignee(const ppVal: INRTUser); safecall;
+    procedure Set_Assignee(const ppVal: INRTUser); safecall;
+    function  Get_Attachments: INRTAttachments; safecall;
+    function  Get_Categories: WideString; safecall;
+    procedure Set_Categories(const val: WideString); safecall;
+    function  Get_RecurringPattern: WideString; safecall;
+    procedure Set_RecurringPattern(const val: WideString); safecall;
+    function  Get_SoundFile: WideString; safecall;
+    procedure Set_SoundFile(const val: WideString); safecall;
+    function  Get_Contacts: WideString; safecall;
+    procedure Set_Contacts(const val: WideString); safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    procedure Set_UserProperty1(const val: WideString); safecall;
+    function  Get_StartDate: TDateTime; safecall;
+    procedure Set_StartDate(val: TDateTime); safecall;
+    function  Get_DateCompleted: TDateTime; safecall;
+    procedure Set_DateCompleted(val: TDateTime); safecall;
+    function  Get_DateDue: TDateTime; safecall;
+    procedure Set_DateDue(pVal: TDateTime); safecall;
+    function  Get_CreateDate: TDateTime; safecall;
+    function  Get_DateModified: TDateTime; safecall;
+    function  Get_SynchTime: TDateTime; safecall;
+    procedure Set_SynchTime(val: TDateTime); safecall;
+    function  Get_ReminderTime: TDateTime; safecall;
+    procedure Set_ReminderTime(val: TDateTime); safecall;
+    function  Get_Status: Integer; safecall;
+    procedure Set_Status(val: Integer); safecall;
+    function  Get_Priority: Integer; safecall;
+    procedure Set_Priority(pVal: Integer); safecall;
+    function  Get_PercentageComplete: Single; safecall;
+    procedure Set_PercentageComplete(pVal: Single); safecall;
+    function  Get_ActualWork: Single; safecall;
+    procedure Set_ActualWork(work: Single); safecall;
+    function  Get_TotalWork: Single; safecall;
+    procedure Set_TotalWork(pVal: Single); safecall;
+    function  Get_Recurring: WordBool; safecall;
+    procedure Set_Recurring(pVal: WordBool); safecall;
+    function  Get_Reminder: WordBool; safecall;
+    procedure Set_Reminder(sdur: WordBool); safecall;
+    function  Get_PlaySound: WordBool; safecall;
+    procedure Set_PlaySound(pVal: WordBool); safecall;
+    function  Get_HasAttachments: WordBool; safecall;
+    function  Get_IsComplete: WordBool; safecall;
+    function  Get_MarkedForArchive: WordBool; safecall;
+    procedure Set_MarkedForArchive(mf: WordBool); safecall;
+    procedure RestoreFromArchive; safecall;
+    function  LockIssue(RefreshProfile: WordBool): WordBool; safecall;
+    function  UnlockIssue: WordBool; safecall;
+    function  Get_Locked: WordBool; safecall;
+    function  Get_Archived: WordBool; safecall;
+    function  Get_LastUser: INRTUser; safecall;
+    function  Get_InUseBy: INRTUser; safecall;
+    function  Get_HistoryList: INRTHistoryList; safecall;
+    function  Get_Security: INRTSecurity; safecall;
+    function  Get_EffectiveRights: AccessRight; safecall;
+    function  Get_Folder: INRTIssueFolder; safecall;
+    procedure Update(var errors: OleVariant); safecall;
+    procedure Refresh; safecall;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; safecall;
+    function  GetAttributeByID(idx: IssueAttributeID): OleVariant; safecall;
+    procedure SetAttributeValueByID(idx: IssueAttributeID; newVal: OleVariant); safecall;
+    function  Get_Rules: INRTRules; safecall;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); safecall;
+    property Subject: WideString read Get_Subject write Set_Subject;
+    property Body: WideString read Get_Body write Set_Body;
+    property Owner: INRTUser read Get_Owner write _Set_Owner;
+    property Database: INRTDatabase read Get_Database;
+    property Page: INRTPage read Get_Page;
+    property ID: WideString read Get_ID;
+    property IssueID: Integer read Get_IssueID;
+    property Class_: INRTDocumentClass read Get_Class_ write _Set_Class_;
+    property SubClass: INRTDocumentClass read Get_SubClass write _Set_SubClass;
+    property Type_: INRTDocumentType read Get_Type_ write _Set_Type_;
+    property Assignee: INRTUser read Get_Assignee write _Set_Assignee;
+    property Attachments: INRTAttachments read Get_Attachments;
+    property Categories: WideString read Get_Categories write Set_Categories;
+    property RecurringPattern: WideString read Get_RecurringPattern write Set_RecurringPattern;
+    property SoundFile: WideString read Get_SoundFile write Set_SoundFile;
+    property Contacts: WideString read Get_Contacts write Set_Contacts;
+    property UserProperty1: WideString read Get_UserProperty1 write Set_UserProperty1;
+    property StartDate: TDateTime read Get_StartDate write Set_StartDate;
+    property DateCompleted: TDateTime read Get_DateCompleted write Set_DateCompleted;
+    property DateDue: TDateTime read Get_DateDue write Set_DateDue;
+    property CreateDate: TDateTime read Get_CreateDate;
+    property DateModified: TDateTime read Get_DateModified;
+    property SynchTime: TDateTime read Get_SynchTime write Set_SynchTime;
+    property ReminderTime: TDateTime read Get_ReminderTime write Set_ReminderTime;
+    property Status: Integer read Get_Status write Set_Status;
+    property Priority: Integer read Get_Priority write Set_Priority;
+    property PercentageComplete: Single read Get_PercentageComplete write Set_PercentageComplete;
+    property ActualWork: Single read Get_ActualWork write Set_ActualWork;
+    property TotalWork: Single read Get_TotalWork write Set_TotalWork;
+    property Recurring: WordBool read Get_Recurring write Set_Recurring;
+    property Reminder: WordBool read Get_Reminder write Set_Reminder;
+    property PlaySound: WordBool read Get_PlaySound write Set_PlaySound;
+    property HasAttachments: WordBool read Get_HasAttachments;
+    property IsComplete: WordBool read Get_IsComplete;
+    property MarkedForArchive: WordBool read Get_MarkedForArchive write Set_MarkedForArchive;
+    property Locked: WordBool read Get_Locked;
+    property Archived: WordBool read Get_Archived;
+    property LastUser: INRTUser read Get_LastUser;
+    property InUseBy: INRTUser read Get_InUseBy;
+    property HistoryList: INRTHistoryList read Get_HistoryList;
+    property Security: INRTSecurity read Get_Security;
+    property EffectiveRights: AccessRight read Get_EffectiveRights;
+    property Folder: INRTIssueFolder read Get_Folder;
+    property Rules: INRTRules read Get_Rules;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssueDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E5FF9A9E-172C-11D5-810E-00C04F610DBB}
+// *********************************************************************//
+  INRTIssueDisp = dispinterface
+    ['{E5FF9A9E-172C-11D5-810E-00C04F610DBB}']
+    property Subject: WideString dispid 0;
+    property Body: WideString dispid 1;
+    property Owner: INRTUser dispid 2;
+    property Database: INRTDatabase readonly dispid 3;
+    property Page: INRTPage readonly dispid 4;
+    property ID: WideString readonly dispid 5;
+    property IssueID: Integer readonly dispid 6;
+    property Class_: INRTDocumentClass dispid 60;
+    property SubClass: INRTDocumentClass dispid 61;
+    property Type_: INRTDocumentType dispid 62;
+    property Assignee: INRTUser dispid 7;
+    property Attachments: INRTAttachments readonly dispid 8;
+    property Categories: WideString dispid 9;
+    property RecurringPattern: WideString dispid 10;
+    property SoundFile: WideString dispid 11;
+    property Contacts: WideString dispid 13;
+    property UserProperty1: WideString dispid 14;
+    property StartDate: TDateTime dispid 15;
+    property DateCompleted: TDateTime dispid 16;
+    property DateDue: TDateTime dispid 17;
+    property CreateDate: TDateTime readonly dispid 18;
+    property DateModified: TDateTime readonly dispid 19;
+    property SynchTime: TDateTime dispid 20;
+    property ReminderTime: TDateTime dispid 21;
+    property Status: Integer dispid 22;
+    property Priority: Integer dispid 23;
+    property PercentageComplete: Single dispid 24;
+    property ActualWork: Single dispid 25;
+    property TotalWork: Single dispid 26;
+    property Recurring: WordBool dispid 27;
+    property Reminder: WordBool dispid 28;
+    property PlaySound: WordBool dispid 29;
+    property HasAttachments: WordBool readonly dispid 30;
+    property IsComplete: WordBool readonly dispid 31;
+    property MarkedForArchive: WordBool dispid 32;
+    procedure RestoreFromArchive; dispid 33;
+    function  LockIssue(RefreshProfile: WordBool): WordBool; dispid 34;
+    function  UnlockIssue: WordBool; dispid 35;
+    property Locked: WordBool readonly dispid 36;
+    property Archived: WordBool readonly dispid 37;
+    property LastUser: INRTUser readonly dispid 38;
+    property InUseBy: INRTUser readonly dispid 39;
+    property HistoryList: INRTHistoryList readonly dispid 40;
+    property Security: INRTSecurity readonly dispid 41;
+    property EffectiveRights: AccessRight readonly dispid 42;
+    property Folder: INRTIssueFolder readonly dispid 43;
+    procedure Update(var errors: OleVariant); dispid 46;
+    procedure Refresh; dispid 47;
+    function  IsOperationAllowed(TheOperation: CollaborationOperation): WordBool; dispid 48;
+    function  GetAttributeByID(idx: IssueAttributeID): OleVariant; dispid 49;
+    procedure SetAttributeValueByID(idx: IssueAttributeID; newVal: OleVariant); dispid 50;
+    property Rules: INRTRules readonly dispid 51;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 52;
+  end;
+
+// *********************************************************************//
+// Interface: INRTForms
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBDD-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTForms = interface(IDispatch)
+    ['{399ECBDD-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTForm; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFormsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBDD-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTFormsDisp = dispinterface
+    ['{399ECBDD-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTForm; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTForm
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBDF-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTForm = interface(IDispatch)
+    ['{399ECBDF-0C62-11D2-860E-006097BF089C}']
+    function  Get_Caption: WideString; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_X: Integer; safecall;
+    function  Get_Y: Integer; safecall;
+    function  Get_Controls: INRTControls; safecall;
+    function  Get_Width: Integer; safecall;
+    function  Get_Height: Integer; safecall;
+    function  Get_Type_: FormType; safecall;
+    function  Get_FormID: Integer; safecall;
+    function  Get_Description: WideString; safecall;
+    function  Get_BackColor: Integer; safecall;
+    function  Get_ForeColor: Integer; safecall;
+    function  Get_UserProperty1: WideString; safecall;
+    function  Get_UserProperty2: WideString; safecall;
+    function  Get_UserProperty3: WideString; safecall;
+    property Caption: WideString read Get_Caption;
+    property ID: WideString read Get_ID;
+    property X: Integer read Get_X;
+    property Y: Integer read Get_Y;
+    property Controls: INRTControls read Get_Controls;
+    property Width: Integer read Get_Width;
+    property Height: Integer read Get_Height;
+    property Type_: FormType read Get_Type_;
+    property FormID: Integer read Get_FormID;
+    property Description: WideString read Get_Description;
+    property BackColor: Integer read Get_BackColor;
+    property ForeColor: Integer read Get_ForeColor;
+    property UserProperty1: WideString read Get_UserProperty1;
+    property UserProperty2: WideString read Get_UserProperty2;
+    property UserProperty3: WideString read Get_UserProperty3;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFormDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBDF-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTFormDisp = dispinterface
+    ['{399ECBDF-0C62-11D2-860E-006097BF089C}']
+    property Caption: WideString readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property X: Integer readonly dispid 2;
+    property Y: Integer readonly dispid 3;
+    property Controls: INRTControls readonly dispid 4;
+    property Width: Integer readonly dispid 5;
+    property Height: Integer readonly dispid 6;
+    property Type_: FormType readonly dispid 7;
+    property FormID: Integer readonly dispid 8;
+    property Description: WideString readonly dispid 9;
+    property BackColor: Integer readonly dispid 10;
+    property ForeColor: Integer readonly dispid 11;
+    property UserProperty1: WideString readonly dispid 12;
+    property UserProperty2: WideString readonly dispid 13;
+    property UserProperty3: WideString readonly dispid 14;
+  end;
+
+// *********************************************************************//
+// Interface: INRTControls
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBEF-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTControls = interface(IDispatch)
+    ['{399ECBEF-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTControl; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTControlsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBEF-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTControlsDisp = dispinterface
+    ['{399ECBEF-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTControl; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTControl
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBF1-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTControl = interface(IDispatch)
+    ['{399ECBF1-0C62-11D2-860E-006097BF089C}']
+    function  Get_Caption: WideString; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get_Type_: ControlType; safecall;
+    function  Get_TabOrder: Integer; safecall;
+    function  Get_Left: Integer; safecall;
+    function  Get_Right: Integer; safecall;
+    function  Get_Top: Integer; safecall;
+    function  Get_Bottom: Integer; safecall;
+    function  Get_ControlID: Integer; safecall;
+    property Caption: WideString read Get_Caption;
+    property ID: WideString read Get_ID;
+    property Type_: ControlType read Get_Type_;
+    property TabOrder: Integer read Get_TabOrder;
+    property Left: Integer read Get_Left;
+    property Right: Integer read Get_Right;
+    property Top: Integer read Get_Top;
+    property Bottom: Integer read Get_Bottom;
+    property ControlID: Integer read Get_ControlID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTControlDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECBF1-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTControlDisp = dispinterface
+    ['{399ECBF1-0C62-11D2-860E-006097BF089C}']
+    property Caption: WideString readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    property Type_: ControlType readonly dispid 2;
+    property TabOrder: Integer readonly dispid 4;
+    property Left: Integer readonly dispid 5;
+    property Right: Integer readonly dispid 6;
+    property Top: Integer readonly dispid 7;
+    property Bottom: Integer readonly dispid 8;
+    property ControlID: Integer readonly dispid 9;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAttributeDefinitions
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CAC-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTAttributeDefinitions = interface(IDispatch)
+    ['{9D892CAC-0C6D-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTAttributeDefinition; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAttributeDefinitionsDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CAC-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTAttributeDefinitionsDisp = dispinterface
+    ['{9D892CAC-0C6D-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTAttributeDefinition; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTAttributeDefinition
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CAA-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTAttributeDefinition = interface(IDispatch)
+    ['{9D892CAA-0C6D-11D2-860E-006097BF089C}']
+    function  Get_Caption: WideString; safecall;
+    procedure Set_Caption(const pVal: WideString); safecall;
+    function  Get_FieldName: WideString; safecall;
+    function  Get_Size: Integer; safecall;
+    function  Get_Type_: AttributeType; safecall;
+    function  Get_AttrID: AttributeID; safecall;
+    property Caption: WideString read Get_Caption write Set_Caption;
+    property FieldName: WideString read Get_FieldName;
+    property Size: Integer read Get_Size;
+    property Type_: AttributeType read Get_Type_;
+    property AttrID: AttributeID read Get_AttrID;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTAttributeDefinitionDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {9D892CAA-0C6D-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTAttributeDefinitionDisp = dispinterface
+    ['{9D892CAA-0C6D-11D2-860E-006097BF089C}']
+    property Caption: WideString dispid 0;
+    property FieldName: WideString readonly dispid 1;
+    property Size: Integer readonly dispid 3;
+    property Type_: AttributeType readonly dispid 4;
+    property AttrID: AttributeID readonly dispid 5;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocumentTypes
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC0F-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDocumentTypes = interface(IDispatch)
+    ['{399ECC0F-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTDocumentType; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDocumentTypesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC0F-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTDocumentTypesDisp = dispinterface
+    ['{399ECC0F-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTDocumentType; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTRoles
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC0B-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTRoles = interface(IDispatch)
+    ['{399ECC0B-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTRole; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get_ID: WideString; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property ID: WideString read Get_ID;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTRolesDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {399ECC0B-0C62-11D2-860E-006097BF089C}
+// *********************************************************************//
+  INRTRolesDisp = dispinterface
+    ['{399ECC0B-0C62-11D2-860E-006097BF089C}']
+    function  Item(Index: OleVariant): INRTRole; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventHandlers
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4137-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTEventHandlers = interface(IDispatch)
+    ['{AD8F4137-43D5-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: Integer): INRTEventHandler; safecall;
+    function  Get_Count: Integer; safecall;
+    function  Get__NewEnum: IUnknown; safecall;
+    property Count: Integer read Get_Count;
+    property _NewEnum: IUnknown read Get__NewEnum;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventHandlersDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {AD8F4137-43D5-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTEventHandlersDisp = dispinterface
+    ['{AD8F4137-43D5-11D4-80F6-00C04F610DBB}']
+    function  Item(Index: Integer): INRTEventHandler; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTIssueFolder2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {4DFA51D0-C24A-41E1-8B19-2AD874D02923}
+// *********************************************************************//
+  INRTIssueFolder2 = interface(INRTIssueFolder)
+    ['{4DFA51D0-C24A-41E1-8B19-2AD874D02923}']
+    function  Get_ExplicitUserGrants: INRTUsers; safecall;
+    function  Get_ExplicitGroupGrants: INRTGroups; safecall;
+    function  Get_ConsolidatedUserGrants: INRTUsers; safecall;
+    property ExplicitUserGrants: INRTUsers read Get_ExplicitUserGrants;
+    property ExplicitGroupGrants: INRTGroups read Get_ExplicitGroupGrants;
+    property ConsolidatedUserGrants: INRTUsers read Get_ConsolidatedUserGrants;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTIssueFolder2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {4DFA51D0-C24A-41E1-8B19-2AD874D02923}
+// *********************************************************************//
+  INRTIssueFolder2Disp = dispinterface
+    ['{4DFA51D0-C24A-41E1-8B19-2AD874D02923}']
+    property ExplicitUserGrants: INRTUsers readonly dispid 30;
+    property ExplicitGroupGrants: INRTGroups readonly dispid 31;
+    property ConsolidatedUserGrants: INRTUsers readonly dispid 32;
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTIssueFolder readonly dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property IssueFolders: INRTIssueFolders readonly dispid 11;
+    property Issues: INRTIssues readonly dispid 12;
+    property Page: INRTPage readonly dispid 13;
+    property InheritSecurity: WordBool dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 16;
+    procedure Refresh; dispid 17;
+    procedure Update; dispid 18;
+    property Rules: INRTRules readonly dispid 19;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 20;
+  end;
+
+// *********************************************************************//
+// Interface: INRTLinkFolder2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {D8EB1D35-22C1-4E02-A9BC-6F9148A12AB8}
+// *********************************************************************//
+  INRTLinkFolder2 = interface(INRTLinkFolder)
+    ['{D8EB1D35-22C1-4E02-A9BC-6F9148A12AB8}']
+    function  Get_ExplicitUserGrants: INRTUsers; safecall;
+    function  Get_ExplicitGroupGrants: INRTGroups; safecall;
+    function  Get_ConsolidatedUserGrants: INRTUsers; safecall;
+    property ExplicitUserGrants: INRTUsers read Get_ExplicitUserGrants;
+    property ExplicitGroupGrants: INRTGroups read Get_ExplicitGroupGrants;
+    property ConsolidatedUserGrants: INRTUsers read Get_ConsolidatedUserGrants;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTLinkFolder2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {D8EB1D35-22C1-4E02-A9BC-6F9148A12AB8}
+// *********************************************************************//
+  INRTLinkFolder2Disp = dispinterface
+    ['{D8EB1D35-22C1-4E02-A9BC-6F9148A12AB8}']
+    property ExplicitUserGrants: INRTUsers readonly dispid 20;
+    property ExplicitGroupGrants: INRTGroups readonly dispid 21;
+    property ConsolidatedUserGrants: INRTUsers readonly dispid 22;
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTLinkFolder readonly dispid 7;
+    property InheritSecurity: WordBool dispid 8;
+    property UserProperty1: WideString dispid 9;
+    property UserProperty2: WideString dispid 10;
+    property UserProperty3: WideString dispid 11;
+    property LinkFolders: INRTLinkFolders readonly dispid 12;
+    property Links: INRTLinks readonly dispid 13;
+    property Page: INRTPage readonly dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    procedure Update; dispid 16;
+    procedure Refresh; dispid 17;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 18;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDMS2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E4A1940C-3852-41F2-9A8F-D1447B27896F}
+// *********************************************************************//
+  INRTDMS2 = interface(INRTDMS)
+    ['{E4A1940C-3852-41F2-9A8F-D1447B27896F}']
+    function  Get_ConfigurationData: INRTAdditionalProperties; safecall;
+    property ConfigurationData: INRTAdditionalProperties read Get_ConfigurationData;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDMS2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {E4A1940C-3852-41F2-9A8F-D1447B27896F}
+// *********************************************************************//
+  INRTDMS2Disp = dispinterface
+    ['{E4A1940C-3852-41F2-9A8F-D1447B27896F}']
+    property ConfigurationData: INRTAdditionalProperties readonly dispid 30;
+    property Sessions: INRTSessions readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    procedure CloseApplication; dispid 2;
+    function  CreateSearchParameters: INRTSearchParameters; dispid 3;
+    function  CreateDiscussionParameters: INRTDiscussionParameters; dispid 4;
+    function  CreateEventParameters: INRTEventParameters; dispid 5;
+    function  CreateLinkParameters: INRTLinkParameters; dispid 6;
+    function  CreateTaskParameters: INRTTaskParameters; dispid 7;
+    function  CreateIssueParameters: INRTIssueParameters; dispid 8;
+    function  CreateUserParameters: INRTUserParameters; dispid 9;
+    function  GetPerformanceSnapshot: INRTPerformanceSnapshot; dispid 10;
+    function  GetObjectByID(const ObjectID: WideString): IDispatch; dispid 11;
+    function  GetObjectBySID(const ObjectID: WideString): IDispatch; dispid 12;
+    function  GetPageWithContentsBySID(const ObjectID: WideString): INRTPage; dispid 13;
+    property LocaleID: Integer dispid 14;
+    property TimezoneOffset: Integer dispid 15;
+    property ComputerName: WideString dispid 16;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDMSCancel
+// Flags:     (400) Hidden NonExtensible OleAutomation
+// GUID:      {B9F270FA-34CF-4623-AD72-DD82AF36F1D1}
+// *********************************************************************//
+  INRTDMSCancel = interface(IUnknown)
+    ['{B9F270FA-34CF-4623-AD72-DD82AF36F1D1}']
+    function  Set_CancelObject(const Param1: INRTCancel): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTCancel
+// Flags:     (400) Hidden NonExtensible OleAutomation
+// GUID:      {5B002BEF-A91F-4164-8C8A-9DAD781D57EC}
+// *********************************************************************//
+  INRTCancel = interface(IUnknown)
+    ['{5B002BEF-A91F-4164-8C8A-9DAD781D57EC}']
+    function  GetCancelStatus(out pVal: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSessionSearchNotification
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {AE5B4871-B0B3-4E4A-B9AE-060F108DAC81}
+// *********************************************************************//
+  INRTSessionSearchNotification = interface(IUnknown)
+    ['{AE5B4871-B0B3-4E4A-B9AE-060F108DAC81}']
+    function  BeginSearchDatabase(const DatabaseName: WideString): HResult; stdcall;
+    function  EndSearchDatabase(const DatabaseName: WideString; nResults: Integer; 
+                                const ErrInfo: IErrorInfo): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSessionControl
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {239E79F0-1731-11D2-8622-006097BF089C}
+// *********************************************************************//
+  INRTSessionControl = interface(IUnknown)
+    ['{239E79F0-1731-11D2-8622-006097BF089C}']
+    function  Get_DocSvr(out pVal: Pointer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDatabaseMisc
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {A8AC35B5-AB38-11D2-8310-00A0C932328D}
+// *********************************************************************//
+  INRTDatabaseMisc = interface(IUnknown)
+    ['{A8AC35B5-AB38-11D2-8310-00A0C932328D}']
+    function  GetDocumentsForFolder(FolderID: Integer; out coll: INRTDocuments): HResult; stdcall;
+    function  GetDocumentsForSavedSearch(ssid: Integer; var oflow: WordBool; out coll: INRTDocuments): HResult; stdcall;
+    function  GetSubFolders(FolderID: Integer; out coll: INRTFolders): HResult; stdcall;
+    function  GetSubFoldersOfSavedSearch(ssid: Integer; out coll: INRTFolders): HResult; stdcall;
+    function  GetRootFolders(out fldrs: INRTFolders): HResult; stdcall;
+    function  LockDocument(const __MIDL_0042: INRTDocument; RefreshProfile: WordBool; 
+                           out retval: WordBool): HResult; stdcall;
+    function  UnlockDocument(const __MIDL_0043: INRTDocument; out retval: WordBool): HResult; stdcall;
+    function  GetDocumentType(const docAlias: WideString; out __MIDL_0044: INRTDocumentType): HResult; stdcall;
+    function  GetDocumentClass(const docClass: WideString; out __MIDL_0045: INRTDocumentClass): HResult; stdcall;
+    function  GetDocumentSubClasses(const docClassAlias: WideString; 
+                                    const SearchCriteria: WideString; 
+                                    searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                    var oflow: OleVariant; out __MIDL_0046: INRTDocumentClasses): HResult; stdcall;
+    function  UpdateDocument(const doc: INRTDocument; var ProfErrList: OleVariant; 
+                             out worked: WordBool): HResult; stdcall;
+    function  GetSubClass(const classAlias: WideString; const subclassAlias: WideString; 
+                          out pVal: INRTDocumentClass): HResult; stdcall;
+    function  UpdateDocumentsForFolder(FolderID: Integer): HResult; stdcall;
+    function  UpdateDocumentsForSavedSearch(ssid: Integer; var Overflow: OleVariant): HResult; stdcall;
+    function  AddDocumentToFolder(FolderID: Integer; const docobj: INRTDocument): HResult; stdcall;
+    function  RemoveDocumentFromFolder(FolderID: Integer; const docobj: INRTDocument): HResult; stdcall;
+    function  GetRelatedDocuments(docNumber: Integer; out pVal: INRTDocuments): HResult; stdcall;
+    function  GetAllVersions(docNumber: Integer; out pVal: INRTDocuments): HResult; stdcall;
+    function  CreateSubFolder(FolderID: Integer; const Name: WideString; 
+                              const Description: WideString; defSecurity: SecurityType; 
+                              out newfolder: INRTFolder): HResult; stdcall;
+    function  CreateRootFolder(const Name: WideString; const Description: WideString; 
+                               defSecurity: SecurityType; const sparms: INRTSearchParameters; 
+                               out newfolder: INRTFolder): HResult; stdcall;
+    function  RemoveFolder(const folderobj: INRTFolder): HResult; stdcall;
+    function  RefreshRootFolder: HResult; stdcall;
+    function  RefreshFolder(const folderobj: INRTFolder; var Overflow: WordBool): HResult; stdcall;
+    function  UpdateFolder(const folderobj: INRTFolder): HResult; stdcall;
+    function  GetExistingFolderByFolderID(FolderID: Integer; out outval: INRTFolder): HResult; stdcall;
+    function  GetSearchParametersForSavedSearch(ssid: Integer; out params: INRTSearchParameters): HResult; stdcall;
+    function  UpdateDatabaseFromSavedSearch(const fldr: INRTFolder): HResult; stdcall;
+    function  UpdateFoldersForFolder(FolderID: Integer): HResult; stdcall;
+    function  TransferSecurityInfo(const doc: INRTDocument; const sec: INRTSecurity): HResult; stdcall;
+    function  DocMarkedForArchive(docnum: Integer; Version: Integer; out marked: WordBool): HResult; stdcall;
+    function  MoveFolderToFolders(const src: INRTFolder; const dest: INRTFolders): HResult; stdcall;
+    function  GetRelatedDocumentsForNewDocument(out pVal: INRTDocuments): HResult; stdcall;
+    function  GetAllVersionsForNewDocument(out pVal: INRTDocuments): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDocumentsControl
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {418BCF91-2CA6-11D2-8646-006097BF089C}
+// *********************************************************************//
+  INRTDocumentsControl = interface(IUnknown)
+    ['{418BCF91-2CA6-11D2-8646-006097BF089C}']
+    function  Set_ID(const Param1: WideString): HResult; stdcall;
+    function  ReallyAdd(const docobj: INRTDocument): HResult; stdcall;
+    function  ReallyClear: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTFolder2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {6BEC0732-EDCC-4684-9D1B-8239B3D78D9D}
+// *********************************************************************//
+  INRTFolder2 = interface(INRTFolder)
+    ['{6BEC0732-EDCC-4684-9D1B-8239B3D78D9D}']
+    function  Get_IsContentSearch: WordBool; safecall;
+    property IsContentSearch: WordBool read Get_IsContentSearch;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFolder2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {6BEC0732-EDCC-4684-9D1B-8239B3D78D9D}
+// *********************************************************************//
+  INRTFolder2Disp = dispinterface
+    ['{6BEC0732-EDCC-4684-9D1B-8239B3D78D9D}']
+    property IsContentSearch: WordBool readonly dispid 50;
+    property Name: WideString dispid 0;
+    property Folders: INRTFolders readonly dispid 1;
+    property Documents: INRTDocuments readonly dispid 2;
+    property Security: INRTSecurity readonly dispid 3;
+    procedure Update; dispid 4;
+    property Description: WideString dispid 6;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 7;
+    procedure MoveTo(const DestinationFolderCollection: INRTFolders); dispid 8;
+    procedure CopyTo(const DestinationFoldersCollection: INRTFolders; CopyOnlyDocuments: WordBool); dispid 9;
+    property ID: WideString readonly dispid 11;
+    property FolderID: Integer readonly dispid 12;
+    property SearchParameters: INRTSearchParameters readonly dispid 13;
+    property Database: INRTDatabase readonly dispid 14;
+    property Owner: INRTUser readonly dispid 15;
+    property Overflow: WordBool readonly dispid 16;
+    procedure AddDocument(const doc: INRTDocument); dispid 17;
+    procedure RemoveDocument(const docobj: INRTDocument); dispid 18;
+    function  CreateSubFolder(const Name: WideString; const descr: WideString; 
+                              defSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; dispid 19;
+    procedure RemoveSubFolder(const fldr: INRTFolder); dispid 20;
+    procedure Refresh; dispid 21;
+    property IsSearch: WordBool readonly dispid 22;
+    property IsRootLevelFolder: WordBool readonly dispid 23;
+    property Parent: INRTFolder readonly dispid 24;
+    property InheritSecurity: WordBool dispid 25;
+    property Rules: INRTRules readonly dispid 26;
+    property UserProperty1: WideString dispid 27;
+    property UserProperty2: WideString dispid 28;
+    property UserProperty3: WideString dispid 29;
+    property Page: INRTPage readonly dispid 30;
+    property AdditionalProperties: INRTAdditionalProperties readonly dispid 31;
+    function  CreateSubFolderEx(const NewFolderName: WideString; 
+                                const NewFolderDescription: WideString; const Custom1: WideString; 
+                                const Custom2: WideString; const Custom3: WideString; 
+                                DefaultSecurity: SecurityType; 
+                                const SearchParms: INRTSearchParameters): INRTFolder; dispid 32;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 33;
+  end;
+
+// *********************************************************************//
+// Interface: INRTFolder3
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {355B2901-5B3D-4D4E-8DEA-1E2A489D079E}
+// *********************************************************************//
+  INRTFolder3 = interface(INRTFolder2)
+    ['{355B2901-5B3D-4D4E-8DEA-1E2A489D079E}']
+    function  Get_EmailPrefix: WideString; safecall;
+    procedure Set_EmailPrefix(const pVal: WideString); safecall;
+    function  Get_FullEmail: WideString; safecall;
+    property EmailPrefix: WideString read Get_EmailPrefix write Set_EmailPrefix;
+    property FullEmail: WideString read Get_FullEmail;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFolder3Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {355B2901-5B3D-4D4E-8DEA-1E2A489D079E}
+// *********************************************************************//
+  INRTFolder3Disp = dispinterface
+    ['{355B2901-5B3D-4D4E-8DEA-1E2A489D079E}']
+    property EmailPrefix: WideString dispid 60;
+    property FullEmail: WideString readonly dispid 61;
+    property IsContentSearch: WordBool readonly dispid 50;
+    property Name: WideString dispid 0;
+    property Folders: INRTFolders readonly dispid 1;
+    property Documents: INRTDocuments readonly dispid 2;
+    property Security: INRTSecurity readonly dispid 3;
+    procedure Update; dispid 4;
+    property Description: WideString dispid 6;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 7;
+    procedure MoveTo(const DestinationFolderCollection: INRTFolders); dispid 8;
+    procedure CopyTo(const DestinationFoldersCollection: INRTFolders; CopyOnlyDocuments: WordBool); dispid 9;
+    property ID: WideString readonly dispid 11;
+    property FolderID: Integer readonly dispid 12;
+    property SearchParameters: INRTSearchParameters readonly dispid 13;
+    property Database: INRTDatabase readonly dispid 14;
+    property Owner: INRTUser readonly dispid 15;
+    property Overflow: WordBool readonly dispid 16;
+    procedure AddDocument(const doc: INRTDocument); dispid 17;
+    procedure RemoveDocument(const docobj: INRTDocument); dispid 18;
+    function  CreateSubFolder(const Name: WideString; const descr: WideString; 
+                              defSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; dispid 19;
+    procedure RemoveSubFolder(const fldr: INRTFolder); dispid 20;
+    procedure Refresh; dispid 21;
+    property IsSearch: WordBool readonly dispid 22;
+    property IsRootLevelFolder: WordBool readonly dispid 23;
+    property Parent: INRTFolder readonly dispid 24;
+    property InheritSecurity: WordBool dispid 25;
+    property Rules: INRTRules readonly dispid 26;
+    property UserProperty1: WideString dispid 27;
+    property UserProperty2: WideString dispid 28;
+    property UserProperty3: WideString dispid 29;
+    property Page: INRTPage readonly dispid 30;
+    property AdditionalProperties: INRTAdditionalProperties readonly dispid 31;
+    function  CreateSubFolderEx(const NewFolderName: WideString; 
+                                const NewFolderDescription: WideString; const Custom1: WideString; 
+                                const Custom2: WideString; const Custom3: WideString; 
+                                DefaultSecurity: SecurityType; 
+                                const SearchParms: INRTSearchParameters): INRTFolder; dispid 32;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 33;
+  end;
+
+// *********************************************************************//
+// Interface: INRTFolders2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {BB71726B-ADE4-46B7-AD6D-4624F8A6EB40}
+// *********************************************************************//
+  INRTFolders2 = interface(INRTFolders)
+    ['{BB71726B-ADE4-46B7-AD6D-4624F8A6EB40}']
+    function  Add2(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                   DefaultSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTFolders2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {BB71726B-ADE4-46B7-AD6D-4624F8A6EB40}
+// *********************************************************************//
+  INRTFolders2Disp = dispinterface
+    ['{BB71726B-ADE4-46B7-AD6D-4624F8A6EB40}']
+    function  Add2(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                   DefaultSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; dispid 21;
+    function  Item(Index: OleVariant): INRTFolder; dispid 0;
+    property Count: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 4;
+    function  Add(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                  DefaultSecurity: SecurityType; const SearchParms: INRTSearchParameters): INRTFolder; dispid 5;
+    procedure Remove(IdOrIndexOrObject: OleVariant); dispid 6;
+    procedure Clear; dispid 7;
+    procedure Refresh; dispid 8;
+    property _NewEnum: IUnknown readonly dispid -4;
+    function  AddEx(const NewFolderName: WideString; const NewFolderDescription: WideString; 
+                    const Custom1: WideString; const Custom2: WideString; 
+                    const Custom3: WideString; DefaultSecurity: SecurityType; 
+                    const SearchParms: INRTSearchParameters): INRTFolder; dispid 10;
+  end;
+
+// *********************************************************************//
+// Interface: INRTFoldersControl
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {0E22EC40-1B2C-11D2-8626-006097BF089C}
+// *********************************************************************//
+  INRTFoldersControl = interface(IUnknown)
+    ['{0E22EC40-1B2C-11D2-8626-006097BF089C}']
+    function  Add(const fldr: INRTFolder): HResult; stdcall;
+    function  Remove(Index: OleVariant): HResult; stdcall;
+    function  InitAsTheRealRoot(const db: INRTDatabase; const ctl: INRTSessionControl): HResult; stdcall;
+    function  ReallyClear: HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserDomain
+// Flags:     (400) Hidden NonExtensible OleAutomation
+// GUID:      {8DEBAA1C-3F7E-11D3-BD1C-00C04F68A665}
+// *********************************************************************//
+  INRTUserDomain = interface(IUnknown)
+    ['{8DEBAA1C-3F7E-11D3-BD1C-00C04F68A665}']
+    function  Get_DomainName(out pVal: WideString): HResult; stdcall;
+    function  Get_NOS(out pVal: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserVeryTransientInterface
+// Flags:     (400) Hidden NonExtensible OleAutomation
+// GUID:      {058B2AA5-0A03-11D3-BD02-00C04F68A665}
+// *********************************************************************//
+  INRTUserVeryTransientInterface = interface(IUnknown)
+    ['{058B2AA5-0A03-11D3-BD02-00C04F68A665}']
+    function  GetRoleForDatabase(const dbase: INRTDatabase; out RoleForDB: INRTRole): HResult; stdcall;
+    function  Get_IDNum(out pVal: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroup2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {A06DD4F8-408E-4C8B-8790-3AE62E8AFF8A}
+// *********************************************************************//
+  INRTGroup2 = interface(INRTGroup)
+    ['{A06DD4F8-408E-4C8B-8790-3AE62E8AFF8A}']
+    function  Get_DomainName: WideString; safecall;
+    function  Get_NOS: Integer; safecall;
+    function  Get_Enabled: WordBool; safecall;
+    property DomainName: WideString read Get_DomainName;
+    property NOS: Integer read Get_NOS;
+    property Enabled: WordBool read Get_Enabled;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroup2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {A06DD4F8-408E-4C8B-8790-3AE62E8AFF8A}
+// *********************************************************************//
+  INRTGroup2Disp = dispinterface
+    ['{A06DD4F8-408E-4C8B-8790-3AE62E8AFF8A}']
+    property DomainName: WideString readonly dispid 10;
+    property NOS: Integer readonly dispid 11;
+    property Enabled: WordBool readonly dispid 12;
+    property Name: WideString readonly dispid 0;
+    property ID: Integer readonly dispid 2;
+    property Users: INRTUsers readonly dispid 1;
+    property FullName: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserACLsWeb
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FA3B0A13-8BC0-11D3-A0BE-00C04F68A665}
+// *********************************************************************//
+  INRTUserACLsWeb = interface(INRTUserACLs)
+    ['{FA3B0A13-8BC0-11D3-A0BE-00C04F68A665}']
+    procedure AddEx(const userName: WideString; AccessRight: AccessRight; Expires: TDateTime); safecall;
+    procedure Clear; safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserACLsWebDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FA3B0A13-8BC0-11D3-A0BE-00C04F68A665}
+// *********************************************************************//
+  INRTUserACLsWebDisp = dispinterface
+    ['{FA3B0A13-8BC0-11D3-A0BE-00C04F68A665}']
+    procedure AddEx(const userName: WideString; AccessRight: AccessRight; Expires: TDateTime); dispid 10;
+    procedure Clear; dispid 11;
+    function  Item(Index: OleVariant): INRTUserACL; dispid 0;
+    procedure Add(const userName: WideString; accRight: AccessRight); dispid 1;
+    property Count: Integer readonly dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroupACLsWeb
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FA3B0A14-8BC0-11D3-A0BE-00C04F68A665}
+// *********************************************************************//
+  INRTGroupACLsWeb = interface(INRTGroupACLs)
+    ['{FA3B0A14-8BC0-11D3-A0BE-00C04F68A665}']
+    procedure AddEx(const groupName: WideString; AccessRight: AccessRight; Expires: TDateTime); safecall;
+    procedure Clear; safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroupACLsWebDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FA3B0A14-8BC0-11D3-A0BE-00C04F68A665}
+// *********************************************************************//
+  INRTGroupACLsWebDisp = dispinterface
+    ['{FA3B0A14-8BC0-11D3-A0BE-00C04F68A665}']
+    procedure AddEx(const groupName: WideString; AccessRight: AccessRight; Expires: TDateTime); dispid 10;
+    procedure Clear; dispid 11;
+    function  Item(Index: OleVariant): INRTGroupACL; dispid 0;
+    procedure Add(const groupName: WideString; accRight: AccessRight); dispid 1;
+    property Count: Integer readonly dispid 2;
+    procedure Remove(Index: OleVariant); dispid 3;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTUserACLWeb
+// Flags:     (4432) Hidden Dual OleAutomation Dispatchable
+// GUID:      {FA3B0A15-8BC0-11D3-A0BE-00C04F68A665}
+// *********************************************************************//
+  INRTUserACLWeb = interface(INRTUserACL)
+    ['{FA3B0A15-8BC0-11D3-A0BE-00C04F68A665}']
+    function  Get_Expires: TDateTime; safecall;
+    procedure Set_Expires(pVal: TDateTime); safecall;
+    property Expires: TDateTime read Get_Expires write Set_Expires;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTUserACLWebDisp
+// Flags:     (4432) Hidden Dual OleAutomation Dispatchable
+// GUID:      {FA3B0A15-8BC0-11D3-A0BE-00C04F68A665}
+// *********************************************************************//
+  INRTUserACLWebDisp = dispinterface
+    ['{FA3B0A15-8BC0-11D3-A0BE-00C04F68A665}']
+    property Expires: TDateTime dispid 10;
+    property User: INRTUser dispid 1;
+    property Right: AccessRight dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTGroupACLWeb
+// Flags:     (4544) Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {2C171595-8C70-11D3-A0C0-00C04F68A665}
+// *********************************************************************//
+  INRTGroupACLWeb = interface(INRTGroupACL)
+    ['{2C171595-8C70-11D3-A0C0-00C04F68A665}']
+    function  Get_Expires: TDateTime; safecall;
+    procedure Set_Expires(pVal: TDateTime); safecall;
+    property Expires: TDateTime read Get_Expires write Set_Expires;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTGroupACLWebDisp
+// Flags:     (4544) Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {2C171595-8C70-11D3-A0C0-00C04F68A665}
+// *********************************************************************//
+  INRTGroupACLWebDisp = dispinterface
+    ['{2C171595-8C70-11D3-A0C0-00C04F68A665}']
+    property Expires: TDateTime dispid 10;
+    property Group: INRTGroup dispid 1;
+    property Right: AccessRight dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTCollectionDataEnum
+// Flags:     (16) Hidden
+// GUID:      {6F482854-1126-11D2-8612-006097BF089C}
+// *********************************************************************//
+  INRTCollectionDataEnum = interface(IUnknown)
+    ['{6F482854-1126-11D2-8612-006097BF089C}']
+  end;
+
+// *********************************************************************//
+// Interface: INRTObjectDataSort
+// Flags:     (400) Hidden NonExtensible OleAutomation
+// GUID:      {91F728CB-0265-40B5-A1AA-32C67338254F}
+// *********************************************************************//
+  INRTObjectDataSort = interface(IUnknown)
+    ['{91F728CB-0265-40B5-A1AA-32C67338254F}']
+    function  Less(const obj1: INRTObjectDatum; const obj2: INRTObjectDatum; out pRet: WordBool): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTObjectDataControl
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {665DAF01-703B-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTObjectDataControl = interface(IUnknown)
+    ['{665DAF01-703B-11D2-82F5-00A0C932328D}']
+    function  Add(const objdatum: INRTObjectDatum): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTMethodCallsControl
+// Flags:     (144) Hidden NonExtensible
+// GUID:      {665DAF02-703B-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTMethodCallsControl = interface(IUnknown)
+    ['{665DAF02-703B-11D2-82F5-00A0C932328D}']
+    function  Add(const objdatum: INRTMethodCall): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTStrings2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {197EB8FD-52D0-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTStrings2 = interface(INRTStrings)
+    ['{197EB8FD-52D0-11D4-80F6-00C04F610DBB}']
+    procedure Add(const val: WideString); safecall;
+    procedure Remove(idx: Integer); safecall;
+    procedure Clear; safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTStrings2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {197EB8FD-52D0-11D4-80F6-00C04F610DBB}
+// *********************************************************************//
+  INRTStrings2Disp = dispinterface
+    ['{197EB8FD-52D0-11D4-80F6-00C04F610DBB}']
+    procedure Add(const val: WideString); dispid 5;
+    procedure Remove(idx: Integer); dispid 6;
+    procedure Clear; dispid 7;
+    function  Item(idx: OleVariant): WideString; dispid 0;
+    property _NewEnum: IUnknown readonly dispid -4;
+    property Count: Integer readonly dispid 1;
+  end;
+
+// *********************************************************************//
+// Interface: INRTProfileError
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {D3E5FC81-3D1A-11D2-865E-006097BF089C}
+// *********************************************************************//
+  INRTProfileError = interface(IDispatch)
+    ['{D3E5FC81-3D1A-11D2-865E-006097BF089C}']
+    function  Get_AttrID: AttributeID; safecall;
+    function  Get_ErrorCode: ProfileErrorCode; safecall;
+    function  Get_Description: WideString; safecall;
+    property AttrID: AttributeID read Get_AttrID;
+    property ErrorCode: ProfileErrorCode read Get_ErrorCode;
+    property Description: WideString read Get_Description;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTProfileErrorDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {D3E5FC81-3D1A-11D2-865E-006097BF089C}
+// *********************************************************************//
+  INRTProfileErrorDisp = dispinterface
+    ['{D3E5FC81-3D1A-11D2-865E-006097BF089C}']
+    property AttrID: AttributeID readonly dispid 1;
+    property ErrorCode: ProfileErrorCode readonly dispid 2;
+    property Description: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTPerformanceCollectionEnum
+// Flags:     (400) Hidden NonExtensible OleAutomation
+// GUID:      {1855059A-6D1C-11D2-82F5-00A0C932328D}
+// *********************************************************************//
+  INRTPerformanceCollectionEnum = interface(IUnknown)
+    ['{1855059A-6D1C-11D2-82F5-00A0C932328D}']
+  end;
+
+// *********************************************************************//
+// Interface: INRTCacheCheckpoint
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {525EC805-4A3E-4D96-889A-62BCB692373B}
+// *********************************************************************//
+  INRTCacheCheckpoint = interface(IDispatch)
+    ['{525EC805-4A3E-4D96-889A-62BCB692373B}']
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTCacheCheckpointDisp
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {525EC805-4A3E-4D96-889A-62BCB692373B}
+// *********************************************************************//
+  INRTCacheCheckpointDisp = dispinterface
+    ['{525EC805-4A3E-4D96-889A-62BCB692373B}']
+  end;
+
+// *********************************************************************//
+// Interface: IManThreadInfo
+// Flags:     (384) NonExtensible OleAutomation
+// GUID:      {649E2BCC-5922-4624-BAE3-9F87D2384218}
+// *********************************************************************//
+  IManThreadInfo = interface(IUnknown)
+    ['{649E2BCC-5922-4624-BAE3-9F87D2384218}']
+    function  Get_CurrentThread(out ThreadID: Integer): HResult; stdcall;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDMS3
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {326DFD76-7E9B-414E-BDDE-6DD31EBB8C7E}
+// *********************************************************************//
+  INRTDMS3 = interface(INRTDMS2)
+    ['{326DFD76-7E9B-414E-BDDE-6DD31EBB8C7E}']
+    function  CreateCacheCheckpoint: IDispatch; safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDMS3Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {326DFD76-7E9B-414E-BDDE-6DD31EBB8C7E}
+// *********************************************************************//
+  INRTDMS3Disp = dispinterface
+    ['{326DFD76-7E9B-414E-BDDE-6DD31EBB8C7E}']
+    function  CreateCacheCheckpoint: IDispatch; dispid 51;
+    property ConfigurationData: INRTAdditionalProperties readonly dispid 30;
+    property Sessions: INRTSessions readonly dispid 0;
+    property ID: WideString readonly dispid 1;
+    procedure CloseApplication; dispid 2;
+    function  CreateSearchParameters: INRTSearchParameters; dispid 3;
+    function  CreateDiscussionParameters: INRTDiscussionParameters; dispid 4;
+    function  CreateEventParameters: INRTEventParameters; dispid 5;
+    function  CreateLinkParameters: INRTLinkParameters; dispid 6;
+    function  CreateTaskParameters: INRTTaskParameters; dispid 7;
+    function  CreateIssueParameters: INRTIssueParameters; dispid 8;
+    function  CreateUserParameters: INRTUserParameters; dispid 9;
+    function  GetPerformanceSnapshot: INRTPerformanceSnapshot; dispid 10;
+    function  GetObjectByID(const ObjectID: WideString): IDispatch; dispid 11;
+    function  GetObjectBySID(const ObjectID: WideString): IDispatch; dispid 12;
+    function  GetPageWithContentsBySID(const ObjectID: WideString): INRTPage; dispid 13;
+    property LocaleID: Integer dispid 14;
+    property TimezoneOffset: Integer dispid 15;
+    property ComputerName: WideString dispid 16;
+  end;
+
+// *********************************************************************//
+// Interface: ISmartNRTDMS
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {F1DAEAFB-636E-424F-B2D1-15BB5E37E1B9}
+// *********************************************************************//
+  ISmartNRTDMS = interface(IDispatch)
+    ['{F1DAEAFB-636E-424F-B2D1-15BB5E37E1B9}']
+    function  Get_NRTDMS: INRTDMS; safecall;
+    property NRTDMS: INRTDMS read Get_NRTDMS;
+  end;
+
+// *********************************************************************//
+// DispIntf:  ISmartNRTDMSDisp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {F1DAEAFB-636E-424F-B2D1-15BB5E37E1B9}
+// *********************************************************************//
+  ISmartNRTDMSDisp = dispinterface
+    ['{F1DAEAFB-636E-424F-B2D1-15BB5E37E1B9}']
+    property NRTDMS: INRTDMS readonly dispid 0;
+  end;
+
+// *********************************************************************//
+// Interface: INRTSession2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {25C95479-A5FE-41CB-8776-822A46CCABDE}
+// *********************************************************************//
+  INRTSession2 = interface(INRTSession)
+    ['{25C95479-A5FE-41CB-8776-822A46CCABDE}']
+    function  Get_ConfigurationData: INRTAdditionalProperties; safecall;
+    function  Get_SetOCRCompareFilter: WordBool; safecall;
+    procedure Set_SetOCRCompareFilter(pVal: WordBool); safecall;
+    function  Get_MaxRowsNonSearch: Integer; safecall;
+    procedure Set_MaxRowsNonSearch(pVal: Integer); safecall;
+    property ConfigurationData: INRTAdditionalProperties read Get_ConfigurationData;
+    property SetOCRCompareFilter: WordBool read Get_SetOCRCompareFilter write Set_SetOCRCompareFilter;
+    property MaxRowsNonSearch: Integer read Get_MaxRowsNonSearch write Set_MaxRowsNonSearch;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTSession2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {25C95479-A5FE-41CB-8776-822A46CCABDE}
+// *********************************************************************//
+  INRTSession2Disp = dispinterface
+    ['{25C95479-A5FE-41CB-8776-822A46CCABDE}']
+    property ConfigurationData: INRTAdditionalProperties readonly dispid 40;
+    property SetOCRCompareFilter: WordBool dispid 41;
+    property MaxRowsNonSearch: Integer dispid 42;
+    property ServerName: WideString readonly dispid 0;
+    property Alias: WideString dispid 1;
+    property UserID: WideString readonly dispid 2;
+    property Password: WideString readonly dispid 3;
+    property PasswordExpired: WordBool readonly dispid 4;
+    property Databases: INRTDatabases readonly dispid 5;
+    property WebDatabases: INRTDatabases readonly dispid 6;
+    property MaxRowsForSearch: Integer dispid 7;
+    property NRTDMS: INRTDMS readonly dispid 8;
+    property Connected: WordBool readonly dispid 9;
+    property Timeout: Integer dispid 10;
+    property DefaultAttributeSelections: INRTAttributeSelections readonly dispid 11;
+    property AllVersions: WordBool dispid 12;
+    property PreferredDatabase: INRTDatabase readonly dispid 13;
+    procedure Login(const UserID: WideString; const Password: WideString); dispid 14;
+    procedure TrustedLogin; dispid 15;
+    procedure Logout; dispid 16;
+    procedure ChangePassword(const oldpassword: WideString; const newpassword: WideString); dispid 17;
+    property ID: WideString readonly dispid 18;
+    property Worklist: INRTDocuments readonly dispid 19;
+    property CheckedOutDocuments: INRTDocuments readonly dispid 20;
+    function  IsOperationAllowed(TheOperation: SessionOperation): WordBool; dispid 21;
+    function  SearchDocuments(ArrayOfDatabases: OleVariant; 
+                              const SearchCriteria: INRTSearchParameters; var oflow: OleVariant; 
+                              vtSearchTree: WordBool): INRTDocuments; dispid 22;
+    function  SearchPages(ArrayOfDatabases: OleVariant; const Name: WideString; 
+                          const desc: WideString; const Owner: WideString; 
+                          const SubType: WideString; const Custom1: WideString; 
+                          const Custom2: WideString; const Custom3: WideString; 
+                          const params: INRTSearchParameters; var Overflow: OleVariant): INRTPages; dispid 23;
+    function  SearchTasks(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTTaskParameters; 
+                          var oflow: OleVariant; vtSearchTree: WordBool): INRTTasks; dispid 24;
+    function  SearchEvents(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTEventParameters; 
+                           var oflow: OleVariant; vtSearchTree: WordBool): INRTEvents; dispid 25;
+    function  SearchLinks(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTLinkParameters; 
+                          var oflow: OleVariant; vtSearchTree: WordBool): INRTLinks; dispid 26;
+    function  SearchDiscussions(ArrayOfDatabases: OleVariant; 
+                                const SearchCriteria: INRTDiscussionParameters; 
+                                var oflow: OleVariant): INRTMessages; dispid 27;
+    function  SearchIssues(ArrayOfDatabases: OleVariant; const SearchCriteria: INRTIssueParameters; 
+                           var oflow: OleVariant; vtSearchTree: WordBool): INRTIssues; dispid 28;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDatabase2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FCB166D0-B530-4866-B1D9-CE306C577537}
+// *********************************************************************//
+  INRTDatabase2 = interface(INRTDatabase)
+    ['{FCB166D0-B530-4866-B1D9-CE306C577537}']
+    function  Get_ConfigurationData: INRTAdditionalProperties; safecall;
+    property ConfigurationData: INRTAdditionalProperties read Get_ConfigurationData;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDatabase2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {FCB166D0-B530-4866-B1D9-CE306C577537}
+// *********************************************************************//
+  INRTDatabase2Disp = dispinterface
+    ['{FCB166D0-B530-4866-B1D9-CE306C577537}']
+    property ConfigurationData: INRTAdditionalProperties readonly dispid 40;
+    property Name: WideString readonly dispid 0;
+    property Description: WideString readonly dispid 1;
+    property Session: INRTSession readonly dispid 2;
+    property Forms: INRTForms readonly dispid 3;
+    property AttributeDefinitions: INRTAttributeDefinitions readonly dispid 4;
+    property Root: INRTFolder readonly dispid 6;
+    function  CreateDocument: INRTDocument; dispid 7;
+    function  GetDocument(Number: Integer; vers: Integer): INRTDocument; dispid 8;
+    function  DeleteDocument(docNumber: Integer; Version: Integer): WordBool; dispid 10;
+    function  SearchDocuments(const SearchCriteria: INRTSearchParameters; var oflow: OleVariant; 
+                              vtSearchTree: WordBool): INRTDocuments; dispid 11;
+    function  SearchUsers(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                          SearchAtBegin: WordBool; var oflow: OleVariant): INRTUsers; dispid 12;
+    function  SearchGroups(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                           SearchAtBegin: WordBool; var oflow: OleVariant): INRTGroups; dispid 13;
+    function  SearchCustomAttributes(const SearchCriteria: WideString; tableType: AttributeID; 
+                                     searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                     var oflow: OleVariant): INRTCustomAttributes; dispid 14;
+    function  SearchDocumentTypes(const SearchCriteria: WideString; 
+                                  searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                  var oflow: OleVariant): INRTDocumentTypes; dispid 15;
+    function  SearchDocumentClasses(const SearchCriteria: WideString; 
+                                    searchType: SearchAttributeType; SearchAtBegin: WordBool; 
+                                    var oflow: OleVariant): INRTDocumentClasses; dispid 16;
+    property ID: WideString readonly dispid 17;
+    function  GetDocumentTypeFromPath(const DocumentPath: WideString): INRTDocumentType; dispid 18;
+    function  IsOperationAllowed(TheOperation: DatabaseOperation): WordBool; dispid 19;
+    property PrimaryApplications: INRTLaunchMethods readonly dispid 20;
+    property NonPrimaryApplications: INRTLaunchMethods readonly dispid 21;
+    function  GetUser(const userName: WideString): INRTUser; dispid 22;
+    property Roles: INRTRoles readonly dispid 23;
+    function  SearchUsersEx(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                            SearchAtBegin: WordBool; sVal: NOSType; var oflow: OleVariant): INRTUsers; dispid 24;
+    function  FindUsers(const SearchCriteria: INRTUserParameters; var oflow: OleVariant): INRTUsers; dispid 25;
+    function  SearchGroupsEx(const SearchCriteria: WideString; searchType: SearchAttributeType; 
+                             SearchAtBegin: WordBool; sVal: NOSType; var oflow: OleVariant): INRTGroups; dispid 26;
+    property Worklist: INRTDocuments readonly dispid 27;
+    property CheckedOutDocuments: INRTDocuments readonly dispid 28;
+    property Pages: INRTPages readonly dispid 29;
+    function  CreatePage: INRTPage; dispid 30;
+    procedure DeletePage(PageID: Integer); dispid 31;
+    property RuleEventTypes: INRTRuleEventTypes readonly dispid 32;
+    property EventHandlers: INRTEventHandlers readonly dispid 33;
+    function  SearchPages(const Name: WideString; const desc: WideString; const Owner: WideString; 
+                          const SubType: WideString; const Custom1: WideString; 
+                          const Custom2: WideString; const Custom3: WideString; 
+                          const params: INRTSearchParameters; var Overflow: OleVariant): INRTPages; dispid 34;
+    function  SearchTasks(const SearchCriteria: INRTTaskParameters; var oflow: OleVariant; 
+                          vtSearchTree: WordBool): INRTTasks; dispid 35;
+    function  SearchEvents(const SearchCriteria: INRTEventParameters; var oflow: OleVariant; 
+                           vtSearchTree: WordBool): INRTEvents; dispid 36;
+    function  SearchLinks(const SearchCriteria: INRTLinkParameters; var oflow: OleVariant; 
+                          vtSearchTree: WordBool): INRTLinks; dispid 37;
+    function  SearchDiscussions(const SearchCriteria: INRTDiscussionParameters; 
+                                var oflow: OleVariant): INRTMessages; dispid 38;
+    function  SearchIssues(const SearchCriteria: INRTIssueParameters; var oflow: OleVariant; 
+                           vtSearchTree: WordBool): INRTIssues; dispid 39;
+  end;
+
+// *********************************************************************//
+// Interface: INRTObjectData2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {89F4D8FF-2847-4DA2-8468-E481EB5EC36E}
+// *********************************************************************//
+  INRTObjectData2 = interface(INRTObjectData)
+    ['{89F4D8FF-2847-4DA2-8468-E481EB5EC36E}']
+    procedure Sort(const pSorter: INRTObjectDataSort); safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTObjectData2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {89F4D8FF-2847-4DA2-8468-E481EB5EC36E}
+// *********************************************************************//
+  INRTObjectData2Disp = dispinterface
+    ['{89F4D8FF-2847-4DA2-8468-E481EB5EC36E}']
+    procedure Sort(const pSorter: INRTObjectDataSort); dispid 2;
+    function  Item(idx: Integer): INRTObjectDatum; dispid 0;
+    property Count: Integer readonly dispid 1;
+    property _NewEnum: IUnknown readonly dispid -4;
+  end;
+
+// *********************************************************************//
+// Interface: INRTPage2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {45E1B5CD-C502-47DA-9439-46D7A8B99A16}
+// *********************************************************************//
+  INRTPage2 = interface(INRTPage)
+    ['{45E1B5CD-C502-47DA-9439-46D7A8B99A16}']
+    function  Get_ExplicitUserGrants: INRTUsers; safecall;
+    function  Get_ExplicitGroupGrants: INRTGroups; safecall;
+    function  Get_ConsolidatedUserGrants: INRTUsers; safecall;
+    property ExplicitUserGrants: INRTUsers read Get_ExplicitUserGrants;
+    property ExplicitGroupGrants: INRTGroups read Get_ExplicitGroupGrants;
+    property ConsolidatedUserGrants: INRTUsers read Get_ConsolidatedUserGrants;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTPage2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {45E1B5CD-C502-47DA-9439-46D7A8B99A16}
+// *********************************************************************//
+  INRTPage2Disp = dispinterface
+    ['{45E1B5CD-C502-47DA-9439-46D7A8B99A16}']
+    property ExplicitUserGrants: INRTUsers readonly dispid 40;
+    property ExplicitGroupGrants: INRTGroups readonly dispid 41;
+    property ConsolidatedUserGrants: INRTUsers readonly dispid 42;
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property Database: INRTDatabase readonly dispid 2;
+    property Class_: INRTDocumentClass dispid 3;
+    property SubClass: INRTDocumentClass dispid 4;
+    property Type_: INRTDocumentType dispid 5;
+    property SubType: WideString dispid 7;
+    property ID: WideString readonly dispid 8;
+    property PageID: Integer readonly dispid 9;
+    property Owner: INRTUser readonly dispid 10;
+    property Size: Integer readonly dispid 11;
+    property CreationDate: TDateTime readonly dispid 12;
+    property DateModified: TDateTime readonly dispid 13;
+    property UserProperty1: WideString dispid 14;
+    property UserProperty2: WideString dispid 15;
+    property UserProperty3: WideString dispid 16;
+    property DocumentFolders: INRTFolders readonly dispid 17;
+    property TaskFolders: INRTTaskFolders readonly dispid 18;
+    property LinkFolders: INRTLinkFolders readonly dispid 19;
+    property DiscussionFolders: INRTDiscussionFolders readonly dispid 20;
+    property EventFolders: INRTEventFolders readonly dispid 21;
+    property ReferenceFolders: INRTReferenceFolders readonly dispid 22;
+    property IssueFolders: INRTIssueFolders readonly dispid 23;
+    property LastUser: INRTUser readonly dispid 24;
+    property InUseBy: INRTUser readonly dispid 25;
+    property HistoryList: INRTHistoryList readonly dispid 26;
+    property Security: INRTSecurity readonly dispid 27;
+    property EffectiveRights: AccessRight readonly dispid 28;
+    procedure GetCopy(const Path: WideString); dispid 29;
+    procedure Update(const Path: WideString; options: PageUpdateOptions; var errors: OleVariant); dispid 30;
+    procedure Refresh; dispid 31;
+    function  IsOperationAllowed(TheOperation: PageOperation): WordBool; dispid 32;
+    function  GetAttributeByID(idx: AttributeID): OleVariant; dispid 33;
+    procedure SetAttributeValueByID(idx: AttributeID; newVal: OleVariant); dispid 34;
+    property Rules: INRTRules readonly dispid 35;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 36;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTaskFolder2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {47C0BDEE-8D88-4933-9F8B-88E2B7A7BA14}
+// *********************************************************************//
+  INRTTaskFolder2 = interface(INRTTaskFolder)
+    ['{47C0BDEE-8D88-4933-9F8B-88E2B7A7BA14}']
+    function  Get_ExplicitUserGrants: INRTUsers; safecall;
+    function  Get_ExplicitGroupGrants: INRTGroups; safecall;
+    function  Get_ConsolidatedUserGrants: INRTUsers; safecall;
+    property ExplicitUserGrants: INRTUsers read Get_ExplicitUserGrants;
+    property ExplicitGroupGrants: INRTGroups read Get_ExplicitGroupGrants;
+    property ConsolidatedUserGrants: INRTUsers read Get_ConsolidatedUserGrants;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTaskFolder2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {47C0BDEE-8D88-4933-9F8B-88E2B7A7BA14}
+// *********************************************************************//
+  INRTTaskFolder2Disp = dispinterface
+    ['{47C0BDEE-8D88-4933-9F8B-88E2B7A7BA14}']
+    property ExplicitUserGrants: INRTUsers readonly dispid 30;
+    property ExplicitGroupGrants: INRTGroups readonly dispid 31;
+    property ConsolidatedUserGrants: INRTUsers readonly dispid 32;
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTTaskFolder readonly dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property TaskFolders: INRTTaskFolders readonly dispid 11;
+    property Tasks: INRTTasks readonly dispid 12;
+    property Page: INRTPage readonly dispid 13;
+    property InheritSecurity: WordBool dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 16;
+    procedure Refresh; dispid 17;
+    procedure Update; dispid 18;
+    property Rules: INRTRules readonly dispid 19;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 20;
+  end;
+
+// *********************************************************************//
+// Interface: INRTEventFolder2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {3B5FCAE0-7EE5-423D-A636-DFD9A8318CF4}
+// *********************************************************************//
+  INRTEventFolder2 = interface(INRTEventFolder)
+    ['{3B5FCAE0-7EE5-423D-A636-DFD9A8318CF4}']
+    function  Get_ExplicitUserGrants: INRTUsers; safecall;
+    function  Get_ExplicitGroupGrants: INRTGroups; safecall;
+    function  Get_ConsolidatedUserGrants: INRTUsers; safecall;
+    property ExplicitUserGrants: INRTUsers read Get_ExplicitUserGrants;
+    property ExplicitGroupGrants: INRTGroups read Get_ExplicitGroupGrants;
+    property ConsolidatedUserGrants: INRTUsers read Get_ConsolidatedUserGrants;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTEventFolder2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {3B5FCAE0-7EE5-423D-A636-DFD9A8318CF4}
+// *********************************************************************//
+  INRTEventFolder2Disp = dispinterface
+    ['{3B5FCAE0-7EE5-423D-A636-DFD9A8318CF4}']
+    property ExplicitUserGrants: INRTUsers readonly dispid 30;
+    property ExplicitGroupGrants: INRTGroups readonly dispid 31;
+    property ConsolidatedUserGrants: INRTUsers readonly dispid 32;
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property ID: WideString readonly dispid 3;
+    property FolderID: Integer readonly dispid 4;
+    property Database: INRTDatabase readonly dispid 5;
+    property Owner: INRTUser readonly dispid 6;
+    property Parent: INRTEventFolder readonly dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property InheritSecurity: WordBool dispid 11;
+    property EventFolders: INRTEventFolders readonly dispid 12;
+    property Events: INRTEvents readonly dispid 13;
+    property Page: INRTPage readonly dispid 14;
+    property Security: INRTSecurity readonly dispid 15;
+    procedure Update; dispid 16;
+    procedure Refresh; dispid 17;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 18;
+    property Rules: INRTRules readonly dispid 19;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 20;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDiscussionFolder2
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {16C9F554-B8CF-4033-8CD8-C7C144D253B5}
+// *********************************************************************//
+  INRTDiscussionFolder2 = interface(INRTDiscussionFolder)
+    ['{16C9F554-B8CF-4033-8CD8-C7C144D253B5}']
+    function  Get_ExplicitUserGrants: INRTUsers; safecall;
+    function  Get_ExplicitGroupGrants: INRTGroups; safecall;
+    function  Get_ConsolidatedUserGrants: INRTUsers; safecall;
+    property ExplicitUserGrants: INRTUsers read Get_ExplicitUserGrants;
+    property ExplicitGroupGrants: INRTGroups read Get_ExplicitGroupGrants;
+    property ConsolidatedUserGrants: INRTUsers read Get_ConsolidatedUserGrants;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDiscussionFolder2Disp
+// Flags:     (4560) Hidden Dual NonExtensible OleAutomation Dispatchable
+// GUID:      {16C9F554-B8CF-4033-8CD8-C7C144D253B5}
+// *********************************************************************//
+  INRTDiscussionFolder2Disp = dispinterface
+    ['{16C9F554-B8CF-4033-8CD8-C7C144D253B5}']
+    property ExplicitUserGrants: INRTUsers readonly dispid 20;
+    property ExplicitGroupGrants: INRTGroups readonly dispid 21;
+    property ConsolidatedUserGrants: INRTUsers readonly dispid 22;
+    property Name: WideString dispid 0;
+    property Description: WideString dispid 1;
+    property FolderID: Integer readonly dispid 2;
+    property ID: WideString readonly dispid 3;
+    property Database: INRTDatabase readonly dispid 4;
+    property Owner: INRTUser readonly dispid 5;
+    property Parent: INRTDiscussionFolder readonly dispid 6;
+    property InheritSecurity: WordBool dispid 7;
+    property UserProperty1: WideString dispid 8;
+    property UserProperty2: WideString dispid 9;
+    property UserProperty3: WideString dispid 10;
+    property DiscussionFolders: INRTDiscussionFolders readonly dispid 11;
+    property DiscussionTopics: INRTMessages readonly dispid 12;
+    property Page: INRTPage readonly dispid 13;
+    property Security: INRTSecurity readonly dispid 14;
+    procedure Update; dispid 15;
+    procedure Refresh; dispid 16;
+    function  IsOperationAllowed(TheOperation: FolderOperation): WordBool; dispid 17;
+    property Rules: INRTRules readonly dispid 18;
+    procedure LogEvent(const evntType: INRTRuleEventType; const customData: WideString); dispid 19;
+  end;
+
+// *********************************************************************//
+// Interface: INRTStats
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {4DE226D1-735C-44E0-B6E9-E2BD381D8599}
+// *********************************************************************//
+  INRTStats = interface(IDispatch)
+    ['{4DE226D1-735C-44E0-B6E9-E2BD381D8599}']
+    function  CreateTraceInfo: INRTTraceInfo; safecall;
+    function  GetObjectCounts: WideString; safecall;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTStatsDisp
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {4DE226D1-735C-44E0-B6E9-E2BD381D8599}
+// *********************************************************************//
+  INRTStatsDisp = dispinterface
+    ['{4DE226D1-735C-44E0-B6E9-E2BD381D8599}']
+    function  CreateTraceInfo: INRTTraceInfo; dispid 2;
+    function  GetObjectCounts: WideString; dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTTraceInfo
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {3ACA5043-8330-4190-9846-27CC19F0F2D0}
+// *********************************************************************//
+  INRTTraceInfo = interface(IDispatch)
+    ['{3ACA5043-8330-4190-9846-27CC19F0F2D0}']
+    procedure Start; safecall;
+    procedure Stop; safecall;
+    function  Get_Data: WideString; safecall;
+    property Data: WideString read Get_Data;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTTraceInfoDisp
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {3ACA5043-8330-4190-9846-27CC19F0F2D0}
+// *********************************************************************//
+  INRTTraceInfoDisp = dispinterface
+    ['{3ACA5043-8330-4190-9846-27CC19F0F2D0}']
+    procedure Start; dispid 1;
+    procedure Stop; dispid 2;
+    property Data: WideString readonly dispid 3;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDate
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {85CDDE4C-FE2E-476B-A0CC-8604C1BD098B}
+// *********************************************************************//
+  INRTDate = interface(IDispatch)
+    ['{85CDDE4C-FE2E-476B-A0CC-8604C1BD098B}']
+    function  Get_Value: TDateTime; safecall;
+    procedure Set_Value(theDate: TDateTime); safecall;
+    function  Get_IsSet: WordBool; safecall;
+    procedure Clear; safecall;
+    property Value: TDateTime read Get_Value write Set_Value;
+    property IsSet: WordBool read Get_IsSet;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDateDisp
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {85CDDE4C-FE2E-476B-A0CC-8604C1BD098B}
+// *********************************************************************//
+  INRTDateDisp = dispinterface
+    ['{85CDDE4C-FE2E-476B-A0CC-8604C1BD098B}']
+    property Value: TDateTime dispid 0;
+    property IsSet: WordBool readonly dispid 1;
+    procedure Clear; dispid 2;
+  end;
+
+// *********************************************************************//
+// Interface: INRTDateRange
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {8F850ABC-287C-49D2-8BFB-3CD7E0313A20}
+// *********************************************************************//
+  INRTDateRange = interface(IDispatch)
+    ['{8F850ABC-287C-49D2-8BFB-3CD7E0313A20}']
+    function  Get_Value: WideString; safecall;
+    procedure Set_Value(const pString: WideString); safecall;
+    function  Get_Start: INRTDate; safecall;
+    function  Get_End_: INRTDate; safecall;
+    property Value: WideString read Get_Value write Set_Value;
+    property Start: INRTDate read Get_Start;
+    property End_: INRTDate read Get_End_;
+  end;
+
+// *********************************************************************//
+// DispIntf:  INRTDateRangeDisp
+// Flags:     (4416) Dual OleAutomation Dispatchable
+// GUID:      {8F850ABC-287C-49D2-8BFB-3CD7E0313A20}
+// *********************************************************************//
+  INRTDateRangeDisp = dispinterface
+    ['{8F850ABC-287C-49D2-8BFB-3CD7E0313A20}']
+    property Value: WideString dispid 0;
+    property Start: INRTDate readonly dispid 1;
+    property End_: INRTDate readonly dispid 2;
+  end;
+
+// *********************************************************************//
+// The Class CoManStrings provides a Create and CreateRemote method to          
+// create instances of the default interface IManStrings exposed by              
+// the CoClass ManStrings. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoManStrings = class
+    class function Create: IManStrings;
+    class function CreateRemote(const MachineName: string): IManStrings;
+  end;
+
+// *********************************************************************//
+// The Class CoManAndQuery provides a Create and CreateRemote method to          
+// create instances of the default interface IManAndQuery exposed by              
+// the CoClass ManAndQuery. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoManAndQuery = class
+    class function Create: IManAndQuery;
+    class function CreateRemote(const MachineName: string): IManAndQuery;
+  end;
+
+// *********************************************************************//
+// The Class CoManOrQuery provides a Create and CreateRemote method to          
+// create instances of the default interface IManOrQuery exposed by              
+// the CoClass ManOrQuery. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoManOrQuery = class
+    class function Create: IManOrQuery;
+    class function CreateRemote(const MachineName: string): IManOrQuery;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDMS provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDMS3 exposed by              
+// the CoClass NRTDMS. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDMS = class
+    class function Create: INRTDMS3;
+    class function CreateRemote(const MachineName: string): INRTDMS3;
+  end;
+
+// *********************************************************************//
+// The Class CoManDMS provides a Create and CreateRemote method to          
+// create instances of the default interface IManDMS exposed by              
+// the CoClass ManDMS. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoManDMS = class
+    class function Create: IManDMS;
+    class function CreateRemote(const MachineName: string): IManDMS;
+  end;
+
+// *********************************************************************//
+// The Class CoSmartNRTDms provides a Create and CreateRemote method to          
+// create instances of the default interface ISmartNRTDMS exposed by              
+// the CoClass SmartNRTDms. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoSmartNRTDms = class
+    class function Create: ISmartNRTDMS;
+    class function CreateRemote(const MachineName: string): ISmartNRTDMS;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSessions provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSessions exposed by              
+// the CoClass NRTSessions. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSessions = class
+    class function Create: INRTSessions;
+    class function CreateRemote(const MachineName: string): INRTSessions;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSession provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSession2 exposed by              
+// the CoClass NRTSession. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSession = class
+    class function Create: INRTSession2;
+    class function CreateRemote(const MachineName: string): INRTSession2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDatabases provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDatabases exposed by              
+// the CoClass NRTDatabases. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDatabases = class
+    class function Create: INRTDatabases;
+    class function CreateRemote(const MachineName: string): INRTDatabases;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDatabase provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDatabase2 exposed by              
+// the CoClass NRTDatabase. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDatabase = class
+    class function Create: INRTDatabase2;
+    class function CreateRemote(const MachineName: string): INRTDatabase2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTForms provides a Create and CreateRemote method to          
+// create instances of the default interface INRTForms exposed by              
+// the CoClass NRTForms. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTForms = class
+    class function Create: INRTForms;
+    class function CreateRemote(const MachineName: string): INRTForms;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTForm provides a Create and CreateRemote method to          
+// create instances of the default interface INRTForm exposed by              
+// the CoClass NRTForm. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTForm = class
+    class function Create: INRTForm;
+    class function CreateRemote(const MachineName: string): INRTForm;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocuments provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocuments exposed by              
+// the CoClass NRTDocuments. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocuments = class
+    class function Create: INRTDocuments;
+    class function CreateRemote(const MachineName: string): INRTDocuments;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTFolder provides a Create and CreateRemote method to          
+// create instances of the default interface INRTFolder2 exposed by              
+// the CoClass NRTFolder. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTFolder = class
+    class function Create: INRTFolder2;
+    class function CreateRemote(const MachineName: string): INRTFolder2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTFolders provides a Create and CreateRemote method to          
+// create instances of the default interface INRTFolders exposed by              
+// the CoClass NRTFolders. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTFolders = class
+    class function Create: INRTFolders;
+    class function CreateRemote(const MachineName: string): INRTFolders;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTControls provides a Create and CreateRemote method to          
+// create instances of the default interface INRTControls exposed by              
+// the CoClass NRTControls. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTControls = class
+    class function Create: INRTControls;
+    class function CreateRemote(const MachineName: string): INRTControls;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTControl provides a Create and CreateRemote method to          
+// create instances of the default interface INRTControl exposed by              
+// the CoClass NRTControl. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTControl = class
+    class function Create: INRTControl;
+    class function CreateRemote(const MachineName: string): INRTControl;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSecurity provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSecurity exposed by              
+// the CoClass NRTSecurity. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSecurity = class
+    class function Create: INRTSecurity;
+    class function CreateRemote(const MachineName: string): INRTSecurity;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSecurityWeb provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSecurity exposed by              
+// the CoClass NRTSecurityWeb. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSecurityWeb = class
+    class function Create: INRTSecurity;
+    class function CreateRemote(const MachineName: string): INRTSecurity;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSecurityTemplate provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSecurityTemplate exposed by              
+// the CoClass NRTSecurityTemplate. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSecurityTemplate = class
+    class function Create: INRTSecurityTemplate;
+    class function CreateRemote(const MachineName: string): INRTSecurityTemplate;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSecurityTemplates provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSecurityTemplates exposed by              
+// the CoClass NRTSecurityTemplates. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSecurityTemplates = class
+    class function Create: INRTSecurityTemplates;
+    class function CreateRemote(const MachineName: string): INRTSecurityTemplates;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUser provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUser exposed by              
+// the CoClass NRTUser. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUser = class
+    class function Create: INRTUser;
+    class function CreateRemote(const MachineName: string): INRTUser;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTGroup provides a Create and CreateRemote method to          
+// create instances of the default interface INRTGroup exposed by              
+// the CoClass NRTGroup. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTGroup = class
+    class function Create: INRTGroup;
+    class function CreateRemote(const MachineName: string): INRTGroup;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUserACL provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUserACL exposed by              
+// the CoClass NRTUserACL. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUserACL = class
+    class function Create: INRTUserACL;
+    class function CreateRemote(const MachineName: string): INRTUserACL;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTGroupACL provides a Create and CreateRemote method to          
+// create instances of the default interface INRTGroupACL exposed by              
+// the CoClass NRTGroupACL. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTGroupACL = class
+    class function Create: INRTGroupACL;
+    class function CreateRemote(const MachineName: string): INRTGroupACL;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTGroupACLs provides a Create and CreateRemote method to          
+// create instances of the default interface INRTGroupACLs exposed by              
+// the CoClass NRTGroupACLs. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTGroupACLs = class
+    class function Create: INRTGroupACLs;
+    class function CreateRemote(const MachineName: string): INRTGroupACLs;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUserACLs provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUserACLs exposed by              
+// the CoClass NRTUserACLs. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUserACLs = class
+    class function Create: INRTUserACLs;
+    class function CreateRemote(const MachineName: string): INRTUserACLs;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSearchParameters provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSearchParameters exposed by              
+// the CoClass NRTSearchParameters. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSearchParameters = class
+    class function Create: INRTSearchParameters;
+    class function CreateRemote(const MachineName: string): INRTSearchParameters;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUsers provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUsers exposed by              
+// the CoClass NRTUsers. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUsers = class
+    class function Create: INRTUsers;
+    class function CreateRemote(const MachineName: string): INRTUsers;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTGroups provides a Create and CreateRemote method to          
+// create instances of the default interface INRTGroups exposed by              
+// the CoClass NRTGroups. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTGroups = class
+    class function Create: INRTGroups;
+    class function CreateRemote(const MachineName: string): INRTGroups;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRole provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRole exposed by              
+// the CoClass NRTRole. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRole = class
+    class function Create: INRTRole;
+    class function CreateRemote(const MachineName: string): INRTRole;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRoles provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRoles exposed by              
+// the CoClass NRTRoles. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRoles = class
+    class function Create: INRTRoles;
+    class function CreateRemote(const MachineName: string): INRTRoles;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocumentType provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocumentType exposed by              
+// the CoClass NRTDocumentType. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocumentType = class
+    class function Create: INRTDocumentType;
+    class function CreateRemote(const MachineName: string): INRTDocumentType;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocumentTypes provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocumentTypes exposed by              
+// the CoClass NRTDocumentTypes. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocumentTypes = class
+    class function Create: INRTDocumentTypes;
+    class function CreateRemote(const MachineName: string): INRTDocumentTypes;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTLaunchMethod provides a Create and CreateRemote method to          
+// create instances of the default interface INRTLaunchMethod exposed by              
+// the CoClass NRTLaunchMethod. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTLaunchMethod = class
+    class function Create: INRTLaunchMethod;
+    class function CreateRemote(const MachineName: string): INRTLaunchMethod;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTLaunchMethods provides a Create and CreateRemote method to          
+// create instances of the default interface INRTLaunchMethods exposed by              
+// the CoClass NRTLaunchMethods. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTLaunchMethods = class
+    class function Create: INRTLaunchMethods;
+    class function CreateRemote(const MachineName: string): INRTLaunchMethods;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocumentClass provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocumentClass exposed by              
+// the CoClass NRTDocumentClass. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocumentClass = class
+    class function Create: INRTDocumentClass;
+    class function CreateRemote(const MachineName: string): INRTDocumentClass;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocumentClasses provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocumentClasses exposed by              
+// the CoClass NRTDocumentClasses. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocumentClasses = class
+    class function Create: INRTDocumentClasses;
+    class function CreateRemote(const MachineName: string): INRTDocumentClasses;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocumentHistory provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocumentHistory exposed by              
+// the CoClass NRTDocumentHistory. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocumentHistory = class
+    class function Create: INRTDocumentHistory;
+    class function CreateRemote(const MachineName: string): INRTDocumentHistory;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTHistoryList provides a Create and CreateRemote method to          
+// create instances of the default interface INRTHistoryList exposed by              
+// the CoClass NRTHistoryList. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTHistoryList = class
+    class function Create: INRTHistoryList;
+    class function CreateRemote(const MachineName: string): INRTHistoryList;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAttributeDefinition provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAttributeDefinition exposed by              
+// the CoClass NRTAttributeDefinition. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAttributeDefinition = class
+    class function Create: INRTAttributeDefinition;
+    class function CreateRemote(const MachineName: string): INRTAttributeDefinition;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAttributeDefinitions provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAttributeDefinitions exposed by              
+// the CoClass NRTAttributeDefinitions. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAttributeDefinitions = class
+    class function Create: INRTAttributeDefinitions;
+    class function CreateRemote(const MachineName: string): INRTAttributeDefinitions;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTCustomAttributes provides a Create and CreateRemote method to          
+// create instances of the default interface INRTCustomAttributes exposed by              
+// the CoClass NRTCustomAttributes. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTCustomAttributes = class
+    class function Create: INRTCustomAttributes;
+    class function CreateRemote(const MachineName: string): INRTCustomAttributes;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTCustomAttribute provides a Create and CreateRemote method to          
+// create instances of the default interface INRTCustomAttribute exposed by              
+// the CoClass NRTCustomAttribute. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTCustomAttribute = class
+    class function Create: INRTCustomAttribute;
+    class function CreateRemote(const MachineName: string): INRTCustomAttribute;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDocument provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDocument exposed by              
+// the CoClass NRTDocument. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDocument = class
+    class function Create: INRTDocument;
+    class function CreateRemote(const MachineName: string): INRTDocument;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAttributeSelections provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAttributeSelections exposed by              
+// the CoClass NRTAttributeSelections. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAttributeSelections = class
+    class function Create: INRTAttributeSelections;
+    class function CreateRemote(const MachineName: string): INRTAttributeSelections;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTSearchParameter provides a Create and CreateRemote method to          
+// create instances of the default interface INRTSearchParameter exposed by              
+// the CoClass NRTSearchParameter. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTSearchParameter = class
+    class function Create: INRTSearchParameter;
+    class function CreateRemote(const MachineName: string): INRTSearchParameter;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTCollectionDataEnum provides a Create and CreateRemote method to          
+// create instances of the default interface INRTCollectionDataEnum exposed by              
+// the CoClass NRTCollectionDataEnum. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTCollectionDataEnum = class
+    class function Create: INRTCollectionDataEnum;
+    class function CreateRemote(const MachineName: string): INRTCollectionDataEnum;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAttributeSelectionsEnum provides a Create and CreateRemote method to          
+// create instances of the default interface IEnumVARIANT exposed by              
+// the CoClass NRTAttributeSelectionsEnum. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAttributeSelectionsEnum = class
+    class function Create: IEnumVARIANT;
+    class function CreateRemote(const MachineName: string): IEnumVARIANT;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTProfileError provides a Create and CreateRemote method to          
+// create instances of the default interface INRTProfileError exposed by              
+// the CoClass NRTProfileError. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTProfileError = class
+    class function Create: INRTProfileError;
+    class function CreateRemote(const MachineName: string): INRTProfileError;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTPerformanceSnapshot provides a Create and CreateRemote method to          
+// create instances of the default interface INRTPerformanceSnapshot exposed by              
+// the CoClass NRTPerformanceSnapshot. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTPerformanceSnapshot = class
+    class function Create: INRTPerformanceSnapshot;
+    class function CreateRemote(const MachineName: string): INRTPerformanceSnapshot;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTMethodCall provides a Create and CreateRemote method to          
+// create instances of the default interface INRTMethodCall exposed by              
+// the CoClass NRTMethodCall. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTMethodCall = class
+    class function Create: INRTMethodCall;
+    class function CreateRemote(const MachineName: string): INRTMethodCall;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTMethodCalls provides a Create and CreateRemote method to          
+// create instances of the default interface INRTMethodCalls exposed by              
+// the CoClass NRTMethodCalls. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTMethodCalls = class
+    class function Create: INRTMethodCalls;
+    class function CreateRemote(const MachineName: string): INRTMethodCalls;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTServerCall provides a Create and CreateRemote method to          
+// create instances of the default interface INRTServerCall exposed by              
+// the CoClass NRTServerCall. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTServerCall = class
+    class function Create: INRTServerCall;
+    class function CreateRemote(const MachineName: string): INRTServerCall;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTServerCalls provides a Create and CreateRemote method to          
+// create instances of the default interface INRTServerCalls exposed by              
+// the CoClass NRTServerCalls. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTServerCalls = class
+    class function Create: INRTServerCalls;
+    class function CreateRemote(const MachineName: string): INRTServerCalls;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTObjectDatum provides a Create and CreateRemote method to          
+// create instances of the default interface INRTObjectDatum exposed by              
+// the CoClass NRTObjectDatum. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTObjectDatum = class
+    class function Create: INRTObjectDatum;
+    class function CreateRemote(const MachineName: string): INRTObjectDatum;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTObjectData provides a Create and CreateRemote method to          
+// create instances of the default interface INRTObjectData2 exposed by              
+// the CoClass NRTObjectData. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTObjectData = class
+    class function Create: INRTObjectData2;
+    class function CreateRemote(const MachineName: string): INRTObjectData2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTObjectDataSort provides a Create and CreateRemote method to          
+// create instances of the default interface INRTObjectDataSort exposed by              
+// the CoClass NRTObjectDataSort. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTObjectDataSort = class
+    class function Create: INRTObjectDataSort;
+    class function CreateRemote(const MachineName: string): INRTObjectDataSort;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTPerformanceCollectionEnum provides a Create and CreateRemote method to          
+// create instances of the default interface INRTPerformanceCollectionEnum exposed by              
+// the CoClass NRTPerformanceCollectionEnum. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTPerformanceCollectionEnum = class
+    class function Create: INRTPerformanceCollectionEnum;
+    class function CreateRemote(const MachineName: string): INRTPerformanceCollectionEnum;
+  end;
+
+// *********************************************************************//
+// The Class CoSTLEnumVARIANT provides a Create and CreateRemote method to          
+// create instances of the default interface IEnumVARIANT exposed by              
+// the CoClass STLEnumVARIANT. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoSTLEnumVARIANT = class
+    class function Create: IEnumVARIANT;
+    class function CreateRemote(const MachineName: string): IEnumVARIANT;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRoleEditCreate provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRoleEditCreate exposed by              
+// the CoClass NRTRoleEditCreate. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRoleEditCreate = class
+    class function Create: INRTRoleEditCreate;
+    class function CreateRemote(const MachineName: string): INRTRoleEditCreate;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRoleSearchProfile provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRoleSearchProfile exposed by              
+// the CoClass NRTRoleSearchProfile. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRoleSearchProfile = class
+    class function Create: INRTRoleSearchProfile;
+    class function CreateRemote(const MachineName: string): INRTRoleSearchProfile;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRoleEditCreates provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRoleEditCreates exposed by              
+// the CoClass NRTRoleEditCreates. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRoleEditCreates = class
+    class function Create: INRTRoleEditCreates;
+    class function CreateRemote(const MachineName: string): INRTRoleEditCreates;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRoleSearchProfiles provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRoleSearchProfiles exposed by              
+// the CoClass NRTRoleSearchProfiles. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRoleSearchProfiles = class
+    class function Create: INRTRoleSearchProfiles;
+    class function CreateRemote(const MachineName: string): INRTRoleSearchProfiles;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTStrings provides a Create and CreateRemote method to          
+// create instances of the default interface INRTStrings exposed by              
+// the CoClass NRTStrings. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTStrings = class
+    class function Create: INRTStrings;
+    class function CreateRemote(const MachineName: string): INRTStrings;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUserACLWeb provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUserACLWeb exposed by              
+// the CoClass NRTUserACLWeb. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUserACLWeb = class
+    class function Create: INRTUserACLWeb;
+    class function CreateRemote(const MachineName: string): INRTUserACLWeb;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUserACLsWeb provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUserACLsWeb exposed by              
+// the CoClass NRTUserACLsWeb. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUserACLsWeb = class
+    class function Create: INRTUserACLsWeb;
+    class function CreateRemote(const MachineName: string): INRTUserACLsWeb;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTGroupACLWeb provides a Create and CreateRemote method to          
+// create instances of the default interface INRTGroupACLWeb exposed by              
+// the CoClass NRTGroupACLWeb. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTGroupACLWeb = class
+    class function Create: INRTGroupACLWeb;
+    class function CreateRemote(const MachineName: string): INRTGroupACLWeb;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTGroupACLsWeb provides a Create and CreateRemote method to          
+// create instances of the default interface INRTGroupACLsWeb exposed by              
+// the CoClass NRTGroupACLsWeb. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTGroupACLsWeb = class
+    class function Create: INRTGroupACLsWeb;
+    class function CreateRemote(const MachineName: string): INRTGroupACLsWeb;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRuleEventType provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRuleEventType exposed by              
+// the CoClass NRTRuleEventType. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRuleEventType = class
+    class function Create: INRTRuleEventType;
+    class function CreateRemote(const MachineName: string): INRTRuleEventType;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEventHandler provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEventHandler exposed by              
+// the CoClass NRTEventHandler. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEventHandler = class
+    class function Create: INRTEventHandler;
+    class function CreateRemote(const MachineName: string): INRTEventHandler;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRule provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRule exposed by              
+// the CoClass NRTRule. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRule = class
+    class function Create: INRTRule;
+    class function CreateRemote(const MachineName: string): INRTRule;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEventHandlers provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEventHandlers exposed by              
+// the CoClass NRTEventHandlers. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEventHandlers = class
+    class function Create: INRTEventHandlers;
+    class function CreateRemote(const MachineName: string): INRTEventHandlers;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRules provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRules exposed by              
+// the CoClass NRTRules. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRules = class
+    class function Create: INRTRules;
+    class function CreateRemote(const MachineName: string): INRTRules;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTRuleEventTypes provides a Create and CreateRemote method to          
+// create instances of the default interface INRTRuleEventTypes exposed by              
+// the CoClass NRTRuleEventTypes. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTRuleEventTypes = class
+    class function Create: INRTRuleEventTypes;
+    class function CreateRemote(const MachineName: string): INRTRuleEventTypes;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAdditionalProperties provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAdditionalProperties exposed by              
+// the CoClass NRTAdditionalProperties. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAdditionalProperties = class
+    class function Create: INRTAdditionalProperties;
+    class function CreateRemote(const MachineName: string): INRTAdditionalProperties;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAdditionalProperty provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAdditionalProperty exposed by              
+// the CoClass NRTAdditionalProperty. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAdditionalProperty = class
+    class function Create: INRTAdditionalProperty;
+    class function CreateRemote(const MachineName: string): INRTAdditionalProperty;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTPages provides a Create and CreateRemote method to          
+// create instances of the default interface INRTPages exposed by              
+// the CoClass NRTPages. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTPages = class
+    class function Create: INRTPages;
+    class function CreateRemote(const MachineName: string): INRTPages;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTPage provides a Create and CreateRemote method to          
+// create instances of the default interface INRTPage2 exposed by              
+// the CoClass NRTPage. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTPage = class
+    class function Create: INRTPage2;
+    class function CreateRemote(const MachineName: string): INRTPage2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTasks provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTasks exposed by              
+// the CoClass NRTTasks. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTasks = class
+    class function Create: INRTTasks;
+    class function CreateRemote(const MachineName: string): INRTTasks;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTask provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTask exposed by              
+// the CoClass NRTTask. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTask = class
+    class function Create: INRTTask;
+    class function CreateRemote(const MachineName: string): INRTTask;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTaskFolders provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTaskFolders exposed by              
+// the CoClass NRTTaskFolders. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTaskFolders = class
+    class function Create: INRTTaskFolders;
+    class function CreateRemote(const MachineName: string): INRTTaskFolders;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTaskFolder provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTaskFolder2 exposed by              
+// the CoClass NRTTaskFolder. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTaskFolder = class
+    class function Create: INRTTaskFolder2;
+    class function CreateRemote(const MachineName: string): INRTTaskFolder2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEvent provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEvent exposed by              
+// the CoClass NRTEvent. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEvent = class
+    class function Create: INRTEvent;
+    class function CreateRemote(const MachineName: string): INRTEvent;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEvents provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEvents exposed by              
+// the CoClass NRTEvents. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEvents = class
+    class function Create: INRTEvents;
+    class function CreateRemote(const MachineName: string): INRTEvents;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEventFolders provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEventFolders exposed by              
+// the CoClass NRTEventFolders. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEventFolders = class
+    class function Create: INRTEventFolders;
+    class function CreateRemote(const MachineName: string): INRTEventFolders;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEventFolder provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEventFolder2 exposed by              
+// the CoClass NRTEventFolder. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEventFolder = class
+    class function Create: INRTEventFolder2;
+    class function CreateRemote(const MachineName: string): INRTEventFolder2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTMessage provides a Create and CreateRemote method to          
+// create instances of the default interface INRTMessage exposed by              
+// the CoClass NRTMessage. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTMessage = class
+    class function Create: INRTMessage;
+    class function CreateRemote(const MachineName: string): INRTMessage;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTMessages provides a Create and CreateRemote method to          
+// create instances of the default interface INRTMessages exposed by              
+// the CoClass NRTMessages. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTMessages = class
+    class function Create: INRTMessages;
+    class function CreateRemote(const MachineName: string): INRTMessages;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDiscussionFolders provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDiscussionFolders exposed by              
+// the CoClass NRTDiscussionFolders. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDiscussionFolders = class
+    class function Create: INRTDiscussionFolders;
+    class function CreateRemote(const MachineName: string): INRTDiscussionFolders;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDiscussionFolder provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDiscussionFolder2 exposed by              
+// the CoClass NRTDiscussionFolder. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDiscussionFolder = class
+    class function Create: INRTDiscussionFolder2;
+    class function CreateRemote(const MachineName: string): INRTDiscussionFolder2;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAttachment provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAttachment exposed by              
+// the CoClass NRTAttachment. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAttachment = class
+    class function Create: INRTAttachment;
+    class function CreateRemote(const MachineName: string): INRTAttachment;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTAttachments provides a Create and CreateRemote method to          
+// create instances of the default interface INRTAttachments exposed by              
+// the CoClass NRTAttachments. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTAttachments = class
+    class function Create: INRTAttachments;
+    class function CreateRemote(const MachineName: string): INRTAttachments;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTaskParameter provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTaskParameter exposed by              
+// the CoClass NRTTaskParameter. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTaskParameter = class
+    class function Create: INRTTaskParameter;
+    class function CreateRemote(const MachineName: string): INRTTaskParameter;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTaskParameters provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTaskParameters exposed by              
+// the CoClass NRTTaskParameters. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTaskParameters = class
+    class function Create: INRTTaskParameters;
+    class function CreateRemote(const MachineName: string): INRTTaskParameters;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEventParameter provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEventParameter exposed by              
+// the CoClass NRTEventParameter. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEventParameter = class
+    class function Create: INRTEventParameter;
+    class function CreateRemote(const MachineName: string): INRTEventParameter;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTEventParameters provides a Create and CreateRemote method to          
+// create instances of the default interface INRTEventParameters exposed by              
+// the CoClass NRTEventParameters. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTEventParameters = class
+    class function Create: INRTEventParameters;
+    class function CreateRemote(const MachineName: string): INRTEventParameters;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDiscussionParameter provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDiscussionParameter exposed by              
+// the CoClass NRTDiscussionParameter. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDiscussionParameter = class
+    class function Create: INRTDiscussionParameter;
+    class function CreateRemote(const MachineName: string): INRTDiscussionParameter;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDiscussionParameters provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDiscussionParameters exposed by              
+// the CoClass NRTDiscussionParameters. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDiscussionParameters = class
+    class function Create: INRTDiscussionParameters;
+    class function CreateRemote(const MachineName: string): INRTDiscussionParameters;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUserParameter provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUserParameter exposed by              
+// the CoClass NRTUserParameter. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUserParameter = class
+    class function Create: INRTUserParameter;
+    class function CreateRemote(const MachineName: string): INRTUserParameter;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTUserParameters provides a Create and CreateRemote method to          
+// create instances of the default interface INRTUserParameters exposed by              
+// the CoClass NRTUserParameters. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTUserParameters = class
+    class function Create: INRTUserParameters;
+    class function CreateRemote(const MachineName: string): INRTUserParameters;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTStats provides a Create and CreateRemote method to          
+// create instances of the default interface INRTStats exposed by              
+// the CoClass NRTStats. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTStats = class
+    class function Create: INRTStats;
+    class function CreateRemote(const MachineName: string): INRTStats;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTTraceInfo provides a Create and CreateRemote method to          
+// create instances of the default interface INRTTraceInfo exposed by              
+// the CoClass NRTTraceInfo. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTTraceInfo = class
+    class function Create: INRTTraceInfo;
+    class function CreateRemote(const MachineName: string): INRTTraceInfo;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDate provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDate exposed by              
+// the CoClass NRTDate. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDate = class
+    class function Create: INRTDate;
+    class function CreateRemote(const MachineName: string): INRTDate;
+  end;
+
+// *********************************************************************//
+// The Class CoNRTDateRange provides a Create and CreateRemote method to          
+// create instances of the default interface INRTDateRange exposed by              
+// the CoClass NRTDateRange. The functions are intended to be used by             
+// clients wishing to automate the CoClass objects exposed by the         
+// server of this typelibrary.                                            
+// *********************************************************************//
+  CoNRTDateRange = class
+    class function Create: INRTDateRange;
+    class function CreateRemote(const MachineName: string): INRTDateRange;
+  end;
+
+implementation
+
+uses ComObj;
+
+class function CoManStrings.Create: IManStrings;
+begin
+  Result := CreateComObject(CLASS_ManStrings) as IManStrings;
+end;
+
+class function CoManStrings.CreateRemote(const MachineName: string): IManStrings;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_ManStrings) as IManStrings;
+end;
+
+class function CoManAndQuery.Create: IManAndQuery;
+begin
+  Result := CreateComObject(CLASS_ManAndQuery) as IManAndQuery;
+end;
+
+class function CoManAndQuery.CreateRemote(const MachineName: string): IManAndQuery;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_ManAndQuery) as IManAndQuery;
+end;
+
+class function CoManOrQuery.Create: IManOrQuery;
+begin
+  Result := CreateComObject(CLASS_ManOrQuery) as IManOrQuery;
+end;
+
+class function CoManOrQuery.CreateRemote(const MachineName: string): IManOrQuery;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_ManOrQuery) as IManOrQuery;
+end;
+
+class function CoNRTDMS.Create: INRTDMS3;
+begin
+  Result := CreateComObject(CLASS_NRTDMS) as INRTDMS3;
+end;
+
+class function CoNRTDMS.CreateRemote(const MachineName: string): INRTDMS3;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDMS) as INRTDMS3;
+end;
+
+class function CoManDMS.Create: IManDMS;
+begin
+  Result := CreateComObject(CLASS_ManDMS) as IManDMS;
+end;
+
+class function CoManDMS.CreateRemote(const MachineName: string): IManDMS;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_ManDMS) as IManDMS;
+end;
+
+class function CoSmartNRTDms.Create: ISmartNRTDMS;
+begin
+  Result := CreateComObject(CLASS_SmartNRTDms) as ISmartNRTDMS;
+end;
+
+class function CoSmartNRTDms.CreateRemote(const MachineName: string): ISmartNRTDMS;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_SmartNRTDms) as ISmartNRTDMS;
+end;
+
+class function CoNRTSessions.Create: INRTSessions;
+begin
+  Result := CreateComObject(CLASS_NRTSessions) as INRTSessions;
+end;
+
+class function CoNRTSessions.CreateRemote(const MachineName: string): INRTSessions;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSessions) as INRTSessions;
+end;
+
+class function CoNRTSession.Create: INRTSession2;
+begin
+  Result := CreateComObject(CLASS_NRTSession) as INRTSession2;
+end;
+
+class function CoNRTSession.CreateRemote(const MachineName: string): INRTSession2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSession) as INRTSession2;
+end;
+
+class function CoNRTDatabases.Create: INRTDatabases;
+begin
+  Result := CreateComObject(CLASS_NRTDatabases) as INRTDatabases;
+end;
+
+class function CoNRTDatabases.CreateRemote(const MachineName: string): INRTDatabases;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDatabases) as INRTDatabases;
+end;
+
+class function CoNRTDatabase.Create: INRTDatabase2;
+begin
+  Result := CreateComObject(CLASS_NRTDatabase) as INRTDatabase2;
+end;
+
+class function CoNRTDatabase.CreateRemote(const MachineName: string): INRTDatabase2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDatabase) as INRTDatabase2;
+end;
+
+class function CoNRTForms.Create: INRTForms;
+begin
+  Result := CreateComObject(CLASS_NRTForms) as INRTForms;
+end;
+
+class function CoNRTForms.CreateRemote(const MachineName: string): INRTForms;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTForms) as INRTForms;
+end;
+
+class function CoNRTForm.Create: INRTForm;
+begin
+  Result := CreateComObject(CLASS_NRTForm) as INRTForm;
+end;
+
+class function CoNRTForm.CreateRemote(const MachineName: string): INRTForm;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTForm) as INRTForm;
+end;
+
+class function CoNRTDocuments.Create: INRTDocuments;
+begin
+  Result := CreateComObject(CLASS_NRTDocuments) as INRTDocuments;
+end;
+
+class function CoNRTDocuments.CreateRemote(const MachineName: string): INRTDocuments;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocuments) as INRTDocuments;
+end;
+
+class function CoNRTFolder.Create: INRTFolder2;
+begin
+  Result := CreateComObject(CLASS_NRTFolder) as INRTFolder2;
+end;
+
+class function CoNRTFolder.CreateRemote(const MachineName: string): INRTFolder2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTFolder) as INRTFolder2;
+end;
+
+class function CoNRTFolders.Create: INRTFolders;
+begin
+  Result := CreateComObject(CLASS_NRTFolders) as INRTFolders;
+end;
+
+class function CoNRTFolders.CreateRemote(const MachineName: string): INRTFolders;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTFolders) as INRTFolders;
+end;
+
+class function CoNRTControls.Create: INRTControls;
+begin
+  Result := CreateComObject(CLASS_NRTControls) as INRTControls;
+end;
+
+class function CoNRTControls.CreateRemote(const MachineName: string): INRTControls;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTControls) as INRTControls;
+end;
+
+class function CoNRTControl.Create: INRTControl;
+begin
+  Result := CreateComObject(CLASS_NRTControl) as INRTControl;
+end;
+
+class function CoNRTControl.CreateRemote(const MachineName: string): INRTControl;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTControl) as INRTControl;
+end;
+
+class function CoNRTSecurity.Create: INRTSecurity;
+begin
+  Result := CreateComObject(CLASS_NRTSecurity) as INRTSecurity;
+end;
+
+class function CoNRTSecurity.CreateRemote(const MachineName: string): INRTSecurity;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSecurity) as INRTSecurity;
+end;
+
+class function CoNRTSecurityWeb.Create: INRTSecurity;
+begin
+  Result := CreateComObject(CLASS_NRTSecurityWeb) as INRTSecurity;
+end;
+
+class function CoNRTSecurityWeb.CreateRemote(const MachineName: string): INRTSecurity;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSecurityWeb) as INRTSecurity;
+end;
+
+class function CoNRTSecurityTemplate.Create: INRTSecurityTemplate;
+begin
+  Result := CreateComObject(CLASS_NRTSecurityTemplate) as INRTSecurityTemplate;
+end;
+
+class function CoNRTSecurityTemplate.CreateRemote(const MachineName: string): INRTSecurityTemplate;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSecurityTemplate) as INRTSecurityTemplate;
+end;
+
+class function CoNRTSecurityTemplates.Create: INRTSecurityTemplates;
+begin
+  Result := CreateComObject(CLASS_NRTSecurityTemplates) as INRTSecurityTemplates;
+end;
+
+class function CoNRTSecurityTemplates.CreateRemote(const MachineName: string): INRTSecurityTemplates;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSecurityTemplates) as INRTSecurityTemplates;
+end;
+
+class function CoNRTUser.Create: INRTUser;
+begin
+  Result := CreateComObject(CLASS_NRTUser) as INRTUser;
+end;
+
+class function CoNRTUser.CreateRemote(const MachineName: string): INRTUser;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUser) as INRTUser;
+end;
+
+class function CoNRTGroup.Create: INRTGroup;
+begin
+  Result := CreateComObject(CLASS_NRTGroup) as INRTGroup;
+end;
+
+class function CoNRTGroup.CreateRemote(const MachineName: string): INRTGroup;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTGroup) as INRTGroup;
+end;
+
+class function CoNRTUserACL.Create: INRTUserACL;
+begin
+  Result := CreateComObject(CLASS_NRTUserACL) as INRTUserACL;
+end;
+
+class function CoNRTUserACL.CreateRemote(const MachineName: string): INRTUserACL;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUserACL) as INRTUserACL;
+end;
+
+class function CoNRTGroupACL.Create: INRTGroupACL;
+begin
+  Result := CreateComObject(CLASS_NRTGroupACL) as INRTGroupACL;
+end;
+
+class function CoNRTGroupACL.CreateRemote(const MachineName: string): INRTGroupACL;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTGroupACL) as INRTGroupACL;
+end;
+
+class function CoNRTGroupACLs.Create: INRTGroupACLs;
+begin
+  Result := CreateComObject(CLASS_NRTGroupACLs) as INRTGroupACLs;
+end;
+
+class function CoNRTGroupACLs.CreateRemote(const MachineName: string): INRTGroupACLs;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTGroupACLs) as INRTGroupACLs;
+end;
+
+class function CoNRTUserACLs.Create: INRTUserACLs;
+begin
+  Result := CreateComObject(CLASS_NRTUserACLs) as INRTUserACLs;
+end;
+
+class function CoNRTUserACLs.CreateRemote(const MachineName: string): INRTUserACLs;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUserACLs) as INRTUserACLs;
+end;
+
+class function CoNRTSearchParameters.Create: INRTSearchParameters;
+begin
+  Result := CreateComObject(CLASS_NRTSearchParameters) as INRTSearchParameters;
+end;
+
+class function CoNRTSearchParameters.CreateRemote(const MachineName: string): INRTSearchParameters;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSearchParameters) as INRTSearchParameters;
+end;
+
+class function CoNRTUsers.Create: INRTUsers;
+begin
+  Result := CreateComObject(CLASS_NRTUsers) as INRTUsers;
+end;
+
+class function CoNRTUsers.CreateRemote(const MachineName: string): INRTUsers;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUsers) as INRTUsers;
+end;
+
+class function CoNRTGroups.Create: INRTGroups;
+begin
+  Result := CreateComObject(CLASS_NRTGroups) as INRTGroups;
+end;
+
+class function CoNRTGroups.CreateRemote(const MachineName: string): INRTGroups;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTGroups) as INRTGroups;
+end;
+
+class function CoNRTRole.Create: INRTRole;
+begin
+  Result := CreateComObject(CLASS_NRTRole) as INRTRole;
+end;
+
+class function CoNRTRole.CreateRemote(const MachineName: string): INRTRole;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRole) as INRTRole;
+end;
+
+class function CoNRTRoles.Create: INRTRoles;
+begin
+  Result := CreateComObject(CLASS_NRTRoles) as INRTRoles;
+end;
+
+class function CoNRTRoles.CreateRemote(const MachineName: string): INRTRoles;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRoles) as INRTRoles;
+end;
+
+class function CoNRTDocumentType.Create: INRTDocumentType;
+begin
+  Result := CreateComObject(CLASS_NRTDocumentType) as INRTDocumentType;
+end;
+
+class function CoNRTDocumentType.CreateRemote(const MachineName: string): INRTDocumentType;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocumentType) as INRTDocumentType;
+end;
+
+class function CoNRTDocumentTypes.Create: INRTDocumentTypes;
+begin
+  Result := CreateComObject(CLASS_NRTDocumentTypes) as INRTDocumentTypes;
+end;
+
+class function CoNRTDocumentTypes.CreateRemote(const MachineName: string): INRTDocumentTypes;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocumentTypes) as INRTDocumentTypes;
+end;
+
+class function CoNRTLaunchMethod.Create: INRTLaunchMethod;
+begin
+  Result := CreateComObject(CLASS_NRTLaunchMethod) as INRTLaunchMethod;
+end;
+
+class function CoNRTLaunchMethod.CreateRemote(const MachineName: string): INRTLaunchMethod;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTLaunchMethod) as INRTLaunchMethod;
+end;
+
+class function CoNRTLaunchMethods.Create: INRTLaunchMethods;
+begin
+  Result := CreateComObject(CLASS_NRTLaunchMethods) as INRTLaunchMethods;
+end;
+
+class function CoNRTLaunchMethods.CreateRemote(const MachineName: string): INRTLaunchMethods;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTLaunchMethods) as INRTLaunchMethods;
+end;
+
+class function CoNRTDocumentClass.Create: INRTDocumentClass;
+begin
+  Result := CreateComObject(CLASS_NRTDocumentClass) as INRTDocumentClass;
+end;
+
+class function CoNRTDocumentClass.CreateRemote(const MachineName: string): INRTDocumentClass;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocumentClass) as INRTDocumentClass;
+end;
+
+class function CoNRTDocumentClasses.Create: INRTDocumentClasses;
+begin
+  Result := CreateComObject(CLASS_NRTDocumentClasses) as INRTDocumentClasses;
+end;
+
+class function CoNRTDocumentClasses.CreateRemote(const MachineName: string): INRTDocumentClasses;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocumentClasses) as INRTDocumentClasses;
+end;
+
+class function CoNRTDocumentHistory.Create: INRTDocumentHistory;
+begin
+  Result := CreateComObject(CLASS_NRTDocumentHistory) as INRTDocumentHistory;
+end;
+
+class function CoNRTDocumentHistory.CreateRemote(const MachineName: string): INRTDocumentHistory;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocumentHistory) as INRTDocumentHistory;
+end;
+
+class function CoNRTHistoryList.Create: INRTHistoryList;
+begin
+  Result := CreateComObject(CLASS_NRTHistoryList) as INRTHistoryList;
+end;
+
+class function CoNRTHistoryList.CreateRemote(const MachineName: string): INRTHistoryList;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTHistoryList) as INRTHistoryList;
+end;
+
+class function CoNRTAttributeDefinition.Create: INRTAttributeDefinition;
+begin
+  Result := CreateComObject(CLASS_NRTAttributeDefinition) as INRTAttributeDefinition;
+end;
+
+class function CoNRTAttributeDefinition.CreateRemote(const MachineName: string): INRTAttributeDefinition;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAttributeDefinition) as INRTAttributeDefinition;
+end;
+
+class function CoNRTAttributeDefinitions.Create: INRTAttributeDefinitions;
+begin
+  Result := CreateComObject(CLASS_NRTAttributeDefinitions) as INRTAttributeDefinitions;
+end;
+
+class function CoNRTAttributeDefinitions.CreateRemote(const MachineName: string): INRTAttributeDefinitions;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAttributeDefinitions) as INRTAttributeDefinitions;
+end;
+
+class function CoNRTCustomAttributes.Create: INRTCustomAttributes;
+begin
+  Result := CreateComObject(CLASS_NRTCustomAttributes) as INRTCustomAttributes;
+end;
+
+class function CoNRTCustomAttributes.CreateRemote(const MachineName: string): INRTCustomAttributes;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTCustomAttributes) as INRTCustomAttributes;
+end;
+
+class function CoNRTCustomAttribute.Create: INRTCustomAttribute;
+begin
+  Result := CreateComObject(CLASS_NRTCustomAttribute) as INRTCustomAttribute;
+end;
+
+class function CoNRTCustomAttribute.CreateRemote(const MachineName: string): INRTCustomAttribute;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTCustomAttribute) as INRTCustomAttribute;
+end;
+
+class function CoNRTDocument.Create: INRTDocument;
+begin
+  Result := CreateComObject(CLASS_NRTDocument) as INRTDocument;
+end;
+
+class function CoNRTDocument.CreateRemote(const MachineName: string): INRTDocument;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDocument) as INRTDocument;
+end;
+
+class function CoNRTAttributeSelections.Create: INRTAttributeSelections;
+begin
+  Result := CreateComObject(CLASS_NRTAttributeSelections) as INRTAttributeSelections;
+end;
+
+class function CoNRTAttributeSelections.CreateRemote(const MachineName: string): INRTAttributeSelections;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAttributeSelections) as INRTAttributeSelections;
+end;
+
+class function CoNRTSearchParameter.Create: INRTSearchParameter;
+begin
+  Result := CreateComObject(CLASS_NRTSearchParameter) as INRTSearchParameter;
+end;
+
+class function CoNRTSearchParameter.CreateRemote(const MachineName: string): INRTSearchParameter;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTSearchParameter) as INRTSearchParameter;
+end;
+
+class function CoNRTCollectionDataEnum.Create: INRTCollectionDataEnum;
+begin
+  Result := CreateComObject(CLASS_NRTCollectionDataEnum) as INRTCollectionDataEnum;
+end;
+
+class function CoNRTCollectionDataEnum.CreateRemote(const MachineName: string): INRTCollectionDataEnum;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTCollectionDataEnum) as INRTCollectionDataEnum;
+end;
+
+class function CoNRTAttributeSelectionsEnum.Create: IEnumVARIANT;
+begin
+  Result := CreateComObject(CLASS_NRTAttributeSelectionsEnum) as IEnumVARIANT;
+end;
+
+class function CoNRTAttributeSelectionsEnum.CreateRemote(const MachineName: string): IEnumVARIANT;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAttributeSelectionsEnum) as IEnumVARIANT;
+end;
+
+class function CoNRTProfileError.Create: INRTProfileError;
+begin
+  Result := CreateComObject(CLASS_NRTProfileError) as INRTProfileError;
+end;
+
+class function CoNRTProfileError.CreateRemote(const MachineName: string): INRTProfileError;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTProfileError) as INRTProfileError;
+end;
+
+class function CoNRTPerformanceSnapshot.Create: INRTPerformanceSnapshot;
+begin
+  Result := CreateComObject(CLASS_NRTPerformanceSnapshot) as INRTPerformanceSnapshot;
+end;
+
+class function CoNRTPerformanceSnapshot.CreateRemote(const MachineName: string): INRTPerformanceSnapshot;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTPerformanceSnapshot) as INRTPerformanceSnapshot;
+end;
+
+class function CoNRTMethodCall.Create: INRTMethodCall;
+begin
+  Result := CreateComObject(CLASS_NRTMethodCall) as INRTMethodCall;
+end;
+
+class function CoNRTMethodCall.CreateRemote(const MachineName: string): INRTMethodCall;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTMethodCall) as INRTMethodCall;
+end;
+
+class function CoNRTMethodCalls.Create: INRTMethodCalls;
+begin
+  Result := CreateComObject(CLASS_NRTMethodCalls) as INRTMethodCalls;
+end;
+
+class function CoNRTMethodCalls.CreateRemote(const MachineName: string): INRTMethodCalls;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTMethodCalls) as INRTMethodCalls;
+end;
+
+class function CoNRTServerCall.Create: INRTServerCall;
+begin
+  Result := CreateComObject(CLASS_NRTServerCall) as INRTServerCall;
+end;
+
+class function CoNRTServerCall.CreateRemote(const MachineName: string): INRTServerCall;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTServerCall) as INRTServerCall;
+end;
+
+class function CoNRTServerCalls.Create: INRTServerCalls;
+begin
+  Result := CreateComObject(CLASS_NRTServerCalls) as INRTServerCalls;
+end;
+
+class function CoNRTServerCalls.CreateRemote(const MachineName: string): INRTServerCalls;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTServerCalls) as INRTServerCalls;
+end;
+
+class function CoNRTObjectDatum.Create: INRTObjectDatum;
+begin
+  Result := CreateComObject(CLASS_NRTObjectDatum) as INRTObjectDatum;
+end;
+
+class function CoNRTObjectDatum.CreateRemote(const MachineName: string): INRTObjectDatum;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTObjectDatum) as INRTObjectDatum;
+end;
+
+class function CoNRTObjectData.Create: INRTObjectData2;
+begin
+  Result := CreateComObject(CLASS_NRTObjectData) as INRTObjectData2;
+end;
+
+class function CoNRTObjectData.CreateRemote(const MachineName: string): INRTObjectData2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTObjectData) as INRTObjectData2;
+end;
+
+class function CoNRTObjectDataSort.Create: INRTObjectDataSort;
+begin
+  Result := CreateComObject(CLASS_NRTObjectDataSort) as INRTObjectDataSort;
+end;
+
+class function CoNRTObjectDataSort.CreateRemote(const MachineName: string): INRTObjectDataSort;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTObjectDataSort) as INRTObjectDataSort;
+end;
+
+class function CoNRTPerformanceCollectionEnum.Create: INRTPerformanceCollectionEnum;
+begin
+  Result := CreateComObject(CLASS_NRTPerformanceCollectionEnum) as INRTPerformanceCollectionEnum;
+end;
+
+class function CoNRTPerformanceCollectionEnum.CreateRemote(const MachineName: string): INRTPerformanceCollectionEnum;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTPerformanceCollectionEnum) as INRTPerformanceCollectionEnum;
+end;
+
+class function CoSTLEnumVARIANT.Create: IEnumVARIANT;
+begin
+  Result := CreateComObject(CLASS_STLEnumVARIANT) as IEnumVARIANT;
+end;
+
+class function CoSTLEnumVARIANT.CreateRemote(const MachineName: string): IEnumVARIANT;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_STLEnumVARIANT) as IEnumVARIANT;
+end;
+
+class function CoNRTRoleEditCreate.Create: INRTRoleEditCreate;
+begin
+  Result := CreateComObject(CLASS_NRTRoleEditCreate) as INRTRoleEditCreate;
+end;
+
+class function CoNRTRoleEditCreate.CreateRemote(const MachineName: string): INRTRoleEditCreate;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRoleEditCreate) as INRTRoleEditCreate;
+end;
+
+class function CoNRTRoleSearchProfile.Create: INRTRoleSearchProfile;
+begin
+  Result := CreateComObject(CLASS_NRTRoleSearchProfile) as INRTRoleSearchProfile;
+end;
+
+class function CoNRTRoleSearchProfile.CreateRemote(const MachineName: string): INRTRoleSearchProfile;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRoleSearchProfile) as INRTRoleSearchProfile;
+end;
+
+class function CoNRTRoleEditCreates.Create: INRTRoleEditCreates;
+begin
+  Result := CreateComObject(CLASS_NRTRoleEditCreates) as INRTRoleEditCreates;
+end;
+
+class function CoNRTRoleEditCreates.CreateRemote(const MachineName: string): INRTRoleEditCreates;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRoleEditCreates) as INRTRoleEditCreates;
+end;
+
+class function CoNRTRoleSearchProfiles.Create: INRTRoleSearchProfiles;
+begin
+  Result := CreateComObject(CLASS_NRTRoleSearchProfiles) as INRTRoleSearchProfiles;
+end;
+
+class function CoNRTRoleSearchProfiles.CreateRemote(const MachineName: string): INRTRoleSearchProfiles;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRoleSearchProfiles) as INRTRoleSearchProfiles;
+end;
+
+class function CoNRTStrings.Create: INRTStrings;
+begin
+  Result := CreateComObject(CLASS_NRTStrings) as INRTStrings;
+end;
+
+class function CoNRTStrings.CreateRemote(const MachineName: string): INRTStrings;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTStrings) as INRTStrings;
+end;
+
+class function CoNRTUserACLWeb.Create: INRTUserACLWeb;
+begin
+  Result := CreateComObject(CLASS_NRTUserACLWeb) as INRTUserACLWeb;
+end;
+
+class function CoNRTUserACLWeb.CreateRemote(const MachineName: string): INRTUserACLWeb;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUserACLWeb) as INRTUserACLWeb;
+end;
+
+class function CoNRTUserACLsWeb.Create: INRTUserACLsWeb;
+begin
+  Result := CreateComObject(CLASS_NRTUserACLsWeb) as INRTUserACLsWeb;
+end;
+
+class function CoNRTUserACLsWeb.CreateRemote(const MachineName: string): INRTUserACLsWeb;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUserACLsWeb) as INRTUserACLsWeb;
+end;
+
+class function CoNRTGroupACLWeb.Create: INRTGroupACLWeb;
+begin
+  Result := CreateComObject(CLASS_NRTGroupACLWeb) as INRTGroupACLWeb;
+end;
+
+class function CoNRTGroupACLWeb.CreateRemote(const MachineName: string): INRTGroupACLWeb;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTGroupACLWeb) as INRTGroupACLWeb;
+end;
+
+class function CoNRTGroupACLsWeb.Create: INRTGroupACLsWeb;
+begin
+  Result := CreateComObject(CLASS_NRTGroupACLsWeb) as INRTGroupACLsWeb;
+end;
+
+class function CoNRTGroupACLsWeb.CreateRemote(const MachineName: string): INRTGroupACLsWeb;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTGroupACLsWeb) as INRTGroupACLsWeb;
+end;
+
+class function CoNRTRuleEventType.Create: INRTRuleEventType;
+begin
+  Result := CreateComObject(CLASS_NRTRuleEventType) as INRTRuleEventType;
+end;
+
+class function CoNRTRuleEventType.CreateRemote(const MachineName: string): INRTRuleEventType;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRuleEventType) as INRTRuleEventType;
+end;
+
+class function CoNRTEventHandler.Create: INRTEventHandler;
+begin
+  Result := CreateComObject(CLASS_NRTEventHandler) as INRTEventHandler;
+end;
+
+class function CoNRTEventHandler.CreateRemote(const MachineName: string): INRTEventHandler;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEventHandler) as INRTEventHandler;
+end;
+
+class function CoNRTRule.Create: INRTRule;
+begin
+  Result := CreateComObject(CLASS_NRTRule) as INRTRule;
+end;
+
+class function CoNRTRule.CreateRemote(const MachineName: string): INRTRule;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRule) as INRTRule;
+end;
+
+class function CoNRTEventHandlers.Create: INRTEventHandlers;
+begin
+  Result := CreateComObject(CLASS_NRTEventHandlers) as INRTEventHandlers;
+end;
+
+class function CoNRTEventHandlers.CreateRemote(const MachineName: string): INRTEventHandlers;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEventHandlers) as INRTEventHandlers;
+end;
+
+class function CoNRTRules.Create: INRTRules;
+begin
+  Result := CreateComObject(CLASS_NRTRules) as INRTRules;
+end;
+
+class function CoNRTRules.CreateRemote(const MachineName: string): INRTRules;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRules) as INRTRules;
+end;
+
+class function CoNRTRuleEventTypes.Create: INRTRuleEventTypes;
+begin
+  Result := CreateComObject(CLASS_NRTRuleEventTypes) as INRTRuleEventTypes;
+end;
+
+class function CoNRTRuleEventTypes.CreateRemote(const MachineName: string): INRTRuleEventTypes;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTRuleEventTypes) as INRTRuleEventTypes;
+end;
+
+class function CoNRTAdditionalProperties.Create: INRTAdditionalProperties;
+begin
+  Result := CreateComObject(CLASS_NRTAdditionalProperties) as INRTAdditionalProperties;
+end;
+
+class function CoNRTAdditionalProperties.CreateRemote(const MachineName: string): INRTAdditionalProperties;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAdditionalProperties) as INRTAdditionalProperties;
+end;
+
+class function CoNRTAdditionalProperty.Create: INRTAdditionalProperty;
+begin
+  Result := CreateComObject(CLASS_NRTAdditionalProperty) as INRTAdditionalProperty;
+end;
+
+class function CoNRTAdditionalProperty.CreateRemote(const MachineName: string): INRTAdditionalProperty;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAdditionalProperty) as INRTAdditionalProperty;
+end;
+
+class function CoNRTPages.Create: INRTPages;
+begin
+  Result := CreateComObject(CLASS_NRTPages) as INRTPages;
+end;
+
+class function CoNRTPages.CreateRemote(const MachineName: string): INRTPages;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTPages) as INRTPages;
+end;
+
+class function CoNRTPage.Create: INRTPage2;
+begin
+  Result := CreateComObject(CLASS_NRTPage) as INRTPage2;
+end;
+
+class function CoNRTPage.CreateRemote(const MachineName: string): INRTPage2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTPage) as INRTPage2;
+end;
+
+class function CoNRTTasks.Create: INRTTasks;
+begin
+  Result := CreateComObject(CLASS_NRTTasks) as INRTTasks;
+end;
+
+class function CoNRTTasks.CreateRemote(const MachineName: string): INRTTasks;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTasks) as INRTTasks;
+end;
+
+class function CoNRTTask.Create: INRTTask;
+begin
+  Result := CreateComObject(CLASS_NRTTask) as INRTTask;
+end;
+
+class function CoNRTTask.CreateRemote(const MachineName: string): INRTTask;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTask) as INRTTask;
+end;
+
+class function CoNRTTaskFolders.Create: INRTTaskFolders;
+begin
+  Result := CreateComObject(CLASS_NRTTaskFolders) as INRTTaskFolders;
+end;
+
+class function CoNRTTaskFolders.CreateRemote(const MachineName: string): INRTTaskFolders;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTaskFolders) as INRTTaskFolders;
+end;
+
+class function CoNRTTaskFolder.Create: INRTTaskFolder2;
+begin
+  Result := CreateComObject(CLASS_NRTTaskFolder) as INRTTaskFolder2;
+end;
+
+class function CoNRTTaskFolder.CreateRemote(const MachineName: string): INRTTaskFolder2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTaskFolder) as INRTTaskFolder2;
+end;
+
+class function CoNRTEvent.Create: INRTEvent;
+begin
+  Result := CreateComObject(CLASS_NRTEvent) as INRTEvent;
+end;
+
+class function CoNRTEvent.CreateRemote(const MachineName: string): INRTEvent;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEvent) as INRTEvent;
+end;
+
+class function CoNRTEvents.Create: INRTEvents;
+begin
+  Result := CreateComObject(CLASS_NRTEvents) as INRTEvents;
+end;
+
+class function CoNRTEvents.CreateRemote(const MachineName: string): INRTEvents;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEvents) as INRTEvents;
+end;
+
+class function CoNRTEventFolders.Create: INRTEventFolders;
+begin
+  Result := CreateComObject(CLASS_NRTEventFolders) as INRTEventFolders;
+end;
+
+class function CoNRTEventFolders.CreateRemote(const MachineName: string): INRTEventFolders;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEventFolders) as INRTEventFolders;
+end;
+
+class function CoNRTEventFolder.Create: INRTEventFolder2;
+begin
+  Result := CreateComObject(CLASS_NRTEventFolder) as INRTEventFolder2;
+end;
+
+class function CoNRTEventFolder.CreateRemote(const MachineName: string): INRTEventFolder2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEventFolder) as INRTEventFolder2;
+end;
+
+class function CoNRTMessage.Create: INRTMessage;
+begin
+  Result := CreateComObject(CLASS_NRTMessage) as INRTMessage;
+end;
+
+class function CoNRTMessage.CreateRemote(const MachineName: string): INRTMessage;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTMessage) as INRTMessage;
+end;
+
+class function CoNRTMessages.Create: INRTMessages;
+begin
+  Result := CreateComObject(CLASS_NRTMessages) as INRTMessages;
+end;
+
+class function CoNRTMessages.CreateRemote(const MachineName: string): INRTMessages;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTMessages) as INRTMessages;
+end;
+
+class function CoNRTDiscussionFolders.Create: INRTDiscussionFolders;
+begin
+  Result := CreateComObject(CLASS_NRTDiscussionFolders) as INRTDiscussionFolders;
+end;
+
+class function CoNRTDiscussionFolders.CreateRemote(const MachineName: string): INRTDiscussionFolders;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDiscussionFolders) as INRTDiscussionFolders;
+end;
+
+class function CoNRTDiscussionFolder.Create: INRTDiscussionFolder2;
+begin
+  Result := CreateComObject(CLASS_NRTDiscussionFolder) as INRTDiscussionFolder2;
+end;
+
+class function CoNRTDiscussionFolder.CreateRemote(const MachineName: string): INRTDiscussionFolder2;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDiscussionFolder) as INRTDiscussionFolder2;
+end;
+
+class function CoNRTAttachment.Create: INRTAttachment;
+begin
+  Result := CreateComObject(CLASS_NRTAttachment) as INRTAttachment;
+end;
+
+class function CoNRTAttachment.CreateRemote(const MachineName: string): INRTAttachment;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAttachment) as INRTAttachment;
+end;
+
+class function CoNRTAttachments.Create: INRTAttachments;
+begin
+  Result := CreateComObject(CLASS_NRTAttachments) as INRTAttachments;
+end;
+
+class function CoNRTAttachments.CreateRemote(const MachineName: string): INRTAttachments;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTAttachments) as INRTAttachments;
+end;
+
+class function CoNRTTaskParameter.Create: INRTTaskParameter;
+begin
+  Result := CreateComObject(CLASS_NRTTaskParameter) as INRTTaskParameter;
+end;
+
+class function CoNRTTaskParameter.CreateRemote(const MachineName: string): INRTTaskParameter;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTaskParameter) as INRTTaskParameter;
+end;
+
+class function CoNRTTaskParameters.Create: INRTTaskParameters;
+begin
+  Result := CreateComObject(CLASS_NRTTaskParameters) as INRTTaskParameters;
+end;
+
+class function CoNRTTaskParameters.CreateRemote(const MachineName: string): INRTTaskParameters;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTaskParameters) as INRTTaskParameters;
+end;
+
+class function CoNRTEventParameter.Create: INRTEventParameter;
+begin
+  Result := CreateComObject(CLASS_NRTEventParameter) as INRTEventParameter;
+end;
+
+class function CoNRTEventParameter.CreateRemote(const MachineName: string): INRTEventParameter;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEventParameter) as INRTEventParameter;
+end;
+
+class function CoNRTEventParameters.Create: INRTEventParameters;
+begin
+  Result := CreateComObject(CLASS_NRTEventParameters) as INRTEventParameters;
+end;
+
+class function CoNRTEventParameters.CreateRemote(const MachineName: string): INRTEventParameters;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTEventParameters) as INRTEventParameters;
+end;
+
+class function CoNRTDiscussionParameter.Create: INRTDiscussionParameter;
+begin
+  Result := CreateComObject(CLASS_NRTDiscussionParameter) as INRTDiscussionParameter;
+end;
+
+class function CoNRTDiscussionParameter.CreateRemote(const MachineName: string): INRTDiscussionParameter;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDiscussionParameter) as INRTDiscussionParameter;
+end;
+
+class function CoNRTDiscussionParameters.Create: INRTDiscussionParameters;
+begin
+  Result := CreateComObject(CLASS_NRTDiscussionParameters) as INRTDiscussionParameters;
+end;
+
+class function CoNRTDiscussionParameters.CreateRemote(const MachineName: string): INRTDiscussionParameters;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDiscussionParameters) as INRTDiscussionParameters;
+end;
+
+class function CoNRTUserParameter.Create: INRTUserParameter;
+begin
+  Result := CreateComObject(CLASS_NRTUserParameter) as INRTUserParameter;
+end;
+
+class function CoNRTUserParameter.CreateRemote(const MachineName: string): INRTUserParameter;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUserParameter) as INRTUserParameter;
+end;
+
+class function CoNRTUserParameters.Create: INRTUserParameters;
+begin
+  Result := CreateComObject(CLASS_NRTUserParameters) as INRTUserParameters;
+end;
+
+class function CoNRTUserParameters.CreateRemote(const MachineName: string): INRTUserParameters;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTUserParameters) as INRTUserParameters;
+end;
+
+class function CoNRTStats.Create: INRTStats;
+begin
+  Result := CreateComObject(CLASS_NRTStats) as INRTStats;
+end;
+
+class function CoNRTStats.CreateRemote(const MachineName: string): INRTStats;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTStats) as INRTStats;
+end;
+
+class function CoNRTTraceInfo.Create: INRTTraceInfo;
+begin
+  Result := CreateComObject(CLASS_NRTTraceInfo) as INRTTraceInfo;
+end;
+
+class function CoNRTTraceInfo.CreateRemote(const MachineName: string): INRTTraceInfo;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTTraceInfo) as INRTTraceInfo;
+end;
+
+class function CoNRTDate.Create: INRTDate;
+begin
+  Result := CreateComObject(CLASS_NRTDate) as INRTDate;
+end;
+
+class function CoNRTDate.CreateRemote(const MachineName: string): INRTDate;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDate) as INRTDate;
+end;
+
+class function CoNRTDateRange.Create: INRTDateRange;
+begin
+  Result := CreateComObject(CLASS_NRTDateRange) as INRTDateRange;
+end;
+
+class function CoNRTDateRange.CreateRemote(const MachineName: string): INRTDateRange;
+begin
+  Result := CreateRemoteComObject(MachineName, CLASS_NRTDateRange) as INRTDateRange;
+end;
+
+end.
+

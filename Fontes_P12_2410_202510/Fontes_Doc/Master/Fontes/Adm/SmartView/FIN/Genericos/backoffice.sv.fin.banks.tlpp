@@ -1,0 +1,574 @@
+#include "msobject.ch"
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#Include "TOTVS.CH"
+
+namespace totvs.protheus.backoffice.fin.smartView.integratedProvider
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Banks
+    @description Centraliza a extração de dados relacionados a bancos e saldos bancários para o Smart View.
+    É muito importante que as alterações nessa classe sejam validadas em todos os objetos de negócio relacionados.
+    @author guilherme.sordi@totvs.com.br
+    @since 07/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+class Banks
+    private data oStBalance as object
+    private data oStBankData as object
+    private data cAliasSE8 as character
+    private data nCurrency as numeric
+    private data nBankCurrency as numeric
+    private data nDecimals as numeric
+    private data jBankData as json
+    private data jModeAccess as json
+    private data jLenModeAccess as json
+    private data aBalances as array
+    private data aBranchFilter as array
+    private data aSE8BranchFilter as array
+    private data lUseBankCurrency as logical
+    private data dCurrencyConvertionDate as date
+    private data lCurrencyConvertionDateSeted as logical
+    private data nSE8SalAtua as numeric
+    private data nSE8SalReco as numeric
+
+	public method new() as object
+    public method setCurrency(nCurrency as numeric)
+    public method setBranchFilter(aBranchFilter as array, lRemoveTrim as logical)
+    public method getBankBalances(nRecnoSA6 as numeric, dReferenceDate as date) as array
+    public method setCurrencyConvertionDate(dCurrencyConversionDate as date)
+    public method useAllBranches()
+
+    private method removeTrimFromBranchFilter()
+    private method loadSE8BranchFilter()
+    private method getAllBranches() as array
+    private method setBankCurrency(nCurrency as numeric)
+    private method loadBankData(nRecnoSA6 as numeric)
+    private method loadStatementBalance()
+    private method getSE8Value()
+    private method getMovFilter() as character
+    private method loadModeAccess()
+    private method setFwModeAccess()
+    private method sumBalances()
+    private method completeEmptyBalances()
+    private method getEmptyBalance(cBranch as character) as json
+endClass
+
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} new
+    @author guilherme.sordi@totvs.com.br
+    @since 04/07/2023
+    @version 12.1.2210
+*/
+//-------------------------------------------------------------------
+method new() as object class Banks
+    self:nCurrency := 1
+    self:nBankCurrency := 1
+    self:lUseBankCurrency := .T.
+    self:lCurrencyConvertionDateSeted := .F.
+    self:dCurrencyConvertionDate := dDatabase
+
+    self:jModeAccess := JsonObject():new()
+    self:jLenModeAccess := JsonObject():new()
+    self:aBalances := {}
+    self:aBranchFilter := { cFilAnt }
+    self:aSE8BranchFilter := { FwXFilial("SE8") }
+    self:jBankData := JsonObject():new()    
+    self:nDecimals := TamSx3("M2_MOEDA2")[2] +1
+
+    self:loadModeAccess()
+return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setCurrency
+    @description Define a moeda do objeto de negócio.
+    Se um moeda for definida, lUseBankCurrency será definida para falso
+    e o essa classe vai retornar o saldo já convertido para a moeda do objeto 
+    de negócio.
+    Se nenhuma moeda for definida, isto é, o método setCurrency não for chamado
+    pelo objeto de negócio, será definida a moeda do banco como moeda do objeto de negócio
+    e essa classe não fará conversões.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method setCurrency(nCurrency as numeric) class Banks
+    self:nCurrency := nCurrency
+    self:lUseBankCurrency := .F.
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setBankCurrency
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method setBankCurrency(nCurrency as numeric) class Banks
+    self:nBankCurrency := nCurrency
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setBranchFilter
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method setBranchFilter(aBranchFilter as array) class Banks
+    self:aBranchFilter := aClone(aBranchFilter)
+    if empty(self:aBranchFilter)
+        self:aBranchFilter := { cFilAnt }
+    endIf
+    self:removeTrimFromBranchFilter()
+    self:loadSE8BranchFilter()
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} removeTrimFromBranchFilter
+    Hoje o Smart View devolve o filtro de filiais removendo espaços em branco no final.
+    Isso se torna um problema em algumas comparações. Esse método restaura o nome da filial
+    com seu tamanho completo.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method removeTrimFromBranchFilter() class Banks 
+    local nX as numeric
+    if !empty(self:aBranchFilter) .and. len(self:aBranchFilter[1]) != FwSizeFilial()
+        for nX := 1 to len(self:aBranchFilter)
+            self:aBranchFilter[nX] := padR(self:aBranchFilter[nX], FwSizeFilial())
+        next
+    endIf
+return
+    
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadSE8BranchFilter
+    @description Carrega o conteúdo que deve ser filtrado no campo E8_FILIAL 
+    conforme filtro de filial que vem do objeto de negócio.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method loadSE8BranchFilter() class Banks
+    local nX as numeric
+    local cSE8Branch as character
+
+    fwFreeArray(self:aSE8BranchFilter)
+    self:aSE8BranchFilter := {}
+
+    for nX := 1 to len(self:aBranchFilter)
+        cSE8Branch := FwXFilial("SE8", self:aBranchFilter[nX])
+        if aScan(self:aSE8BranchFilter, {|cItem| cItem == cSE8Branch }) == 0
+            aAdd(self:aSE8BranchFilter, cSE8Branch)
+        endIf
+    next
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadBankData
+    @description Carrega alguns dados básicos do cadastro de banco conforme RECNO recebido.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method loadBankData(nRecnoSA6 as numeric) class Banks
+    local cQuery as character
+    local cAlias as character
+    self:jBankData := JsonObject():new()
+
+    if self:oStBankData == NIL
+        cQuery := " SELECT A6_FILIAL, A6_COD, A6_AGENCIA, A6_NUMCON, A6_MOEDA "
+        cQuery += " FROM " +  retSqlName("SA6")
+        cQuery += " WHERE R_E_C_N_O_ = ? "
+        self:oStBankData := FWExecStatement():new(changeQuery(cQuery))
+    endIf
+    self:oStBankData:SetNumeric(1, nRecnoSA6)
+
+    cAlias := self:oStBankData:openAlias()
+    if !(cAlias)->(eof())
+        self:setBankCurrency(Max((cAlias)->A6_MOEDA, 1))
+        self:jBankData['a6_filial'] := (cAlias)->A6_FILIAL
+        self:jBankData['a6_cod'] := (cAlias)->A6_COD
+        self:jBankData['a6_agencia'] := (cAlias)->A6_AGENCIA
+        self:jBankData['a6_numcon'] := (cAlias)->A6_NUMCON
+    endIf
+    (cAlias)->(dbCloseArea())
+
+    if self:lUseBankCurrency
+        self:nCurrency := self:nBankCurrency
+    endIf
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getBankBalances
+    @description Retorna uma lista de saldos bancários para o determinado cadastro de banco,
+    conforme compartilhamento das tabelas SA6, SE8 e FK5.
+    O resultado respeita o filtro de filiais feito no Smart View e a moeda do objeto de negócio
+    definida pelo Smart View, fazendo as conversões necessárias do saldo.
+    Lista todas as filiais relacionadas ao cadastro do banco mesmo que não possuam informação válida
+    na tabela SE8.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method getBankBalances(nRecnoSA6 as numeric, dReferenceDate as date) as array class Banks
+    local nParamOrder := 1 as numeric
+    local jBalance as json
+
+    default dReferenceDate := dDatabase
+
+    fwFreeArray(self:aBalances)
+    self:aBalances := {}
+
+    self:loadBankData(nRecnoSA6)
+    self:loadStatementBalance()
+
+    self:oStBalance:SetString(nParamOrder++, " ")
+    self:oStBalance:setDate(nParamOrder++, dReferenceDate)
+    self:oStBalance:SetNumeric(nParamOrder++, nRecnoSA6)
+    self:oStBalance:SetIn(nParamOrder++, self:aSE8BranchFilter)
+    self:oStBalance:SetString(nParamOrder++, " ")
+
+    self:cAliasSE8 := self:oStBalance:openAlias()
+    while !(self:cAliasSE8)->(eof())
+        self:getSE8Value()
+        jBalance := self:getEmptyBalance((self:cAliasSE8)->E8_FILIAL)
+        jBalance['e8_dtsalat'] := sToD((self:cAliasSE8)->E8_DTSALAT)
+        jBalance['e8_salatua'] := self:nSE8SalAtua
+        jBalance['e8_salreco'] := self:nSE8SalReco
+        aAdd(self:aBalances, jBalance)
+
+        (self:cAliasSE8)->(dbSkip())
+    endDo
+    (self:cAliasSE8)->(dbCloseArea())
+
+    self:completeEmptyBalances()
+    self:sumBalances()
+
+return self:aBalances
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadStatementBalance
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method loadStatementBalance() class Banks
+    local cQuery as character
+
+    if self:oStBalance == NIL
+        cQuery := " SELECT SE8.E8_FILIAL, SE8.E8_BANCO, SE8.E8_AGENCIA, SE8.E8_CONTA, SE8.E8_DTSALAT, SE8.E8_SALATUA, SE8.E8_SALRECO "
+        cQuery += " FROM " + retSQLName("SE8") + " SE8 "
+        
+        cQuery += " JOIN ( "
+        cQuery += " SELECT E8_FILIAL, E8_BANCO, E8_AGENCIA, E8_CONTA, MAX(E8_DTSALAT) E8_DTSALAT "
+        cQuery += " FROM " + retSQLName("SE8")
+        cQuery += " WHERE D_E_L_E_T_ = ? "
+        cQuery += " AND E8_DTSALAT < ? "
+        cQuery += " GROUP BY E8_FILIAL, E8_BANCO, E8_AGENCIA, E8_CONTA ) ULTSAL "
+        cQuery += " ON SE8.E8_FILIAL = ULTSAL.E8_FILIAL "
+        cQuery += " AND SE8.E8_BANCO = ULTSAL.E8_BANCO "
+        cQuery += " AND SE8.E8_AGENCIA = ULTSAL.E8_AGENCIA "
+        cQuery += " AND SE8.E8_CONTA = ULTSAL.E8_CONTA "
+        cQuery += " AND SE8.E8_DTSALAT = ULTSAL.E8_DTSALAT "
+        
+        cQuery += " JOIN " + retSQLName("SA6") + " SA6 "
+        cQuery += " ON " + fwJoinFilial("SA6", "SE8")
+        cQuery += " AND A6_COD = SE8.E8_BANCO "
+        cQuery += " AND A6_AGENCIA = SE8.E8_AGENCIA "
+        cQuery += " AND A6_NUMCON = SE8.E8_CONTA "
+        cQuery += " AND SA6.R_E_C_N_O_ = ? "
+        
+        cQuery += " WHERE "
+        cQuery += " SE8.E8_FILIAL IN (?) "
+        cQuery += " AND SE8.D_E_L_E_T_ = ? "
+
+        self:oStBalance := FWExecStatement():new(changeQuery(cQuery))
+    endIf
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getSE8Value
+    @description Retorna o saldo na moeda do objeto de negócio definida no 
+    método setCurrency().
+    Veja também o método setCurrencyConvertionDate().
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method getSE8Value() class Banks
+    local dBalanceDate := sToD((self:cAliasSE8)->E8_DTSALAT) as date
+    local dConversionDate := dBalanceDate as date
+    
+    self:nSE8SalAtua := (self:cAliasSE8)->E8_SALATUA
+    self:nSE8SalReco := (self:cAliasSE8)->E8_SALRECO
+
+    if self:nCurrency == self:nBankCurrency
+        return
+    endIf
+
+    if self:lCurrencyConvertionDateSeted
+        dConversionDate := self:dCurrencyConvertionDate
+    endIf
+
+    self:nSE8SalAtua := xMoeda(self:nSE8SalAtua, self:nBankCurrency, self:nCurrency, dConversionDate, self:nDecimals)
+    self:nSE8SalReco := xMoeda(self:nSE8SalReco, self:nBankCurrency, self:nCurrency, dConversionDate, self:nDecimals)
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getMovFilter
+    @description Determina a forma correta de filtrar os registros da tabela FK5 
+    para determinado registro da SE8, conforme o compartilhamento das duas tabelas.
+    Usa uma comparação de substring no campo FK5_FILIAL conforme a tabela mais compartilhada.
+
+    *** FK5 mais compartilhada do que a SE8 ***
+    
+    No caso da FK5 mais compartilhada do que a SE8, vai retornar todos os registros da FK5 para determinada filial, 
+    e o método SumBalances será o responsável por somar os saldos da SE8
+    de todas as filiais conforme o compartilhamento da FK5.
+    Trazemos essa solução de contorno, mas a FK5 mais compartilhada do que a SE8 não é um compartilhamento válido.
+    Implica em um relacionamento 1 FK5 para n SE8, quebrando a modelagem do banco de dados e dando margem para quebra
+    de integridade dos dados.
+    Nesse caso, não é possível visualizar separadamente os saldos por filial.
+
+    Existe uma alternativa para esse cenário, mas entendemos que é inviável.
+    Alternativa: Percorrer todos os registros da FK5 das filiais selecionadas, 
+    identificando a qual saldo o registro pertence através de xFilial("SE8",FK5->FILORI) e somando em um objeto JSON ou tabela temporária. 
+    Essa solução não é viável porque:
+    - aumenta o tempo de desenvolvimento e de cobertura com testes automatizados,
+    - aumenta o risco de erros colaterais em manutenções futuras, 
+    - compromete completamente a performance da consulta,
+    - gera débitos técnicos de consulta e relacionamento sem índice e
+    - mantém a integridade referencial das tabelas comprometida, o que pode ser cobrado pela engenharia no futuro.
+
+    Veja mais em: https://tdn.totvs.com/pages/viewpage.action?pageId=844959467
+
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method getMovFilter(cSE8Branch as character) as character class Banks
+    local cFk5Filter as character
+
+    if self:jLenModeAccess['SE8'] == self:jLenModeAccess['FK5']
+        cFk5Filter := " AND FK5_FILIAL = '"+ cSE8Branch +"' "
+    elseIf self:jLenModeAccess['SE8'] < self:jLenModeAccess['FK5']
+        cFk5Filter := " AND SUBSTRING(FK5_FILIAL,1,"+ cValToChar(self:jLenModeAccess['SE8'])+") = '"+ left(cSE8Branch, self:jLenModeAccess['SE8']) +"' "
+    else
+        cFk5Filter := " AND SUBSTRING(FK5_FILIAL,1,"+ cValToChar(self:jLenModeAccess['FK5'])+") = '"+ left(cSE8Branch, self:jLenModeAccess['FK5']) +"' "
+    endIf
+return cFk5Filter
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadModeAccess
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method loadModeAccess() class Banks
+    if empty(self:jModeAccess:getNames())
+        self:setFwModeAccess("SA6")
+        self:setFwModeAccess("SE8")
+        self:setFwModeAccess("FK5")
+    endIf
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setFwModeAccess
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method setFwModeAccess(cAlias as character) class Banks
+    local nLenModeAccess as numeric
+    local cModeAccess as character
+    
+    cModeAccess := FWModeAccess(cAlias, 1) + FWModeAccess(cAlias, 2) + FWModeAccess(cAlias, 3)
+    self:jModeAccess[cAlias] := cModeAccess
+
+    if FWModeAccess(cAlias, 1) == "E"
+        nLenModeAccess += len(FWCompany())
+    endIf
+    if FWModeAccess(cAlias, 2) == "E"
+        nLenModeAccess += len(FWUnitBusiness())
+    endIf
+    if FWModeAccess(cAlias, 3) == "E"
+        nLenModeAccess += len(FWFilial())
+    endIf
+    self:jLenModeAccess[cAlias] := nLenModeAccess
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} sumBalances
+    Se o ambiente possui a tabela FK5 mais compartilhada do que a tabela SE8,
+    é necessário somar todos os saldos na mesma linha, conforme o compartilhamento da 
+    FK5.
+    Essa soma não está sendo feita pelo SQL porque filiais diferentes podem ter registrado o 
+    último saldo em dias diferentes, o que implica em taxas diferentes para moeda estrangeira,
+    sendo necessário converter os saldos conforme a data antes de somar.
+    @author guilherme.sordi@totvs.com.br
+    @since 22/12/2023
+    @version 12.1.2310
+*/
+//-------------------------------------------------------------------
+method sumBalances() class Banks
+    local nX as numeric
+    local aSumBalances := {} as array
+    local jNewBalance as object
+    local nPosition as numeric
+
+    if (self:jLenModeAccess['SE8'] <= self:jLenModeAccess['FK5']) .or. empty(self:aBalances)
+        return
+    endIf
+
+    for nX := 1 to len(self:aBalances)
+        jNewBalance := JsonObject():new()
+        jNewBalance:fromJson(self:aBalances[nX]:toJson())
+        jNewBalance['cGroupBranch'] := left(jNewBalance['e8_filial'], self:jLenModeAccess['FK5'])
+
+        nPosition := aScan(aSumBalances, {|jItem| jItem['cGroupBranch'] == jNewBalance['cGroupBranch']})
+        if nPosition == 0
+            aAdd(aSumBalances, jNewBalance)
+        else
+            aSumBalances[nPosition]['e8_salatua'] += jNewBalance['e8_salatua']
+            aSumBalances[nPosition]['e8_salreco'] += jNewBalance['e8_salreco']
+        endIf
+    next
+
+    fwFreeArray(self:aBalances)
+    self:aBalances := aSumBalances
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} completeEmptyBalances
+    @description Completa o vetor self:aBalances com dados de todas as 
+    filiais relacionadas ao banco definido em getBankBalances(), mesmo
+    que essas filiais não tenham retornado na consulta da tabela SE8.
+    Isso pode acontecer, por exemplo, ao analisar o primeiro dia de movimentos
+    desse banco nessa filial.
+    Nesse caso, será inserido um json no vetor com saldo = 0 e data = data base,
+    e o objeto de negócio pode considerar esse saldo como saldo inicial para as movimentações
+    do dia que está sendo analisado (sem gambiarras na query e sem omitir filiais na visão de dados).
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method completeEmptyBalances() class Banks
+    local aSE8Branches := {} as array
+    local nX as numeric
+    local nPosition as numeric
+    local cFullBranch as character
+
+    if self:jLenModeAccess["SA6"] >= self:jLenModeAccess["SE8"]
+        return
+    endIf
+
+    for nX := 1 to len(self:aBranchFilter)
+        cFullBranch := self:aBranchFilter[nX]
+        if left(cFullBranch, self:jLenModeAccess["SA6"]) == left(self:jBankData['a6_filial'], self:jLenModeAccess["SA6"])
+            cSE8Branch := FwXFilial("SE8", cFullBranch)
+            if aScan(aSE8Branches, {|cItem| cItem == cSE8Branch }) == 0
+                aAdd(aSE8Branches, cSE8Branch)
+            endIf
+        endIf
+    next
+
+    for nX := 1 to len(aSE8Branches)
+        cSE8Branch := aSE8Branches[nX]
+        nPosition := aScan(self:aBalances, {|jItem| jItem['e8_filial'] == cSE8Branch })
+        if nPosition == 0
+            aAdd(self:aBalances, self:getEmptyBalance(cSE8Branch))
+        endIf
+    next
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getEmptyBalance
+    @description Retorna um JSON com dados de saldo bancário em uma única estutura
+    que pode ser usada em qualquer método dessa classe, mantendo padrão e coerência.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method getEmptyBalance(cBranch as character) as json class Banks
+    local jBalance := JsonObject():new() as json
+    jBalance['e8_filial'] := cBranch
+    jBalance['e8_banco'] := self:jBankData['a6_cod']
+    jBalance['e8_agencia'] := self:jBankData['a6_agencia']
+    jBalance['e8_conta'] := self:jBankData['a6_numcon']
+    jBalance['e8_dtsalat'] := dDatabase
+    jBalance['e8_salatua'] := 0
+    jBalance['e8_salreco'] := 0
+    jBalance['cMovFilter'] := self:getMovFilter(cBranch)
+    jBalance['cGroupBranch'] := cBranch
+return jBalance
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} useAllBranches
+    @description No caso do Extrato de comunicação bancária, nós filtramos o número do do processo
+    e retornamos os dados da tabela SIG referente à filial logada, então não 
+    haverá filtro de filiais nesse objeto de negócio. Porém, ao recuperar o saldo do banco
+    relacionado a esse extrato, vamos somar os saldos do mesmo banco/agência/conta 
+    de todas as filiais que o usuário tem acesso.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method useAllBranches() class Banks
+    self:setBranchFilter(self:getAllBranches())
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getAllBranches
+    @description Retorna um vetor listando todas as filiais que o usuário corrente tem acesso.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/11/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method getAllBranches() as array class Banks
+    local aBranches := {} as array
+    local aSm0 := {} as array
+    local cBaseAlias := "" as character
+    local lCompany := .T. as logical
+    local lBusinessUnit := .T. as logical
+    local lHelp := .F. as logical
+    local lShowModal := .F. as logical
+    local nX as numeric
+
+    aSm0 := AdmGetFil(.T., lCompany, cBaseAlias, lBusinessUnit, lHelp, lShowModal)
+    for nX := 1 to len(aSm0)
+        aAdd(aBranches, aSm0[nX][1]) //1 = código, 2 = nome, 3 = CNPJ
+    next
+    fwFreeArray(aSm0)
+return aBranches
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setCurrencyConvertionDate
+    @description Determina uma data específica para a conversão de moeda do saldo.
+    Se nenhuma data for definida, será usada a data do saldo (E8_DTSALAT).
+    @author guilherme.sordi@totvs.com.br
+    @since 06/12/2024
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+method setCurrencyConvertionDate(dCurrencyConversionDate as date) class Banks
+    self:lCurrencyConvertionDateSeted := .T.
+    self:dCurrencyConvertionDate := dCurrencyConversionDate
+return

@@ -1,0 +1,36 @@
+#ifdef SPANISH
+	#define STR0001 "Transmitida"
+	#define STR0002 "Factura ya transmitida, no puede modificarse"
+	#define STR0003 "Atencion"
+	#define STR0004 "Existe ocurrencia para este cliente. ¿Desea borrarla?"
+	#define STR0005 "Ocurrencia"
+	#define STR0006 "FACTURA"
+	#define STR0007 "Confirma este Nr. de Factura:"
+	#define STR0008 "Ninguna Factura Seleccionada"
+	#define STR0009 "Numero :"
+	#define STR0010 "No Transmitida"
+#else
+	#ifdef ENGLISH
+		#define STR0001 "Transmitida"
+		#define STR0002 "Nota ja transmitida, nao pode ser alterada"
+		#define STR0003 "Atencao"
+		#define STR0004 "Existe ocorrencia para este cliente. Deseja exclui-la ?"
+		#define STR0005 "Ocorrencia"
+		#define STR0006 "NOTA"
+		#define STR0007 "Confirma este Nr. de nota :"
+		#define STR0008 "Nenhuma nota Selecionada"
+		#define STR0009 "Número :"
+		#define STR0010 "Nao Transmitida"
+	#else
+		#define STR0001 "Transmitida"
+		#define STR0002 "Nota ja transmitida, nao pode ser alterada"
+		#define STR0003 "Atencao"
+		#define STR0004 "Existe ocorrencia para este cliente. Deseja exclui-la ?"
+		#define STR0005 "Ocorrencia"
+		#define STR0006 "NOTA"
+		#define STR0007 "Confirma este Nr. de nota :"
+		#define STR0008 "Nenhuma nota Selecionada"
+		#define STR0009 "Número :"
+		#define STR0010 "Nao Transmitida"
+	#endif
+#endif

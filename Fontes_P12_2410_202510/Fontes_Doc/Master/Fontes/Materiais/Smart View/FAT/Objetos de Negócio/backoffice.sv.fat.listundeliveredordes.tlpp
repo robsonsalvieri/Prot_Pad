@@ -1,0 +1,458 @@
+#include "protheus.ch" 
+#include "fwlibversion.ch"
+#include "totvs.ch"
+#include "msobject.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+#include "tlpp-rest.th"
+#include "tlpp-core.th"
+#include "backoffice.sv.fat.listundeliveredordes.ch"
+
+Static __LookUp	:= FwLibVersion() >= "20231121" as logical
+
+namespace totvs.protheus.backoffice.sv.fat.listundeliveredordes.treportsintegratedprovider
+using namespace totvs.framework.treports.integratedprovider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team="SIGAFAT", tables="SC5,SC6,SF4,SA1,SA3", name="Pedidos não Entregues", country="ALL", customTables="SC5,SC6,SF4,SA1")
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} listundeliveredordesSmartViewBusinessObject
+Classe para criação do Objeto de Negócio para Relacao de Pedidos não 
+entregues
+
+@author FAT/CRM
+@since 18/05/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------
+Class listundeliveredordesSmartViewBusinessObject From IntegratedProvider
+
+    public method new()             as object
+    public method getData()         as object
+    public method getSchema()       as object
+
+    public method FatSv032CreateSQL()
+
+    protected data aFields          as array
+    protected data aStruct          as array
+    protected data cAliasQry        as character
+    protected data cLocSelect       as character
+    protected data cLocWhere        as character
+    protected data cWhereVend       as character
+    protected data ojItems          as json
+
+EndClass
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} new
+Método de instância da classe
+
+@return object: self
+
+@author FAT/CRM
+@since 18/05/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------
+Method new() Class listundeliveredordesSmartViewBusinessObject
+
+    _Super:new()
+    self:appendArea(STR0003)        // "Faturamento"
+    self:setDisplayName(STR0001)    // "Pedidos não Entregues"
+    self:setDescription(STR0002)    // "Relação de Pedidos não Entregues"
+    self:setIsLookUp(.T.)  
+
+Return self
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} getData
+Retorna os dados do objeto de negócio
+
+@param nPage, numérico, indica a página atual do relatório
+@param oFilter, objeto, contém o filtro do TReports
+
+@return object: self:oData
+
+@author FAT/CRM
+@since 18/05/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------
+Method getData(nPage as numeric, oFilter as object) as object Class listundeliveredordesSmartViewBusinessObject
+
+    Local xValue        := Nil
+
+    Local cCpoStruct    := ""               as character
+    Local cVend         := ""               as character
+
+    Local nX            := 0                as numeric
+    Local nSaldo        := 0                as numeric
+    Local nScan         := 0                as numeric
+    Local nTamProd      := GetSx3Cache("B1_COD", "X3_TAMANHO") as numeric
+
+    Local aPDFields     := {}               as array
+
+    Local lObfuscated   := .F.              as logical
+
+    Private aFieldsValue:= {}               as array
+    Private aFieldsCusto:= self:getCustomFields() as array
+
+    Private MV_MOEDA    := 0  as numeric
+    Private MV_FIL 		:= "" as character
+    Private CPEDDE      := "" as character
+    Private CPEDATE     := "" as character
+    Private CPRODDE     := "" as character
+    Private CPRODATE    := "" as character
+    Private CCLIDE      := "" as character
+    Private CCLIATE     := "" as character
+    Private CMASCPRD    := "" as character
+
+    Private DENTDE      := CToD("") as date
+    Private DENTATE     := CToD("") as date
+
+    Private NSITPED     := 0 as numeric
+    Private NGERADUP    := 0 as numeric
+
+    SA3->(dbSetOrder(1)) //A3_FILIAL,A3_COD
+
+    //Metodo para retorno do json dos parâmetros
+    FatSetValueMVPAR(oFilter:getParameters(), "MTR680")
+
+    NSITPED  := Iif(NSITPED == 0, 2, NSITPED)
+    NGERADUP := Iif(NGERADUP == 0, 3, NGERADUP)
+
+    //Tratamento para respeitar o tamanho do campo do produto
+    CMASCPRD := PADR(CMASCPRD, nTamProd)
+
+	// Criacao das Querys
+    self:FatSv032CreateSQL()
+
+    //Verifica se precisa fazer o tratamento para LGPD   
+    aPDFields   := FatGetfieldsLGPD(self:aFields, aFieldsCusto)
+    lObfuscated := Len( aPDFields ) > 0
+
+	dbSelectArea(self:cALiasQry)
+	(self:cALiasQry)->(dbGoTop())
+
+	While !(self:cALiasQry)->(Eof())
+
+		//Executa a validacao dos filtros do usuario e Parametros
+        If Alltrim((self:cALiasQry)->C6_BLQ) == "R" .And. MV_PAR13 == 2 // Se Foi Eliminado Residuos
+            nSaldo  := 0
+        Else
+            nSaldo  := (self:cALiasQry)->C6_QTDVEN - (self:cALiasQry)->C6_QTDENT
+        Endif
+
+        If (((self:cALiasQry)->C6_QTDENT < (self:cALiasQry)->C6_QTDVEN .And. NSITPED == 1).Or. (NSITPED == 2));
+            .And. ((nSaldo == 0 .And. MV_PAR14 == 1 .And. Alltrim((self:cALiasQry)->C6_BLQ)<>"R") .Or. nSaldo <> 0);
+            .And. (((self:cALiasQry)->F4_DUPLIC == "S" .And. NGERADUP == 1) .Or. ((self:cALiasQry)->F4_DUPLIC == "N" .And. NGERADUP == 2) .Or. (NGERADUP == 3));
+            .And. ValidMasc((self:cALiasQry)->C6_PRODUTO,CMASCPRD)
+
+            //Montagem do json para envio ao SV
+            self:ojItems := JsonObject():new()
+            For nX := 1 To Len(self:aStruct)
+
+                If "TB_NOMEVD" $ self:aStruct[nX][5]
+                    cCpoStruct	:= "A3_NOME"
+                    cVend       := "C5_VEND" + SubStr(self:aStruct[nX][5], Len(self:aStruct[nX][5]), 1)
+                    SA3->(MsSeek((self:cALiasQry)->A1_FILIAL+(self:cALiasQry)->&(cVend)))
+                    xValue		:= "SA3->A3_NOME"
+                Else
+                    cCpoStruct	:= self:aStruct[nX][5]
+                    xValue		:= "(self:cALiasQry)->"+self:aStruct[nX][5]
+                EndIf
+
+                If lObfuscated .and. (nScan := aScan(aPDFields, {|x| x[1] == cCpoStruct})) > 0
+                    self:ojItems[self:aStruct[nX][1]] := aPDFields[nScan][2]
+                ElseIf UPPER(self:aStruct[nX][3]) == "DATE"				
+                    self:ojItems[self:aStruct[nX][1]] := Iif(ValType((self:cALiasQry)->&(cCpoStruct)) == "C", totvs.framework.treports.date.stringToTimeStamp( &(xValue) ), totvs.framework.treports.date.dateToTimeStamp( &(xValue) ))
+                Else
+                    If self:aStruct[nX][1] == "C6VALOR"
+                        self:ojItems[self:aStruct[nX][1]] := xMoeda((self:cALiasQry)->C6_VALOR, (self:cALiasQry)->C5_MOEDA, MV_MOEDA, (self:cALiasQry)->C5_EMISSAO)
+                    Else
+                        self:ojItems[self:aStruct[nX][1]] := &(xValue)
+                    EndIf
+                EndIf
+
+            Next nX
+
+            self:processData(1)
+            self:oData:appendData(self:ojItems)
+
+        EndIf
+
+		(self:cALiasQry)->(dbSkip())
+
+	EndDo
+
+	(self:cALiasQry)->(dbCloseArea())
+
+    aSize(aPDFields,0)
+    aSize(aFieldsValue,0)
+    aSize(aFieldsCusto,0)
+
+return self:oData
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} getSchema
+Retorna a estrutura dos campos
+
+@return object: self:oSchema
+
+@author FAT/CRM
+@since 18/05/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------
+Method getSchema() as object class listundeliveredordesSmartViewBusinessObject
+
+    Local cVend         := "" as character
+    Local cNrVend       := "" as character
+    Local cNomeVend     := "" as character
+    Local cTituloCpo    := "" as character
+    Local cTipoCpo      := "" as character
+	Local nX			:= 0  as numeric
+    Local nVend        := FA440CntVen() as numeric
+    Local aParameters   := {} as array
+
+    self:aFields := {"C5_FILIAL","C5_TIPO","C6_NUM","C5_EMISSAO","C6_CLI","C6_LOJA","A1_NOME","C6_ITEM","C6_PRODUTO","C6_DESCRI","C6_QTDVEN","C6_QTDENT","C6_PRCVEN","C6_VALOR","C6_TES","C6_ENTREG","C6_BLQ"}
+    For nX := 1 to nVend
+        cNrVend     := AllTrim(Str(nX))
+        cVend       := "C5_VEND" + cNrVend
+        cNomeVend   := "TB_NOMEVD" + cNrVend
+        If SC5->(FieldPos(cVend)) > 0
+            aAdd(self:aFields,cVend)
+            aAdd(self:aFields,cNomeVend)
+        Endif
+    Next
+
+    self:aStruct := FatTrGetStruct(self:aFields)
+	For nX := 1 To Len(self:aStruct)
+        If "TB_NOMEVD" $ self:aStruct[nX][05]
+            cTituloCpo  := STR0004 + " " + SubStr(AllTrim(self:aStruct[nX][05]),Len(self:aStruct[nX][05]),1) //"Vendedor" + Numero
+            cTipoCpo    := "string"
+        Else
+            cTituloCpo  := self:aStruct[nX][02]
+            cTipoCpo    := self:aStruct[nX][03]
+        EndIf
+		self:oSchema:addProperty(self:aStruct[nX][01], cTituloCpo, cTipoCpo, cTituloCpo, self:aStruct[nX][05])
+	Next
+
+    //Incluído campo A3_NOME no aFields, pois o nome dos vendedores
+    //foi criado como campo Fake com o prefixo 'TB_'.
+    //Então precisa ser validado o campo de origem que é atribuído o conteúdo nesses campos
+    //E não pode fazer parte do aStruct, por esse motivo foi carregado após a definição da estrutura de dados
+    aAdd(self:aFields, "A3_NOME")
+
+	aParameters := FtSVSetParam("MTR680",,,{"01","02","03","04","05","06","07","08","09","10","11","15","18","19"})
+
+    self:oSchema:addParameter("MV_FIL", 	STR0016 + " ?", "string", .T.,,,,,, FTSVHelp(,,, .T.))  // Filial
+    self:oSchema:addParameter("CPEDDE",     STR0005, "string", .F.,,,,,, FTSVHelp('MTR680','01'))   // Do Pedido ?
+    self:oSchema:addParameter("CPEDATE",    STR0006, "string", .F.,,,,,, FTSVHelp('MTR680','02'))   // Ate o Pedido ?
+    self:oSchema:addParameter("CPRODDE",    STR0007, "string", .F.,,,,,, FTSVHelp('MTR680','03'))   // Do Produto ?
+    self:oSchema:addParameter("CPRODATE",   STR0008, "string", .F.,,,,,, FTSVHelp('MTR680','04'))   // Ate o Produto ?
+    self:oSchema:addParameter("CCLIDE",     STR0009, "string", .F.,,,,,, FTSVHelp('MTR680','05'))   // Do Cliente ?
+    self:oSchema:addParameter("CCLIATE",    STR0010, "string", .F.,,,,,, FTSVHelp('MTR680','06'))   // Ate o Cliente ?
+    self:oSchema:addParameter("DENTDE",     STR0011, "date",   .F.,,,,,, FTSVHelp('MTR680','07'))   // De Data de Entrega ?
+    self:oSchema:addParameter("DENTATE",    STR0012, "date",   .F.,,,,,, FTSVHelp('MTR680','08'))   // Ate a Data Entrega ?
+    self:oSchema:addParameter("NSITPED",    STR0013, "number", .F.,,,,,, FTSVHelp('MTR680','09'))   // Situacao do Pedido ?
+    self:oSchema:addParameter("NGERADUP",   STR0014, "number", .F.,,,,,, FTSVHelp('MTR680','10'))   // Com Geracao Duplic. ?
+    self:oSchema:addParameter("CMASCPRD",   STR0015, "string", .F.,,,,,, FTSVHelp('MTR680','11'))   // Máscara do Produto ?
+
+    For nX := 1 To Len(aParameters)
+		self:oSchema:addParameter(aParameters[nX][1], aParameters[nX][2], aParameters[nX][3], aParameters[nX][4],,,,,, aParameters[nX][5])
+	Next nX
+
+    self:oSchema:addParameter("MV_MOEDA", STR0017 + " ?", "number", .F.,,,,,, FTSVHelp("MTR680","18")) // Moeda
+
+    If __LookUp
+        self:setCustomURL("MV_FIL",   "api/framework/v1/genericLookupService/smartview/SM0", 2)
+		self:setCustomURL("CPRODDE",  "api/framework/v1/genericLookupService/smartview/SB1", 2)
+		self:setCustomURL("CPRODATE", "api/framework/v1/genericLookupService/smartview/SB1", 2)
+		self:setCustomURL("CCLIDE",   "api/framework/v1/genericLookupService/smartview/SA1", 2)
+		self:setCustomURL("CCLIATE",  "api/framework/v1/genericLookupService/smartview/SA1", 2)
+        self:setCustomURL("MV_PAR16", "api/framework/v1/genericLookupService/smartview/SA3", 2)
+		self:setCustomURL("MV_PAR17", "api/framework/v1/genericLookupService/smartview/SA3", 2)
+        self:setCustomURL("NSITPED",  "api/faturamento/smartview/v1/options/fat/listundeliveredordes/SVLisUnDeli/1", 1)
+        self:setCustomURL("NGERADUP", "api/faturamento/smartview/v1/options/fat/listundeliveredordes/SVLisUnDeli/2", 1)
+        self:setCustomURL("MV_PAR12", "api/faturamento/smartview/v1/options/fat/listundeliveredordes/SVLisUnDeli/3", 1)
+        self:setCustomURL("MV_PAR13", "api/faturamento/smartview/v1/options/fat/listundeliveredordes/SVLisUnDeli/4", 1)
+        self:setCustomURL("MV_PAR14", "api/faturamento/smartview/v1/options/fat/listundeliveredordes/SVLisUnDeli/5", 1)
+	EndIf
+
+	aSize(aParameters,0)
+
+Return self:oSchema
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} SVLisUnDeli
+Retorna as opçoes disponível para parametros do tipo combo.
+
+@return array: Array com as opçoes
+
+@author FAT/CRM
+@since 14/05/2024
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Function SVLisUnDeli(cOpcao)
+
+	Local aRet := {} as array
+
+	If cOpcao == "1"		 
+		aRet := FatGetCboX1('MTR680', 9)
+	ElseIf cOpcao == "2"
+		aRet := FatGetCboX1('MTR680', 10)
+	ElseIf cOpcao == "3"
+		aRet := FatGetCboX1('MTR680', 12)
+	ElseIf cOpcao == "4"
+		aRet := FatGetCboX1('MTR680', 13)
+	ElseIf cOpcao == "5"
+		aRet := FatGetCboX1('MTR680', 14)
+	EndIf
+
+Return aRet
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} FatSv032CreateSQL
+Retorna todas as querys montadas
+
+@return Nil
+
+@author FAT/CRM
+@since 05/12/2024
+@version 1.0
+*/
+//-------------------------------------------------------------------
+Method FatSv032CreateSQL() Class listundeliveredordesSmartViewBusinessObject
+
+    Local nX 	     := 0   as numeric
+    Local nY 	     := 0   as numeric
+    Local nNumFils   := 0   as numeric
+    Local nParam     := 1   as numeric
+    Local nVend      := FA440CntVen() as numeric
+    Local cQuery     := ""  as character
+    Local cFieldsQry := ""  as character
+    Local cSuf       := ""  as character
+    Local cVend      := ""  as character
+    Local oQuery 	 := Nil as object
+    Local aFiliais	 := {}  as array
+
+	// Função que verifica se há filiais informadas no parâmetro
+    aFiliais := FatGetMVFiliais(MV_FIL)
+	nNumFils := Len(aFiliais)
+
+    cFieldsQry := "SC5.C5_FILIAL,SC5.C5_TIPO,SC5.C5_MOEDA, SC6.C6_NUM,SC5.C5_EMISSAO,SC6.C6_CLI,SC6.C6_LOJA,SA1.A1_NOME,SA1.A1_FILIAL,"
+    cFieldsQry += "SC6.C6_FILIAL,SC6.C6_ITEM,SC6.C6_PRODUTO,SC6.C6_DESCRI,SC6.C6_QTDVEN,SC6.C6_QTDENT,SC6.C6_PRCVEN,SC6.C6_VALOR,SC6.C6_TES,SC6.C6_ENTREG,SC6.C6_BLQ,SF4.F4_DUPLIC"
+    cFieldsQry += self:cLocSelect
+
+    cSuf := "0"
+    self:cWhereVend := "("
+    For nX := 1 to nVend
+        cSuf := Soma1(cSuf)
+        cVend := "C5_VEND" + cSuf
+        If SC5->(FieldPos(cVend)) > 0
+            If Len(self:cWhereVend) > 2
+                self:cWhereVend += " OR "
+            Endif
+            self:cWhereVend += "(" + cVend + " >= ? AND " + cVend + " <= ? ) "
+            cFieldsQry += ",SC5." + cVend
+        Endif
+    Next
+    self:cWhereVend += ")"
+
+    //Adiciona campos customizados (no array da estrutura)
+	FatInjCposPerson(@aFieldsValue, @self:aStruct, @cFieldsQry, aFieldsCusto, .T., .F., .T.)
+
+    For nX := 1 To nNumFils
+
+        cQuery += "SELECT ? "
+        cQuery += " FROM "      + RetSqlName("SC6") + " SC6 "
+        cQuery += "INNER JOIN " + RetSqlName("SC5") + " SC5 "
+        cQuery += " ON SC5.C5_FILIAL = SC6.C6_FILIAL "
+        cQuery += " AND SC5.C5_NUM   = SC6.C6_NUM "
+        cQuery += " AND SC5.C5_TIPO NOT IN (?) "
+
+        If !Empty(self:cWhereVend)
+            cQuery += " AND " + self:cWhereVend
+        EndIf
+
+        cQuery += " AND SC5.D_E_L_E_T_  = ? "
+        cQuery += "LEFT JOIN "  + RetSqlName("SF4") + " SF4 "
+        cQuery += " ON SF4.F4_FILIAL    = ? "
+        cQuery += " AND SF4.F4_CODIGO   = SC6.C6_TES "
+        cQuery += " AND SF4.D_E_L_E_T_  = ? "
+        cQuery += "LEFT JOIN "  + RetSqlName("SA1") + " SA1 "
+        cQuery += " ON SA1.A1_FILIAL    = ? "
+        cQuery += " AND SA1.A1_COD      = SC6.C6_CLI "
+        cQuery += " AND SA1.A1_LOJA     = SC6.C6_LOJA "
+        cQuery += " AND SA1.D_E_L_E_T_  = ? "
+        cQuery += "WHERE SC6.C6_FILIAL  = ? "
+        cQuery += " AND SC6.C6_NUM     >= ? "
+        cQuery += " AND SC6.C6_NUM     <= ? "
+        cQuery += " AND SC6.C6_PRODUTO >= ? "
+        cQuery += " AND SC6.C6_PRODUTO <= ? "
+        cQuery += " AND SC6.C6_CLI     >= ? "
+        cQuery += " AND SC6.C6_CLI     <= ? "
+        cQuery += " AND SC6.C6_ENTREG  >= ? "
+        cQuery += " AND SC6.C6_ENTREG  <= ? "
+
+        If MV_PAR13 == 3
+            cQuery += " AND SC6.C6_BLQ = ? "
+        EndIf
+
+        cQuery += " ? " //Ajuste de WHERE para objeto localizado
+        cQuery += " AND SC6.D_E_L_E_T_ = ? "
+
+        If nNumFils > 1 .And. nX < nNumFils
+            cQuery += " UNION ALL "
+        Else
+            cQuery += " ORDER BY SC6.C6_FILIAL, SC6.C6_NUM, SC6.C6_ITEM, SC6.C6_PRODUTO "
+        EndIf
+
+    Next nX
+
+    oQuery := FwExecStatement():New(ChangeQuery(cQuery))
+
+    For nX := 1 To nNumFils
+
+        oQuery:SetUnsafe(nParam++, cFieldsQry)
+        oQuery:SetIn(nParam++, {'D','B'})
+
+        If !Empty(self:cWhereVend)
+            For nY := 1 to nVend
+                oQuery:SetString(nParam++, MV_PAR16)
+                oQuery:SetString(nParam++, MV_PAR17)
+            Next
+        EndIf
+
+        oQuery:SetString(nParam++, ' ')
+        oQuery:SetString(nParam++, FatSVFilial('SF4', 'F4_FILIAL', aFiliais[nX]))
+        oQuery:SetString(nParam++, ' ')
+        oQuery:SetString(nParam++, FatSVFilial('SA1', 'A1_FILIAL', aFiliais[nX]))
+        oQuery:SetString(nParam++, ' ')
+        oQuery:SetString(nParam++, FatSVFilial('SC6', 'C6_FILIAL', aFiliais[nX]))
+        oQuery:SetString(nParam++, CPEDDE)
+        oQuery:SetString(nParam++, CPEDATE)
+        oQuery:SetString(nParam++, CPRODDE)
+        oQuery:SetString(nParam++, CPRODATE)
+        oQuery:SetString(nParam++, CCLIDE)
+        oQuery:SetString(nParam++, CCLIATE)
+        oQuery:SetString(nParam++, DTOS(DENTDE))
+        oQuery:SetString(nParam++, DTOS(DENTATE))
+
+        If MV_PAR13 == 3
+            oQuery:SetString(nParam++, 'R ')
+        EndIf
+
+        oQuery:SetUnsafe(nParam++, self:cLocWhere)
+        oQuery:SetString(nParam++, ' ')
+
+	Next nX
+
+	self:cALiasQry := oQuery:OpenAlias()
+
+   	FreeObj(oQuery)
+
+    aSize(aFiliais,0)
+
+Return

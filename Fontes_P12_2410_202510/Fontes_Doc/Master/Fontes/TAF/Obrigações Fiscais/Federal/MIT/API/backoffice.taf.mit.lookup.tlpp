@@ -1,0 +1,320 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "protheus.ch"
+#INCLUDE "backoffice.taf.mit.lookup.ch"
+
+#DEFINE CONTENT_TYPE        "application/json"
+#DEFINE HEADER_CONTENT_TYPE "Content-Type"
+#DEFINE HASNEXT             "hasNext"
+#DEFINE ITEMS               "items"
+#DEFINE CodeRespBadRequest 400
+
+/*/{Protheus.doc} GetCHDDataAPI
+@type			function
+@description	API para retornar dados da forma de tributação
+@author			Jose Felipe
+@since			14/01/2025
+@version		1.0
+@return			json
+/*/
+@GET(endpoint="/api/taf/fiscal/v1/TaxFormmit", description="Retorna a forma de tributação")
+Function GetIdTaxForm()
+
+    Local aCompany    := {}     as array
+    Local cEmpRequest := ''     as character
+    Local cFilRequest := ''     as character
+    Local jResponse   := Nil    as json
+    Local jItens      := Nil    as json
+    Local aCHDData    := {}     as array       
+    Local nI          := 0      as numeric
+    Local aItens      := {}     as array
+    Local cFilter     := ""     as character
+
+    jResponse :=    JSONObject():New()
+
+    If oRest:getQueryRequest()['companyId'] == Nil
+        jResponse['code']    := CodeRespBadRequest
+        jResponse['message'] := STR0001 //Empresa|Filial não informado no parâmetro 'companyId'.
+        oRest:setStatusCode(CodeRespBadRequest)
+    Else
+        aCompany := StrTokArr(oRest:getQueryRequest()['companyId'], "|")
+
+        If Len(aCompany) < 2
+            jResponse['code']    := CodeRespBadRequest
+            jResponse['message'] := STR0002 //Tamanho Empresa|Filial informado no parâmetro 'companyId' menor que o esperado.
+            oRest:setStatusCode(CodeRespBadRequest)
+		Else
+			cEmpRequest := aCompany[1]
+			cFilRequest := PADR(alltrim(aCompany[2]),FWSizeFilial())
+
+            If PrepEnv(cEmpRequest, cFilRequest)
+
+                cFilter   :=    oRest:getQueryRequest()['filter']
+                aCHDData  :=    SearchTaxForm(cFilter) 
+
+                For nI := 1 To Len(aCHDData)
+                    jItens := JSONObject():New()
+                    jItens['id']      := AllTrim(aCHDData[nI][1]) //id
+                    jItens['period']  := Alltrim(aCHDData[nI][2]) //periodo
+                    aAdd(aItens, jItens)
+                Next nI
+                
+                If Len(aCHDData) == 0
+                    jItens := JSONObject():New()
+                    jItens['id']     := ""
+                    jItens['period'] := ""
+                    aAdd(aItens, jItens)
+                Endif   
+
+                jResponse[ITEMS]    := aItens
+                jResponse[HASNEXT]  := .F.
+            Else
+                jResponse['code']    := CodeRespBadRequest
+                jResponse['message'] := STR0003 + cEmpRequest + STR0004 + cFilRequest //Falha na preparação do ambiente para a Empresa / e Filial
+                oRest:setStatusCode(CodeRespBadRequest)
+            Endif
+        Endif
+    Endif
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetResponse(jResponse)
+
+    FWFreeObj(jResponse)
+    FWFreeObj(jItens)
+
+Return Nil
+
+/*/{Protheus.doc} SearchTaxForm
+@type			function
+@description	Função para retornar dados da CHD
+@author			Jose Felipe
+@since			14/01/2025
+@version		1.0
+@return			array
+/*/
+Static Function SearchTaxForm(cFilter)
+
+    Local aResult     := {}     as array     
+    Local oPrepCHD    := Nil    as object    
+    Local cQuery      := ""     as character 
+    Local cAlias      := ""     as character
+    Local aBind       := {}     as array
+    Local cPeriodo    := ""     as character
+    Local cConvFilt   := ""     as character
+    Local cBd   	  := ""     as character
+    Local nX          := 0      as numeric
+    
+    Default cFilter := ""    
+    
+    cBd :=  TcGetDb()
+    
+    cQuery := " SELECT CHD.CHD_ID, CHD.CHD_PERINI, CHD.CHD_PERFIN "
+    cQuery += " FROM " + RetSqlName("CHD") + " CHD "
+    cQuery += " WHERE CHD.CHD_FILIAL = ? "
+    aAdd(aBind, xFilial("CHD"))
+    
+    If !Empty(cFilter)
+        Do Case
+            Case Len(AllTrim(cFilter)) == 10 .And. SubStr(cFilter, 3, 1) == "/" .And. SubStr(cFilter, 6, 1) == "/"
+                cConvFilt := SubStr(cFilter, 7, 4) + SubStr(cFilter, 4, 2) + SubStr(cFilter, 1, 2) // Formato aaaammdd
+                cConvFilt := "%" + cConvFilt + "%"
+                cQuery += " AND (CHD.CHD_PERINI LIKE ? OR CHD.CHD_PERFIN LIKE ?) "
+            Case Len(AllTrim(cFilter)) == 4
+                cConvFilt := "%" + AllTrim(cFilter) + "%" // Formato aaaa
+                cQuery += " AND (CHD.CHD_PERINI LIKE ? OR CHD.CHD_PERFIN LIKE ?) " 
+            Case Len(AllTrim(cFilter)) == 5 .And. SubStr(cFilter, 3, 1) == "/"
+                cConvFilt := "%" + SubStr(cFilter, 4, 2) + SubStr(cFilter, 1, 2) + "%" // Formato ddmm
+                If cBd $ "ORACLE|POSTGRES|DB2"
+                    cQuery += " AND (SUBSTR(CHD.CHD_PERINI, 5, 4) LIKE ? OR SUBSTR(CHD.CHD_PERFIN, 5, 4) LIKE ?) " 
+                Elseif cBd $ "INFORMIX"
+                    cQuery += " AND (CHD.CHD_PERINI[5,4] LIKE ? OR CHD.CHD_PERFIN[5,4] LIKE ?) " 
+                Else 
+                    cQuery += " AND (SUBSTRING(CHD.CHD_PERINI, 5, 4) LIKE ? OR SUBSTRING(CHD.CHD_PERFIN, 5, 4) LIKE ?) "
+                Endif   
+            Case Len(AllTrim(cFilter)) == 7 .And. SubStr(cFilter, 3, 1) == "/"
+                cConvFilt := "%" + SubStr(cFilter, 4, 4) + SubStr(cFilter, 1, 2) + "%" // Formato mmaaaa                
+                If cBd $ "ORACLE|POSTGRES|DB2"
+                    cQuery += " AND (SUBSTR(CHD.CHD_PERINI, 1, 6) LIKE ? OR SUBSTR(CHD.CHD_PERFIN, 1, 6) LIKE ?) " 
+                Elseif cBd $ "INFORMIX"
+                    cQuery += " AND (CHD.CHD_PERINI[1,6] LIKE ? OR CHD.CHD_PERFIN[1,6] LIKE ?) " 
+                Else 
+                    cQuery += " AND (SUBSTRING(CHD.CHD_PERINI, 1, 6) LIKE ? OR SUBSTRING(CHD.CHD_PERFIN, 1, 6) LIKE ?) "
+                Endif  
+            Otherwise
+                cConvFilt := "%" + AllTrim(cFilter) + "%"
+                cQuery += " AND (CHD.CHD_PERINI LIKE ? OR CHD.CHD_PERFIN LIKE ?) "                        
+        EndCase
+        If !Empty(cConvFilt)     
+            aAdd(aBind, cConvFilt)
+            aAdd(aBind, cConvFilt)
+        Endif
+    Endif    
+    
+    cQuery += " AND CHD.D_E_L_E_T_ = ? "
+    aAdd(aBind, Space(1))
+    cQuery += " ORDER BY CHD.CHD_PERINI DESC, CHD.CHD_PERFIN DESC "
+    
+    cQuery := ChangeQuery(cQuery) 
+    oPrepCHD := FwExecStatement():New(cQuery)
+
+    For nX := 1 To Len(aBind)        
+        oPrepCHD:setString(nX, aBind[nX])       
+    Next nX
+
+    cAlias := GetNextAlias()
+    oPrepCHD:OpenAlias(cAlias)
+    
+    While !(cAlias)->(EOF())
+        cPeriodo := DToC(SToD(AllTrim((cAlias)->CHD_PERINI))) + " " + DToC(SToD(AllTrim((cAlias)->CHD_PERFIN)))
+        aAdd(aResult, {;
+            (cAlias)->CHD_ID,;          
+            cPeriodo;
+        })
+        (cAlias)->(DBSkip())
+    EndDo
+    
+    (cAlias)->(DBCloseArea())
+
+    aSize(aBind,0)
+    aBind := {}
+    FWFreeObj(oPrepCHD)
+    
+    Return aResult
+
+/*/{Protheus.doc} GetIdAccountants
+@type			function
+@description	API para retornar dados dos contabilistas
+@author			Jose Felipe
+@since			14/01/2025
+@version		1.0
+@return			json
+/*/
+@GET(endpoint="/api/taf/fiscal/v1/Accountantsmit", description="Retorna o Cadastro de Contabilistas")
+Function GetIdAccountants()
+
+    Local aCompany    := {}     as array
+    Local cEmpRequest := ''     as character
+    Local cFilRequest := ''     as character
+    Local jResponse   := Nil    as json
+    Local jItens      := Nil    as json
+    Local aC2JData    := {}     as array       
+    Local nI          := 0      as numeric
+    Local aItens      := {}     as array
+    Local cFilter     := ""     as character
+
+    jResponse :=    JSONObject():New()
+
+    If oRest:getQueryRequest()['companyId'] == Nil
+        jResponse['code']    := CodeRespBadRequest
+        jResponse['message'] := STR0001 //Empresa|Filial não informado no parâmetro 'companyId'.
+        oRest:setStatusCode(CodeRespBadRequest)
+    Else
+        aCompany := StrTokArr(oRest:getQueryRequest()['companyId'], "|")
+
+        If Len(aCompany) < 2
+            jResponse['code']    := CodeRespBadRequest
+            jResponse['message'] := STR0002 //Tamanho Empresa|Filial informado no parâmetro 'companyId' menor que o esperado.
+            oRest:setStatusCode(CodeRespBadRequest)
+		Else
+			cEmpRequest := aCompany[1]
+			cFilRequest := PADR(alltrim(aCompany[2]),FWSizeFilial())
+
+            If PrepEnv(cEmpRequest, cFilRequest)   
+
+                cFilter   :=    oRest:getQueryRequest()['filter']
+                aC2JData  :=    SearchAccountants(cFilter)      
+
+                For nI := 1 To Len(aC2JData)
+                    jItens := JSONObject():New()
+                    jItens['id']     := AllTrim(aC2JData[nI][1]) //id
+                    jItens['name' ]  := Alltrim(aC2JData[nI][2]) //nome
+                    jItens['crc'  ]  := Alltrim(aC2JData[nI][3]) //crc
+                    aAdd(aItens, jItens)
+                Next nI
+                
+                If Len(aC2JData) == 0
+                    jItens := JSONObject():New()
+                    jItens['id']    := ""
+                    jItens['name']  := ""
+                    jItens['crc']   := ""
+                    aAdd(aItens, jItens)
+                Endif   
+                
+                jResponse[ITEMS]    := aItens
+                jResponse[HASNEXT]  := .F.
+            Else
+                jResponse['code'] := CodeRespBadRequest
+                jResponse['message'] := STR0003 + cEmpRequest + STR0004 + cFilRequest //Falha na preparação do ambiente para a Empresa / e Filial
+                oRest:setStatusCode(CodeRespBadRequest)
+            Endif
+        Endif
+    Endif
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetResponse(jResponse)
+
+    FWFreeObj(jResponse) 
+    FWFreeObj(jItens)
+
+Return Nil
+
+/*/{Protheus.doc} SearchAccountants
+@type			function
+@description	Função para retornar dados da tabela C2J
+@author			Jose Felipe
+@since			14/01/2025
+@version		1.0
+@return			array
+/*/
+Static Function SearchAccountants(cFilter)
+
+    Local aContabs    := {}     as array     
+    Local oPrepC2J    := Nil    as object    
+    Local cQuery      := ""     as character 
+    Local cAlias      := ""     as character
+    Local aBind       := {}     as array
+    Local nX          := 0      as numeric
+    
+    Default cFilter := ""
+    
+    cQuery := " SELECT C2J.C2J_ID, C2J.C2J_NOME, C2J.C2J_CRC, C2J.C2J_CPF, C2J.C2J_CNPJ "    
+    cQuery += " FROM " + RetSqlName("C2J") + " C2J "
+    cQuery += " WHERE C2J.C2J_FILIAL = ? "
+    aAdd(aBind, xFilial("C2J"))
+    If !Empty(cFilter)
+        cFilter := "%" + Upper(cFilter) + "%"        
+        cQuery += " AND ( UPPER(C2J.C2J_NOME)  LIKE ? "
+        cQuery += "    OR UPPER(C2J.C2J_CRC)   LIKE ? ) "
+        aAdd(aBind, cFilter)
+        aAdd(aBind, cFilter)
+    Endif    
+    cQuery += " AND C2J.D_E_L_E_T_ = ? "
+    aAdd(aBind, Space(1))
+    cQuery += " ORDER BY C2J.C2J_ID, C2J.C2J_NOME "
+
+    cQuery := ChangeQuery(cQuery) 
+    oPrepC2J := FwExecStatement():New(cQuery)
+
+    For nX := 1 To Len(aBind)        
+        oPrepC2J:setString(nX, aBind[nX])       
+    Next nX
+
+    cAlias := GetNextAlias()
+    oPrepC2J:OpenAlias(cAlias)    
+    
+    While !(cAlias)->(EOF())
+        aAdd(aContabs, {;
+            (cAlias)->C2J_ID,;          
+            (cAlias)->C2J_NOME,;
+            (cAlias)->C2J_CRC;
+        })
+        (cAlias)->(DBSkip())
+    EndDo
+    
+    (cAlias)->(DBCloseArea())
+
+    aSize(aBind,0)
+    aBind := {}
+    FWFreeObj(oPrepC2J)
+    
+Return aContabs

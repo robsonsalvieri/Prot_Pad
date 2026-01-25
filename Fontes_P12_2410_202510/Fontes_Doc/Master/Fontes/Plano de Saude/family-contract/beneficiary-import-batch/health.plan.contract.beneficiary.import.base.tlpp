@@ -1,0 +1,281 @@
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+
+#define STATUS_BATCH_RECEIVED "1"
+#define STATUS_BATCH_PROCESSING "2"
+#define STATUS_BATCH_IMPORTED_WITH_ERROR "3"
+#define STATUS_BATCH_IMPORTED_SUCCESSFULLY "4"
+#define STATUS_BATCH_CANCELED "5"
+
+#define STATUS_BENEF_RECEIVED "1"
+#define STATUS_BENEF_IMPORTED_WITH_ERROR "2"
+#define STATUS_BENEF_IMPORTED_SUCCESSFULLY "3"
+#define STATUS_BENEF_CANCELED "4"
+
+namespace totvs.protheus.health.plan.contract.beneficiary.import
+
+/*/{Protheus.doc} ImportBatchBase
+Classe base com funcionalidades comuns utilizadas nos processos de importação de lotes de beneficiários, 
+incluindo operações compartilhadas entre os módulos de arquivo (file) e protocolo (protocol).
+@type class
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+/*/
+class ImportBatchBase
+
+	protected data cBatchCode as character
+	protected data aFormFields as array
+	protected data cErrorMessage as character
+	protected data oModelBatch as object
+	protected data oModelBJ5 as object
+	protected data oModelBJ6 as object
+
+	public method new() constructor
+	public method destroy()
+
+	protected method setImportBatch(cBatchCode as character) as logical
+	protected method loadModel()
+	protected method setImportBatchStatus(cStatus as character, cMessage as character, lBeneficiaryStatus as logical)
+	protected method setBeneficiariesStatus(cStatus as character, jRequest as json)
+	protected method loadFormFields(lAddFamilyId as logical) as array
+
+endclass
+
+/*/{Protheus.doc} new
+Inicializa a classe ImportBatchBase, preparando os atributos e estruturas necessárias para uso nos 
+processos de importação de lote de beneficiários.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+/*/
+method new() class ImportBatchBase
+
+	BJ5->(dbSetOrder(1))
+	BJ6->(dbSetOrder(1))
+
+return self
+
+/*/{Protheus.doc} destroy
+Libera os recursos utilizados pela classe ImportBatchBase durante o processo de importação de lote de beneficiários.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+/*/
+method destroy() class ImportBatchBase
+
+	if valType(self:oModelBatch) != "U"
+		self:oModelBatch:destroy()
+	endif
+
+	freeObj(self:oModelBatch)
+	freeObj(self:oModelBJ5)
+	freeObj(self:oModelBJ6)
+
+	fwFreeArray(self:aFormFields)
+
+return
+
+/*/{Protheus.doc} setImportBatch
+Define o código do lote de importação a ser utilizado nos processos relacionados à importação de beneficiários.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+@param cBatchCode, character, código do lote de importação
+@return logical, verdadeiro se o código for definido com sucesso, falso caso contrário
+/*/
+method setImportBatch(cBatchCode as character) as logical class ImportBatchBase
+
+	local lOk := .F. as logical
+
+	if BJ5->(dbSeek(xFilial("BJ5") + cBatchCode))
+		self:cBatchCode := BJ5->BJ5_CODLOT
+		lOk := .T.
+	endif
+
+return lOk
+
+/*/{Protheus.doc} loadModel
+Carrega o modelo de dados utilizada para processar a importação do lote de beneficiários
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+/*/
+method loadModel() class ImportBatchBase
+
+	self:oModelBatch := fwLoadModel("PLCTO001")
+	self:oModelBJ5 := self:oModelBatch:getModel("BJ5MASTER")
+	self:oModelBJ6 := self:oModelBatch:getModel("BJ6DETAIL")
+
+	self:oModelBatch:setOperation(MODEL_OPERATION_UPDATE)
+
+return
+
+/*/{Protheus.doc} setImportBatchStatus
+Atualiza o status e a mensagem atual do lote de importação, com opção de refletir a atualização nos beneficiários do lote
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 29/05/2025
+@param cStatus, character, novo status do lote de importação
+@param cMessage, character, mensagem associada ao status
+@param lBeneficiaryStatus, logical, indica se o status dos beneficiários deve ser aplicado ao lote
+/*/
+method setImportBatchStatus(cStatus as character, cMessage as character, lBeneficiaryStatus as logical) class ImportBatchBase
+
+	default lBeneficiaryStatus := .F.
+
+	self:oModelBatch:activate()
+
+	self:oModelBJ5:setValue("BJ5_STATUS", cStatus)
+	self:oModelBJ5:setValue("BJ5_OBSLOT", cMessage)
+
+	if lBeneficiaryStatus
+		self:oModelBJ5:setValue("BJ5_QTDIMP", getBatchBeneficiaryStatusTotals(self:cBatchCode, STATUS_BENEF_IMPORTED_SUCCESSFULLY))
+		self:oModelBJ5:setValue("BJ5_QTDERR", getBatchBeneficiaryStatusTotals(self:cBatchCode, STATUS_BENEF_IMPORTED_WITH_ERROR))
+	endif
+
+	if self:oModelBatch:vldData()
+		self:oModelBatch:commitData()
+	endif
+
+	self:oModelBatch:deActivate()
+
+return
+
+/*/{Protheus.doc} setBeneficiariesStatus
+Define o status de um conjunto de beneficiários do lote de importação a partir de uma estrutura JSON de requisição
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 29/05/2025
+@param jRequest, json, estrutura JSON contendo os dados dos beneficiários e informações adicionais da requisição
+/*/
+method setBeneficiariesStatus(jRequest as json) class ImportBatchBase
+
+	local nCount as numeric
+	local nBeneficiaryTotal as numeric
+	local cErrorMessage as character
+
+	nBeneficiaryTotal := len(jRequest["beneficiaries"])
+
+	for nCount := 1 to nBeneficiaryTotal
+		if BJ6->(msSeek(xFilial("BJ6") + self:cBatchCode + jRequest["beneficiaries"][nCount]["familyId"] + jRequest["beneficiaries"][nCount]["cpf"]))
+			BJ6->(recLock("BJ6", .F.))
+			BJ6->BJ6_STATUS := jRequest["status"]
+
+			do case
+			case jRequest["status"] == STATUS_BENEF_IMPORTED_WITH_ERROR
+				cErrorMessage := jRequest["beneficiaries"][nCount]["errorMessage"]
+
+				if empty(cErrorMessage)
+					cErrorMessage := jRequest["errorMessage"]
+				endif
+
+				BJ6->BJ6_OBSBEN := cErrorMessage
+
+			case jRequest["status"] == STATUS_BENEF_IMPORTED_SUCCESSFULLY
+				BJ6->BJ6_PROTOC := jRequest["protocol"]
+				BJ6->BJ6_OBSBEN := ""
+			endcase
+			BJ6->(msUnLock())
+		endif
+	next nCount
+
+return
+
+/*/{Protheus.doc} loadFormFields
+Carrega os campos que compõem o formulário de importação do lote de beneficiários.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+@param lAddFamilyId, logical, define se o campo de identificador da família deve ser incluído na estrutura
+@return array, estrutura dos campos do formulário de importação
+/*/
+method loadFormFields(lAddFamilyId as logical) as array class ImportBatchBase
+
+	local oStructBeneficiary as object
+	local aStructFields as array
+	local nCount as numeric
+	local nLenStruct as numeric
+
+	default lAddFamilyId := .T.
+
+	self:aFormFields := {}
+
+	oStructBeneficiary := totvs.protheus.health.plan.api.portal.formstruct.BeneficiaryService():new()
+
+	oStructBeneficiary:setFormFields("1") // Inclusion
+	aStructFields := oStructBeneficiary:getFieldsBase("B2N")
+
+	aSort(aStructFields, nil, nil, {|x, y| x["order"] < y["order"]})
+
+	if lAddFamilyId
+		aAdd(self:aFormFields, {"property": "B2N_CODSEQ", "order": 1})
+
+		nLenStruct := len(aStructFields)
+		for nCount := 1 to nLenStruct
+
+			aStructFields[nCount]["order"] := nCount + 1
+			aAdd(self:aFormFields, aStructFields[nCount])
+
+		next nCount
+
+		nCount++
+
+		aAdd(self:aFormFields, {"property": "BBA_MATRIC", "order": nCount})
+	else
+		self:aFormFields := aClone(aStructFields)
+	endif
+
+	oStructBeneficiary:destroy()
+
+	freeObj(oStructBeneficiary)
+	fwFreeArray(aStructFields)
+
+return self:aFormFields
+
+/*/{Protheus.doc} getBatchBeneficiaryStatusTotals
+Retorna o total de beneficiários de um lote de importação com base no status informado
+@type function
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/06/2025
+@param cBatchCode, character, código do lote de importação
+@param cStatus, character, status dos beneficiários a serem contabilizados
+@return numeric, total de beneficiários com o status informado no lote
+/*/
+function getBatchBeneficiaryStatusTotals(cBatchCode as character, cStatus as character) as numeric
+
+	local nTotal := 0 as numeric
+	local cQuery as character
+	local oExecStmt as object
+	local nOrder := 1 as numeric
+
+	cQuery := " SELECT COUNT(?) TOTAL "
+	cQuery += " FROM ? BJ6 "
+	cQuery += " WHERE BJ6.BJ6_FILIAL = ? "
+	cQuery += "   AND BJ6.BJ6_CODLOT = ? "
+	cQuery += "   AND BJ6.BJ6_STATUS = ? "
+	cQuery += "   AND BJ6.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BJ6.BJ6_CPFBEN")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BJ6"))
+	oExecStmt:setString(nOrder++, xFilial("BJ6"))
+	oExecStmt:setString(nOrder++, cBatchCode)
+	oExecStmt:setString(nOrder++, cStatus)
+	oExecStmt:setString(nOrder++, " ")
+
+	nTotal := oExecStmt:execScalar("TOTAL")
+
+	oExecStmt:destroy()
+	freeObj(oExecStmt)
+
+return nTotal

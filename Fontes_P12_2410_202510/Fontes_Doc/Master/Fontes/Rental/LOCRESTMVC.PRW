@@ -1,0 +1,87 @@
+#INCLUDE "TOTVS.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+
+Static IsRest := .F.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LOCRestModel
+Publicação dos modelos que devem ficar disponíveis no REST.
+Vide classe FwRestModel.
+@type CLASS
+@author Alexandre Circenis
+@since 25/08/2023
+@version 23.10
+/*/
+Class LOCRestModel From FwRestModel
+    Method Activate()
+    Method DeActivate()
+    METHOD New() CONSTRUCTOR
+EndClass
+
+METHOD New() CLASS LOCRestModel
+    IsRest := .F.
+Return Self
+
+Method Activate() Class LOCRestModel
+    IsRest := .T.
+Return _Super:Activate()
+
+Method DeActivate() Class LOCRestModel
+    IsRest := .F.
+Return _Super:DeActivate()
+
+Function LOCIsRest()
+Return IsRest
+
+
+// Publicacao dos modelos que sao disponibilizados no REST
+
+PUBLISH MODEL REST NAME LOCA004 SOURCE LOCA004 RESOURCE OBJECT LOCRestModel // Cadastro de usuários analisadores de promoções
+PUBLISH MODEL REST NAME LOCA081 SOURCE LOCA081 RESOURCE OBJECT LOCRestModel // Status do Equipamento x Contrato Rental
+PUBLISH MODEL REST NAME LOCA082 SOURCE LOCA082 RESOURCE OBJECT LOCRestModel // Pedido de Venda x Locação
+PUBLISH MODEL REST NAME LOCA075 SOURCE LOCA075 RESOURCE OBJECT LOCRestModel // Integracao / processos
+PUBLISH MODEL REST NAME LOCA085 SOURCE LOCA085 RESOURCE OBJECT LOCRestModel // Cadastro de Sub Status
+PUBLISH MODEL REST NAME LOCA224 SOURCE LOCA224 RESOURCE OBJECT LOCRestModel // Gerenciamento de bens modelo I
+PUBLISH MODEL REST NAME LOCA224A SOURCE LOCA224A RESOURCE OBJECT LOCRestModel // Gerenciamento de bens modelo II
+PUBLISH MODEL REST NAME LOCA001C SOURCE LOCA001C RESOURCE OBJECT LOCRestModel // Rotina de Transferencia de Obra os itens do contrato
+PUBLISH MODEL REST NAME LOCA005 SOURCE LOCA005 RESOURCE OBJECT LOCRestModel // CONTROLE DE MINUTA
+PUBLISH MODEL REST NAME LOCA007 SOURCE LOCA007 RESOURCE OBJECT LOCRestModel // Custo extra
+PUBLISH MODEL REST NAME LOCA092 SOURCE LOCA092 RESOURCE OBJECT LOCRestModel // Monitoramento de Faturamento
+PUBLISH MODEL REST NAME LOCA248 SOURCE LOCA248 RESOURCE OBJECT LOCRestModel // Medição
+PUBLISH MODEL REST NAME LOCA259A SOURCE LOCA259A RESOURCE OBJECT LOCRestModel // Cabeçalho de Demanda
+PUBLISH MODEL REST NAME LOCA088 SOURCE LOCA088 RESOURCE OBJECT LOCRestModel // Cabeçalho CheckList
+PUBLISH MODEL REST NAME LOCA089 SOURCE LOCA089 RESOURCE OBJECT LOCRestModel // Itens do Cheklist
+PUBLISH MODEL REST NAME LOCA090 SOURCE LOCA090 RESOURCE OBJECT LOCRestModel // Cadastro Check list
+PUBLISH MODEL REST NAME LOCA091 SOURCE LOCA091 RESOURCE OBJECT LOCRestModel // Check list
+PUBLISH MODEL REST NAME LOCA259B SOURCE LOCA259B RESOURCE OBJECT LOCRestModel // Movimentar A.S.
+PUBLISH MODEL REST NAME LOCA259C SOURCE LOCA259C RESOURCE OBJECT LOCRestModel // Resumo 
+PUBLISH MODEL REST NAME LOCA259E SOURCE LOCA259E RESOURCE OBJECT LOCRestModel // Separação A.S.
+PUBLISH MODEL REST NAME LOCA259F SOURCE LOCA259F RESOURCE OBJECT LOCRestModel // Desvincular A.S.
+PUBLISH MODEL REST NAME LOCA259G SOURCE LOCA259G RESOURCE OBJECT LOCRestModel // Tela de Consulta responsaveis e Documentos 
+PUBLISH MODEL REST NAME LOCA259H SOURCE LOCA259H RESOURCE OBJECT LOCRestModel // Estorna Separação na Demanda
+PUBLISH MODEL REST NAME LOCA229A SOURCE LOCA229A RESOURCE OBJECT LOCRestModel // Cabeçalho Romenaneio
+PUBLISH MODEL REST NAME LOCA229B SOURCE LOCA229B RESOURCE OBJECT LOCRestModel // Romaneio completo
+PUBLISH MODEL REST NAME LOCA229C SOURCE LOCA229C RESOURCE OBJECT LOCRestModel // Inclusão de itens no Romaneio
+PUBLISH MODEL REST NAME LOCA229D SOURCE LOCA229D RESOURCE OBJECT LOCRestModel // Edição de Item do Romaneio
+PUBLISH MODEL REST NAME LOCA097  SOURCE LOCA097  RESOURCE OBJECT LOCRestModel // Interação com o Usuário do Portal do Locador
+PUBLISH MODEL REST NAME LOCA229E SOURCE LOCA229E RESOURCE OBJECT LOCRestModel // Separação de itens no romaneio
+PUBLISH MODEL REST NAME LOCA229F SOURCE LOCA229F RESOURCE OBJECT LOCRestModel // Estorna Separação no Romaneio
+PUBLISH MODEL REST NAME LOCA100 SOURCE LOCA100 RESOURCE OBJECT LOCRestModel // Cadastro MTBF do Contrato
+PUBLISH MODEL REST NAME LOCA101 SOURCE LOCA101 RESOURCE OBJECT LOCRestModel // Aprovação de Ordens de Serviço APP
+PUBLISH MODEL REST NAME LOCA229G SOURCE LOCA229G RESOURCE OBJECT LOCRestModel // Implementa Logs de eventos diversos
+
+/*
+ // Usar para testar a classe
+User Function LocRestTst()
+
+Local Obj := LOCRestModel():New()
+
+oBj:Activate()
+MsgStop(If(LOCIsRest(),"Ativo","Inativo"))
+oBj:DeActivate()
+MsgStop(If(LOCIsRest(),"Ativo","Inativo"))
+
+Return
+*/
+

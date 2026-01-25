@@ -1,0 +1,145 @@
+#INCLUDE "loca042.ch" 
+#INCLUDE "PROTHEUS.CH" 
+
+/*/{PROTHEUS.DOC} LOCA042.PRW
+ITUP BUSINESS - TOTVS RENTAL
+ROTINA PARA REALIZAR A LIBERACAO DO PEDIDO DE VENDA A PARTIR DA MEDICAO
+@TYPE FUNCTION
+@AUTHOR FRANK ZWARG FUGA
+@SINCE 03/12/2020
+@VERSION P12
+@HISTORY 03/12/2020, FRANK ZWARG FUGA, FONTE PRODUTIZADO.
+/*/
+
+FUNCTION LOCA042(CPRODUTO , CNUMPED , NTOTQTD , CCLIENTE , CLOJA , NTOTVLR , CFROTA , CDESC)
+// DECLARAÇÃO DE VARIAVEIS
+LOCAL CITEM := ""
+LOCAL AAREA := GETAREA() 
+Local lMvLocBac := SuperGetMv("MV_LOCBAC",.F.,.F.) //Integração com Módulo de Locações SIGALOC
+Local cFrotaCamp
+
+// LOCALIZO O ITEM DO PEDIDO E ATUALIZO O CAMPO DE QTD LIBERADA 
+DBSELECTAREA("SC6")
+DBSETORDER(1) 							// C6_FILIAL + C6_PRODUTO + C6_NUM + C6_ITEM 
+
+IF DBSEEK(XFILIAL("SC6")+CNUMPED)
+	WHILE SC6->(!EOF()) .AND. ALLTRIM(SC6->C6_NUM) == ALLTRIM(CNUMPED)
+
+		If lMvLocBac
+			cFrotaCamp := ""
+			FPZ->(dbSetOrder(1))
+            If FPZ->(dbSeek(xFilial("FPZ")+SC6->C6_NUM))
+                While !FPZ->(Eof()) .and. FPZ->FPZ_FILIAL + FPZ->FPZ_PEDVEN == xFilial("FPZ") + SC6->C6_NUM
+                    If FPZ->FPZ_ITEM == SC6->C6_ITEM
+                        FPY->(dbSetOrder(1))
+                        If FPY->(dbSeek(xFilial("FPY")+SC6->C6_NUM))
+                            If FPY->FPY_STATUS <> "2"
+                                cFrotaCamp := FPZ->FPZ_FROTA
+                            EndIF
+                        EndIF
+                    EndIF
+                    FPZ->(dbSkip())
+                EndDo
+            EndIF
+		else
+			cFrotaCamp := SC6->C6_FROTA
+		endif
+
+		IF ALLTRIM(cFrotaCamp) == ALLTRIM(CFROTA)
+			IF ALLTRIM(SC6->C6_PRODUTO) == ALLTRIM(CPRODUTO)
+				CITEM := SC6->C6_ITEM         	
+				RECLOCK("SC6",.F.)
+				SC6->C6_QTDLIB := NTOTQTD + SC6->C6_QTDLIB
+				SC6->C6_ENTREG := DDATABASE
+				SC6->(MSUNLOCK()) 
+			 ENDIF
+		ENDIF   
+		SC6->(DBSKIP())
+	ENDDO
+ELSE
+	MSGINFO(STR0001+CNUMPED+STR0002 , STR0003)  //"PEDIDO DE VENDA ["###"] NÃO ENCONTRADO! VERIFIQUE COM O DEPARTAMENTO COMECIAL !"###"GPO - LOCFSC9.PRW"
+	RESTAREA(AAREA) 
+	RETURN
+ENDIF
+
+If len(cItem) == 0
+	MSGINFO(STR0001+CNUMPED+STR0002 , STR0003)  //"PEDIDO DE VENDA ["###"] NÃO ENCONTRADO! VERIFIQUE COM O DEPARTAMENTO COMECIAL !"###"GPO - LOCFSC9.PRW"
+	RESTAREA(AAREA) 
+	RETURN
+EndIF
+
+// GRAVO A LIBERACAO DO PEDIDO PELA QUANTIDADE LANÇADA NA MEDIÇÃO 
+DBSELECTAREA("SC9")
+DBSETORDER(1)  			// C9_FILIAL+C9_PEDIDO+C9_ITEM+C9_SEQUEN+C9_PRODUTO
+
+IF !DBSEEK(XFILIAL("SC9")+CNUMPED+CITEM+"01"+CPRODUTO)
+
+	RECLOCK("SC9",.T.)
+		SC9->C9_FILIAL  := XFILIAL("SC9")
+		SC9->C9_OK      := " "
+	   	SC9->C9_PEDIDO  := CNUMPED               
+	    SC9->C9_ITEM    := CITEM
+	   	SC9->C9_CLIENTE := CCLIENTE
+		SC9->C9_LOJA	:= CLOJA
+		SC9->C9_PRODUTO := CPRODUTO 
+	   	SC9->C9_QTDLIB  := NTOTQTD
+	    SC9->C9_DATALIB := DDATABASE 
+		SC9->C9_SEQUEN  := "01"
+		SC9->C9_PRCVEN  := NTOTVLR
+	    SC9->C9_LOCAL   := "01"
+	    SC9->C9_TPCARGA := "2"
+	    SC9->C9_BLEST   := " "
+	    SC9->C9_BLCRED  := " "
+	    SC9->C9_BLOQUEI := " "     
+	    SC9->C9_DTVALID := DDATABASE
+	    SC9->C9_RETOPER := "2" 			                           
+		if SC9->(FIELDPOS("C9_FROTA")) > 0
+	    	SC9->C9_FROTA   := CFROTA 		// PARA PREENCHER A FROTA
+		EndIF
+		if SC9->(FIELDPOS("C9_LDESC")) > 0
+	    	SC9->C9_LDESC   := CDESC 		// PARA PREENCHER A FROTA
+		EndIF
+	SC9->(MSUNLOCK()) 
+
+ELSE
+
+	WHILE !(EOF()) .AND. CNUMPED == SC9->C9_PEDIDO 
+    	IF CPRODUTO == SC9->C9_PRODUTO
+    		CSEQ := SC9->C9_SEQUEN
+	  	ENDIF                     
+       	SC9->(DBSKIP())
+ 	ENDDO   	    
+ 	
+    CSEQ := STRZERO((VAL(CSEQ) + 1),2,0)
+    RECLOCK("SC9",.T.)
+	    SC9->C9_FILIAL  := XFILIAL("SC9")
+		SC9->C9_OK      := " "
+	   	SC9->C9_PEDIDO  := CNUMPED               
+	    SC9->C9_ITEM    := CITEM
+	   	SC9->C9_CLIENTE := CCLIENTE
+		SC9->C9_LOJA	:= CLOJA
+		SC9->C9_PRODUTO := CPRODUTO 
+	   	SC9->C9_QTDLIB  := NTOTQTD
+	    SC9->C9_DATALIB := DDATABASE
+		SC9->C9_SEQUEN  := CSEQ
+		SC9->C9_PRCVEN  := NTOTVLR
+	    SC9->C9_LOCAL   := "01"
+	    SC9->C9_TPCARGA := "2"
+	    SC9->C9_BLEST   := " "
+	    SC9->C9_BLCRED  := " "
+	    SC9->C9_BLOQUEI := " "     
+	    SC9->C9_DTVALID := DDATABASE
+	    SC9->C9_RETOPER := "2" 
+		if SC9->(FIELDPOS("C9_FROTA")) > 0
+	    	SC9->C9_FROTA   := CFROTA 		// PARA PREENCHER A FROTA
+		EndIF
+		if SC9->(FIELDPOS("C9_LDESC")) > 0
+	    	SC9->C9_LDESC   := CDESC 		// PARA PREENCHER A FROTA
+		EndIF
+	SC9->(MSUNLOCK()) 
+
+ENDIF 
+
+RESTAREA(AAREA) 
+
+RETURN

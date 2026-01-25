@@ -1,0 +1,36 @@
+#IFDEF SPANISH
+   #define STR0001 "Operación no disponible para clientes com Saldo Anterior"
+   #define STR0002 "Aviso"
+   #define STR0003 "Credito invalido, no ha Pedidos de Venta!"
+   #define STR0004 "Credito ya incluido!"
+   #define STR0005 "Ingresse el Plazo!"
+   #define STR0006 "Ingresse el Cheque!"
+   #define STR0007 "Ingresse el Banco!"
+   #define STR0008 "Ingresse el Data!"
+   #define STR0009 "Ingrese el Pago!"
+   #define STR0010 "Modificando Pedidos..."
+#ELSE
+   #IFDEF ENGLISH
+      #define STR0001 "Operación no disponible para clientes com Saldo Anterior"
+      #define STR0002 "Aviso"
+      #define STR0003 "Credito invalido, no ha Pedidos de Venta!"
+      #define STR0004 "Credito ya incluido!"
+      #define STR0005 "Ingresse el Plazo!"
+      #define STR0006 "Ingresse el Cheque!"
+      #define STR0007 "Ingresse el Banco!"
+      #define STR0008 "Ingresse el Data!"
+      #define STR0009 "Ingrese el Pago!"
+      #define STR0010 "Modificando Pedidos..."
+   #ELSE
+      #define STR0001 "Operación no disponible para clientes com Saldo Anterior"
+      #define STR0002 "Aviso"
+      #define STR0003 "Credito invalido, no ha Pedidos de Venta!"
+      #define STR0004 "Credito ya incluido!"
+      #define STR0005 "Ingresse el Plazo!"
+      #define STR0006 "Ingresse el Cheque!"
+      #define STR0007 "Ingresse el Banco!"
+      #define STR0008 "Ingresse el Data!"
+      #define STR0009 "Ingrese el Pago!"
+      #define STR0010 "Modificando Pedidos..."
+   #ENDIF
+#ENDIF

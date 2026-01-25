@@ -1,0 +1,455 @@
+#include "tlpp-core.th"
+
+#define POST 1
+#define PUT 2
+#define DELETE 3
+#define PATCH 4
+
+#define METHOD_BANK_SLIP "1"
+#define METHOD_CREDIT_CARD "2"
+#define METHOD_PIX "3"
+
+#define STATUS_CODE_OK "200"
+#define STATUS_CODE_CREATE "201"
+#define STATUS_CODE_BAD_REQUEST "400"
+
+namespace totvs.protheus.health.plan.integration.grr
+
+/*/{Protheus.doc} Subscriptions
+Classe das subscrições do GRR (assinaturas)
+@type method
+@version 12.1.2410  
+@author vinicius.queiros
+@since 21/08/2024
+/*/
+class Subscriptions
+
+	protected data cEndpoint as character
+	protected data cPath as character
+	protected data cResponse as character
+	protected data cStatusCode as character
+	protected data jResponse as json
+
+	public method new() constructor
+	public method getSubscriptionId(cId as character) as logical
+	public method addSubscription(jFamilyId as json, jCustomer as json) as logical
+	public method commitSubscriptionStatus(cStatus as character, cErrorMessage as character) as logical
+	public method commitInvoice(cIdTitle as character) as logical
+	public method deactivatePaymentToken(cIntegrationId as character) as logical
+	public method getResponse() as character
+	public method getStatusCode() as character
+	public method destroy()
+
+endclass
+
+/*/{Protheus.doc} new
+Método construtor da classe
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/08/2024
+@return object, objeto da instância da classe
+/*/
+method new() class Subscriptions
+
+	self:cEndpoint := GRRUrl()
+	self:cPath := "/subscriptions"
+	self:jResponse := JsonObject():new()
+
+return self
+
+/*/{Protheus.doc} getSubscriptionId
+Obter os dados da subscrição no GRR 
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/08/2024
+@param cId, character, código de integração da assinatura (subscription)
+@return logical, se a subscrição foi encontrada no GRR
+/*/
+method getSubscriptionId(cId as character) as logical class Subscriptions
+
+	local oRest as object
+
+	GRRRestExec("GET", self:cEndpoint, self:cPath + "/" + cId, @oRest)
+
+	self:cStatusCode := oRest:getHttpCode()
+	self:cResponse := oRest:getResult()
+	self:jResponse:fromJson(self:cResponse)
+
+	freeObj(oRest)
+
+return self:cStatusCode == STATUS_CODE_OK
+
+/*/{Protheus.doc} addSubscription
+Cria uma nova subscrição na plataforma GRR para a família e cliente de cobrança informados.
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 01/06/2025
+@param jFamilyId, json, Objeto JSON contendo o identificador da família
+@param jCustomer, json, Objeto JSON com os dados do cliente de cobrança
+@return logical, Indica se a subscrição foi criada com sucesso
+/*/
+method addSubscription(jFamilyId as json, jCustomer as json) as logical class Subscriptions
+
+	local lSuccess := .F. as logical
+	local jBody as json
+	local cMessage := "" as character
+	local jHolder as json
+	local cPaymentMethods := superGetMV("MV_PGRRPAY", .F., "1|2|3") as character // 1 = boleto , 2 = cartão e 3 = pix
+	local nDueDay := PLDayVencCob(BA3->(BA3_CODINT + BA3_CODEMP + BA3_MATRIC)) as numeric
+	local dStartDate as date
+
+	jHolder := getHolderData(jFamilyId)
+	
+	jBody := JsonObject():new()
+	jBody["organizationIntegrationId"] := cEmpAnt + '|' + cFilAnt
+	jBody["name"] := jHolder["name"]
+	jBody["currencyCode"] := "BRL"
+	jBody["subscriptionAccession"] := formattedDate(dDataBase)
+	jBody["tastingDays"] := 0
+
+	if BA3->(fieldPos("BA3_GRRRAT")) > 0 .and. BA3->BA3_GRRRAT == "1" .and. nDueDay < day(dDatabase)
+		dStartDate := stod(year2Str(dDatabase) + month2Str(dDatabase) + strZero(nDueDay, 2))
+		jBody["subscriptionStart"] := formattedDate(dStartDate)
+	else
+		jBody["subscriptionStart"] := formattedDate(dDataBase)
+	endif
+
+	if !empty(jHolder["blockDate"])
+		jBody["subscriptionEnd"] := jHolder["blockDate"]
+	endif
+
+	jBody["description"] := alltrim(posicione("BI3", 1, xFilial("BI3") + BA3->(BA3_CODINT + BA3_CODPLA + BA3_VERSAO), "BI3_DESCRI"))
+	jBody["paymentMethods"] := strTokArr2(cPaymentMethods, "|")
+	jBody["reference"] := BA3->(BA3_CODINT + BA3_CODEMP + BA3_MATRIC)
+	jBody["integrationId"] := BA3->BA3_CODINT + "|" + BA3->BA3_CODEMP + "|" + BA3->BA3_MATRIC + "|" + jCustomer["code"] + "|" + jCustomer["branch"]
+	jBody["chargeEach"] := 1
+	jBody["period"] := "2" // 2 = Mês
+	jBody["numberOfTimes"] := 0 // tempo indefinido
+	jBody["chargeType"] := 1 // 1 = Dia específico
+	jBody["specificDay"] := nDueDay
+	jBody["quantityDay"] := 1
+	jBody["referenceDay"] := "1" // 1 = Dias antes
+	jBody["referencePeriod"] := "1" // 1 = StartOfPeriod
+	jBody["source"] := "PLS"
+	jBody["origin"] := "Protheus"
+	jBody["alwaysSaveCreditcard" ] := .T.
+	jBody["customer"] := getCustomer(jCustomer, jBody["integrationId"], jBody["reference"])
+	jBody["items"] := getMonthlyPaymentItems()
+	
+	self:cResponse := GRRSyncData(nil, jBody, self:cEndPoint, self:cPath, POST, .F., @cMessage)
+
+	if !empty(self:cResponse)
+		lSuccess := .T.
+		self:cStatusCode := STATUS_CODE_CREATE
+
+		self:jResponse:fromJson(self:cResponse)
+
+		if cPaymentMethods == METHOD_CREDIT_CARD 
+			self:deactivatePaymentToken(jBody["integrationId"])
+		endif
+	else
+		self:cResponse := cMessage
+		self:cStatusCode := STATUS_CODE_BAD_REQUEST
+	endif
+	
+	freeObj(jBody)
+	freeObj(jHolder)
+
+return lSuccess
+
+/*/{Protheus.doc} commitSubscriptionStatus
+Realiza o commit do status do cadastro da subscrição
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 01/06/2025
+@param cStatus, character, Situação da integração com a plataforma GRR
+@param cErrorMessage, character, Mensagem de erro da integração com a plataforma GRR
+@return logical, Indica se o commit foi realizado com sucesso
+/*/
+method commitSubscriptionStatus(cStatus as character, cErrorMessage as character) as logical class Subscriptions
+
+	BA3->(recLock("BA3", .F.))
+		BA3->BA3_GRRSIT := cStatus
+		BA3->BA3_GRRMSG := cErrorMessage
+	BA3->(msUnLock())
+
+return .T.
+
+/*/{Protheus.doc} commitInvoice
+Realiza a gravação de uma fatura na tabela HRH da subscrição
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 26/08/2024
+@param cIdTitle, character, chave da fatura (titulo)
+@return logical, se a fatura foi gravada com sucesso
+/*/
+method commitInvoice(cIdTitle as character) as logical class Subscriptions
+
+	local lSuccess := .F. as logical
+
+	if self:jResponse:hasProperty("id")
+		GRRA050({xFilial("SE1"), "SE1", "PLSA627", cIdTitle, "", ""})
+
+		GRRSetSubscriptionId({xFilial("SE1"), "SE1", cIdTitle }, self:jResponse["id"])
+		lSuccess := .T.
+	endif
+
+return lSuccess
+
+/*/{Protheus.doc} deactivatePaymentToken
+Desativa o token de pagamento associado a uma subscrição utilizando o identificador de integração.
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 02/06/2025
+@param cIntegrationId, character, Identificador de integração da subscrição
+@return logical, Indica se a desativação do token foi realizada com sucesso
+/*/
+method deactivatePaymentToken(cIntegrationId as character) as logical class Subscriptions
+
+	local oRest as object
+
+	GRRRestExec("PUT", self:cEndpoint, self:cPath + "/" + cIntegrationId + "/replace-payment-token", @oRest, {"integrationId": cIntegrationId})
+
+	self:cStatusCode := oRest:getHttpCode()
+	self:cResponse := oRest:getResult()
+	self:jResponse:fromJson(self:cResponse)
+
+	freeObj(oRest)
+
+return self:cStatusCode == STATUS_CODE_OK
+
+/*/{Protheus.doc} getResponse
+Obter a resposta da comunicação
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 22/08/2024
+@return character, resposta da comunicação
+/*/
+method getResponse() as character class Subscriptions
+
+return self:cResponse
+
+/*/{Protheus.doc} getStatusCode
+Obter o código de status da comunicação
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 22/08/2024
+@return character, código de status
+/*/
+method getStatusCode() as character class Subscriptions
+
+return self:cStatusCode
+
+/*/{Protheus.doc} destroy
+Limpa da memória as variáveis (objeto, array e json) da classe
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 23/08/2024
+/*/
+method destroy() class Subscriptions
+
+	freeObj(self:jResponse)
+
+return
+
+/*/{Protheus.doc} getHolderData
+Obter os dados do titular ou responsavel familiar da familia da assinatura
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/08/2024
+@param jFamilyId, json, dados da familia (operadora, empresa e matricula)
+@return json, dados do titular ou responsavel familiar
+/*/
+static function getHolderData(jFamilyId as json) as json
+
+	local oExecStmt as object
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local cHolderType := superGetMV("MV_PLCDTIT", .F., "T") as character
+	local jHolderData as json
+
+	jHolderData := {"name": "", "blockDate": ""}
+
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? BA1 "
+	cQuery += " WHERE "
+	cQuery += "     BA1.BA1_FILIAL = ? AND "
+	cQuery += "     BA1.BA1_CODINT = ? AND "
+	cQuery += "     BA1.BA1_CODEMP = ? AND "
+	cQuery += "     BA1.BA1_MATRIC = ? AND "
+	cQuery += "     ((BA1.BA1_TIPUSU = ? AND (BA1.BA1_DATBLO = ? OR BA1.BA1_DATBLO > ?)) OR (BA1.BA1_TIPUSU <> ? AND BA1.BA1_RESFAM = ? AND (BA1.BA1_DATBLO = ? OR BA1.BA1_DATBLO > ?))) AND "
+	cQuery += "     BA1.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BA1.BA1_NOMUSR, BA1.BA1_DATBLO")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BA1"))
+	oExecStmt:setString(nOrder++, xFilial("BA1"))
+	oExecStmt:setString(nOrder++, jFamilyId["healthInsurerCode"])
+	oExecStmt:setString(nOrder++, jFamilyId["companyCode"])
+	oExecStmt:setString(nOrder++, jFamilyId["registration"])
+	oExecStmt:setString(nOrder++, cHolderType)
+	oExecStmt:setString(nOrder++, " ")
+	oExecStmt:setDate(nOrder++, dDataBase)
+	oExecStmt:setString(nOrder++, cHolderType)
+	oExecStmt:setString(nOrder++, "1") // 1 = Sim (Responsavel familiar)
+	oExecStmt:setString(nOrder++, " ")
+	oExecStmt:setDate(nOrder++, dDataBase)
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	if !(cAlias)->(eof())
+		jHolderData["name"] := allTrim((cAlias)->BA1_NOMUSR)
+		jHolderData["blockDate"] := formattedDate(stod((cAlias)->BA1_DATBLO))
+	endif
+
+	(cAlias)->(dbCloseArea())
+
+	freeObj(oExecStmt)
+
+return jHolderData
+
+/*/{Protheus.doc} getCustomer
+Obter os dados do cliente da subscrição
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/08/2024
+@param jCustomerId, json, dados do cliente (código e loja)
+@param cIntegrationId, character, identificador da subscrição
+@param cReference, character, referência da subscrição
+@return json, dados do cliente
+/*/
+static function getCustomer(jCustomerId as json, cIntegrationId as character, cReference as character) as json
+
+	local jCustomerData := JsonObject():new() as json
+	local jAddressData as json
+	local jEmailData as json
+	local jPhoneData as json
+	local aAreaSA1 := SA1->(getArea()) as array
+
+	SA1->(dbSetOrder(1))
+	if SA1->(msSeek(xFilial("SA1") + jCustomerId["code"] + jCustomerId["branch"]))
+
+		jCustomerData["code"] := SA1->(A1_COD + A1_LOJA)
+		jCustomerData["organizationIntegrationId"] :=  cEmpAnt + "|" + cFilant
+		jCustomerData["reference"] := cReference + SA1->(A1_COD + A1_LOJA)
+		jCustomerData["name"] := substr(alltrim(SA1->A1_NOME), 1, 26)
+		jCustomerData["typeDocument"] := "1" // 1 = CPF
+		jCustomerData["documentNumber"] := alltrim(SA1->A1_CGC)
+		jCustomerData["integrationId"] := cIntegrationId
+		jCustomerData["status"] := "1" // 1 = Ativo
+		jCustomerData["source"] := "PLS"
+
+		if !empty(SA1->A1_DTNASC)
+			jCustomerData["birthDate"] := formattedDate(SA1->A1_DTNASC)
+		endif
+
+		jAddressData := JsonObject():new()
+		jAddressData["type"] := "1" // 1 = Residencial
+		jAddressData["street"] := alltrim(trataEnd(SA1->A1_END, "L")) // L = Logradouro
+		jAddressData["number"] := alltrim(trataEnd(SA1->A1_END, "N")) // N = Numero
+		jAddressData["complement"] := alltrim(SA1->A1_COMPLEM)
+		jAddressData["district"] := alltrim(SA1->A1_BAIRRO)
+		jAddressData["zipCode"] := alltrim(SA1->A1_CEP)
+		jAddressData["cityName"] := alltrim(SA1->A1_MUN)
+		jAddressData["stateInitials"] := alltrim(SA1->A1_EST)
+		jAddressData["stateName"] := GRRX5Content("12", alltrim(SA1->A1_EST))
+		jAddressData["countryName"] := "BR"
+
+		jCustomerData["addresses"] := { jAddressData }
+
+		jEmailData := JsonObject():new()
+		jEmailData["type"] := "1" // 1 = Pessoal
+		jEmailData["emailAddress"] := alltrim(SA1->A1_EMAIL)
+
+		jCustomerData["emails"] := { jEmailData }
+
+		jPhoneData := JsonObject():new()
+		jPhoneData["type"] := "1" // 1 = Residencial
+		jPhoneData["countryCode"] := "+55"
+		jPhoneData["areaCode"] :=  alltrim(SA1->A1_DDD)
+		jPhoneData["number"] :=  alltrim(SA1->A1_TEL)
+		jPhoneData["extension"] := ""
+
+		jCustomerData["phones"] := { jPhoneData }
+	endif
+
+	restArea(aAreaSA1)
+
+	freeObj(jAddressData)
+	freeObj(jEmailData)
+	freeObj(jPhoneData)
+
+	fwFreeArray(aAreaSA1)
+
+return jCustomerData
+
+/*/{Protheus.doc} getMonthlyPaymentItems
+Retorna uma lista de itens que correspondem a mensalidade
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 02/06/2025
+@return array, Lista de itens
+/*/
+static function getMonthlyPaymentItems() as array
+
+	local aItemsData := {} as array
+	local jItems as json
+
+	BFQ->(dbSetOrder(1))
+	if BFQ->(msSeek(xFilial("BFQ") + BA3->BA3_CODINT + "101")) // Mensalidade
+		jItems := JsonObject():new()
+
+		jItems["integrationId"] := cEmpAnt + '|' + cFilAnt + '|' + BFQ->BFQ_CODINT + '|' + BFQ->BFQ_PROPRI + BFQ->BFQ_CODLAN
+		jItems["recurringType"] := 1
+		jItems["itemName"] := alltrim(BFQ->BFQ_DESCRI)
+		jItems["description"] := alltrim(BFQ->BFQ_DESCRI)
+		jItems["typeCalculation"] := 1
+		jItems["quantityCicles"] := 0
+		jItems["variation"] := 1
+		jItems["aditonal"] := 0
+		jItems["discount"] := 0
+		jItems["cicleNumber"] := iif(BFQ->BFQ_TIPFAT == "2", 0, 1) // 2 = Mensal
+		jItems["quantity"] := 1
+		jItems["currencyCode" ] := "BRL"
+		jItems["alwaysSaveCreditcard" ] := .T.
+
+		aAdd(aItemsData, jItems)
+	endif
+
+	freeObj(jItems)
+
+return aItemsData
+
+/*/{Protheus.doc} formattedDate
+Obter data formatada no padrão YYYY-MM-DD
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/08/2024
+@param dDate, date, data a ser formatada
+@return character, data formatada
+/*/
+static function formattedDate(dDate as date) as character
+
+	local cDate := "" as character
+
+	if !empty(dDate)
+		cDate := transform(dtos(dDate), "@R 9999-99-99")
+	endif
+
+return cDate

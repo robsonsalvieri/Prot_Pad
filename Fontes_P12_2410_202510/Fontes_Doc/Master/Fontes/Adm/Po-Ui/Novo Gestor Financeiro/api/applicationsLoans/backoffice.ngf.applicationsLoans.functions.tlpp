@@ -1,0 +1,1215 @@
+#include 'tlpp-core.th'
+#include "protheus.ch"
+#INCLUDE "TOTVS.CH"
+#INCLUDE "BACKOFFICE.NGF.APPLICATIONSLOANS.FUNCTIONS.CH"
+
+USING NAMESPACE gfin.util
+
+#DEFINE parcela 1
+#DEFINE datax 2
+#DEFINE valor 3
+#DEFINE juros 4
+#DEFINE vcorrigido 5
+#DEFINE amortiza 6
+#DEFINE prestacao 7
+
+Static __aItems   := {} As Array
+Static __nDiasCTB := getDiasCTB() As Numeric
+
+/*/{Protheus.doc} CalculateParcels
+	Calcula as parcelas do emprestimo, utilizando o core do legado
+	@type  Function
+	@author Vitor Duca
+	@since 16/12/2021
+	@version 1.0
+	@param oBodyRequest, Json, Body da requisição
+	@return jResponse, Json, Json de resposta para apresentar as parcelas
+
+	************ EXEMPLO DO JSON DE RESPOSTA *******************************
+	{
+		"items": [
+			{
+				"amortiza": 2000,
+				"valor": 10000,
+				"juros": 0,
+				"datax": "2016/03/21",
+				"vcorrigido": 10000,
+				"parcela": 1,
+				"prestacao": 2000
+			},
+			{
+				"amortiza": 2000,
+				"valor": 8000,
+				"juros": 0,
+				"datax": "2016/04/20",
+				"vcorrigido": 8000,
+				"parcela": 2,
+				"prestacao": 2000
+			}
+		],
+		"struct": [
+			{
+				"field": "parcela",
+				"title": "Parcela"
+			},
+			{
+				"field": "datax",
+				"title": "Data de vencimento"
+			},
+			{
+				"field": "valor",
+				"title": "Valor"
+			},
+			{
+				"field": "juros",
+				"title": "Valor do juros"
+			},
+			{
+				"field": "vcorrigido",
+				"title": "Valor corrigido"
+			},
+			{
+				"field": "amortiza",
+				"title": "Amortização"
+			},
+			{
+				"field": "prestacao",
+				"title": "Valor da prestação"
+			}
+		],
+		"items_total": [
+			{
+				"amortiza": 10000,
+				"valor": 0,
+				"datax": " - ",
+				"juros": 0,
+				"vcorrigido": 0,
+				"parcela": " - ",
+				"prestacao": 10000
+			}
+		]
+	}
+/*/
+Function CalculateParcels(oBodyRequest As Json) As Json
+	Local dDataVenc := STOD("") As Date
+	Local lPriParc  := .T. As Logical
+	Local nParcela  := 1 As Numeric
+	Local nI	    := 1 As Numeric
+	Local nValAmor  := 0 As Numeric
+	Local nValCorr  := 0 As Numeric
+	Local nValDeb   := 0 As Numeric
+	Local nValJuros := 0 As Numeric
+	Local nValPrest := 0 As Numeric
+	Local nTotJuros := 0 As Numeric
+	Local nTotPrest := 0 As Numeric
+	Local nTotAmort := 0 As Numeric
+	Local i         := 1 As Numeric
+	Local lCarencia := .F. As Logical
+	Local lRetCar   := .T. As Logical
+	Local cTPCaren  := SuperGetMV("MV_TPCAREN",.F.,"1") As Character
+	Local nCont     := 0 As Numeric
+	Local lJurCar   := .F. As Logical
+	Local jResponse As Json
+	Local jArraytotal As Json
+	Local aTotal := {} As Array
+	Local aStruct := {} As Array
+	Local cMessageError := "" As Character
+	Local dDatefee as Date
+	Local dDataAnt := dDataBase As Date
+	Local oCalcTemplate as Object
+	Local lCalcTemplate := .F. as Logical
+	Local nFator := 0 As Numeric
+
+	InitBody(@oBodyRequest)
+
+	If ValidData(@cMessageError, oBodyRequest)
+		lJurCar   := oBodyRequest["eh_jurcar"] == "1"
+
+		If oBodyRequest:hasProperty('dataPrimeiroVencimento') .And. !Empty(oBodyRequest["dataPrimeiroVencimento"])
+			dDataVenc := SToD(StrTran(oBodyRequest["dataPrimeiroVencimento"], '-', ''))
+		Else
+			dDataVenc := getDataVencVld(oBodyRequest)
+		EndIf
+
+		dDatefee  := STOD(oBodyRequest["eh_data"])
+
+		// Valor do debito inicial
+		If oBodyRequest["eh_basedes"] == "1" //Compôe taxas e despesas na base de calculo dos juros
+			nValDeb := oBodyRequest["eh_saldo"]+oBodyRequest["eh_tarifa"]+;
+				oBodyRequest["eh_despesa"]+oBodyRequest["eh_spread"]+oBodyRequest["eh_valiof"]
+		Else
+			nValDeb := oBodyRequest["eh_saldo"]
+		Endif
+
+		lCarencia := !Empty(oBodyRequest["eh_carenci"])
+
+		If !Empty(oBodyRequest["eh_vlamorp"])
+			nValAmor := oBodyRequest["eh_vlamorp"]
+		Else
+			// Calcula valor da amortização
+			nValAmor := Round(nValDeb/oBodyRequest["eh_prazo"],2)
+		EndIf
+
+		__aItems := {}
+
+		If oBodyRequest:hasProperty('eh_templt') .And. ValType(oBodyRequest['eh_templt']) $ 'J|O'  // Utiliza calculo por template de fórmulas
+			oCalcTemplate := totvs.protheus.backoffice.ngf.template.Template():new()
+			lCalcTemplate := oCalcTemplate:setTemplate(oBodyRequest["eh_templt"]:ToJson())
+		EndIf
+
+		jResponse := JsonObject():new()
+
+		CreateStruct(@aStruct)
+
+		//Calcula os valores com base no valor da amortização/parcela informada no campo EH_VLAMORP
+		If Empty(oBodyRequest["eh_prazo"]) .And. !Empty(oBodyRequest["eh_vlamorp"])
+
+			//Tabela SAC
+			If oBodyRequest["eh_amortiz"] == "2"
+				While If(lPriParc, nValDeb >= nValAmor, (nValDeb > nValAmor .Or. nValDeb > 0))
+
+					/*********** Emprestimo com Carência***********/
+					If lCarencia
+						For i := 1 to oBodyRequest["eh_carenci"]
+							If !lPriParc
+								// Data de vencimento da parcela subsequente
+								dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+								dDatefee  := dDataAnt
+							EndIf
+
+							If lCalcTemplate
+								oCalcTemplate:setDateBase(dDataAnt)
+								oCalcTemplate:setDateVenc(dDataVenc)
+								oCalcTemplate:setValorBase(nValDeb)
+								oCalcTemplate:calcTemplate()
+								nValJuros := oCalcTemplate:getValor('juros')
+							Else
+								nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+							EndIf
+
+							// Valor de amortização é zero na carência
+							nValAmor := 0
+
+							// Calcula o valor corrigido
+							nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+							//Totaliza totais de juros
+							nTotJuros += nValJuros
+
+							If !lJurCar
+								nValDeb 	+= nValJuros
+								nValJuros := 0
+							EndIf
+
+							// Calcula o valor da prestação
+							nValPrest := nValJuros
+							nTotPrest += nValPrest
+
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							lPriParc := .F.
+
+							// Soma uma parcela
+							nParcela++
+
+							dDataAnt := dDataVenc
+						Next i
+
+						// Define carência como falso para seguir o cálculo das parcelas
+						lCarencia := .F.
+
+					/***********Calculo sem Carência***********/
+					Else
+						// Valor de amortização
+						nValAmor := oBodyRequest["eh_vlamorp"]
+
+						If !lPriParc
+							// Data de vencimento da parcela sequente
+							dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+							dDatefee  := dDataAnt
+						EndIf
+
+						If lCalcTemplate
+							oCalcTemplate:setDateBase(dDataAnt)
+							oCalcTemplate:setDateVenc(dDataVenc)
+							oCalcTemplate:setValorBase(nValDeb)
+							oCalcTemplate:calcTemplate()
+							nValJuros := oCalcTemplate:getValor('juros')
+						Else
+							// Calcula o valor dos juros
+							nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+						EndIf
+
+						nTotJuros += nValJuros
+
+						// Calcula o valor corrigido
+						nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+						If nValDeb < nValAmor
+							nValAmor  := nValDeb
+							nTotAmort += nValAmor
+
+							// Calcula o valor da prestação
+							nValPrest := nValJuros + nValAmor
+							nTotPrest += nValPrest
+
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							// Atualiza o total com o valor da ultima parcela
+							nValPrest := nValCorr
+							nValDeb   := 0
+							nValAmor  := 0
+						Else
+							// Calcula o valor da prestação
+							nValPrest := nValJuros + nValAmor
+							nTotPrest += nValPrest
+
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							// Calcula o valor do debito
+							nValDeb   := nValDeb - nValAmor
+							nTotAmort += nValAmor
+						EndIf
+
+						lPriParc := .F.
+
+						// Soma uma parcela
+						nParcela++
+
+						dDataAnt := dDataVenc
+					EndIf
+				Enddo
+			Else  //Tabela PRICE
+				While nValDeb > nValPrest
+
+					/*********** Emprestimo com Carência***********/
+					If lCarencia
+						For i := 1 to oBodyRequest["eh_carenci"]
+							If !lPriParc
+								// Data de vencimento da parcela sequente
+								dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+								dDatefee  := dDataAnt
+							EndIf
+
+							If lCalcTemplate
+								oCalcTemplate:setDateBase(dDataAnt)
+								oCalcTemplate:setDateVenc(dDataVenc)
+								oCalcTemplate:setValorBase(nValDeb)
+								oCalcTemplate:calcTemplate()
+								nValJuros := oCalcTemplate:getValor('juros')
+							Else
+								// Calcula o valor dos juros
+								nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+							Endif
+
+							// Valor de amortização é zero na carência
+							nValAmor := 0
+
+							// Calcula o valor corrigido
+							nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+							//Totaliza totais de juros e prestação
+							nTotJuros += nValJuros
+
+							If !lJurCar
+								nValDeb 	+= nValJuros
+								nValJuros := 0
+							EndIf
+							// Calcula o valor da prestação
+							nValPrest := nValJuros
+
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							lPriParc := .F.
+
+							nTotPrest += nValPrest
+
+							// Soma uma parcela
+							nParcela++
+
+							dDataAnt := dDataVenc
+						Next i
+
+						// Define carência como falso para seguir o cálculo das parcelas
+						lCarencia := .F.
+
+					/***********Calculo sem Carência***********/
+					Else
+
+						// Valor de amortização
+						nValPrest := oBodyRequest["eh_vlamorp"]
+
+						If !lPriParc
+							// Data de vencimento da parcela sequente
+							dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+							dDatefee  := dDataAnt
+
+							// Recalcula o valor do debito quando não for a primeira parcela
+							// Calcula o valor do debito
+							nValDeb := nValDeb - nValAmor
+						EndIf
+
+						If lCalcTemplate
+							oCalcTemplate:setDateBase(dDataAnt)
+							oCalcTemplate:setDateVenc(dDataVenc)
+							oCalcTemplate:setValorBase(nValDeb)
+							oCalcTemplate:calcTemplate()
+							nValJuros := oCalcTemplate:getValor('juros')
+						Else
+							// Realiza o calculo das parcelas atraves da função Calculatefees presente no FINXFUN
+							nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+						EndIf
+
+						// Calcula o valor corrigido
+						nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+						// Calcula valor da amortização
+						nValAmor := nValPrest - nValJuros
+
+						If nValDeb < nValPrest
+							nValAmor := nValDeb
+
+							// Grava o valor da última parcela
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							// Atualiza o total com o valor da ultima parcela
+							nValPrest := nValCorr
+
+							If lJurCar
+								nValPrest += nValJuros
+							EndIf
+						Else
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+						EndIf
+
+						lPriParc := .F.
+
+						//Totaliza totais de juros e prestação
+						nTotJuros += nValJuros
+						nTotPrest += nValPrest
+						nTotAmort += nValAmor
+
+						// Soma uma parcela
+						nParcela++
+						dDataAnt := dDataVenc
+					EndIf
+				Enddo
+			EndIf
+
+		/*
+			Calcula os valores com base no prazo informado no campo EH_PRAZO
+		*/
+		Else
+
+			nCont := IIF(cTPCaren == "1", oBodyRequest["eh_prazo"] - oBodyRequest["eh_carenci"], oBodyRequest["eh_prazo"]) //Determina se a carência é considera dentro ou fora do prazo informado
+
+			For nI := 1 to nCont
+
+				//Tabela SAC
+				If oBodyRequest["eh_amortiz"]== "2"
+
+					/*********** Emprestimo com Carência***********/
+					If lCarencia
+						For i := 1 to oBodyRequest["eh_carenci"]
+							If !lPriParc
+								// Data de vencimento da parcela sequente
+								dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+								dDatefee  := dDataAnt
+							EndIf
+
+							If lCalcTemplate
+								oCalcTemplate:setDateBase(dDataAnt)
+								oCalcTemplate:setDateVenc(dDataVenc)
+								oCalcTemplate:setValorBase(nValDeb)
+								oCalcTemplate:calcTemplate()
+								nValJuros := oCalcTemplate:getValor('juros')
+							Else
+								// Realiza o calculo das parcelas atraves da função Calculatefees presente no FINXFUN
+								nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+							EndIf
+
+							// Valor de amortização é zero na carência
+							nValAmor := 0
+
+							//Calcula o valor corrigido, considerando ou não os juros na carencia conforme definido no campo EH_JURCAR
+							nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+							//Calcula a prestação no periodo de carencia considerando os juros caso definido no campo EH_JURCAR
+							nValPrest := IIF(lJurCar, nValJuros, 0)
+
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							lPriParc := .F.
+							nValDeb  := nValCorr //Atualiza coluna valor debito com o valor corrigido, para assim exibir o valor debito correto na proxima parcela
+
+							//Totaliza totais de juros e prestação
+							nTotJuros += nValJuros
+							nTotPrest += nValPrest
+
+							// Soma uma parcela
+							nParcela++
+							dDataAnt := dDataVenc
+						Next i
+
+						// Define carência como falso para seguir o cálculo das parcelas
+						lCarencia := .F.
+						lRetCar   := .F.
+						lPriParc  := .T.
+						nI := 0 // Volta uma posição do for para calcular a quantidade certa de parcelas
+
+						Loop
+
+					/***********Calculo sem Carência***********/
+					Else
+
+						If lPriParc
+							If nParcela == 1
+								dDataAnt := STOD(oBodyRequest["eh_data"])
+							EndIf
+
+							// Calcula valor da amortização
+							If cTPCaren == "1"
+								nValAmor := nValDeb/(oBodyRequest["eh_prazo"] - oBodyRequest["eh_carenci"])
+							ElseIf cTPCaren == "2"
+								// Carencia fora do prazo do emprestimo
+								nValAmor := nValDeb/oBodyRequest["eh_prazo"]
+							EndIf
+						Endif
+
+						If nParcela > 1 .And. lPriParc
+							// Data de vencimento da parcela sequente
+							dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+							dDatefee  := dDataAnt
+						EndIf
+
+						If !lPriParc
+							// Data de vencimento da parcela sequente
+							dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+							dDatefee  := dDataAnt
+
+							// Calcula o valor do debito
+							nValDeb := nValDeb - nValAmor
+						EndIf
+
+						If lCalcTemplate
+							oCalcTemplate:setDateBase(dDataAnt)
+							oCalcTemplate:setDateVenc(dDataVenc)
+							oCalcTemplate:setValorBase(nValDeb)
+							oCalcTemplate:calcTemplate()
+							nValJuros := oCalcTemplate:getValor('juros')
+						Else
+							// Realiza o calculo das parcelas atraves da função Calculatefees presente no FINXFUN
+							nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+						EndIf
+
+						// Calcula o valor corrigido
+						nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+						// Calcula o valor da prestação
+						nValPrest := nValJuros + nValAmor
+						lRetCar   := .T. // Define variavel para impressao
+
+						lPriParc := .F.
+
+						dDataAnt := dDataVenc
+					EndIf
+
+					//Tabela PRICE
+				Else
+
+					/*********** Emprestimo com Carência***********/
+					If lCarencia
+						For i := 1 to oBodyRequest["eh_carenci"]
+							If !lPriParc
+								// Data de vencimento da parcela sequente
+								dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+								dDatefee  := dDataAnt
+							EndIf
+
+							If lCalcTemplate
+								oCalcTemplate:setDateBase(dDataAnt)
+								oCalcTemplate:setDateVenc(dDataVenc)
+								oCalcTemplate:setValorBase(nValDeb)
+								oCalcTemplate:calcTemplate()
+								nValJuros := oCalcTemplate:getValor('juros')
+							Else
+								// Realiza o calculo das parcelas atraves da função Calculatefees presente no FINXFIN
+								nValJuros  := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee)
+							EndIf
+
+							// Valor de amortização é zero na carência
+							nValAmor := 0
+
+							//Calcula o valor corrigido, considerando ou não os juros na carencia conforme definido no campo EH_JURCAR
+							nValCorr := IIF(lJurCar, nValDeb, nValDeb+nValJuros)
+
+							//Calcula a prestação no periodo de carencia considerando os juros caso definido no campo EH_JURCAR
+							nValPrest := IIF(lJurCar, nValJuros, 0)
+
+							ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+
+							lPriParc := .F.
+							nValDeb  := nValCorr //Atualiza coluna valor debito com o valor corrigido, para assim exibir o valor debito correto na proxima parcela
+
+							//Totaliza totais de juros e prestação
+							nTotJuros += nValJuros
+							nTotPrest += nValPrest
+
+							// Soma uma parcela
+							nParcela++
+							dDataAnt := dDataVenc
+						Next i
+
+						// Define carência como falso para seguir o cálculo das parcelas
+						lCarencia := .F.
+						lRetCar   := .F.
+						lPriParc  := .T.
+						nI := 0 // Volta uma posição do for para calcular a quantidade certa de parcelas
+
+						Loop
+
+					/***********Calculo sem Carência***********/
+					Else
+
+						If nParcela > 1 .And. lPriParc
+							// Data de vencimento da parcela sequente
+							dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+							dDatefee  := dDataAnt
+						EndIf
+
+						If !lPriParc
+							// Calcula o valor do debito
+							nValDeb := nValDeb - nValAmor
+
+							// Data de vencimento da parcela sequente
+							dDataVenc := getDataVencVld(oBodyRequest, dDataAnt)
+							dDatefee  := dDataAnt
+						EndIf
+
+						If lCalcTemplate
+							oCalcTemplate:setDateBase(dDataAnt)
+							oCalcTemplate:setDateVenc(dDataVenc)
+							oCalcTemplate:setValorBase(nValDeb)
+							oCalcTemplate:calcTemplate()
+							nValJuros := oCalcTemplate:getValor('juros')
+						Else
+							// Realiza o calculo das parcelas atraves da função Calculatefees presente no FINXFIN
+							nValJuros := Calculatefees(dDataVenc, nValDeb, oBodyRequest, dDatefee, lCarencia)
+						EndIf
+
+						// Calcula o valor da prestação para o sistema PRICE
+						If lPriParc
+							// Calcula a taxa de juros mensal
+							If Upper(oBodyRequest['eh_tipo']) != 'TEM' .And. (!Empty(oBodyRequest["AUTFIXEDDUE"]) .Or. !Empty(oBodyRequest["AUTNEXTDUE"]) .Or. (oBodyRequest:hasProperty('dataPrimeiroVencimento') .And. !Empty(oBodyRequest["dataPrimeiroVencimento"])))
+								nTaxaJur 	:= (((oBodyRequest["eh_taxa"] / 100) + 1) ** (30 / __nDiasCTB)) - 1
+							Else
+								nTaxaJur := nValJuros / nValDeb // pega os juros da última parcela em relação a qtd de dias
+							EndIf
+
+							nFator := (1 + nTaxaJur) ^ (oBodyRequest["eh_prazo"] - oBodyRequest["eh_carenci"])
+
+							// Calcula o valor da prestação
+							If cTPCaren == "1"
+								If nTaxaJur > 0
+									nValPrest := nValDeb*((nFator * nTaxaJur) / (nFator - 1))
+								Else
+									nValPrest := nValDeb / (oBodyRequest["eh_prazo"]-oBodyRequest["eh_carenci"])
+								EndIf
+							ElseIf cTPCaren == "2"
+								If nTaxaJur > 0
+									// Carencia fora do prazo do emprestimo
+									nValPrest := nValDeb*(((1+nTaxaJur)^oBodyRequest["eh_prazo"])*nTaxaJur/(((1+nTaxaJur)^oBodyRequest["eh_prazo"])-1))
+								Else
+									nValPrest := nValDeb/oBodyRequest["eh_prazo"]
+								EndIf
+							EndIf
+						EndIf
+
+						nValPrest := Round(nValPrest, 2)
+
+						// Calcula o valor corrigido
+						nValCorr  := IIF(lJurCar, nValDeb, (nValDeb + nValJuros))
+
+						If nValDeb < nValPrest
+							nValAmor  := nValDeb
+							// nValJuros := nValPrest - nValDeb
+
+							nValPrest := nValCorr
+							If lJurCar
+								nValPrest += nValJuros
+							EndIf
+						Else
+							// Calcula valor da amortização
+							nValAmor  := nValPrest - nValJuros
+						EndIf
+
+						lRetCar   := .T. // Define variavel para impressao
+						dDataAnt  := dDataVenc
+
+					EndIf
+				EndIf
+
+				If lRetCar
+					ParcelData({nParcela,dDataVenc,nValDeb,nValJuros,nValCorr,nValAmor,nValPrest})
+					// Soma uma parcela
+					nParcela++
+					lPriParc := .F.
+				EndIf
+
+				//Totaliza totais de juros e prestação
+				nTotJuros += nValJuros
+				nTotPrest += nValPrest
+				nTotAmort += nValAmor
+
+			Next
+		EndIf
+
+		// Ajusta valor total das parcelas quando empréstimo com carência
+		If oBodyRequest["eh_amortiz"] == "2" .And. !Empty(oBodyRequest["eh_carenci"]) .And. !Empty(oBodyRequest["eh_vlamorp"])
+			nTotPrest := nTotPrest + nValAmor
+		EndIf
+
+		// Grava o total do emprestimo/financiamento
+		jArraytotal := JsonObject():new()
+
+		jArraytotal["parcela"] := ' - '
+		jArraytotal["datax"] := ' - '
+		jArraytotal["valor"] := ''
+		jArraytotal["juros"] := Transform(nTotJuros, "@E 999,999,999,999.99")
+		jArraytotal["vcorrigido"] := ''
+		jArraytotal["amortiza"] := Transform(nTotAmort, "@E 999,999,999,999.99")
+		jArraytotal["prestacao"] := Transform(nTotPrest, "@E 999,999,999,999.99")
+
+		Aadd(aTotal, jArraytotal)
+		jArraytotal := NIL
+
+		If lCalcTemplate
+			FreeObj(oCalcTemplate)
+		EndIf
+
+		jResponse :=  {;
+			"result": .T.,;
+			"statusCode": 200,;
+			"response": {;
+			"items": __aItems,;
+			"items_total": aTotal,;
+			"struct": aStruct;
+			};
+			}
+	Else
+		jResponse :=  {;
+			"result": .F.,;
+			"statusCode": 400,;
+			"response": {;
+			"code": '400',;
+			"message": STR0006,;
+			"detailedMessage": cMessageError;
+			};
+			}
+	Endif
+
+Return JResponse
+
+/*/{Protheus.doc} Calculatefees
+	Calcula juros do empréstimo
+	@type  Static Function
+	@author Vitor Duca
+	@since 16/12/2021
+	@version 1.0
+	@param dDtSaldo, Date, param_descr
+	@param nSaldo, Numeric, param_descr
+	@param oBodyRequest, Json, param_descr
+	@param dDtCalculo, Date, param_descr
+	@return nAcEmpJur2, Numeric, Juros do emprestimo
+/*/
+Static Function Calculatefees(dDtSaldo As Date, nSaldo As Numeric, oBodyRequest As Json, dDtCalculo as Date, lCarencia As Logical) As Numeric
+	Local nVlEmpJur2	:= 0 						As Numeric // Juros na moeda do emprestimo
+	Local nAcEmpJur2	:= 0 						As Numeric // Acumulado do Juros na moeda do Emprestimo
+	Local nDiasCTB		:= __nDiasCTB 				As Numeric
+	Local nDias			:= dDataBase - dDtCalculo
+	Local cTipo       := Padr(oBodyRequest["eh_tipo"], TamSx3("EH_TIPO")[1]) As Character
+
+	Default lCarencia := .T.
+
+	nDias := dDtSaldo - dDtCalculo
+	If ( nDias < 0 )
+		nDias := 0
+	EndIf
+
+	If oBodyRequest["eh_amortiz"] == "1" .And. oBodyRequest["eh_vlamorp"] == 0 .And. !lCarencia
+		nDias := 30
+	EndIf
+
+	Do Case
+	Case ( !Empty(oBodyRequest["eh_formula"]) )
+		//A formula deve utilizar as variaveis PRIVATES dFormula,nFormula e lFormula
+		//para calcular o multiplicador da aplicacao
+		dFormula := dDtSaldo
+		nFormula := nSaldo
+		lFormula := lResgate
+
+		nVlEmpJur2 := Formula(oBodyRequest["eh_formula"])
+
+		nAcEmpJur2 += nVlEmpJur2
+
+		//Emprestimos Estrangeiros
+	Case ( oBodyRequest["eh_moeda"] != 1 .And.;
+			cTipo $ GetMv("MV_EMPCAL1")+"|"+GetMv("MV_EMPCAL4") )
+
+		//O juros é calculado sobre o saldo do emprestimo que esta na moeda da
+		// operacao financeira.
+		If ( cTipo $ GetMv("MV_EMPCAL4") )
+			nVlEmpJur2 := Round(nSaldo*((((oBodyRequest["eh_taxa"]/100)+1)*(nDias/nDiasCTB))-1),TamSX3("EH_SALDO")[2])
+		Else
+			nVlEmpJur2 := Round((oBodyRequest["eh_taxa"]/100)*(nSaldo/nDiasCTB)**nDias,TamSX3("EH_SALDO")[2])
+		EndIf
+
+		nAcEmpJur2 += nVlEmpJur2
+		//Emprestimos Nacionais.
+	Case ( cTipo $ GetMv("MV_EMPCAL2")+"|"+GetMv("MV_EMPCAL3") )
+		//Calculo do emprestimo Hot Money. Sua principal  caracteristica
+		//é que o juros sao simples e o resgate e quase imediato.
+		If ( cTipo $ GetMv("MV_EMPCAL2") )
+			nVlEmpJur2 := Round((oBodyRequest["eh_taxa"]/100)*(nSaldo/nDiasCTB)*nDias,TamSX3("EH_SALDO")[2])
+		Else
+			nVlEmpJur2 := Round(DEC_FIN(nSaldo,(((oBodyRequest["eh_taxa"]/100)+1)**(nDias/nDiasCTB))-1), 2)
+		EndIf
+		nAcEmpJur2 += nVlEmpJur2
+	EndCase
+
+Return nAcEmpJur2
+
+/*/{Protheus.doc} ParcelData
+	Grava os dados da parcela no Json de response
+	@type  Static Function
+	@author Vitor Duca
+	@since 16/12/2021
+	@version 1.0
+	@param jResponse, Json, Json de response que sera gravado
+	@param aValues, Array, Array contendo os valores que serão gravados
+	@return Nil
+/*/
+Static Function ParcelData(aValues As Array)
+	Local jArrayItems As Json
+
+	jArrayItems := JsonObject():new()
+
+	jArrayItems["parcela"] := aValues[parcela]
+	jArrayItems["datax"] := aValues[datax]
+
+	jArrayItems["valor_value"] := Round(aValues[valor],2)
+	jArrayItems["valor"] := Transform(jArrayItems["valor_value"], "@E 999,999,999,999.99")
+
+	jArrayItems["juros_value"] := Round(aValues[juros],2)
+	jArrayItems["juros"] := Transform(jArrayItems["juros_value"], "@E 999,999,999,999.99")
+
+	jArrayItems["vcorrigido_value"] := Round(aValues[vcorrigido],2)
+	jArrayItems["vcorrigido"] := Transform(jArrayItems["vcorrigido_value"], "@E 999,999,999,999.99")
+
+	jArrayItems["amortiza_value"] := Round(aValues[amortiza],2)
+	jArrayItems["amortiza"] := Transform(jArrayItems["amortiza_value"], "@E 999,999,999,999.99")
+
+	jArrayItems["prestacao_value"] := Round(aValues[prestacao],2)
+	jArrayItems["prestacao"] := Transform(jArrayItems["prestacao_value"], "@E 999,999,999,999.99")
+
+	Aadd(__aItems, jArrayItems)
+
+Return
+
+/*/{Protheus.doc} CreateStruct
+	Cria a estrutura da tabela fake
+	@type  Static Function
+	@author Vitor Duca
+	@since 16/12/2021
+	@version 1.0
+	@param jResponse, Json, Json que sera adicionado a estrutura
+	@return NIL
+/*/
+Static Function CreateStruct(aStruct As Array)
+	Local aFields := {} As Array
+	Local nCount := 0 As Numeric
+	Local jStruct As Json
+
+	jStruct := JsonObject():new()
+
+	Aadd(aFields, {{"field","parcela"},{"title", STR0009}})     // Parcela
+	Aadd(aFields, {{"field","datax"},{"title", STR0010}})       // Vencimento
+	Aadd(aFields, {{"field","valor"},{"title", STR0011}})       // Valor do débito
+	Aadd(aFields, {{"field","juros"},{"title", STR0012}})       // Valor do juros
+	Aadd(aFields, {{"field","vcorrigido"},{"title", STR0013}})  // Valor corrigido
+	Aadd(aFields, {{"field","amortiza"},{"title", STR0014}})    // Amortização
+	Aadd(aFields, {{"field","prestacao"},{"title", STR0015}})   // Prestação
+
+	For nCount := 1 to Len(aFields)
+		jStruct := JsonObject():new()
+		jStruct[aFields[nCount][1][1]] := aFields[nCount][1][2]
+		jStruct[aFields[nCount][2][1]] := aFields[nCount][2][2]
+		Aadd(aStruct, jStruct)
+		jStruct := NIL
+	Next nCount
+
+Return
+
+/*/{Protheus.doc} ValidData
+	Validação dos dados que serão utilizados no calculo das parcelas
+	@type  Static Function
+	@author Vitor Duca
+	@since 02/02/2022
+	@version 1.0
+	@param cMessage, Character, Mensagem que sera retornada para a requisição
+	@param oBodyRequest, Json, Corpo da requisição
+	@return lOK, Logical, Define se as validações deram certo
+/*/
+Static Function ValidData(cMessage As Character, oBodyRequest As Json) As Logical
+	Local nMaxParc  := 0 As Numeric
+	Local nTamParc  := TAMSX3("E2_PARCELA")[1] As Numeric
+	Local nParceEmp := oBodyRequest["eh_prazo"] As Numeric
+	Local lOk := .T. As Logical
+
+	If nTamParc == 1
+		nMaxParc := 9
+	ElseIf nTamParc == 2
+		nMaxParc := 99
+	Else
+		nMaxParc := 999
+	Endif
+
+	If nParceEmp > nMaxParc
+		cMessage := STR0001  + STR(nMaxParc) + CRLF + STR0002 //"Número máximo de parcelas: " # " Para aumentar altere o grupo de campos PARCELA."
+		lOk := .F.
+	Endif
+
+	If lOk .and. !Empty(nParceEmp) .And. !Empty(oBodyRequest["eh_vlamorp"])
+		cMessage := STR0003 //"Se o valor de parcela/amortização estiver preenchido não é possível definir o campo Prazo!"
+		lOk := .F.
+	EndIf
+
+	if lOk .and. ( Empty(oBodyRequest["AUTCODFOR"]) .or. Empty(oBodyRequest["AUTFORLOJA"]) )
+		cMessage := STR0004 //"Fornecedor/loja são obrigatorios para o calculo das parcelas"
+		lOk := .F.
+	Endif
+
+	If lOK .and. Empty(oBodyRequest["eh_amortiz"])
+		cMessage := STR0005 //"Amortização é obrigatorio para o calculo das parcelas"
+		lOk := .F.
+	Endif
+
+Return lOk
+
+/*/{Protheus.doc} getValidFixedDate
+	Retorna a data valida do mês corrente ou proximo mês conforme o dia informado.
+
+	@param dCurrentDate, Date, data do mês corrente (será usada como base).
+	@param cDay, Character, dia desejado.
+
+	@return dUpdatedDate, Date, retorna a data valida, conforme o dia desejado.
+	o dia informado.
+
+	@type  Static Function
+	@author Vinicius do Prado
+	@since Abr|2022
+/*/
+Static Function getValidFixedDate(dCurrentDate as Date, cDay as Character, nMeses As Numeric) as Date
+	Local cMonth := "" as Character
+	Local cYear  := "" as Character
+	Local dUpdatedDate as Date
+	Local dAuxDate as Date
+
+	Default nMeses := 1
+
+	cMonth := IIF(Month(dCurrentDate) < 10, "0" + cValToChar(Month(dCurrentDate)), cValToChar(Month(dCurrentDate)))
+	cYear := cValToChar(Year(dCurrentDate))
+
+	cDay := IIF(Len(Alltrim(cDay)) > 1, cDay, "0" + cDay)
+
+	dAuxDate := stringIsoToDate(cYear+cMonth+cDay)
+
+	If Empty(dAuxDate)
+		dAuxDate := MonthSum(dCurrentDate,1)
+		cMonth := IIF(Month(dAuxDate) < 10, "0" + cValToChar(Month(dAuxDate)), cValToChar(Month(dAuxDate)))
+		dUpdatedDate := stringIsoToDate(cYear+cMonth+cDay)
+	Else
+		dUpdatedDate := dAuxDate
+		dUpdatedDate := MonthSum(dAuxDate, nMeses)
+	EndIF
+
+Return dUpdatedDate
+
+/*/{Protheus.doc} recalculateSAC
+	Realiza o recalculo do juros de uma parcela de emprestimo SAC.
+
+	@param jBodyRequest, Json, body da requisição contendo os dados da parcela.
+
+	@return jResponse, Json, json contendo dados da parcela com o valor de juros
+	atualizado.
+
+	@type Function
+	@author Vinicius do Prado
+	@since Mai|2022
+/*/
+Function recalculateSAC(jBodyRequest as Json) as Json
+
+	Local jResponse   as Json
+	Local jContract   as Json
+	Local cMsgError   := ""  as Character
+	Local lOk         := .T. as Logical
+	Local lCarParc    := .F. as Logical
+	Local lCalcTemp   := .F. as Logical
+	Local aStruct     := {}  as Array
+	Local aReqFields  := {}  as Array
+	Local nParcel     := 1 as Numeric // Numero da parcela
+	Local nValAmor    := 0 as Numeric // Valor da amortização
+	Local nValAdju    := 0 as Numeric // Valor corrigido
+	Local nValDebt    := 0 as Numeric // Valor de debito
+	Local nValFees    := 0 as Numeric // Valor do juros
+	Local nValPay     := 0 as Numeric // Valor da parcela
+	Local nCountField := 0 as Numeric
+	Local dDueDate    := STOD("") as Date
+	Local dOldDate    := STOD("") as Date
+	Local oCalcTemp   as Object
+	Local jResults    as jSon
+
+	jContract := jBodyRequest['contrato']
+
+	aReqFields := {;
+		'eh_tipo', 'eh_formula', 'eh_moeda', 'eh_taxa', 'eh_carenci','eh_jurcar', 'parcela';
+		}
+
+	For nCountField := 1 to Len(aReqFields)
+		If !jContract:hasProperty(aReqFields[nCountField])
+			cMsgError += IIF(Empty(cMsgError),aReqFields[nCountField], " - " + aReqFields[nCountField])
+			lOk := .F.
+		EndIf
+	Next nCountField
+
+	If lOk
+
+		If jContract:hasProperty('eh_templt') .And. ValType(jContract['eh_templt']) $ 'J|O'
+			oCalcTemp := totvs.protheus.backoffice.ngf.template.Template():new()
+			lCalcTemp := oCalcTemp:setTemplate(jContract["eh_templt"]:ToJson())
+		EndIf
+
+		If jContract["eh_carenci"] > 0
+			If jContract["parcela"]["parcela"] <= jContract["eh_carenci"]
+				lCarParc := .T.
+			EndIf
+		EndIf
+
+		__aItems := {}
+		CreateStruct(@aStruct)
+
+		nParcel   := jContract["parcela"]["parcela"]
+		dDueDate  := STOD(jContract["parcela"]["datax"])
+		nValDebt  := jContract["parcela"]["valor_value"]
+		nValAdju  := jContract["parcela"]["vcorrigido_value"]
+		nValAmor  := jContract["parcela"]["amortiza_value"]
+		nValPay   := jContract["parcela"]["prestacao_value"]
+		dOldDate  := STOD(jContract["parcela"]["data_base"]) // Data do vencimento anterior para calculo do juros
+
+		If lCalcTemp // Calulo por template de fórmula
+			oCalcTemp:setDateBase(dOldDate)
+			oCalcTemp:setDateVenc(dDueDate)
+			oCalcTemp:setValorBase(nValDebt)
+			oCalcTemp:calcTemplate()
+
+			nValFees := oCalcTemp:getValor('juros')
+			jResults := oCalcTemp:getResults()
+			FreeObj(oCalcTemp)
+		Else
+			nValFees := Calculatefees(dDueDate, nValDebt, jContract, dOldDate)
+		EndIf
+
+		If lCarParc
+			nValPay  := IIF(jContract["eh_jurcar"] == "1", nValFees, 0)
+			nValAdju := IIF(jContract["eh_jurcar"] == "1", nValDebt, nValDebt + nValFees)
+		Else
+			nValPay  := nValFees + nValAmor
+			nValAdju := nValDebt + nValFees
+		EndIf
+
+		ParcelData({nParcel,dDueDate,nValDebt,nValFees,nValAdju,nValAmor,nValPay})
+
+		jResponse :=  {;
+			"result": .T.,;
+			"statusCode": 200,;
+			"response": {;
+			"items": __aItems,;
+			"struct": aStruct;
+			};
+			}
+		If lCalcTemp
+			jResponse['response']['details'] := jResults
+		EndIf
+	Else
+		jResponse :=  {;
+			"result": .F.,;
+			"statusCode": 400,;
+			"response": {;
+			"code": '400',;
+			"message": STR0006,; // "Não foi possivel efetuar o calculo da parcela"
+		"detailedMessage": STR0007 + cMsgError + STR0008; // Campos ( ... ) obrigatórios
+		};
+			}
+	EndIf
+
+Return jResponse
+
+/*/{Protheus.doc} validateRate
+	Realiza a validação se o TIPO usado na aplicação é do TIPO "CDI".
+
+	@return nValor, Numeric, Retorna nValor com o valor calculado da moeda em uso ou o vaor origem.
+	@type Function
+	@author Francisco Oliveira
+	@since 14/02/2023
+/*/
+
+Function validateRate(nVlrAtu As Numeric, cTipo As Character, nMoeda As Numeric) As Numeric
+
+	Local nValor	:= 0  As Numeric
+	Local nQuote	:= 0  As Numeric
+
+	If nVlrAtu > 0 .And. nMoeda > 1 .And. !(cTipo $  SuperGetMV("MV_APLCAL1")) // Aplicação CDI
+		nQuote  := gfin.util.currencyLastQuote(cValToChar(nMoeda), Dtos(dDataBase))
+		nValor := xMoeda(nVlrAtu, nMoeda, 1, , 2, nQuote )
+	Else
+		nValor := nVlrAtu
+	Endif
+
+Return nValor
+
+/*/{Protheus.doc} AplEmpErr
+	Carrega o erro da execução da execauto
+	@type function
+	@author daniel.muniz
+	@since 15/02/2023
+	@param e, Object, objeto do erro
+	@param cFunName, Character, Nome da Função responsável
+	@param cExecAuto, Character, Nome da ExecAuto que foi executada
+	@param cErro, Character, mensagem de erro
+/*/
+
+Function AplEmpErr(e As Object, cFunName As Character, cExecAuto As Character, cErro as Character)
+	cErro := (cExecAuto + ' - ' + e:description + e:errorStack)
+	FwLogMsg("ERROR",, cFunName, cFunName, "", e:description , e:errorStack )
+	Break
+Return
+
+/*/{Protheus.doc} getDataVencVld
+	Função para verificar qual será a data dos vencimentos das parcelas de acordo com as opções
+	preenchidas pelo usuário
+	@type  Function
+	@author Sidney Santos
+	@since 04/07/2023
+	@version version
+	@param oBodyRequest, json, se há data fixa preenchida
+	@param dDataAnt, date, se há vencimento anterior
+	@return return_var, return_type, return_description
+	@example
+	(examples)
+	@see (links_or_references)
+	/*/
+Function getDataVencVld(oBodyRequest As Json, dDataAnt As Date) As Date
+	Local dDtVencVld  := SToD(' / / ') As Date
+	Local nPeriodo    := 30            As Numeric
+	Local dDataValida := dDataBase     As Date
+
+	Default oBodyRequest := JsonObject():New()
+	Default dDataAnt := SToD(oBodyRequest['eh_data'])
+
+	If oBodyRequest:hasProperty("AUTQTDDIAS") .and. Val(oBodyRequest["AUTQTDDIAS"]) > 0
+		nPeriodo := Val(oBodyRequest["AUTQTDDIAS"])
+	Endif
+
+	If !Empty(oBodyRequest['AUTFIXEDDUE'])
+		cFixedDue  := cValToChar(oBodyRequest["AUTFIXEDDUE"])
+		dDtVencVld := getValidFixedDate(dDataAnt, cFixedDue, nPeriodo / 30)
+	Else
+		dDtVencVld := DaySum(dDataAnt, nPeriodo)
+	EndIf
+
+	If !Empty(oBodyRequest['AUTNEXTDUE'])
+		If oBodyRequest['AUTNEXTDUE'] $ 'S|N' // Antecipar | Postergar
+			dDataValida := DataValida(dDtVencVld, oBodyRequest['AUTNEXTDUE'] == 'S')
+
+			//Caso a DataValida tenha retroagido a dDtVencVld voltando para o mês da parcela anterior dDataAnt
+			//manter conteudo da dDtVencVld
+			If Month(dDataValida) <> Month(dDataAnt)
+				dDtVencVld := dDataValida
+			Endif
+		EndIf
+	EndIf
+
+Return dDtVencVld
+
+/*/{Protheus.doc} getDiasCTB
+	Função que retorna os dias contábeis do ano referente ao parâmetro ou PE
+	@type  Static Function
+	@author Sidney Santos
+	@since 26/09/2023
+	@version version
+	@param param_name, param_type, param_descr
+	@return return_var, return_type, return_description
+	@example
+	(examples)
+	@see (links_or_references)
+/*/
+Static Function getDiasCTB() As Numeric
+	Local nDiasCTB := GetNewPar("MV_DIASCTB", 360)  As Numeric // Quantidade de dias para o ano contábil
+
+	//Ponto de entrada para validacao do dias CTB
+	If ExistBlock("FADIACTB")
+		nDiasCTB := ExecBlock("FADIACTB", .F., .F., { nDiasCTB })
+	Endif
+
+Return nDiasCTB
+
+/*/{Protheus.doc} InitBody
+	Inicializa o Json com valores default, caso não exista a propriedade ou com conteudo
+	diferente do esperado
+	@type  Function
+	@author Vitor Duca
+	@since 03/11/2023
+	@version 1.0
+	@param oBodyRequest, Json, Body da requisição que terá seus valores iniciados
+/*/
+Static Function InitBody(oBodyRequest As Json)
+	Local aFields := {} As Array
+	Local nX  := 0 As Numeric
+	Local nCount := 0 As Numeric
+	Local cType := "" As Character
+
+	aFields := {;
+				"eh_jurcar",;
+				"eh_data",;
+				"eh_basedes",;
+				"eh_saldo",;
+				"eh_tarifa",;
+				"eh_despesa",;
+				"eh_spread",;
+				"eh_valiof",;
+				"eh_carenci",;
+				"eh_vlamorp",;
+				"eh_prazo",;
+				"eh_amortiz",;
+				"eh_tipo",;
+				"eh_taxa",;
+				"eh_formula";
+			}
+
+	nCount := Len(aFields)
+
+	For nX := 1 to nCount
+		If !(oBodyRequest:hasProperty(aFields[nX])) .or. Empty(oBodyRequest[aFields[nX]])
+			cType := GetSX3Cache(Upper(aFields[nX]), "X3_TIPO")
+			Do Case
+				Case cType == "C"
+					oBodyRequest[aFields[nX]] := ""
+				Case cType == "N"
+					oBodyRequest[aFields[nX]] := 0
+				Case cType == "D"
+					oBodyRequest[aFields[nX]] := Dtos(dDataBase)
+			End Case
+		Endif
+	Next nX
+
+Return

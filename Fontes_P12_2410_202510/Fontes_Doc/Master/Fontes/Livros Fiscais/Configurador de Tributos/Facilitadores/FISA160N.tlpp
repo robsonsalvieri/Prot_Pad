@@ -1,0 +1,1199 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "PROTHEUS.CH"
+
+#DEFINE PULAR_LINHA         chr(13) + chr(10)
+#DEFINE PRE_COD_PERFIL_PARTICIPANTE "TPP"
+#DEFINE PRE_COD_PERFIL_PRODUTO      "TPP"
+#DEFINE PRE_COD_BASE                "TB"
+#DEFINE PRE_COD_ALIQUOTA            "TA"
+#DEFINE PRE_COD_REGRA               "TR"
+
+
+/*/{Protheus.doc} FISA160N
+
+Esta rotina tem objetivo de realizar carga de cadastros automaticamente no configurador de tributos
+
+@author Matheus Bispo
+@type function
+@since 28/05/2025
+@version P12.1.2410
+@param cFilialLogada, character, informa a filial que esta logada no sistema
+@param lAutomato, logical, informa se esta processando via automacao
+@return return_var, return_type, return_description
+/*/
+function FISA160N(cFilialLogada as character, lAutomato as logical)
+    local oCargaConfigurador := TaxConfiguratorLoader():new(cFilialLogada) as object
+    local cText := ""   as character
+    local cTitle := ""  as character
+    local cMsg := ""    as character
+
+    default lAutomato := .F.
+
+    if !lAutomato
+        cFilAnt := cFilialLogada //Processo a filial corrente, pois caso pegue a filial posicionada, não foi dado a carga (x170carga)
+
+        cMsg := ""
+        cTitle := "Cargas Configurador de Tributos"
+        cText := "Ao confirmar, as regras do CBS e IBS para o ano de 2026 serão incluídas na base, para a filial: " + cFilialLogada
+
+        if MsgNoYes(cText, cTitle)
+            oCargaConfigurador:executeLoads()
+
+            if Empty(oCargaConfigurador:getSuccessMsg()) //Significa que não foi incluído pois ja existem
+                cMsg := "Cargas já foram incluídas para a filial: " + cFilialLogada + PULAR_LINHA
+                cMsg += "Deseja incluir as regras novamente com outro código?"
+
+                if MsgNoYes(cMsg, cTitle)
+                    oCargaConfigurador:executeLoads(.T.)
+                    MsgInfo(oCargaConfigurador:getSuccessMsg(), cTitle)
+                endIf
+            else
+                cMsg := "Cargas concluídas com sucesso para filial: " + cFilialLogada + PULAR_LINHA
+                cMsg += oCargaConfigurador:getSuccessMsg()
+
+                MsgInfo(cMsg, cTitle)
+
+                // Função para tratamento dos dados gerados pelo GFE apos geração dos cadastros.
+                If cModulo == "GFE" .And. FindFunction("GFEXFBMCI")
+                    GFEXFBMCI(cMsg)
+                EndIf
+            endIf
+        endIf
+    else
+        oCargaConfigurador:executeLoads()
+    endif
+
+    oCargaConfigurador:destroy()
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxConfiguratorLoader()
+@description Classe que ficara responsavel por fazer cargas no configurador (perfis, aliquotas, bases e regras)
+
+@author Matheus Bispo
+@since 05/06/2025
+@version P12.2410
+/*/
+//-------------------------------------------------------------------
+class TaxConfiguratorLoader
+    data aParticipantes as array
+    data aProdutos      as array
+    data aBases         as array
+    data aAliquotas     as array
+    data aRegras        as array
+
+    data oQryPerfil     as object
+    data oQryBases      as object
+    data oQryAliquotas  as object
+    data oQryRegras     as object
+
+    data cMsgSucesso    as character
+    data cFilLogada     as character
+    
+    data lExisteRegra   as logical
+    data lCIN           as logical
+    data lF2BStatus     as logical
+
+    public method new(cFilLogada) as object
+    
+    public method executeLoads(lForce)
+    
+    public method loadParticipants()
+    public method loadProducts()
+    public method loadBases()
+    public method loadRates()
+    public method loadRules(lForce)
+
+    public method saveParticipant(cCodPerfil,cDescrPerfil,cTpPerfil,aCadPart)   as logical
+    public method saveProduct(cCodPerfil,cDesPerfil,cTpPerfil,aCdProd)          as logical
+    public method saveBase(cCodBase, cDesc, cVlOrig, nPcRed, cFormula)          as character
+    public method saveRate(cCodAliq, cDesc, cVlOrig, cPcAlq, cTpAlq, cFormula)  as character
+    public method saveRule(cCodRegra,cDesc,cTributo,cCodAliquota,cCodBase,cCodEscrituracao,cPerfilProduto,cPerfilParticipantes,cPerfilOperacao,cPerfilOrigemDestino,cTributoMajorado,cVigIni,cVigFim,cStatus,lForce) as logical
+
+    public method getSuccessMsg() as character
+
+    private method buildParticipants()  as array
+    private method buildProducts()      as array
+    private method buildBases()         as array
+    private method buildRates()         as array
+    private method buildRules()         as array
+
+    private method getDescRule(cTributo, cPerfilProduto, cPerfilParticipantes, cPerfilOperacao, cPerfilOrigemDestino) as character
+
+    private method getPerfilCode()      as character
+    private method getBaseCode()        as character
+    private method getRateCode()        as character
+    private method getRuleCode()        as character
+    
+    private method incrementCode(cPrefixo as character, cCodigo as character)  as character
+    private method buildExecStatement(oExecStatement, cQuery)  as object
+
+    private method generateMD5(cChave, lFormula)        as character
+    private method loadExists(cAlias, nOrder, cChave)   as logical
+    private method getRuleKey(oModel)                   as character
+    private method buildMessage(cTipo, cCodigo)         as character
+
+    public method destroy()
+endClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+Instancia da classe TaxConfiguratorLoader
+
+@param cFilialLogada, character, informa a filial que esta logada no sistema
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method new(cFilLogada as character) as object class TaxConfiguratorLoader
+    self:lCIN := AliasIndic("CIN") .And. FindFunction("FisExecNPI")
+    self:lF2BStatus := F2B->(Fieldpos("F2B_STATUS")) > 0
+    
+    self:cFilLogada := cFilLogada
+    self:cMsgSucesso := ""
+ 
+    self:aParticipantes := self:buildParticipants()
+    self:aProdutos := self:buildProducts()
+    self:aBases := self:buildBases()
+    self:aAliquotas := self:buildRates()
+    self:aRegras := {}
+
+    self:oQryPerfil := nil
+    self:oQryBases := nil
+    self:oQryAliquotas := nil
+    self:oQryRegras := nil
+return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} executeLoads
+Realiza as cargas no configurador
+
+@param nil, nil
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method executeLoads(lForce as logical) class TaxConfiguratorLoader
+
+    default lForce := .F.
+
+    if self:lCIN
+        self:cMsgSucesso := ""
+
+        self:loadParticipants()
+        self:loadProducts()
+        self:loadBases()
+        self:loadRates()
+        self:loadRules(lForce)
+    endIf
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadParticipants
+Monta os perfils de participantes para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method loadParticipants() class TaxConfiguratorLoader
+    local aItens := {}                          as array
+    local cChaveSeek := ""                      as character
+    local cAlias := "F22"                       as character
+    local nTamArray := len(self:aParticipantes) as numeric
+    local nOrder := 2                           as numeric
+    local nI := 0                               as numeric
+    local nJ := 0                               as numeric
+    local lExiste := .F.                        as logical
+    local lSave := .F.                          as logical
+
+    for nI := 1 to nTamArray
+
+        aItens := self:aParticipantes[nI][4]
+        
+        for nJ := 1 to len(aItens)
+            cChaveSeek := aItens[nJ][1] + aItens[nJ][2] + aItens[nJ][3]
+            lExiste := self:loadExists(cAlias, nOrder, cChaveSeek) .and. PRE_COD_PERFIL_PARTICIPANTE $ (cAlias)->F22_CODIGO
+
+            if !lExiste
+                lExiste := .F.
+                exit
+            endif
+        next
+
+        if !lExiste
+            cCodPerfil := self:getPerfilCode("02")
+
+            lSave := self:saveParticipant(cCodPerfil, self:aParticipantes[nI][2], self:aParticipantes[nI][3], self:aParticipantes[nI][4])
+
+            if lSave
+                self:cMsgSucesso += self:buildMessage(cAlias, cCodPerfil)
+                self:aParticipantes[nI][1] := cCodPerfil
+            endIf
+        else
+            cCodPerfil := (cAlias)->F22_CODIGO
+        endIf
+
+        self:aParticipantes[nI][1] := cCodPerfil
+    next
+
+    fwFreeArray(aItens)
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadProducts
+Monta os perfils de produtos para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method loadProducts() class TaxConfiguratorLoader
+    local cCodPerfil := ""                  as character
+    local cChaveSeek := ""                  as character
+    local cAlias := "F24"                   as character
+    local nTamArray := len(self:aProdutos)  as numeric
+    local nOrder := 2                       as numeric
+    local nI := 0                           as numeric
+    local lExiste := .T.                    as logical
+    local lSave := .F.                      as logical
+
+    for nI := 1 to nTamArray
+        cChaveSeek := self:aProdutos[nI][4][1][1]
+
+        lExiste := self:loadExists(cAlias, nOrder, cChaveSeek) .and. PRE_COD_PERFIL_PRODUTO $ (cAlias)->F24_CODIGO
+
+        if !lExiste
+            cCodPerfil := self:getPerfilCode("04")
+
+            lSave := self:saveProduct(cCodPerfil, self:aProdutos[nI][2], self:aProdutos[nI][3], self:aProdutos[nI][4])
+        else
+            cCodPerfil := (cAlias)->F24_CODIGO
+        endIf
+
+        self:aProdutos[nI][1] := cCodPerfil
+    next
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadBases
+Monta as bases de calculos para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method loadBases() class TaxConfiguratorLoader
+    local cCodBase := ""                as character
+    local nTamArray := len(self:aBases) as numeric
+    local nI := 0                       as numeric
+
+    for nI := 1 to nTamArray
+        cCodBase := self:saveBase(self:aBases[nI][1], self:aBases[nI][2], self:aBases[nI][3], self:aBases[nI][4], self:aBases[nI][5])
+
+        if !empty(cCodBase)
+            self:aBases[nI][1] := cCodBase
+        endIf
+    next
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadRates
+Monta as aliquotas para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method loadRates() class TaxConfiguratorLoader
+    local cCodAliq := ""                    as character
+    local nTamArray := len(self:aAliquotas) as numeric
+    local nI := 0                           as numeric
+
+    for nI := 1 to nTamArray
+        cCodAliq := self:saveRate(self:aAliquotas[nI][1], self:aAliquotas[nI][2], self:aAliquotas[nI][3], self:aAliquotas[nI][4], self:aAliquotas[nI][5], self:aAliquotas[nI][6])
+
+        if !empty(cCodAliq)
+            self:aAliquotas[nI][1] := cCodAliq
+        endIf
+    next
+return
+
+/*/{Protheus.doc} loadRules
+Monta as regras de calculo para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method loadRules(lForce as logical) class TaxConfiguratorLoader
+    local nTamArray := 0    as numeric
+    local nI := 0           as numeric
+
+    default lForce := .F.
+
+    self:aRegras := self:buildRules()
+    nTamArray := len(self:aRegras)
+
+    for nI := 1 to nTamArray
+        self:saveRule(self:aRegras[nI][1], self:aRegras[nI][2], self:aRegras[nI][3], self:aRegras[nI][4], self:aRegras[nI][5], ;
+                self:aRegras[nI][6], self:aRegras[nI][7], self:aRegras[nI][8], self:aRegras[nI][9], self:aRegras[nI][10], self:aRegras[nI][11], ;
+                self:aRegras[nI][12], self:aRegras[nI][13], self:aRegras[nI][14], lForce)
+    next
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} saveParticipant
+Grava perfil de participante de forma automatica no configurador de tributos
+
+@param cCodPerfil, character, codigo do perfil do participante (F20_CODIGO/F22_CODIGO)
+@param cDescrPerfil, character, descricao do perfil do particpante (F20_DESC)
+@param cTpPerfil, character, tipo do perfil (Participante = 02) (F20_TIPO)
+@param aCadPart, array, estrutura dos itens do participante - contendo cliente e fornecedor ([1] - Cliente ou Fornecedor [2] - codigo do Participante [3] - Loja do Participante)
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method saveParticipant(cCodPerfil as character,cDescrPerfil as character,cTpPerfil as character,aCadPart as array) as logical class TaxConfiguratorLoader
+    local oModel := nil         as object
+    local oModelItem := nil     as object
+    local nTamPart := 0         as numeric
+    local nI := 0               as numeric
+    local lSave := .F.          as logical
+    
+    oModel := fWLoadModel('FISA164')
+
+    oModel:setOperation(MODEL_OPERATION_INSERT)
+    oModel:activate()
+
+    oModel:setValue('FISA164', 'F20_CODIGO', cCodPerfil)
+    oModel:setValue('FISA164', 'F20_DESC'  , cDescrPerfil)
+    oModel:setValue('FISA164', 'F20_TIPO'  , cTpPerfil)
+
+    oModelItem := oModel:GetModel("FISA164PARTICIPANTE")
+
+    nTamPart := Len(aCadPart)
+    
+    for nI := 1 to nTamPart
+        if nI != 1
+            oModelItem:addLine()
+        endIf
+
+        oModelItem:setValue('F22_TPPART', aCadPart[nI][1]) 
+        oModelItem:setValue('F22_CLIFOR', aCadPart[nI][2])
+        oModelItem:setValue('F22_LOJA'  , aCadPart[nI][3])
+        oModelItem:setValue('F22_CODIGO', cCodPerfil)
+    next
+
+    if oModel:vldData()
+        if oModel:commitData()
+            lSave := .T.
+        endIf
+    endIf
+
+    oModel:deActivate()
+    oModel:destroy()
+    freeObj(oModel)
+return lSave
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} saveProduct
+Grava perfil de produtos de forma automatica no configurador de tributos
+
+@param cCodPerfil, character, codigo do perfil do produto (F20_CODIGO/F24_CODIGO)
+@param cDesPerfil, character, descricao do perfil do produto (F20_DESC)
+@param cTpPerfil, character, tipo do perfil (Produto = 04) (F20_TIPO)
+@param aCdProd, array, estrutura dos itens dos produto ([1] - codigo do Produto)
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method saveProduct(cCodPerfil as character,cDesPerfil as character,cTpPerfil as character,aCdProd as array) as logical class TaxConfiguratorLoader
+    local cAlias := "F24"       as character
+    local oModel := nil         as object
+    local oModelItem := nil     as object
+    local nTamProd := 0         as numeric
+    local nI := 0               as numeric
+    local lSave := .F.          as logical
+    
+    oModel := fWLoadModel('FISA166')
+    oModel:setOperation(MODEL_OPERATION_INSERT)
+
+    oModel:activate()
+
+    oModelItem := oModel:GetModel("FISA166PRODUTO")
+
+    oModel:setValue('FISA166', 'F20_CODIGO', cCodPerfil)
+    oModel:setValue('FISA166', 'F20_DESC'  , cDesPerfil)
+    oModel:setValue('FISA166', 'F20_TIPO'  , cTpPerfil)
+
+    nTamProd := Len(aCdProd)
+    
+    for nI := 1 to nTamProd
+        if nI != 1
+            oModelItem:addLine()
+        endIf
+
+        oModelItem:setValue('F24_CDPROD', aCdProd[nI][1]) 
+        oModelItem:setValue('F24_CODIGO', cCodPerfil)
+    next
+
+    if oModel:vldData()
+        if oModel:commitData()
+            lSave := .T.
+            self:cMsgSucesso += self:buildMessage(cAlias, cCodPerfil)
+        endIf
+    endIf
+
+    oModel:deActivate()
+    oModel:destroy()
+    freeObj(oModel)
+return lSave
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} saveBase
+Grava a base de calculo de forma automatica no configurador de tributos
+
+@param cCodBase, character, codigo da base de calculo (F27_CODIGO)
+@param cDesc, character, descricao da base de calculo (F27_DESC)
+@param cVlOrig, character, informa o tipo do cadastro (11 - formula) (F27_VALORI)
+@param nPcRed, character, indica se havera reducao da base de calculo (F27_REDBAS)
+@param cFormula, character, formula que sera usada para montagem da base de calculo
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method saveBase(cCodBase as character, cDesc as character, cVlOrig as character, nPcRed as numeric, cFormula as character) as character class TaxConfiguratorLoader
+    local oModel := nil     as object
+    local cAlias := "F27"     as character
+    local cTpRed := "1"     as character
+    local cChaveSeek := ""  as character
+    local nOrder := 6       as numeric
+    local lExiste := .F.    as logical
+
+    default cDesc := ""
+    default cVlOrig := "04"
+    default nPcRed := 0
+    default cFormula := ""
+
+    oModel := FWLoadModel('FISA161')
+    oModel:SetOperation(MODEL_OPERATION_INSERT)
+    oModel:Activate()
+    
+    oModel:SetValue('FISA161', 'F27_DESC'  , cDesc)
+    oModel:SetValue('FISA161', 'F27_VALORI', cVlOrig)
+
+    if !( nPcRed > 0 .and. cVlOrig != "11" )
+        cTpRed := ''
+    endIf    
+
+    if nPcRed > 0
+        oModel:SetValue('FISA161', 'F27_REDBAS', nPcRed)   
+        oModel:SetValue('FISA161', 'F27_TPRED' , cTpRed)   
+    endIf
+
+    //Realizado Preenchimento da formula
+    if cVlOrig == "11" .and. !Empty(cFormula)
+        Fsa161Form(cFormula)
+    endIf
+
+    cChaveSeek := self:generateMD5(oModel:GetValue('FORMULBAS', 'CIN_FORMUL'), .T.) + "2"
+
+    lExiste := self:loadExists(cAlias, nOrder, cChaveSeek)
+
+    if !lExiste
+        if empty(cCodBase)
+            cCodBase := self:getBaseCode()
+        endIf
+        
+        oModel:SetValue('FISA161', 'F27_CODIGO', cCodBase)
+
+        if oModel:VldData() .and. oModel:CommitData()
+            self:cMsgSucesso += self:buildMessage(cAlias, cCodBase)
+        endIf
+    else
+        cCodBase := (cAlias)->F27_CODIGO
+    endIf
+
+    oModel:DeActivate()
+    oModel:Destroy()
+    oModel := Nil
+    FreeObj(oModel)
+    
+return cCodBase
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} saveRate
+Grava aliquotas de forma automatica no configurador de tributos
+
+@param cCodAliq, character, codigo da alíquota (F28_CODIGO)
+@param cDesc, character, descricao da alíquota (F27_DESC)
+@param cVlOrig, character, informa o valor de origem (F28_VALORI)
+@param cPcAlq, character, informa o percentual da aliquota (F28_ALIQ)
+@param cTpAlq, character, indica o tipo de aliquota (1 = porcentagem ou 2 = unidade de medida) (F28_TPALIQ)
+@param cFormula, character, formula que sera usada para montagem
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method saveRate(cCodAliq as character, cDesc as character, cVlOrig as character, nPcAlq as numeric, cTpAlq as character, cFormula as character) as character class TaxConfiguratorLoader
+    local oModel := nil as object
+    local cChaveSeek := ""                  as character
+    local cAlias := "F28"                   as character
+    local nOrder := 7                       as numeric
+
+    default cDesc := '' 
+    default cVlOrig := '01'
+    default nPcAlq := 0
+    default cTpAlq := ""
+    default cFormula := ""
+
+    oModel := FWLoadModel('FISA162')
+    oModel:SetOperation(MODEL_OPERATION_INSERT)
+    oModel:Activate()
+
+    oModel:SetValue('FISA162', 'F28_DESC'  , cDesc)
+    oModel:SetValue('FISA162', 'F28_VALORI', cVlOrig)
+
+    if !Empty(cTpAlq) 
+        oModel:SetValue('FISA162','F28_TPALIQ', cTpAlq)
+    endIf
+
+    if cVlOrig == "06" .and. !Empty(cFormula)        
+        Fsa162Form(cFormula)
+    else
+        oModel:SetValue('FISA162','F28_ALIQ  ', nPcAlq) 
+    endIf
+    
+    cChaveSeek := oModel:GetValue('FISA162', 'F28_TPALIQ') + xFisSYard(oModel:GetValue('FORMULALQ', 'CIN_FORMUL'))
+    cChaveSeek := self:generateMD5(cChaveSeek, .F.) + "2"
+
+    lExiste := self:loadExists(cAlias, nOrder, cChaveSeek)
+
+    if !lExiste
+        if empty(cCodAliq)
+            cCodAliq := self:getRateCode()
+        endIf
+
+        oModel:SetValue('FISA162', 'F28_CODIGO', cCodAliq)
+
+        if oModel:VldData() .and. oModel:CommitData()
+            self:cMsgSucesso += self:buildMessage(cAlias, cCodAliq)
+        endIf
+    else
+        cCodAliq := (cAlias)->F28_CODIGO
+    endIf
+
+    oModel:DeActivate()
+    oModel:Destroy()
+    oModel := Nil
+    FreeObj(oModel)
+return cCodAliq
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} saveRule
+Grava Regra de Calculos de forma automatica no configurador de tributos
+
+@param cCodRegra, character, codigo da regra de calculo (F2B_REGRA)
+@param cDesc, character, descricao regra de calculo (F2B_DESC)
+@param cTributo, character, codigo do Tributo (F2B_TRIB)
+@param cCodAliquota, character, codigo do cadastro de Aliquota (F28) (F2B_RALIQ)
+@param cCodBase, character, codigo do cadastro da Base de Calculo (F27) (F2B_RBASE)
+@param cCodEscrituracao, character, codigo do cadastro de Escrituracao (CJ2) (F2B_CODESC)
+@param cPerfilProduto, character, codigo do cadastro do Perfil do Produto (F24) (F2B_PERFPR)
+@param cPerfilParticipantes, character, codigo do cadastro do Perfil de Participante (F22) (F2B_PERFPA)
+@param cPerfilOperacao, character, codigo do cadastro do Perfil de Operacao (F23) (F2B_PERFOP)
+@param cPerfilOrigemDestino, character, codigo do cadastro do Perfil de Origem/Destino (F21) (F2B_PEROD)
+@param cTributoMajorado, character, informa tributo majorado (F2B_TRBMAJ)
+@param cVigIni, character, informa vigencia inicial da regra (F2B_VIGINI)
+@param cVigFim, character, informa vigencia final da regra (F2B_VIGFIM)
+@param cStatus, character, informa se a regra esta em teste ou producao (F2B_STATUS)
+@return nil, nil
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method saveRule(cCodRegra as character,cDesc as character,cTributo as character,cCodAliquota as character,cCodBase as character,cCodEscrituracao as character,;
+                    cPerfilProduto as character,cPerfilParticipantes as character,cPerfilOperacao as character,cPerfilOrigemDestino as character,cTributoMajorado as character,;
+                    cVigIni as character,cVigFim as character,cStatus as character,lForce as logical) as logical class TaxConfiguratorLoader
+    local oModel := nil     as object
+    local cChaveSeek := ""  as character
+    local cAlias := "F2B"  as character
+    local nOrder := 8       as numeric
+    local lExiste := .F.    as logical
+
+    default cTributoMajorado := ""
+    default lForce := .F.
+
+    oModel := FWLoadModel('FISA160')
+
+    oModel:SetOperation(MODEL_OPERATION_INSERT)
+    oModel:Activate()
+
+    if empty(cDesc)
+        cDesc := self:getDescRule(cTributo, cPerfilProduto, cPerfilParticipantes, cPerfilOperacao, cPerfilOrigemDestino)
+    endIf
+
+    oModel:SetValue('FISA160', 'F2B_TRIB'  , cTributo)
+    oModel:SetValue('FISA160', 'F2B_DESC'  , cDesc)
+    oModel:SetValue('FISA160', 'F2B_VIGINI', STOD(cVigIni))
+    oModel:SetValue('FISA160', 'F2B_VIGFIM', STOD(cVigFim))
+    oModel:SetValue('FISA160', 'F2B_RBASE' , cCodBase)
+    oModel:SetValue('FISA160', 'F2B_RALIQ' , cCodAliquota)
+    oModel:SetValue('FISA160', 'F2B_CODESC', cCodEscrituracao)
+    oModel:SetValue('FISA160', 'F2B_PEROD' , cPerfilOrigemDestino)
+    oModel:SetValue('FISA160', 'F2B_PERFPA', cPerfilParticipantes)
+    oModel:SetValue('FISA160', 'F2B_PERFOP', cPerfilOperacao)
+    oModel:SetValue('FISA160', 'F2B_PERFPR', cPerfilProduto)
+
+    if !Empty(cTributoMajorado)
+        oModel:SetValue('FISA160','F2B_TRBMAJ', cTributoMajorado)
+    endIf
+
+    if self:lF2BStatus
+        oModel:SetValue('FISA160','F2B_STATUS', cStatus)
+    endIf
+
+    cChaveSeek := self:getRuleKey(oModel)
+    cChaveSeek := self:generateMD5(cChaveSeek, .F.) + "2"
+
+    lExiste := self:loadExists(cAlias, nOrder, cChaveSeek)
+
+    if !lExiste .or. lForce
+        if empty(cCodRegra)
+            cCodRegra := self:getRuleCode()
+        endIf
+
+        oModel:SetValue('FISA160', 'F2B_REGRA' , cCodRegra)
+
+        if oModel:VldData() .and. oModel:CommitData()
+            self:cMsgSucesso += self:buildMessage(cAlias, cCodRegra)
+        endIf
+    endIf
+
+    oModel:DeActivate()
+    oModel:Destroy()
+    oModel := Nil
+    FreeObj(oModel)
+return lExiste
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadExists
+Funcao que fara o seek com base em um alias, order e uma chave informada
+
+@param cAlias, character, informa o alias que sera feito o seek
+@param nOrder, numeric, informa o order que sera feito o seek
+@param cChave, character, chave de pesquisa que sera usada no seek
+@return lRet, logical, se encontrou um registro, retorna .T. - caso contrario .F.
+@author Matheus Bispo
+@since 28/05/2025
+@type method
+@version P12.1.2410
+
+/*/
+//-------------------------------------------------------------------
+method loadExists(cAlias as character, nOrder as numeric, cChave as character) as logical class TaxConfiguratorLoader
+    local lRet := .F. as logical
+
+    DbSelectArea(cAlias)   
+    (cAlias)->(DbSetOrder(nOrder))
+
+    if (cAlias)->( MsSeek( xFilial(cAlias) + cChave) )
+        lRet := .T.
+    endIf
+    
+return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getSuccessMsg
+@return self:cMsgSucesso, character, retorna os cadastros incluidos com sucesso
+/*/
+//-------------------------------------------------------------------
+method getSuccessMsg() class TaxConfiguratorLoader
+return self:cMsgSucesso
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildParticipants
+Monta os perfils de participantes para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return aParticipantes, array, retorna participantes
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method buildParticipants() class TaxConfiguratorLoader
+    local aParticipantes := {} as array
+    
+    //TODOS PARTICIPANTES - CLIENTES E FORNECEDORES
+    aAdd(aParticipantes, {"", "Perfil de Participantes: TODOS Clientes TODOS Fornecedores", "02", { {"1", "TODOS ", "ZZ"}, {"2", "TODOS ", "ZZ"} }})
+return aParticipantes
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildProducts
+Monta os perfils de produtos para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return aProdutos, array, retorna produtos
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method buildProducts() class TaxConfiguratorLoader
+    local aProdutos := {} as array
+
+    //TODOS PRODUTOS
+    aAdd(aProdutos, {"", "Perfil de Produtos: TODOS", "04", { {"TODOS"} }})
+return aProdutos
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildBases
+Monta as bases de calculos para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return aBases, array, retorna bases
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method buildBases() class TaxConfiguratorLoader
+    local aBases := {} as array
+    local cFormula := "" as character
+
+    //MONTA CBS FEDERAL E IBS ESTADUAL
+    cFormula := " ( O:VAL_MERCADORIA + O:FRETE + O:SEGURO + O:DESPESAS + O:VAL_II ) - ( O:DESCONTO + O:VAL_PS2 + O:VAL_CF2 + O:VAL_ICMS + O:VAL_DIFAL + O:VAL_FECP + O:VAL_FCPDIF + O:VAL_ISS ) "
+    aAdd(aBases, {"", "Base de calculo: CBS FED/IBS EST", "11", 0, cFormula})
+return aBases
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildRates
+Monta as aliquotas para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return aAliquotas, array, retorna aliquotas
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method buildRates() class TaxConfiguratorLoader
+    local aAliquotas := {} as array
+    
+    //MONTA ALIQUOTA DO CBS
+    aAdd(aAliquotas, {"", "Alíquota 0.9%", "04", 0.9, "1", ""})
+    //MONTA ALIQUOTA DO IBS
+    aAdd(aAliquotas, {"", "Alíquota 0.1%", "04", 0.1, "1", ""})
+return aAliquotas
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildRules
+Monta as regras de calculo para gravacao de forma automatica no configurador de tributos
+
+@param nil, nil
+@return aRegras, array, retorna regras
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method buildRules() class TaxConfiguratorLoader
+    local aRegras := {} as array
+
+    //MONTA REGRA DO CBS
+    aAdd(aRegras, {"", "", "CBSFED", self:aAliquotas[1][1], self:aBases[1][1], "", self:aProdutos[1][1], self:aParticipantes[1][1], "000051", "000002", "", "20260101","20261231","1"})
+    //MONTA REGRA DO IBS
+    aAdd(aRegras, {"", "", "IBSEST", self:aAliquotas[2][1], self:aBases[1][1], "", self:aProdutos[1][1], self:aParticipantes[1][1], "000051", "000002", "", "20260101","20261231","1"})
+return aRegras
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDescRule
+Retorna a descrição da regra de calculo
+
+@param cTributo, character, codigo do Tributo (F2B_TRIB)
+@param cPerfilProduto, character, codigo do cadastro do Perfil do Produto (F24) (F2B_PERFPR)
+@param cPerfilParticipantes, character, codigo do cadastro do Perfil de Participante (F22) (F2B_PERFPA)
+@param cPerfilOperacao, character, codigo do cadastro do Perfil de Operacao (F23) (F2B_PERFOP)
+@param cPerfilOrigemDestino, character, codigo do cadastro do Perfil de Origem/Destino (F21) (F2B_PEROD)
+@return cDesc, character, retorna regras
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getDescRule(cTributo as character, cPerfilProduto as character, cPerfilParticipantes as character, cPerfilOperacao as character, cPerfilOrigemDestino as character) as character class TaxConfiguratorLoader
+    local cDesc := "" as character
+
+    cDesc := cTributo
+    cDesc += " - PROD "  + cPerfilProduto
+    cDesc += " - PART "  + cPerfilParticipantes
+    cDesc += " - OPER " + cPerfilOperacao
+    cDesc += " - ORIG-DEST " + cPerfilOrigemDestino
+    cDesc += " "
+return cDesc
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getPerfilCode
+Gera um código com base na F24 -> F24_CODIGO
+
+@param cPerfil, character, informa qual o tipo do perfil (01=Origem/Destino;02=Participante;03=Operação;04=Produto)
+@return cCodPerfil, character, retorna o novo codigo gerado
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getPerfilCode(cPerfil as character) as character class TaxConfiguratorLoader
+    local cCodPerfil := "" as character
+    local cPrefixo := "" as character
+    local cQuery := "" as character
+
+    cQuery := " SELECT MAX(F20_CODIGO) AS F20_CODIGO "
+    cQuery += " FROM " + retSqlName("F20") + " F20 "
+    cQuery += " WHERE F20.F20_FILIAL = ? "
+    cQuery +=   " AND F20.F20_CODIGO LIKE ? "
+    cQuery +=   " AND F20.F20_TIPO = ? "
+    cQuery +=   " AND F20.D_E_L_E_T_ = ? "
+
+    if cPerfil == "02"
+        cPrefixo := PRE_COD_PERFIL_PARTICIPANTE
+    elseIf cPerfil == "04"
+        cPrefixo := PRE_COD_PERFIL_PRODUTO
+    endIf
+
+    self:oQryPerfil := self:buildExecStatement(self:oQryPerfil, cQuery)
+
+    self:oQryPerfil:setString(1, xFilial("F20"))
+    self:oQryPerfil:setString(2, cPrefixo + "%") //Prefixo de Regra = "TPP%"
+    self:oQryPerfil:setString(3, " ")
+    self:oQryPerfil:setString(4, cPerfil)
+
+    cCodPerfil := self:oQryPerfil:execScalar("F20_CODIGO")
+
+    cCodPerfil := self:incrementCode(cPrefixo, cCodPerfil)
+return cCodPerfil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getBaseCode
+Gera um código com base na F27 -> F27_CODIGO
+
+@param nil, nil
+@return cCodBase, character, retorna o novo codigo gerado
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getBaseCode() as character class TaxConfiguratorLoader
+    local cCodBase  := "" as character
+    local cQuery    := "" as character
+
+    cQuery := " SELECT MAX(F27_CODIGO) AS F27_CODIGO "
+    cQuery += " FROM " + retSqlName("F27") + " F27 "
+    cQuery += " WHERE F27.F27_FILIAL = ? "
+    cQuery +=   " AND F27.F27_CODIGO LIKE ? "
+    cQuery +=   " AND F27.D_E_L_E_T_ = ? "
+
+    self:oQryBases := self:buildExecStatement(self:oQryBases, cQuery)
+
+    self:oQryBases:setString(1, xFilial("F27"))
+    self:oQryBases:setString(2, PRE_COD_BASE + "%") //Prefixo de Regra = "TB%"
+    self:oQryBases:setString(3, " ")
+
+    cCodBase := self:oQryBases:execScalar("F27_CODIGO")
+
+    cCodBase := self:incrementCode(PRE_COD_BASE, cCodBase)
+return cCodBase
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getRateCode
+Gera um código com base na F28 -> F28_CODIGO
+
+@param nil, nil
+@return cCodAliq, character, retorna o novo codigo gerado
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getRateCode() as character class TaxConfiguratorLoader
+    local cCodAliq  := "" as character
+    local cQuery    := "" as character
+
+    cQuery := " SELECT MAX(F28_CODIGO) AS F28_CODIGO "
+    cQuery += " FROM " + retSqlName("F28") + " F28 "
+    cQuery += " WHERE F28.F28_FILIAL = ? "
+    cQuery +=   " AND F28.F28_CODIGO LIKE ? "
+    cQuery +=   " AND F28.D_E_L_E_T_ = ? "
+
+    self:oQryAliquotas := self:buildExecStatement(self:oQryAliquotas, cQuery)
+    
+    self:oQryAliquotas:setString(1, xFilial("F28"))
+    self:oQryAliquotas:setString(2, PRE_COD_ALIQUOTA + "%") //Prefixo de Regra = "TB%"
+    self:oQryAliquotas:setString(3, " ")
+
+    cCodAliq := self:oQryAliquotas:execScalar("F28_CODIGO")
+
+    cCodAliq := self:incrementCode(PRE_COD_ALIQUOTA, cCodAliq)
+return cCodAliq
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getRuleCode
+Gera um código com base getSXENum para a F2B_REGRA 
+
+@param nil, nil
+@return cCodRegra, character, retorna o novo codigo gerado
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getRuleCode() as character class TaxConfiguratorLoader
+    local cCodRegra := "" as character
+    local cQuery    := "" as character
+
+    cQuery := " SELECT MAX(F2B_REGRA) AS F2B_REGRA "
+    cQuery += " FROM " + retSqlName("F2B") + " F2B "
+    cQuery += " WHERE F2B.F2B_FILIAL = ? "
+    cQuery +=   " AND F2B.F2B_REGRA LIKE ? "
+    cQuery +=   " AND F2B.D_E_L_E_T_ = ? "
+
+    self:oQryRegras := self:buildExecStatement(self:oQryRegras, cQuery)
+
+    self:oQryRegras:setString(1, xFilial("F2B"))
+    self:oQryRegras:setString(2, PRE_COD_REGRA + "%") //Prefixo de Regra = "TR%"
+    self:oQryRegras:setString(3, " ")
+
+    cCodRegra := self:oQryRegras:execScalar("F2B_REGRA")
+
+    cCodRegra := self:incrementCode(PRE_COD_REGRA, cCodRegra)
+return cCodRegra
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildExecStatement
+Faz a instancia do fwExecStatement e retorna o objeto
+
+@param oExecStatement, object, objeto que deseja verificar se ja foi instanciado
+@param cQuery, character, query que deseja realizar a instancia
+@return oExecStatement, object, retorna o objeto instanciado
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method buildExecStatement(oExecStatement as object, cQuery as character) as object class TaxConfiguratorLoader
+    if oExecStatement == nil
+        oExecStatement := fwExecStatement():new( changeQuery(cQuery) )
+    endIf
+return oExecStatement
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} incrementCode
+Incrementa o codigo com base em um prefixo
+
+@param cPrefixo, character, informa o prefixo do codigo do cadastro
+@param cCodigo, character, informa o codigo que foi pego na tabela
+@return cNovoCodigo, character, retorna o codigo incrementado com o proximo valor valido para a tabela
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method incrementCode(cPrefixo as character, cCodigo as character) as character class TaxConfiguratorLoader
+    local cNovoCodigo := "" as character
+    local nTamPrefixo := len(cPrefixo) as numeric
+
+    cCodigo := subStr(cCodigo, nTamPrefixo + 1)
+    cCodigo := soma1(cCodigo)
+
+    cNovoCodigo := cPrefixo + cCodigo
+    
+return cNovoCodigo
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} generateMD5
+Faz a criação da chave MD5
+
+@param cChave, character, informa a chave para criacao do md5
+@param lFormula, logical, informa se a chave contem a formula
+@return cChvMd5, character, retorna o novo codigo gerado
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method generateMD5(cChave as character, lFormula as logical) as character class TaxConfiguratorLoader
+    local cPrefixo := "CONFITRIB-"  as character
+    local cChvMd5 := cChave         as character
+    
+    if lFormula
+        cChvMd5 := xFisSYard(cChave)
+    endIf
+
+    cChvMd5 := cPrefixo + Md5(cChvMd5)
+return cChvMd5
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getRuleKey
+Retorna a chave de regra de calculo (F2B) com base no modelo para criação da chave md5
+
+@param oModel, object, modelo para pegar os valores para compor a chave
+@return cChaveRegra, character, chave criada com base no modelo
+@author Matheus Bispo
+@since 27/05/2025
+@type method
+@version P12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getRuleKey(oModel as object) as character class TaxConfiguratorLoader
+    local cChaveRegra := "" as character
+
+    cChaveRegra := oModel:GetValue('FISA160', 'F2B_TRIB')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RBASE')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RALIQ')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_PEROD')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_PERFPA')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_PERFOP')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_PERFPR')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RFIN')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RAPUR')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RND')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RBASES')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_TRBMAJ')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_DEDDEP')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_DEDPRO')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_CODESC')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_MAXMIN')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_RGGUIA')
+    cChaveRegra += cValToChar(oModel:GetValue('FISA160', 'F2B_VLRMAX'))
+    cChaveRegra += cValToChar(oModel:GetValue('FISA160', 'F2B_VLRMIN'))
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_OPRMIN')
+    cChaveRegra += oModel:GetValue('FISA160', 'F2B_OPRMAX')
+return cChaveRegra
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildMessage
+Monta Msg para ser informada no final do processamento da carga, mostrando todos os cadastros feitos
+
+@param cTipo, character, Tipo do cadastro (F22, F24, F27, F28 ou F2B)
+@param cCodigo, character, Codigo cadastrado
+@return cMensagem, character, se encontrou um registro, retorna .T. - caso contrario .F.
+@author Matheus Bispo
+@since 28/05/2025
+@type method
+@version P12.1.2410
+
+/*/
+//-------------------------------------------------------------------
+method buildMessage(cTipo as character, cCodigo as character) as character class TaxConfiguratorLoader
+    local cQuebraLinha := PULAR_LINHA   as character
+    local cMensagem := ""               as character
+    
+    if cTipo == "F22" //PARTICIPANTE
+        cMensagem := "Perfil de Participante: "
+    elseIf cTipo == "F24" //PRODUTO
+        cMensagem := "Perfil de Produto: "
+    elseIf cTipo == "F27" //BASE
+        cMensagem := "Bases de Cálculo: "
+    elseIf cTipo == "F28" //ALIQUOTA
+        cMensagem := "Alíquotas: "
+    elseIf cTipo == "F2B" //REGRA
+        cMensagem := "Regras de Cálculo: "
+    endIf
+
+    cMensagem += cCodigo + cQuebraLinha
+return cMensagem
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} destroy
+Destroi o objeto e limpa variaveis
+
+@param nil, nil, nil
+@return nil, nil, nil
+@author Matheus Bispo
+@since 28/05/2025
+@type method
+@version P12.1.2410
+
+/*/
+//-------------------------------------------------------------------
+method destroy() class TaxConfiguratorLoader
+    fwFreeArray(self:aParticipantes)
+    fwFreeArray(self:aProdutos)
+    fwFreeArray(self:aBases)
+    fwFreeArray(self:aAliquotas)
+    fwFreeArray(self:aRegras)
+
+    if self:oQryPerfil != nil
+        self:oQryPerfil:destroy()
+    endIf
+
+    if self:oQryBases != nil
+        self:oQryBases:destroy()
+    endIf
+
+    if self:oQryAliquotas != nil
+        self:oQryAliquotas:destroy()
+    endIf
+
+    if self:oQryRegras != nil
+        self:oQryRegras:destroy()
+    endIf
+return

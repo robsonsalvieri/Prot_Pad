@@ -1,0 +1,434 @@
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+#include "health.plan.unimed.cadbenef.send.ch"
+
+#define PENDING_SEND "1" // Pendente de envio
+#define SEND_COMPLETED "2" // Envio finalizado
+#define SEND_ERROR "3" // Erro de envio
+
+#define BATCH_RECEIVED "1" // Lote recebido
+#define SENDING_BATCH "2" // Enviando lote 
+#define BATCH_WITH_ERROR "3" // Lote com erro
+#define SUCCESSFULLY_COMPLETED "4" // Finalizado com sucesso
+#define SUCCESSFULLY_PARTIALLY "5" // Finalizado Parcialmente
+
+#define INCLUSION_TYPE "1" // Inclusão
+#define UPDATE_TYPE "2" // Atualização
+#define EXCLUSION_TYPE "3" // Exclusão
+
+namespace totvs.protheus.health.plan.unimed
+
+using namespace totvs.protheus.health.plan.api.util
+
+/*/{Protheus.doc} cadBenefSendBeneficiary
+Realiza a comunicação com o servidor do CadBenef para envio do beneficiário posicionado
+@type function
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/05/2024
+@param lShowMessage, logical, exibir mensagem do status do envio
+@param lUpdateBatchStatus, logical, atualiza o status do lote após o envio do beneficiário
+@return json, objeto com os dados do status do envio
+/*/
+function cadBenefSendBeneficiary(lShowMessage as logical, lUpdateBatchStatus as logical) as json
+
+    local oCadBenefApi as object
+    local jStatus as json
+    local oModel as object
+    local lMessageWarning := .F. as logical
+    local cSubscriberId as character
+
+    default lShowMessage := .T.
+    default lUpdateBatchStatus := .T.
+
+    jStatus := {"status": "",;
+                "sendMessage": "",;
+                "responseMessage": "",;
+                "showMessage": "",;
+                "transactionCode": "",;
+                "sendDate": "",;
+                "sendTime": "",;
+                "responseTime": "";
+               }
+
+    if BPY->BPY_STATUS == SEND_COMPLETED
+        jStatus["status"] := SEND_ERROR
+        do case
+            case BPY->BPY_TIPMOV == INCLUSION_TYPE
+                jStatus["showMessage"] := STR0001 // "Beneficiário já cadastrado no CadBenef."
+            case BPY->BPY_TIPMOV == UPDATE_TYPE
+                jStatus["showMessage"] := STR0002 // "Beneficiário já atualizado no CadBenef."
+            case BPY->BPY_TIPMOV == EXCLUSION_TYPE
+                jStatus["showMessage"] := STR0003 // "Beneficiário já removido no CadBenef."
+        endcase
+        
+        lMessageWarning := .T.
+    else
+        oCadBenefApi := CadBenefApiBeneficiaries():new(BPW->BPW_UNIORI)
+
+        jStatus["transactionCode"] := getNewTransactionCode(BPY->BPY_CODLOT)
+
+        oModel := fwLoadModel("PLPTU002")
+        oModel:setOperation(MODEL_OPERATION_UPDATE)
+
+        oModel:activate()
+        oModel:setValue("BPYMASTER", "BPY_CODTRA", jStatus["transactionCode"])
+    
+        if oModel:vldData()
+            oModel:commitData()
+        endif
+
+        oModel:deActivate()
+
+        cSubscriberId := BPY->(BPY_CODINT + BPY_CODEMP + BPY_MATRIC + BPY_TIPREG + BPY_DIGITO)
+
+        if oCadBenefApi:addBeneficiary(cSubscriberId, BPW->BPW_UNIORI, BPY->BPY_TIPMOV, jStatus["transactionCode"])
+            jStatus["responseTime"] := time()
+
+            if oCadBenefApi:send()
+                jStatus["status"] := SEND_COMPLETED            
+            else
+                jStatus["status"] := SEND_ERROR
+            endif  
+
+            jStatus["responseTime"] := elapTime(jStatus["responseTime"], time())
+        else
+            jStatus["status"] := SEND_ERROR 
+        endif
+
+        jStatus["showMessage"] := oCadBenefApi:getMessage()
+        if BPY->BPY_TIPMOV == EXCLUSION_TYPE
+            jStatus["sendMessage"] := oCadBenefApi:getParamsToString()
+        else
+            jStatus["sendMessage"] := oCadBenefApi:getRequest():toJson()
+        endif
+        jStatus["responseMessage"] := oCadBenefApi:getResponse():toJson()
+        jStatus["transactionCode"] := jStatus["transactionCode"]
+        jStatus["sendDate"] := dDataBase
+        jStatus["sendTime"] := time()     
+
+        oModel:activate()
+        oModel:setValue("BPYMASTER", "BPY_STATUS", jStatus["status"])
+        oModel:setValue("BPYMASTER", "BPY_DATENV", jStatus["sendDate"])
+        oModel:setValue("BPYMASTER", "BPY_HORENV", jStatus["sendTime"])
+        oModel:setValue("BPYMASTER", "BPY_MSGENV", jStatus["sendMessage"])
+        oModel:setValue("BPYMASTER", "BPY_MSGRES", jStatus["responseMessage"])
+        oModel:setValue("BPYMASTER", "BPY_RESULT", jStatus["showMessage"])
+        oModel:setValue("BPYMASTER", "BPY_TIMERP", jStatus["responseTime"])
+
+        if oModel:vldData()
+            oModel:commitData()
+        endif
+
+        if lUpdateBatchStatus
+            do case
+                case getTotalBeneficiariesByStatusCadBenef(BPW->BPW_CODIGO, SEND_ERROR) > 0
+                    cadBenefUpdateBatchStatus(BATCH_WITH_ERROR)
+
+                case getTotalBeneficiariesByStatusCadBenef(BPW->BPW_CODIGO, PENDING_SEND) > 0
+                    cadBenefUpdateBatchStatus(SUCCESSFULLY_PARTIALLY)
+
+                otherWise
+                    cadBenefUpdateBatchStatus(SUCCESSFULLY_COMPLETED)
+            endcase
+        endif
+
+        oModel:deActivate()
+        oModel:destroy()
+        freeObj(oModel)
+
+        oCadBenefApi:destroy()
+        freeObj(oCadBenefApi)
+    endif
+
+    if lShowMessage
+        do case
+            case jStatus["status"] == SEND_COMPLETED
+                fwAlertSuccess(jStatus["showMessage"], "")
+            case lMessageWarning
+                fwAlertWarning(jStatus["showMessage"], "")
+            otherWise
+                fwAlertError(jStatus["showMessage"], "")
+        endcase
+    endif
+
+return jStatus
+
+/*/{Protheus.doc} cadBenefSendBatch
+Envia de todos os beneficiário do lote
+@type function
+@version 12.1.2410  
+@author vinicius.queiros
+@since 21/05/2024
+/*/
+function cadBenefSendBatch()
+
+    do case
+        case BPW->BPW_STATUS == BATCH_RECEIVED .or. BPW->BPW_STATUS == BATCH_WITH_ERROR .or. BPW->BPW_STATUS == SUCCESSFULLY_PARTIALLY
+            if FWAlertNoYes(STR0004, "") // "Deseja enviar todos os beneficiários do lote para o CadBenef?"
+                cadBenefUpdateBatchStatus(SENDING_BATCH)
+
+                startJob("totvs.protheus.health.plan.unimed.cadBenefRunBatchSend", getEnvServer(), .F., cEmpAnt, cFilAnt, BPW->BPW_CODIGO)
+
+                fwAlertSuccess(STR0005, "") // "Processando o envio dos beneficiários para o CadBenef, para mais informações acesse o botão <b>Consultar Status</b>"
+            endif
+        case BPW->BPW_STATUS == SENDING_BATCH
+            fwAlertWarning(STR0006, "") // "O lote já está processando o envio dos beneficiários para o CadBenef, aguarde!"
+
+        case BPW->BPW_STATUS == SUCCESSFULLY_COMPLETED
+            fwAlertWarning(STR0007, "") // "Lote já enviado para o CadBenef."
+    endcase
+
+return
+
+/*/{Protheus.doc} cadBenefRunBatchSend
+Processamento em job do envio dos beneficiários do lote informado.
+@type function
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/05/2024
+@param cCompany, character, código da empresa do sistema
+@param cBranch, character, código da filial do sistema
+@param cBatchCode, character, código do lote a ser enviado
+@param lPrepareEnv, logical, define se o ambiente precisa ser iniciado (job)
+/*/
+function cadBenefRunBatchSend(cCompany as character, cBranch as character, cBatchCode as character, lPrepareEnv as logical)
+
+    local cAlias as character
+    local cFilialBPY as character
+    local oExecStmt as object
+    local cQuery as character
+    local nOrder := 1 as numeric
+    local nQtdFailed := 0 as numeric
+    local jResponse as json
+
+    default lPrepareEnv := .T.
+
+    if lPrepareEnv
+        rpcSetType(3)
+        rpcSetEnv(cCompany, cBranch, nil, nil, "PLS")
+    endif
+
+    cQuery := " SELECT ? "
+    cQuery += " FROM ? BPY "
+    cQuery += " WHERE "
+    cQuery += "     BPY.BPY_FILIAL = ? AND "
+    cQuery += "     BPY.BPY_CODLOT = ? AND "
+    cQuery += "     BPY.BPY_STATUS <> ? AND "
+    cQuery += "     BPY.D_E_L_E_T_ = ? "
+    cQuery += " ORDER BY ? "
+
+    oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BPY_CODLOT, BPY_CODINT, BPY_CODEMP, BPY_MATRIC, BPY_TIPREG, BPY_DIGITO")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BPY"))
+    oExecStmt:setString(nOrder++, xFilial("BPY"))
+    oExecStmt:setString(nOrder++, cBatchCode)
+    oExecStmt:setString(nOrder++, SEND_COMPLETED)
+    oExecStmt:setString(nOrder++, " ")
+    oExecStmt:setUnsafe(nOrder++, "BPY_CODLOT, BPY_CODINT, BPY_CODEMP, BPY_MATRIC, BPY_TIPREG, BPY_DIGITO")
+
+    BPW->(dbSetOrder(1))
+    if BPW->(msSeek(xFilial("BPW") + cBatchCode))
+        cFilialBPY := xFilial("BPY")
+        cAlias := oExecStmt:openAlias()
+
+        BPY->(dbSetOrder(1))
+        if !(cAlias)->(eof())
+            while !(cAlias)->(eof())
+                if BPY->(msSeek(cFilialBPY + (cAlias)->(BPY_CODLOT + BPY_CODINT + BPY_CODEMP + BPY_MATRIC + BPY_TIPREG + BPY_DIGITO)))
+                    jResponse := cadBenefSendBeneficiary(.F., .F.)
+
+                    if !jResponse["status"] == SEND_COMPLETED
+                        nQtdFailed++
+                    endif
+                endif
+
+                (cAlias)->(dbSkip())
+            enddo
+        endif
+
+        (cAlias)->(dbCloseArea())
+
+        if nQtdFailed == 0
+            cadBenefUpdateBatchStatus(SUCCESSFULLY_COMPLETED)
+        else
+            cadBenefUpdateBatchStatus(BATCH_WITH_ERROR)
+        endif
+    endif
+
+    freeObj(oExecStmt)
+    freeObj(jResponse)
+    
+return
+
+/*/{Protheus.doc} cadBenefUpdateBatchStatus
+Atualiza o status do lote
+@type function
+@version 12.1.2410 
+@author vinicius.queiros
+@since 21/05/2024
+@param cStatus, character, status a ser atribuido ao lote posiconado
+@return logical, se o status foi atualizado com sucesso
+/*/
+function cadBenefUpdateBatchStatus(cStatus as character) as logical
+
+    local oModel as object
+    local lOk := .F. as logical
+
+    oModel := fwLoadModel("PLPTU001")
+    oModel:setOperation(MODEL_OPERATION_UPDATE)
+    oModel:activate()
+
+    oModel:setValue("BPWMASTER", "BPW_STATUS", cStatus)
+
+    if oModel:vldData()
+        oModel:commitData()
+        lOk := .T.
+    endif
+
+    oModel:deActivate()
+    oModel:destroy()
+    freeObj(oModel)
+
+return lOk
+
+/*/{Protheus.doc} getNewTransactionCode
+Obter o proximo código de transação a ser utilizado para comunicar com o CadBenef
+@type function
+@version 12.1.2410  
+@author vinicius.queiros
+@since 21/05/2024
+@param cBatchCode, character, código do lote
+@return character, código da transação gerado
+/*/
+static function getNewTransactionCode(cBatchCode as character) as character
+
+    local cTransactionCode as character
+    local nSequen := 1 as numeric
+    local cMonth as character
+    local cYear as character
+
+    BPW->(dbSetOrder(1))
+    if BPW->(msSeek(xFilial("BPW") + cBatchCode))
+        cMonth := month2Str(BPW->BPW_DTEMIS)
+        cYear := year2Str(BPW->BPW_DTEMIS)
+
+        nSequen := getNextBatchSequence(cBatchCode)
+
+        cTransactionCode := cYear + cMonth + cBatchCode + strZero(nSequen, 6)
+    endif
+
+return cTransactionCode
+
+/*/{Protheus.doc} getNextBatchSequence
+Obter o ultimo código sequencial da transação gerado para o lote
+@type function
+@version 12.1.2410  
+@author vinicius.queiros
+@since 21/05/2024
+@param cBatchCode, character, código do lote
+@return numeric, sequencial a ser utilizado na transação
+/*/
+static function getNextBatchSequence(cBatchCode as character) as numeric
+
+    local nSequen := 1 as numeric
+    local cTransactionCode as character
+    local oExecStmt as object
+    local nOrder := 1 as numeric
+    local cQuery as character
+
+    cQuery := " SELECT MAX(?) CODE "
+	cQuery += " FROM ? BPY "
+	cQuery += " WHERE "
+	cQuery += "     BPY.BPY_FILIAL = ? AND "
+	cQuery += "     BPY.BPY_CODLOT = ? AND "
+	cQuery += " 	BPY.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BPY_CODTRA")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BPY"))
+	oExecStmt:setString(nOrder++, xFilial("BPY"))
+	oExecStmt:setString(nOrder++, cBatchCode)
+	oExecStmt:setString(nOrder++, " ")
+
+    cTransactionCode := oExecStmt:execScalar("CODE")
+
+    if !empty(cTransactionCode)
+        nSequen := val(substr(cTransactionCode, 15)) + 1
+    endif
+
+    oExecStmt:destroy()
+    freeObj(oExecStmt)
+
+return nSequen
+
+/*/{Protheus.doc} getTotalBeneficiariesByStatusCadBenef
+Obter a quantidade de beneficiários do lote por status
+@type function
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/05/2024
+@param cBatchCode, character, código do lote
+@param cStatus, character, status a ser verificado
+@return numeric, quantidade de beneficiários encontrado
+/*/
+function getTotalBeneficiariesByStatusCadBenef(cBatchCode as character, cStatus as character) as numeric
+
+    local nTotal := 0 as numeric
+    local cQuery as character
+    local oExecStmt as object
+    local nOrder := 1 as numeric
+
+    cQuery := " SELECT COUNT(?) TOTAL "
+    cQuery += " FROM ? BPY "
+    cQuery += " WHERE BPY.BPY_FILIAL = ? "
+    cQuery += "   AND BPY.BPY_CODLOT = ? "
+    cQuery += "   AND BPY.BPY_STATUS = ? "
+    cQuery += "   AND BPY.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BPY.BPY_CODTRA")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BPY"))
+	oExecStmt:setString(nOrder++, xFilial("BPY"))
+	oExecStmt:setString(nOrder++, cBatchCode)
+    oExecStmt:setString(nOrder++, cStatus)
+	oExecStmt:setString(nOrder++, " ")
+
+    nTotal := oExecStmt:execScalar("TOTAL")
+
+    freeObj(oExecStmt)
+
+return nTotal
+
+/*/{Protheus.doc} showBatchStatus
+Apresenta tela com o status dos beneficiário do lote
+@type function
+@version 12.1.2410
+@author vinicius.queiros
+@since 21/05/2024
+@param cBatchCode, character, código do lote
+/*/
+function showBatchStatus(cBatchCode as character)
+
+    local nQtdPedingSend as numeric
+    local nQtdSendCompleted as numeric
+    local nQtdSendError as numeric
+    local cTitle := STR0008 as character // "Status de Envio dos Beneficiários"
+    local aSubtitle := {} as array
+
+    nQtdPedingSend := getTotalBeneficiariesByStatusCadBenef(cBatchCode, PENDING_SEND)
+    nQtdSendCompleted := getTotalBeneficiariesByStatusCadBenef(cBatchCode, SEND_COMPLETED)
+    nQtdSendError := getTotalBeneficiariesByStatusCadBenef(cBatchCode, SEND_ERROR)
+
+    aAdd(aSubtitle, {"BR_BRANCO", STR0009 + cValToChar(nQtdPedingSend)}) // "Pendente de envio: "
+    aAdd(aSubtitle, {"BR_VERDE", STR0010 + cValToChar(nQtdSendCompleted)}) // "Envio finalizado: "
+    aAdd(aSubtitle, {"BR_VERMELHO", STR0011 + cValToChar(nQtdSendError) }) // "Erro de envio: "
+
+    brwLegenda(cTitle, STR0012, aSubtitle) // "Status"
+
+    fwFreeArray(aSubtitle)
+
+return

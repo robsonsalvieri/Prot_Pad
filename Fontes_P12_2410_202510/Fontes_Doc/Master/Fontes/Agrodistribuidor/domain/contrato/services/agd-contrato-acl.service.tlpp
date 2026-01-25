@@ -1,0 +1,355 @@
+#include "totvs.ch"
+#include 'tlpp-core.th'
+#INCLUDE 'agd.contrato.acl.service.ch'
+
+namespace agd.contratoAclService
+using namespace agd.utilsService
+using namespace agd.contratoAclRepository /*Funcoes de Repositorio*/
+using namespace agd.contratoOriginacaoProtheusService /*Funcoes de geracao de contrato*/
+using namespace agd.negocioService
+using namespace agd.negocioStatusService
+using namespace agd.idService
+
+/*/{Protheus.doc} agdContratoAclService
+Servico para ajuste da entidade de ACL de Contratos do Barter
+@type class
+@version 12
+@author jean.schulze
+@since 07/01/2025
+/*/
+class agdContratoAclService FROM agdUtilsService
+	public Data cCodigoNegocio   As Character
+
+	public method new()
+
+	public method getContratoByCodigoExterno()
+	public method gerarContratos()
+	public method atualizarQuantidadeContrato()
+	public method atualizarCodigoExternoContrato()
+	public method sumQuantidadeByItemContrato() as numeric
+	public method informarContratoExterno()	
+	public method getProximaSequenciaNEF() as Character
+
+	private method getContratosDisponiveisParaGerar() as Array
+	private method getDadosContratosNegociacao() as Logical
+
+endclass
+
+/*/{Protheus.doc} new
+Constructor
+@type method
+@version 12
+@author jean.schulze
+@since 02/01/2025
+@param pcCodigoNegocio, character, Codigo Negocio Barter
+@return variant, instância
+/*/   
+method new(pcCodigoNegocio as Character) class agdContratoAclService
+	Self:cCodigoNegocio := pcCodigoNegocio
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} gerarContratos
+Comando para Gerar Contratos para a ACL de Contrato Barter
+@type method
+@version 12
+@author jean.schulze
+@since 07/01/2025
+@return variant, nil
+/*/
+method gerarContratos()  class agdContratoAclService
+	Local oRepository as object
+	Local oCtrProtheus as object
+	Local aContratosGerar := {}
+	Local aContratosOGProtheus  := {}
+	Local nI
+	Local oNegocioService as Object
+	Local cUltVersao as character
+	Local oNegocioStatusService as object
+	Local lNegocioAutorizado as logical
+	Local oIdService := agdIdService():New()
+
+	oNegocioService := agdNegocioService():New()
+	cUltVersao := oNegocioService:buscarVersaoAtualValida(Self:cCodigoNegocio)
+	FreeObj(oNegocioService)
+
+	oNegocioStatusService := agdNegocioStatusService():new(fwXfilial("NEA") + Self:cCodigoNegocio + cUltVersao)
+	lNegocioAutorizado := oNegocioStatusService:getAutorizacao() == '2' //2=Liberado
+	FreeObj(oNegocioStatusService)
+
+	if ! lNegocioAutorizado
+		Self:setError(STR0006,404,STR0007) //"Negociação com autorização não liberada." //"Será necessário aprovar a autorização da negociação para seguir com a geração do contrato de compra."
+		return
+	endif
+
+	oRepository := agdContratoAclRepository():New()
+	aContratosJaGerados := oRepository:findByNegocio(Self:cCodigoNegocio)
+	aContratosGerar := Self:getContratosDisponiveisParaGerar(aContratosJaGerados)
+
+	if !(self:getDadosContratosNegociacao()) //não tem NEE
+		Self:setError(STR0004, 404, STR0005) //"Não existe registro de informações para geração do contrato" //"Verifique a aba Contrato da negociação e preencha as informações da mesma."
+		return
+	ElseIf len(aContratosGerar) = 0
+		Self:setSuccess(STR0008) //#"Não há pendênica de registro para geração de contrato. Verifique os contratos gerados. "
+		return
+	endif
+
+	Begin Transaction
+		//Grava Contratos ACL
+		For nI := 1 to len(aContratosGerar)
+
+			aFieldsComand := {}
+			AAdd(aFieldsComand, {'NEF_CODBRT', Self:cCodigoNegocio})
+			AAdd(aFieldsComand, {'NEF_ITECTR', aContratosGerar[nI][1]})
+			AAdd(aFieldsComand, {'NEF_QUANT',  aContratosGerar[nI][2]})
+			AAdd(aFieldsComand, {'NEF_ITEM',   aContratosGerar[nI][3]})
+			AAdd(aFieldsComand, {'NEF_VINCTR', '2'})
+
+			oRepository:save(aFieldsComand)
+
+			if oRepository:isSuccess()
+				cKeyContrato := oRepository:getResponse()
+				oCtrProtheus := agdContratoOriginacaoProtheusService():New(cKeyContrato)
+				if oCtrProtheus:isGerenciaContratoOG()
+					oCtrProtheus:gerarContrato()
+					if oCtrProtheus:isSuccess()
+						cIdContrato := oIdService:encode({xFilial("NJR"), oCtrProtheus:getResponse()})
+						Self:informarContratoExterno(cKeyContrato, cIdContrato, oCtrProtheus:getResponse() )
+						If Self:isSuccess()
+							AAdd(aContratosOGProtheus, oCtrProtheus:getResponse())
+						EndIf
+					else
+						Self:setError(oCtrProtheus:getMessageError(),,STR0005) //"Verifique a aba Contrato da negociação e preencha as informações da mesma."
+						DisarmTransaction()
+						Exit
+					endif
+				else
+					Self:setError(STR0009,,)//"Não há parametrização de integração para vincular contrato." 
+					DisarmTransaction()
+					Exit
+				endif
+			else
+				Self:setError(oRepository:getMessageError())
+				DisarmTransaction()
+				Exit
+			endif
+
+		Next
+	End Transaction
+
+	oRepository:DeActivate()
+	FreeObj(oRepository)
+	FreeObj(oCtrProtheus)
+
+	If Self:isSuccess()
+		Self:setSuccess(STR0001 + " " + cValToChar(len(aContratosOGProtheus)) + " " +STR0002 + " " + ArrTokStr(aContratosOGProtheus,", "))
+	EndIf
+
+return nil
+
+/*/{Protheus.doc} getContratosDisponiveisParaGerar
+Obtém a lista de contratos a serem gerados, desconsiderando o que já foi feito
+@type method
+@version 12
+@author jean.schulze
+@since 06/01/2025
+@param aContratosGerados, array, contratos já gerados
+@return array, lista de contratos a gerar
+/*/
+method getContratosDisponiveisParaGerar(aContratosGerados as Array) as Array class agdContratoAclService
+	Local aArea		        := GetArea()
+	Local aLocaisContratos  := {}
+	Local nI				:= 0
+	Local oNegocioService 	:= agdNegocioService():New()
+	Local cVersaoNegocio	:= oNegocioService:buscarVersaoAtualValida(Self:cCodigoNegocio)
+
+	dbSelectArea('NEE')
+	dbSetOrder(1)
+	NEE->(DBGoTop())
+	NEE->(dbSeek(xFilial('NEE')+Self:cCodigoNegocio+cVersaoNegocio))
+
+	While NEE->(!EoF()) .and. (xFilial('NEE')+Self:cCodigoNegocio+cVersaoNegocio == NEE->NEE_FILIAL+NEE->NEE_CODBRT+NEE->NEE_VERSAO)
+		nSequencia  := 1			
+		nQuantidade := NEE->NEE_QTCONV
+
+		if aScan(aContratosGerados,{|x| x[1] == NEE->NEE_ITEM})
+			For nI := 1 to len(aContratosGerados)
+				if(aContratosGerados[nI][1] == NEE->NEE_ITEM)
+					nSequencia  := val(Self:getProximaSequenciaNEF(NEE->NEE_CODBRT, NEE->NEE_ITEM))
+					nQuantidade := nQuantidade - aContratosGerados[nI][3]
+				endif
+			Next
+		endif
+
+		if nQuantidade > 0
+			AAdd(aLocaisContratos, {NEE->NEE_ITEM, nQuantidade, PadL(cValToChar(nSequencia), TamSX3( "NEF_ITEM" )[1], "0")})
+		endif
+
+		NEE->(DBSkip(1))
+	End
+
+	RestArea(aArea)
+return aLocaisContratos
+
+/*/{Protheus.doc} getContratosDisponiveisParaGerar
+Obtém a lista de Dados Contrato da Negociação
+@type method
+@version 12
+@author lindembergson.pacheco
+@since 17/02/2025
+@param aContratosGerados, array, contratos já gerados
+@return array, lista de contratos a gerar
+/*/
+method getDadosContratosNegociacao() as Logical class agdContratoAclService
+	Local aArea		        := GetArea()
+	Local lRet  := .F.
+	Local oNegocioService := nil
+	Local cUltVersao := ""
+
+	oNegocioService := agdNegocioService():New()
+	cUltVersao := oNegocioService:buscarVersaoAtualValida(Self:cCodigoNegocio)
+	FreeObj(oNegocioService)
+
+	dbSelectArea('NEE')
+	dbSetOrder(1)
+	NEE->(DBGoTop())
+	IF NEE->(dbSeek(xFilial('NEE')+Self:cCodigoNegocio+cUltVersao))
+		lRet := .T.
+	ENDIF
+
+	RestArea(aArea)
+return lRet
+
+/*/{Protheus.doc} informarContratoExterno
+Grava a Relacao do Contrato Externo com o Registro de ACL
+@type method
+@version 12
+@author jean.schulze
+@since 07/01/2025
+@param pcIdContratoACL, character, id ACL
+@param pcIdContratoExterno, character, id Contrato Externo
+@param pcDescContratoExterno, character, numero/codigo contrato externo
+@return variant, nil
+/*/
+method informarContratoExterno(pcIdContratoACL as Character, pcIdContratoExterno as Character, pcDescContratoExterno as Character) Class agdContratoAclService
+	Local oRepository as object
+	Local aFieldsComand := {}
+
+	AAdd(aFieldsComand, {'NEF_IDCTR',  pcIdContratoExterno})
+	AAdd(aFieldsComand, {'NEF_CTREXT', pcDescContratoExterno})
+
+	oRepository := agdContratoAclRepository():New(pcIdContratoACL)
+	oRepository:updateRepository(aFieldsComand)
+
+	Self:setFullResponse(oRepository)
+
+	FreeObj(oRepository)
+
+return nil
+
+/*/{Protheus.doc} getContratoByCodigoExterno
+Buscar Por Contrato Externo
+@type method
+@version 12
+@author jean.schulze
+@since 13/01/2025
+@param pcIdContratoExterno, character, id contrato externo
+@return object, nil
+/*/
+method getContratoByCodigoExterno(pcIdContratoExterno as Character) Class agdContratoAclService
+	Local oRepository as object
+
+	oRepository := agdContratoAclRepository():New()
+	oRepository:findByContratoExterno(pcIdContratoExterno)
+	Self:setFullResponse(oRepository)
+
+	FreeObj(oRepository)
+return nil
+
+/*/{Protheus.doc} atualizarQuantidadeContrato
+Atualizar a quantidade de um ACL de Contrato
+@type method
+@version 12
+@author jean.schulze
+@since 13/01/2025
+@param pcIdContratoACL, character, id acl contrato
+@param pnQuantidade, numeric, quantidade
+@return variant, nil
+/*/
+method atualizarQuantidadeContrato(pcIdContratoACL as Character, pnQuantidade as Numeric) Class agdContratoAclService
+	Local oRepository as object
+
+	oRepository := agdContratoAclRepository():New(pcIdContratoACL)
+	oRepository:updateRepository({{'NEF_QUANT', pnQuantidade}})
+
+	Self:setFullResponse(oRepository)
+
+	FreeObj(oRepository)
+
+return nil
+
+/*/{Protheus.doc} atualizarCodigoExternoContrato
+Criar ACL de Contrato de negocio Barter com codigo externo do contrato
+@type method
+@version 12
+@author Gilson.Venturi
+@since 15/01/2025
+@param pcCodNeg, character, codigo barter
+@param jCmdAtualizar, json, id contrato externo
+@return variant, nil
+/*/
+method atualizarCodigoExternoContrato(pcIdContratoACL as Character, pcIdContratoExterno as Character, pcDesContratoExterno as Character) Class agdContratoAclService
+
+	Self:informarContratoExterno(pcIdContratoACL, pcIdContratoExterno, pcDesContratoExterno)
+
+	Self:setSuccess(STR0003)
+
+return nil
+
+/*/{Protheus.doc} sumQuantidadeByItemContrato
+Informa a quantidade de contrato já gerado para o Local do contrato do negocio
+@type method
+@version 12
+@author jean.schulze
+@since 27/01/2025
+@param pcItemContrato, character, item do local de contrato
+@return numeric, quantidade
+/*/
+method sumQuantidadeByItemContrato(pcItemContrato as Character) as numeric class agdContratoAclService
+	Local nTotal := 0
+	Local aContratosGerados := {}
+	Local nI as numeric
+	Local oRepository := agdContratoAclRepository():New()
+
+	aContratosGerados := oRepository:findByNegocio(Self:cCodigoNegocio)
+
+	if aScan(aContratosGerados,{|x| x[1] == pcItemContrato})
+		For nI := 1 to len(aContratosGerados)
+			if(aContratosGerados[nI][1] == pcItemContrato)
+				nTotal := nTotal + aContratosGerados[nI][3]
+			endif
+		Next
+	endif
+
+	FreeObj(oRepository)
+return nTotal
+
+/*/{Protheus.doc} agdContratoAclService::getProximaSequenciaNEF
+Retorna a proxima sequencia para o item ACL do contrato (NEF_ITEM)
+@type method
+@version P12
+@author claudineia.reinert
+@since 02/10/2025
+@param cCodBrt, character, Codigo da negociação de barter
+@param cItemCtr, character, Item do contrato da negociação
+@return character, Sequencia do item ACL do contrato(NEF_ITEM)
+/*/
+method getProximaSequenciaNEF(cCodBrt as character, cItemCtr as character) as character class agdContratoAclService
+	Local cSequencia as character
+	Local oContratoAclRepository:= agdContratoAclRepository():New()
+
+	cSequencia := oContratoAclRepository:getUltimaSequenciaNEF(cCodBrt, cItemCtr)
+	cSequencia := STRZERO((GetDToVal(cSequencia) + 1),TAMSX3("NEF_ITEM")[1])
+
+	FreeObj(oContratoAclRepository)
+return cSequencia

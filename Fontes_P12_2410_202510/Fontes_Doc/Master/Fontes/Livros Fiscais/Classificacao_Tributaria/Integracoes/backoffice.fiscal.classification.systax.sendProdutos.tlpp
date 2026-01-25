@@ -1,0 +1,780 @@
+#Include "Protheus.ch"
+#Include "RwMake.ch"
+#Include "FwBrowse.ch"
+#Include "FwMvcDef.ch"
+#Include "TOPCONN.ch"
+#INCLUDE "TBICONN.CH"
+#include 'tlpp-core.th'
+#include 'classificadorfiscal.ch'
+
+Namespace totvs.protheus.backoffice.fiscal.Classifier
+using Namespace totvs.protheus.backoffice.fiscal.lib
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FISAAPIClassificador
+Classe que contém as operações referente a integração com a API da 
+Systax
+@author  Yuri Fortunato Palacio
+@since   22.02.2021
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+CLASS FISEnvPerfilProduto
+
+    data url as character
+    data username as character
+    data senha as character
+    
+    data produto as character
+    data rToken as character
+    data error as numeric
+    data error_description as character
+    data regras as object
+    data JSONResult as json
+    data id_prod_classificador as character
+    data aPerfil as array
+    data cPerfil as character
+    data cod_ncm as character
+    data cod_perfil as character
+    data nOrigem as numeric
+    data cCodProd as character
+    data cIdClassif as character
+    Public data lRet as logical
+    data lGrvLogEnvProdSystax as logical
+
+    Public METHOD New() CONSTRUCTOR
+    Public METHOD envPerfilProd(cPerfil,cMockServer,lEnviaCenario,cEndPoint,oJsonProd,cErro,nForcedTimeOut)
+    METHOD gravaTabEnvio(cNcm,cProduto,cPerfil,nOrigem,cIdClassif,jReqResProduto,jReqResGrupo)
+    Public METHOD envGrupoProduto(cCodProd,nOrigem,cPerfil,cMockServer,cEndPoint,cErro) as json
+    Public METHOD consulEnvProd(cPerfil,aProdutos)
+    METHOD setUserName(username)
+    METHOD setSenha(senha)
+    METHOD setUrl(url)
+    METHOD setGrvLogEnvProdSystax(lGrvLogEnvProdSystax)
+    METHOD getJsonRequisicaoProduto(aProdutos,cProduto,nOrigem)
+
+END CLASS
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New()
+Método construtor da classe
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+METHOD New() CLASS FISEnvPerfilProduto
+
+    Local aParam := {"URLPRINCIPAL","USERNAMEDEFAULT","SENHADEFAULT","GRVLOGENVPRODSYSTAX"}
+    Local cParametro := GetConfigClassif(aParam)
+    Local oParametro := JsonObject():New()
+
+    If oParametro:FromJson(cParametro) == Nil
+
+        self:seturl(oParametro:URLPRINCIPAL)
+        self:setSenha(oParametro:SENHADEFAULT)
+        self:setUserName(oParametro:USERNAMEDEFAULT)
+        self:setGrvLogEnvProdSystax(&(oParametro:GRVLOGENVPRODSYSTAX))
+
+    EndIf
+
+    FreeObj(oParametro)
+
+    FWFreeArray(aParam)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} envPerfilProd
+Método para realizar o login do usuário e receber o toekn 
+para implementar uma integração contínua
+@author  Erich Buttner
+@since   18.03.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+METHOD envPerfilProd(cPerfil,cMockServer,lEnviaCenario,cEndPoint,oJsonProd,cErro,nForcedTimeOut) CLASS FISEnvPerfilProduto
+
+Local aHeaderProd       := {}
+Local oResult           := Nil
+Local nF, nX            := 0
+Local cExtra            := ""
+Local lRet              as logical
+Local cResult           as character
+Local cIdClassif        as character
+Local cCodProd          as character
+Local cCodNcm           as character
+Local nOrigem           as numeric
+Local oRestProd         as object
+Local nTentativas       := 1 as numeric
+Local aMensagens        as array
+Local lTokenExpirado    as logical
+Local lJsProd           as logical
+Local jReqResProduto    as json
+Local jReqResGrupo      as json
+
+Default lEnviaCenario   := .T.
+Default cMockServer     := ""
+Default cEndPoint       := "/EnviarProduto"
+Default nForcedTimeOut  := 120
+
+oRestProd := FwRest():New(self:url)
+oRestProd:setPath("/v2/cfm/products/multi")
+oRestProd:nTimeOut := nForcedTimeOut // em segundos
+
+If !Empty(cMockServer)
+    oRestProd := FwRest():New(cMockServer)
+    oRestProd:setPath(cEndPoint)
+
+    if ( cEndPoint == '/endpoint-invalido' )
+        oRestProd:nTimeOut := 10 // 10 segundos
+    endif
+
+    if ( cEndPoint == '/Env_prod_success_error' )
+        lTokenExpirado := .T.
+    endif    
+EndIf
+
+DbSelectArea('CJC')
+lJsProd := CJC->(FieldPos('CJC_JSPROD')) > 0
+CJC->(DbCloseArea())
+
+self:rToken := AllTrim(ConsultTok(cUserName,cMockServer))
+
+If ValType(self:rToken) <> 'U'
+    aHeaderProd := {}
+    Aadd(aHeaderProd, 'Content-Type: application/json; charset=UTF-8')
+    Aadd(aHeaderProd, 'User-Agent: Chrome/65.0 (compatible; Protheus ' + GetBuild() + ')')
+    Aadd(aHeaderProd, 'Authorization: Bearer ' + self:rToken)
+    
+    For nX := 1 To Len(oJsonProd["products"])
+        oRestProd:SetPostParams(oJsonProd['products'][nX]:toJson())
+        oRestProd:SetChkStatus(.F.)
+
+        lRet := oRestProd:Post( aHeaderProd )
+
+        If lRet
+
+            cResult := oRestProd:GetResult()
+
+            oResult := JsonObject():New()
+
+            If oResult:FromJson(cResult)  == Nil
+
+                If ( oResult:HasProperty('message') .and. oResult['message'] == 'token_expired' ) .or. ( lTokenExpirado )
+                    lTokenExpirado := .F.
+                    
+                    self:rToken := AllTrim(ConsultTok(cUserName,cMockServer))
+
+                    aHeaderProd[3] := 'Authorization: Bearer ' + self:rToken
+
+                    nX--
+
+                    loop            
+                EndIf
+
+                If oResult:GetJsonObject("success")
+
+                    If oResult:GetJsonObject("itens_ok") > 0
+                        For nF := 1 To oResult:GetJsonObject("itens_ok")
+                            cIdClassif  := cValToChar(oResult:GetJsonObject("insert_ids")[nF]["id"])
+                            cCodProd    := oResult:GetJsonObject("insert_ids")[nF]["cod_interno"]
+                            cCodNcm     := Substr(cCodProd,4,8)
+                            nOrigem     := Val(oResult:GetJsonObject("insert_ids")[nF]["origem_produto"])
+
+                            jReqResProduto := JsonObject():New()
+
+                            if ( lJsProd .and. self:lGrvLogEnvProdSystax )
+                                jReqResProduto['request'] := self:getJsonRequisicaoProduto(oJsonProd['products'][nX]['products'], cCodProd, nOrigem)
+                                jReqResProduto['response'] := oResult:GetJsonObject("insert_ids")[nF]
+                            endif
+                            
+                            // Associa o Produto ao grupo de produto no classificador
+                            jReqResGrupo := self:envGrupoProduto(cCodProd,nOrigem,cPerfil,cMockServer,nil,@cErro)
+
+                            //Grava o ID de retorno da inclusão de produtos do classificador na tabela CJC
+                            self:gravaTabEnvio(cCodNcm,cCodProd,cPerfil,nOrigem,cIdClassif,jReqResProduto,jReqResGrupo)
+
+                            FreeObj(jReqResProduto)
+                            FreeObj(jReqResGrupo)
+                        Next nF
+                    EndIf
+
+                    If oResult:GetJsonObject("itens_error") > 0
+                        For nF := 1 To Len(oResult:GetJsonObject("errors"))
+                            cExtra := oResult:GetJsonObject("errors")[nF]["extra"]
+                            cExtra := AllTrim(SubStr(cExtra,1+At(":",cExtra),Len(cExtra)))
+
+                            cIdClassif  := cExtra
+                            cCodProd    := oResult:GetJsonObject("errors")[nF]["cod_interno"]
+                            cCodNcm     := Substr(cCodProd,4,8)
+                            nOrigem     := Val(oResult:GetJsonObject("errors")[nF]["origem_produto"])
+
+                            jReqResProduto := JsonObject():New()
+
+                            if ( lJsProd .and. self:lGrvLogEnvProdSystax )
+                                jReqResProduto['request'] := self:getJsonRequisicaoProduto(oJsonProd['products'][nX]['products'], cCodProd, nOrigem)
+                                jReqResProduto['response'] := oResult:GetJsonObject("errors")[nF]
+                            endif
+
+                            // Associa o Produto ao grupo de produto no classificador
+                            jReqResGrupo := self:envGrupoProduto(cCodProd,nOrigem,cPerfil,cMockServer,nil,@cErro)
+                            
+                            //Grava o ID de retorno da inclusão de produtos do classificador na tabela CJC
+                            self:gravaTabEnvio(cCodNcm,cCodProd,cPerfil,nOrigem,cIdClassif,jReqResProduto,jReqResGrupo)
+
+                            FreeObj(jReqResProduto)
+                            FreeObj(jReqResGrupo)
+                        Next nF
+                    EndIf
+
+                    lEnviaCenario := Empty(cErro)
+                Else
+                    lEnviaCenario := .F.
+
+                    cErro := STR0282 + ' ' + cResult // "Erro ao enviar produtos para a Systax."
+                EndIf
+
+            EndIf
+
+            nTentativas := 1
+
+            FreeObj(oResult)
+
+        ElseIf Valtype(oRestProd:cInternalError) == 'C'
+            if nTentativas > 4
+                cErro := STR0282 + ' ' + oRestProd:cInternalError // "Erro ao enviar produtos para a Systax."
+                nTentativas := 1
+                loop
+            endif
+
+            aMensagens := {}
+            Aadd(aMensagens, {'', 'Classificacao Tributaria - sendProdutos.tlpp - envPerfilProd'})
+            Aadd(aMensagens, {'', 'Error: ' + oRestProd:cInternalError})
+            Aadd(aMensagens, {'', 'Retrying in 5 seconds... Attempt: ' + CValToChar(nTentativas)})
+
+            FWLogMsg('INFO',/*cTransactionId*/,'envPerfilProd',/*cCategory*/,/*cStep*/,/*cMsgId*/,/*cMessage*/,/*nMensure*/,/*nElapseTime*/,aMensagens)
+
+            Sleep(5000)
+
+            nTentativas++
+
+            nX--
+
+            loop
+        EndIf
+    Next nX
+
+    FWFreeArray(aHeaderProd)
+
+EndIf
+
+FreeObj(oRestProd)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} gravaTabEnvio
+Método para gravar a tabela CJC que indica o envio dos produtos para a Systax
+@author  Erich Buttner
+@since   22.03.2022
+@version 1.0
+@param   cNcm, character, Código do NCM
+@param   cProduto, character, Código do Produto
+@param   cPerfil, character, Código do Perfil
+@param   nOrigem, numeric, Origem do Produto
+@param   cIdClassif, character, ID de retorno da classificação do produto
+@param   jReqResProduto, json, Json de resposta do envio produto para a Systax
+@param   jReqResGrupo, json, Json de resposta do envio do grupo para a Systax
+/*/
+//-------------------------------------------------------------------
+METHOD gravaTabEnvio(cNcm,cProduto,cPerfil,nOrigem,cIdClassif,jReqResProduto,jReqResGrupo) CLASS FISEnvPerfilProduto
+
+    Local cCodNcm as character
+    Local cCodPer as character
+    Local cCodPro as character
+    Local cPrdOri as character
+    Local cIdRet as character
+
+    Default cNcm := ""
+    Default cProduto := ""
+    Default cPerfil := ""
+    Default nOrigem := 0 
+    Default cIdClassif := ""
+
+    If !Empty(cNcm) .And. !Empty(cProduto)
+
+        cCodNcm := PadR(cNcm, FWSX3Util():GetFieldStruct('CJC_CODNCM')[3])
+        cCodPer := PadR(cPerfil, FWSX3Util():GetFieldStruct('CJC_CODPER')[3])
+        cCodPro := PadR(cProduto, FWSX3Util():GetFieldStruct('CJC_CODPRO')[3])
+        cPrdOri := PadR(cValToChar(nOrigem), FWSX3Util():GetFieldStruct('CJC_PRDORI')[3])
+        cIdRet := PadR(cIdClassif, FWSX3Util():GetFieldStruct('CJC_IDRET')[3])
+
+        DbSelectArea("CJC")
+        CJC->(DbSetOrder(1)) // CJC_FILIAL+CJC_CODNCM+CJC_CODPER+CJC_CODPRO+CJC_PRDORI+CJC_IDRET+CJC_ID+CJC_STATUS
+
+        If !CJC->( MsSeek( FWxFilial("CJC") + cCodNcm + cCodPer + cCodPro + cPrdOri + cIdRet ) )
+            RecLock( "CJC", .T. )
+
+            CJC->CJC_FILIAL := FWxFilial("CJC")
+            CJC->CJC_CODNCM := cCodNcm
+            CJC->CJC_CODPER := cCodPer
+            CJC->CJC_IDRET  := cIdRet
+            CJC->CJC_STATUS := "01"
+            CJC->CJC_CODPRO := cCodPro
+            CJC->CJC_PRDORI := cPrdOri
+            CJC->CJC_ID     := FWUUID("CJC")
+
+            if ( self:lGrvLogEnvProdSystax )
+                if ( CJC->(FieldPos('CJC_JSPROD')) > 0 )
+                    CJC->CJC_JSPROD := DecodeUTF8(jReqResProduto:ToJson(),'cp1252')
+                endif
+
+                if ( CJC->(FieldPos('CJC_JSGRUP')) > 0 )
+                    CJC->CJC_JSGRUP := DecodeUTF8(jReqResGrupo:ToJson(),'cp1252')
+                endif
+            endif
+
+            CJC->( MsUnLock() )
+        EndIf
+        
+        CJC->( DbCloseArea() )
+    EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} envGrupoProduto
+Método para realizar o login do usuário e receber o toekn 
+para implementar uma integração contínua
+@author  Erich Buttner
+@since   09.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+METHOD envGrupoProduto(cCodProd,nOrigem,cPerfil,cMockServer,cEndPoint,cErro) as json CLASS FISEnvPerfilProduto
+
+    Local aHeaderProd       := {} as array
+    Local oResult           as object
+    Local jBodyProdGroup    as json 
+    Local jBodyProd         as json
+    Local jBodyGrupo        as json
+    Local lRet              as logical
+    Local cResult           as character
+    Local oRestGrupo        as object
+    Local nMaxTentativas    := 4 as numeric
+    Local nTentativas       as numeric
+    Local lJsGrupo          as logical
+    Local jReqResGrupo      as json
+    Local aMensagens        as array
+
+    Default cEndPoint       := '/EnvGrupoProd'
+
+    oRestGrupo := FwRest():New(self:url)
+    oRestGrupo:setPath("/cadastro-geral/assoc/products-groups")
+
+    If !Empty(cMockServer)
+        oRestGrupo := FwRest():New(cMockServer)
+        oRestGrupo:setPath(cEndPoint)
+
+        if ( cEndPoint == '/endpoint-invalido' )
+            oRestGrupo:nTimeOut := 10 // 10 segundos
+        endif    
+    EndIf
+
+    jBodyProdGroup := JsonObject():New()
+    jBodyProdGroup["products_groups"] := {}
+
+    jBodyProd := JsonObject():New()
+    jBodyProd["cod_interno"] := cCodProd
+    jBodyProd["origem_produto"] := nOrigem
+    jBodyProd["grupos"] := {}
+        
+    jBodyGrupo := JsonObject():New()
+    jBodyGrupo["descricao"] := EncodeUTF8(cPerfil)
+
+    Aadd(jBodyProd["grupos"],jBodyGrupo)
+    Aadd(jBodyProdGroup["products_groups"],jBodyProd)
+
+    DbSelectArea('CJC')
+    lJsGrupo := CJC->(FieldPos('CJC_JSGRUP')) > 0
+    CJC->(DbCloseArea())
+
+    jReqResGrupo := JsonObject():New()
+
+    if ( lJsGrupo .and. self:lGrvLogEnvProdSystax )
+        jReqResGrupo['request'] := jBodyProdGroup
+    endif
+
+    oRestGrupo:SetPostParams(jBodyProdGroup:toJson())
+    oRestGrupo:SetChkStatus(.F.)
+
+    for nTentativas := 1 to nMaxTentativas
+        if ( !lRet )
+            if ( nTentativas > 1 )
+                Sleep(5000)
+            endif
+
+            self:rToken := AllTrim(ConsultTok(cUserName,cMockServer))
+
+            If ValType(self:rToken) <> 'U'
+
+                aHeaderProd := {}
+                Aadd(aHeaderProd, 'Content-Type: application/json; charset=UTF-8')
+                Aadd(aHeaderProd, 'User-Agent: Chrome/65.0 (compatible; Protheus ' + GetBuild() + ')')
+                Aadd(aHeaderProd, 'Authorization: Bearer ' + self:rToken)
+
+                If ( oRestGrupo:Post( aHeaderProd ) )
+
+                    cResult := oRestGrupo:GetResult()
+
+                    oResult := JsonObject():New()
+
+                    If oResult:FromJson(cResult) == Nil
+
+                        if ( oResult:GetJsonObject("success") )
+                            if ( oResult:HasProperty('itens_ok') .and. oResult['itens_ok'] > 0 )
+                                lRet := .T.
+
+                                if ( lJsGrupo .and. self:lGrvLogEnvProdSystax )
+                                    jReqResGrupo['response'] := oResult['assocs_ok'][1]
+                                endif
+                            endif
+                        
+                            if ( nTentativas == nMaxTentativas )
+                                cErro := STR0308 // "Erro ao associar os produtos ao grupo na Systax."
+
+                                if ( lJsGrupo .and. self:lGrvLogEnvProdSystax .and. ;                                
+                                    oResult:HasProperty('itens_error') .and. oResult['itens_error'] > 0 )
+                                    
+                                    jReqResGrupo['response'] := oResult['assocs_error'][1]
+                                endif
+                            endif
+                        endif
+
+                    EndIf
+
+                ElseIf Valtype(oRestGrupo:cInternalError) == 'C'
+
+                    aMensagens := {}
+                    Aadd(aMensagens, {'', 'Classificacao Tributaria - sendProdutos.tlpp - envGrupoProduto'})
+                    Aadd(aMensagens, {'', 'Error: ' + oRestGrupo:cInternalError})
+                    Aadd(aMensagens, {'', 'Retrying in 5 seconds... Attempt: ' + CValToChar(nTentativas)})
+
+                    FWLogMsg('INFO',/*cTransactionId*/,'envGrupoProduto',/*cCategory*/,/*cStep*/,/*cMsgId*/,/*cMessage*/,/*nMensure*/,/*nElapseTime*/,aMensagens)
+
+                    if ( nTentativas == nMaxTentativas )
+                        cErro := STR0308 + ' ' + oRestGrupo:cInternalError // "Erro ao associar os produtos ao grupo na Systax."
+
+                        if ( lJsGrupo .and. self:lGrvLogEnvProdSystax )
+                            jReqResGrupo['response'] := JsonObject():New()
+                            jReqResGrupo['response']['error'] := oRestGrupo:cInternalError
+                        endif
+                    endif
+
+                EndIf
+
+                FreeObj(oResult)
+                FreeObj(jBodyProdGroup)
+                FreeObj(jBodyGrupo)
+                FreeObj(jBodyProd)
+                FWFreeArray(aHeaderProd)
+
+            EndIf
+
+        EndIf
+    next nTentativas
+
+    FreeObj(oRestGrupo)
+
+Return jReqResGrupo
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} consulEnvProd
+Método para realizar a consulta de envio do produto 
+para implementar uma integração contínua
+@author  Erich Buttner
+@since   09.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+METHOD consulEnvProd(cPerfil as character, aProdutos as array) CLASS FISEnvPerfilProduto
+    Local oQuery        as object
+    Local oTable        as object
+    Local cQuery        as character
+    Local cJoin         as character
+    Local aProdBlok     as array
+    Local cCodProduto   as character
+    Local cTempAlias    as character
+    Local cOrigem       as character
+    Local i             as numeric
+    Local j             as numeric
+    Local aBloco        as array
+    Local nTamProduto   as numeric
+    Local nTamOrigem    as numeric
+    Local lRet          as logical
+    Local aCmp          := {} as array
+    Local aIndice       := {} as array
+    Local lBulk         := .F. as logical
+    Local lInsert       := .F. as logical
+    Local nQueryCount   := 0 as numeric
+    Local lChangeQuery  := .F. as logical
+
+    lRet := .T.
+    nTamProduto := TamSX3('CJC_CODPRO')[1]
+    nTamOrigem := TamSX3('CJC_PRDORI')[1]
+
+    //Prepara a classe que inicializa a tabela temporária
+    aAdd (aCmp, {"CODPRO",	"C", 	nTamProduto, 	0})
+    aAdd (aCmp, {"PRDORI",	"C", 	 nTamOrigem,    0})
+
+    aAdd(aIndice, {"01", {"CODPRO", "PRDORI"}})
+
+    //Instancia a classe que vai gerar a tabela temporária
+    oTable  := FisTemporaryTable():New()
+    oTable:setField(aCmp)
+    oTable:setIndex(aIndice)
+
+    //Cria a tabela temporária
+    cTempAlias := oTable:createTable()
+
+    cQuery := "SELECT COUNT(CJC_IDRET) CJC_IDRET FROM " + RetSQLName("CJC") + " CJC"
+
+    If !Empty(cTempAlias)
+        cJoin  := " JOIN "+ cTempAlias +" TC ON CJC.CJC_CODPRO = TC.CODPRO AND CJC.CJC_PRDORI = TC.PRDORI"
+        cQuery += cJoin
+    EndIf
+
+    cQuery += " WHERE  CJC_FILIAL = ? "
+    cQuery += " AND CJC_CODPER = ? "
+    cQuery += " AND CJC.D_E_L_E_T_ = ? "
+
+    //aBind := {valtype, value}
+    aBind := {}
+    aAdd(aBind, {"C", FWxFilial("CJC")})
+    aAdd(aBind, {"C", cPerfil})
+    aAdd(aBind, {"C", ' '})
+
+    //Instanciamento da classe de query
+    oQuery := FisQuery():New()
+    oQuery:SetQuery(cQuery)
+    oQuery:SetBind(aBind)
+
+    for i := 1 to Len(aProdutos)
+        if ( lRet )
+            aBloco := aProdutos[i]['products']
+            aProdBlok := {}
+
+            for j := 1 to Len(aBloco)
+                cCodProduto := aBloco[j]['cod_interno']
+                cOrigem := CValToChar(aBloco[j]['origem_produto'])
+
+                aAdd(aProdBlok, {cCodProduto,cOrigem})
+            next j
+
+            //Inicializa o bulk dos dados
+            If !Empty(cTempAlias)
+                lBulk := oTable:startBulk()
+            Else
+                // Conout("Erro ao criar tabela temporária")
+            EndIf
+
+            lInsert := oTable:bulkData(aProdBlok)
+
+            If !lInsert
+                // Conout("Erro ao inserir dados na tabela temporária")
+                // lRet := .F.
+            EndIf
+
+            nQueryCount := oQuery:executeEscalar(lChangeQuery, "CJC_IDRET")
+            
+            If nQueryCount >= len(aBloco)
+                oTable:cleanTable()
+                nQueryCount := 0
+                lRet := .T.
+            Else
+                lRet := .F.
+            EndIf
+        endif
+    next i
+
+    ASize(aProdBlok, 0)
+    oQuery:destroy()
+    oTable:destroy()
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setUserName
+Método para passar o nome do usuário que irá utilizar a api.
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method setUserName(username) Class FISEnvPerfilProduto
+
+    Self:username := username
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setSenha
+Método para passar a senha do usuário que irá utilizar a api.
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method setSenha(senha) Class FISEnvPerfilProduto
+
+    Self:senha := senha
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setUrl
+Método para passar a senha do usuário que irá utilizar a api.
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method setUrl(Url) Class FISEnvPerfilProduto
+
+    Self:Url := Url
+
+Return
+
+/*/{Protheus.doc} setGrvLogEnvProdSystax
+Define o atributo lGrvLogEnvProdSystax que indica se a gravação dos campos de envio e 
+resposta de produtos para a Systax está habilitado
+@author Juliano Fernandes
+@since 02/12/2024
+@version 12.1.2410
+/*/
+method setGrvLogEnvProdSystax(lGrvLogEnvProdSystax as logical) class FISEnvPerfilProduto
+
+    self:lGrvLogEnvProdSystax := lGrvLogEnvProdSystax
+
+return
+
+/*/{Protheus.doc} getJsonRequisicaoProduto
+Obtém o json que foi enviado para a Systax para o cadastro do produto
+@author Juliano Fernandes
+@since 02/12/2024
+@version 12.1.2410
+/*/
+method getJsonRequisicaoProduto(aProdutos as array, cProduto as character, nOrigem as numeric) class FISEnvPerfilProduto
+
+    local i as numeric
+    local jProduto as json
+
+    for i := 1 to Len(aProdutos)
+        if ( aProdutos[i]['cod_interno'] == cProduto .and. aProdutos[i]['origem_produto'] == nOrigem )
+            jProduto := aProdutos[i]
+            exit
+        endif
+    next i
+
+return jProduto
+
+/*/{Protheus.doc} GetProduto(cPerfil)
+
+    (locription)
+    @type  Static Function
+    @author Erich Buttner
+    @since 21/03/2022
+    @version version
+    @param param, param_type, param_descr
+    @return return, return_type, return_description
+    @example
+    (examples)
+    @see (links_or_references) ajustes
+    /*/
+Function GetProduto(cPerfil,cErro,nSendBlock)
+
+Local cQry          as character
+Local jBody         as json
+Local oJsonRet      as object
+Local oJBodyProd    as object
+Local oStatement    as object
+Local cAliasProd    as character
+Local cCodSystax    as character
+
+Default nSendBlock      := 50 //qtd de quebra de blocos de produto por chamada da API
+
+cQry += " SELECT F24_CODIGO, B1_POSIPI, F25_ORIGEM "  
+cQry += " FROM " + RetSqlName("F24") + " F24 "
+cQry += "   INNER JOIN " + RetSqlName("SB1") + " SB1 "
+cQry += "       ON B1_FILIAL = ? AND B1_COD = F24_CDPROD AND SB1.D_E_L_E_T_ = ? "
+cQry += "   INNER JOIN " + RetSqlName("F25") + " F25 "
+cQry += "       ON F25_FILIAL = ? AND F25_CODIGO = F24_CODIGO AND F25_TIPOPF = ? AND F25.D_E_L_E_T_ = ? "  
+cQry += " WHERE F24_FILIAL = ? "
+cQry += "   AND F24_CODIGO = ? "
+cQry += "   AND F24.D_E_L_E_T_ = ? "
+cQry += "GROUP BY F24_CODIGO, B1_POSIPI, F25_ORIGEM"
+
+oStatement := FWPreparedStatement():New( ChangeQuery(cQry) )
+
+oStatement:setString(1, xFilial("SB1"))
+oStatement:setString(2, ' ')
+oStatement:setString(3, xFilial("F25"))
+oStatement:setString(4, '04')
+oStatement:setString(5, ' ')
+oStatement:setString(6, xFilial("F24"))
+oStatement:setString(7, cPerfil)
+oStatement:setString(8, ' ')
+
+cQry := oStatement:getFixQuery()
+
+cAliasProd := MPSysOpenQuery(cQry)
+
+oJsonRet := JsonObject():New()
+
+oJBodyProd := JsonObject():New()
+oJBodyProd["products"] := {}
+oJsonRet["products"] := {}
+
+While (cAliasProd)->(!EoF()) .and. Empty(cErro)
+
+    if ( Empty((cAliasProd)->F25_ORIGEM) )
+        cErro := STR0284 + ' ' + AllTrim((cAliasProd)->F24_CODIGO) + ' - ' + AllTrim((cAliasProd)->B1_POSIPI) // "Produto não possui código de origem cadastrado."
+    endif    
+
+    if ( Empty((cAliasProd)->B1_POSIPI) )
+        cErro := STR0285 + ' ' + AllTrim((cAliasProd)->F24_CODIGO) + ' - ' + AllTrim((cAliasProd)->B1_POSIPI) // "Produto não possui código de NCM cadastrado."
+    endif    
+
+    jBody := JsonObject():New()
+
+    cCodSystax := EncodeUTF8("NCM" + AllTrim((cAliasProd)->B1_POSIPI) + "_ORIG" + AllTrim((cAliasProd)->F25_ORIGEM)  )
+    jBody["cod_interno"] := cCodSystax
+    jBody["origem_produto"] := Val((cAliasProd)->F25_ORIGEM)
+    jBody["descricao"] := cCodSystax
+    jBody["complemento"] := ""
+    jBody["ean"] := ""
+    jBody["ncm_original"] := AllTrim((cAliasProd)->B1_POSIPI)
+    jBody["ex_tipi_original"] := ""
+    jBody["use_cest"] := .F.
+    jBody["cest"] := ""
+
+    aAdd(oJsonRet["products"],jBody)
+
+    FreeObj(jBody)
+
+    (cAliasProd)->(DbSkip())
+
+    If len(oJsonRet['products']) == nSendBlock .Or. (cAliasProd)->(EoF())
+        aadd(oJBodyProd['products'], oJsonRet)
+        FREEOBJ( oJsonRet )
+        oJsonRet := JsonObject():New()
+        oJsonRet['products'] := {}
+    EndIf
+
+EndDo
+
+(cAliasProd)->(DbCloseArea())
+FreeObj(oStatement)
+
+Return oJBodyProd

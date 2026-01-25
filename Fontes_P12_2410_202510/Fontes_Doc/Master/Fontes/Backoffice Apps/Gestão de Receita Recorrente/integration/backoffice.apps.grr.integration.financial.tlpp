@@ -1,0 +1,1355 @@
+#include "totvs.ch"
+#include "tlpp-rest.th"
+#include "tlpp-core.th"
+
+#include "backoffice.apps.grr.integration.financial.ch"
+
+namespace totvs.protheus.backoffice.apps.grr.integration.financial
+using namespace totvs.protheus.backoffice.apps.grr.general
+using namespace totvs.protheus.backoffice.apps.grr.models
+using namespace totvs.protheus.backoffice.apps.grr.messages
+
+static _cStatusCBox as character
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FinancialIntegration
+    @description Classe responsável para integração entre o módulo Financeiro do Protheus
+    e a plataforma Gestão de Receita Recorrente.
+
+    Atenção especial aos parâmetros que guardam o último timestamp e a última execução.
+    O timestamp grava a data e hora do início do processamento, e o que for alterado após o 
+    início do processamento será considerado no próximo processamento.
+    O parâmetro da última execução serve para evitar sobrecarga no servidor, já que o 
+    job principal de integração com o GRR é cadastrado como "sempre ativo". Nesse caso,
+    queremos garantir que passou um tempo mínimo entre uma execução em outra, talvez alguns poucos
+    segundos seja suficiente. Por isso esse parâmetro grava a data e hora do final da execução.
+    Timestamp -> Início da execução (será usado na query)
+    Última execução -> Fim da execução (evitar consumo excessivo de recursos)
+
+    @author guilherme.sordi@totvs.com.br
+    @since 10/02/2025
+    @version 12.1.2410
+    @see https://tdn.totvs.com/pages/viewpage.action?pageId=910680319
+*/
+//-------------------------------------------------------------------
+class FinancialIntegration
+
+    private data cIdDoc as character
+    private data cTimestampToFilter as character
+    private data cTimestampParam as character
+    private data cForcedTimestamp as character
+    private data jLastNetValue as json
+    private data oIntegrationModel as object
+    private data oFina040 as object
+    private data oFina050 as object
+    private data oFina060 as object
+    private data oFina070 as object
+    private data oExecProc as object
+    private data oBills as object
+    private data cLastProcessedBranch as character
+
+    public method new() as object
+    public method execute()
+    public method processItems()
+    public method sendAllMessages()
+    public method handleAllEvents()
+    public method setupEnvironmentFromWizard() as json
+
+    // ==========================================================================================
+    // Esse métodos forçam a classe a trabalhar apenas com determinado título ou com determinado 
+    // timestamp. Elas podem ser muito úties em testes automatizados, validações, investigações, implantações etc.
+    public method setIdDoc(cIdDoc as character)
+    public method forceTimestamp(dDate as date, cTime as character)
+    // ==========================================================================================
+    
+    static method getStatusList() as json
+    static method getStatusCBox() as character
+    static method getIsValidStatus(cValue as character) as logical
+    static method setStatus(cStatus as character, aIdDocs as array)
+    static method setDeleted(aIdDocs as array)
+    static method setError(cIdDoc as character, cErrorMessage as character, cErrorCategory as character)
+
+    private method createItems()
+    private method updateItems()
+    private method deleteItems()
+    private method newTimestamp() as character
+    private method getTimestamp() as character
+    private method setTimestamp()
+    private method validateEnvironment()
+    private method getBaseQuery() as character
+    private method setBaseQueryParameters(oExec as object, nParamOrder as numeric)
+    private method getDeleteQuery() as character
+    private method setDeleteQueryParameters(oExec as object, nParamOrder as numeric) 
+    private method getIdDocFilter() as character
+    private method getTimestampFilter() as character
+    private method newBulk() as object
+    private method getItemArray(cAlias as character) as array
+    private method compareAndUpdate(cAlias as character)
+    private method getNetValue(cIdDoc as character) as numeric
+    private method getJsonUpdate(cDet as character, jNewData as json) as character
+    private method getExecProc(cStatus as character) as object
+    private method needsToProcessBranch() as logical
+    private method createFk7BillIdRelation()
+    private method getBranchesToRun() as array
+    private method undoBillMovements()
+    private method deleteReceivableProviderPredictiveBill(cCustomerProviderAlias as character)
+    private method deletePayableProviderPredictiveBill(cCustomerProviderAlias as character)
+    private method unsettleReceivableBill(cCustomerProviderAlias as character)
+    private method changeReceivableBillCollection(cCustomerProviderAlias as character)
+
+    private method processByStatus(cStatus as character)
+    private method processStatus07(cAlias as character)
+    private method processStatus08(cAlias as character)
+    private method processStatus09(cAlias as character)
+    private method processStatus10(cAlias as character)
+endClass
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} new
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method new() as object class FinancialIntegration
+    self:cTimestampParam := "grr_grri110_timestamp"
+    self:cIdDoc := ""
+    self:jLastNetValue := {"idDoc": "", "value": 0}
+    self:cForcedTimestamp := ""
+    self:oFina060 := Fina060():new()
+    self:cLastProcessedBranch := ""
+return self
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setupEnvironmentFromWizard
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setupEnvironmentFromWizard() as json class FinancialIntegration
+    local jReturn := JsonObject():new() as json
+    local lSuccess := .T. as logical
+    local cError := "" as character
+
+    try
+        self:validateEnvironment()
+    catch oError
+        lSuccess := .F.
+        cError := oError:description
+        FlowControl():logErrorMessage(oError)
+    endTry
+
+    jReturn['success'] := lSuccess
+    jReturn['message'] := cError
+return jReturn
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} validateEnvironment
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method validateEnvironment() class FinancialIntegration
+    //Valida o dicionário de dados
+    if ( GetRpoRelease() < "12.1.2510" ) .and. ;
+        ( !AliasInDic("HRJ") .or. FRV->( FieldPos('FRV_GRRCOD') ) == 0 )
+        throw FlowControl():newException(STR0013) //"Tabela HRJ ou campo FRV_GRRCOD não existe. Verifique se o dicionário de dados está atualizado."
+    endIf
+
+    //Valida se o campo STAMP existe na SE1 e tenta criar se não existir
+    if !DatabaseUtil():hasStampField("SE1")
+        DatabaseUtil():createStampField("SE1")
+
+        if !DatabaseUtil():hasStampField("SE1")
+            throw FlowControl():newException(STR0014) //"Não foi possível criar o campo S_T_A_M_P_ na tabela SE1."
+        endIf
+    endIf
+    
+    //Valida a criação física da tabela HRJ
+    if !chkFile("HRJ")
+        checkFile("HRJ", retSqlName("HRJ"))
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setTimestamp
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setTimestamp(cTimestamp as character) class FinancialIntegration
+    AppParameters():setBranchParameter(self:cTimestampParam, cTimestamp)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getTimestamp
+    @description Método que retorna o timestamp para o processamento.
+    Veja na descrição da classe mais informações sobre os parâmetros de timestamp e última execução.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getTimestamp() as character class FinancialIntegration
+    local cTimestamp as character
+
+    if empty(self:cForcedTimestamp)
+        cTimestamp := AppParameters():getBranchParameter(self:cTimestampParam)
+    else
+        cTimestamp := self:cForcedTimestamp
+    endIf
+    
+return cTimestamp
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} newTimestamp
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method newTimestamp() as character class FinancialIntegration
+    local cTimestamp := AllTrim(Replace(Replace(FWTimeStamp(6),"T"," "),"Z","")) as character
+return cTimestamp
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} forceTimestamp
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method forceTimestamp(dDate as date, cTime as character) class FinancialIntegration
+    default dDate := date()
+    default cTime := time()
+    cTime += ":00"
+    self:cForcedTimestamp := AllTrim(Replace(Replace(FWTimeStamp(6, dDate, cTime),"T"," "),"Z",""))
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setIdDoc
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setIdDoc(cIdDoc as character) class FinancialIntegration
+    self:cIdDoc := cIdDoc
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getIdDocFilter
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getIdDocFilter(cAlias as character) as character class FinancialIntegration
+    local cFilter as character
+    default cAlias := "FK7"
+
+    if !empty(self:cIdDoc)
+        cFilter := " AND "+cAlias+"."+cAlias+"_IDDOC = '"+ self:cIdDoc +"' "
+    endIf
+return cFilter
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getTimestampFilter
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getTimestampFilter() as character class FinancialIntegration
+    local cFilter as character
+    if !empty(self:cTimestampToFilter)    
+        cFilter := " AND ( COALESCE("+ DatabaseUtil():convertTimestamp("SE1") +",'99999999') >= '"+ self:cTimestampToFilter +"' " 
+        cFilter += " OR "+ DatabaseUtil():convertTimestamp("HRJ") +" >= '"+ self:cTimestampToFilter +"' )" 
+    endIf
+return cFilter
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} processItems
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method processItems() class FinancialIntegration
+    local cNewTimestamp := self:newTimestamp()
+    
+    try
+        self:cTimestampToFilter := self:getTimestamp()
+        self:createItems()
+        self:updateItems()
+        self:deleteItems()
+        self:setTimestamp(cNewTimestamp)
+    catch oError
+        FlowControl():logErrorMessage(oError)
+    endTry  
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} execute
+    @description Método principal que executa o processo de integração com o SIGAFIN.
+    Veja na descrição da classe mais informações sobre os parâmetros de timestamp e última execução.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method execute() class FinancialIntegration 
+    local cLockKey := "GRRI110" as character
+    local lCompanyLock := .T. as logical
+    local lBranchLock := .F. as logical
+    local cLastRunParam := "grr_grri110_last_run_" + cEmpAnt as character
+    local nNow as numeric
+    local nLastRun as numeric
+    local cLastRun as character
+    local nMinimalRunInterval := 5 as numeric // Intervalo mínimo entre execuções em segundos
+    local aBranchesToRun := {} as array
+    local cInitialBranch := cFilAnt as character
+    local nX as numeric
+    
+    if !lockByName(cLockKey, lCompanyLock, lBranchLock)        
+        FlowControl():logMessage({{"FinancialIntegration - Execute", STR0015}}) //"Já existe uma execução do GRRI110 em andamento. Tente novamente mais tarde."
+        return
+    endIf
+
+    cLastRun := AppParameters():getParameter(cLastRunParam)
+    if !Empty(cLastRun)
+        nLastRun := Val(cLastRun)
+    endIf
+    nNow := val(FWTimeStamp(4))
+
+    if ( nNow - nLastRun ) < nMinimalRunInterval
+        FlowControl():logMessage({{"FinancialIntegration - Execute", STR0016}}) //"O GRRI110 não será executado novamente, para respeitar o intervalo mínimo entre as execuções."
+        UnLockByName(cLockKey, lCompanyLock, lBranchLock)
+        return
+    endIf
+
+    aBranchesToRun := self:getBranchesToRun()
+    for nX := 1 to len(aBranchesToRun)
+        try
+            cFilAnt := aBranchesToRun[nX]
+
+            FlowControl():logDebug({{"FinancialIntegration - Execute", "Running"},{"Company", cEmpAnt}, {"Branch", cFilAnt}})
+
+            if GRRIsActive()
+                self:processItems()
+                self:sendAllMessages()
+                self:handleAllEvents()
+            endIf
+        catch oError
+            FlowControl():logErrorMessage(oError)
+        endTry
+    next
+
+    cFilAnt := cInitialBranch
+    UnLockByName(cLockKey, lCompanyLock, lBranchLock)
+    AppParameters():setParameter(cLastRunParam, FWTimeStamp(4))
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getStatusList
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getStatusList() as json class FinancialIntegration
+    local jStatus := JsonObject():new() as json
+    jStatus['01'] := STR0001 //"Pendente inclusão/alteração"
+    jStatus['02'] := STR0002 //"Aguardando confirmação de inclusão/alteração"
+    jStatus['03'] := STR0003 //"Pendente exclusão"
+    jStatus['04'] := STR0004 //"Aguardando confirmação de exclusão"
+    jStatus['05'] := STR0005 //"Ativo"
+    jStatus['06'] := STR0006 //"Excluido"
+    jStatus['07'] := STR0007 //"A liquidar (ERP)"
+    jStatus['08'] := STR0008 //"Liquidado (ERP)"
+    jStatus['09'] := STR0009 //"Pendente remover da carteira (ERP)"
+    jStatus['10'] := STR0010 //"A estornar (ERP)"
+    jStatus['11'] := STR0011 //"Aguardando pagamento"
+return jStatus
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getStatusCBox
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getStatusCBox() as character class FinancialIntegration
+    local jStatus as json
+    local nX as numeric
+    local aStatus := {} as array
+    local cStatusCBox as character
+
+    if empty(_cStatusCBox)
+        jStatus := FinancialIntegration():getStatusList()
+        aStatus := jStatus:getNames()
+        for nX := 1 to len(aStatus)
+            cStatusCBox += if(!empty(cStatusCBox),";","")
+            cStatusCBox += aStatus[nX] + "=" + jStatus[aStatus[nX]]
+        next
+        _cStatusCBox := cStatusCBox
+        FwFreeArray(aStatus)
+        freeObj(jStatus)
+    endIf
+
+return _cStatusCBox
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getIsValidStatus
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getIsValidStatus(cValue as character) as logical class FinancialIntegration
+    local jStatus := FinancialIntegration():getStatusList() as json
+    local lIsValid := jStatus:hasProperty(cValue) as logical
+    default cValue := ""
+    freeObj(jStatus)
+return lIsValid
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getBaseQuery
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getBaseQuery(cSelect as character) as character class FinancialIntegration
+    local cQuery as character
+
+    default cSelect := ""
+
+    cQuery += " SELECT FK7_IDDOC, SE1.R_E_C_N_O_ SE1RECNO, SE1.E1_SITUACA, SE1.E1_VALOR, SE1.E1_VENCTO "
+    cQuery += cSelect
+    cQuery += " FROM "+ retSqlName("FK7") +" FK7 "
+
+    cQuery += " JOIN "+ retSqlName("SE1") +" SE1  "
+    cQuery += " ON FK7.FK7_ALIAS = 'SE1' "
+    cQuery += " AND FK7.FK7_FILTIT = SE1.E1_FILIAL "
+    cQuery += " AND FK7.FK7_PREFIX = SE1.E1_PREFIXO "
+    cQuery += " AND FK7.FK7_NUM = SE1.E1_NUM "
+    cQuery += " AND FK7.FK7_PARCEL = SE1.E1_PARCELA "
+    cQuery += " AND FK7.FK7_TIPO = SE1.E1_TIPO "
+    cQuery += " AND SE1.E1_FILIAL = ? "
+    cQuery += " AND SE1.E1_TIPO NOT IN (?) 
+    cQuery += " AND SE1.E1_SALDO > ? "
+    cQuery += " AND SE1.D_E_L_E_T_ = ? "
+
+    cQuery += " JOIN "+ retSqlName("FRV") +" FRV "
+    cQuery += " ON " + fwJoinFilial("FRV", "SE1")
+    cQuery += " AND FRV_CODIGO = SE1.E1_SITUACA "
+    cQuery += " AND FRV_GRRCOD <> ? "
+    cQuery += " AND FRV.D_E_L_E_T_ = ? "
+
+    cQuery += " LEFT JOIN "+ retSqlName("HRJ") +" HRJ "
+    cQuery += " ON HRJ.HRJ_IDDOC = FK7.FK7_IDDOC "
+    cQuery += " AND HRJ.D_E_L_E_T_ = ? "
+return cQuery
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setBaseQueryParameters
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setBaseQueryParameters(oExec as object, nParamOrder as numeric) class FinancialIntegration
+    local aTypeNotIn := {} as array
+    
+    aTypeNotIn := StrTokArr(MVRECANT + "|" + MV_CRNEG,"|")
+    aAdd(aTypeNotIn, "PR ") //to-do: Ver variável do provisório
+
+    oExec:setString(nParamOrder++, FwXFilial("SE1"))
+    oExec:setIn(nParamOrder++, aTypeNotIn)
+    oExec:setNumeric(nParamOrder++, 0)
+    oExec:setString(nParamOrder++, " ")
+    oExec:setString(nParamOrder++, " ")
+    oExec:setString(nParamOrder++, " ")
+    oExec:setString(nParamOrder++, " ")
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} createItems
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method createItems() class FinancialIntegration
+    local cQuery as character
+    local oExec as object
+    local oBulk as object
+    local nParamOrder := 1 as numeric
+    local cAlias as character
+
+    cQuery := self:getBaseQuery()
+    cQuery += " WHERE HRJ_IDDOC IS NULL "
+    cQuery += " AND FK7.D_E_L_E_T_ = ? "
+    cQuery += self:getTimestampFilter()
+    cQuery += self:getIdDocFilter()
+
+    cQuery := changeQuery(cQuery)
+
+    oExec := FWExecStatement():new(cQuery)
+
+    self:setBaseQueryParameters(oExec, @nParamOrder)
+    oExec:setString(nParamOrder++, ' ')
+    
+    oExec:setFields({FWSX3Util():GetFieldStruct( "E1_VENCTO" )})
+
+    FlowControl():logDebug("CREATE")
+    FlowControl():logDebug(oExec:getFixQuery())
+    cAlias := oExec:openAlias()
+
+    oBulk := self:newBulk()
+
+    while !(cAlias)->(eof())
+        oBulk:addData(self:getItemArray(cAlias))
+        (cAlias)->(dbSkip())
+    endDo
+    
+    oBulk:close()
+
+    (cAlias)->(dbCloseArea())
+
+    freeObj(oBulk)
+    freeObj(oExec)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} newBulk
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method newBulk() as object class FinancialIntegration
+    local aStruct := {} as array
+    local oBulk as object
+
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_FILIAL"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_IDHRJ"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_IDDOC"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_CONFIR"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_SITCOB"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_STAT"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_VALOR"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_VALLIQ"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_VENCTO"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_JUROS"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_MULTA"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_DESC"))
+    aAdd(aStruct, FWSX3Util():GetFieldStruct("HRJ_ERRO"))
+
+    oBulk := FwBulk():New(retSqlName("HRJ"))
+    oBulk:setFields(aStruct)
+
+return oBulk
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getItemArray
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getItemArray(cAlias as character) as array class FinancialIntegration
+    local aItem := {} as array
+    local cConfirmedByGrr := "2" as character //No
+    local cStatus := "01" as character //Pendente inclusão/alteração
+    local cError := "2" as character //Sem erros
+
+    // SE1->(dbGoTo((cAlias)->SE1RECNO)) //to-do: avaliar performance: dbGoTo aqui ou trazer campos da SE1 na query principal ?
+
+    aAdd(aItem, fwXFilial("HRJ"))
+    aAdd(aItem, FWUUIDV4())
+    aAdd(aItem, (cAlias)->FK7_IDDOC)
+    aAdd(aItem, cConfirmedByGrr)
+    aAdd(aItem, (cAlias)->E1_SITUACA)
+    aAdd(aItem, cStatus)
+    aAdd(aItem, (cAlias)->E1_VALOR)
+    aAdd(aItem, self:getNetValue((cAlias)->FK7_IDDOC))
+    aAdd(aItem, (cAlias)->E1_VENCTO)
+    aAdd(aItem, 0) //to-do: definir quais campos serão passados como juros e multa, e verificar se será necessário algum cálculos para configurar ao mes / ao dia / ao ano
+    aAdd(aItem, 0)
+    aAdd(aItem, 0)
+    aAdd(aItem, cError)
+
+return aItem
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} updateItems
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method updateItems() class FinancialIntegration
+    local cQuery as character
+    local oExec as object
+    local nParamOrder := 1 as numeric
+    local cAlias as character
+    local cSelect as character
+
+    cSelect := ", HRJ.R_E_C_N_O_ HRJRECNO, HRJ_IDDOC, HRJ_VALLIQ "
+    cSelect += ", CASE WHEN (E1_SITUACA <> HRJ_SITCOB OR E1_VALOR <> HRJ_VALOR OR E1_VENCTO <> HRJ_VENCTO) THEN '1' ELSE '2' END HASCHANGE "
+
+    cQuery := self:getBaseQuery(cSelect)
+    cQuery += " WHERE HRJ_IDDOC IS NOT NULL "
+    cQuery += " AND FK7.D_E_L_E_T_ = ? "
+    cQuery += " AND HRJ_STAT = ? "
+    cQuery += self:getTimestampFilter()
+    cQuery += self:getIdDocFilter()
+
+    cQuery := changeQuery(cQuery)
+
+    oExec := FWExecStatement():new(cQuery)
+
+    self:setBaseQueryParameters(oExec, @nParamOrder)
+    oExec:setString(nParamOrder++, ' ')
+    oExec:setString(nParamOrder++, '05')
+    
+    oExec:setFields({FWSX3Util():GetFieldStruct( "E1_VENCTO" )})
+
+    FlowControl():logDebug("UPDATE")
+    FlowControl():logDebug(oExec:getFixQuery())
+    cAlias := oExec:openAlias()
+
+    while !(cAlias)->(eof())
+        self:compareAndUpdate(cAlias)
+        (cAlias)->(dbSkip())
+    endDo
+
+    (cAlias)->(dbCloseArea())
+
+    freeObj(oExec)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} compareAndUpdate
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method compareAndUpdate(cAlias as character) class FinancialIntegration
+    local lShoudUpdate as logical
+    local cStatus := "01" as character
+    
+    lShoudUpdate := (cAlias)->HASCHANGE == "1" .or. (cAlias)->HRJ_VALLIQ <> self:getNetValue((cAlias)->FK7_IDDOC)
+
+    if lShoudUpdate
+        HRJ->(dbGoTo((cAlias)->HRJRECNO))
+        recLock("HRJ", .F.)
+        HRJ->HRJ_SITCOB := (cAlias)->E1_SITUACA
+        HRJ->HRJ_VALOR := (cAlias)->E1_VALOR
+        HRJ->HRJ_VALLIQ := self:getNetValue((cAlias)->FK7_IDDOC)
+        HRJ->HRJ_VENCTO := (cAlias)->E1_VENCTO
+        //to-do: definir quais campos serão passados como juros e multa, e verificar se será necessário algum cálculos para configurar ao mes / ao dia / ao ano
+        HRJ->HRJ_JUROS := 0
+        HRJ->HRJ_MULTA := 0
+        HRJ->HRJ_DESC := 0
+        HRJ->HRJ_STAT := cStatus
+        HRJ->(msUnlock())
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getNetValue
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getNetValue(cIdDoc as character) as numeric class FinancialIntegration
+    if self:oIntegrationModel == NIL
+        self:oIntegrationModel := ReceivableIntegrationModel():new()
+    endIf
+    self:oIntegrationModel:setIdDoc(cIdDoc)
+    if self:jLastNetValue['idDoc'] != cIdDoc
+        self:jLastNetValue['idDoc'] := cIdDoc
+        self:jLastNetValue['value'] := self:oIntegrationModel:getNetValue()
+    endIf
+    self:oIntegrationModel:clear()
+
+    FlowControl():logDebug("NET VALUE")
+    FlowControl():logDebug(cIdDoc)
+    FlowControl():logDebug(cValToChar(self:jLastNetValue['value']))
+return self:jLastNetValue['value']
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getDeleteQuery
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getDeleteQuery() as character class FinancialIntegration
+    local cQuery as character
+
+    cQuery += " SELECT HRJ.R_E_C_N_O_ HRJRECNO "
+    cQuery += " FROM "+ retSqlName("HRJ") +" HRJ "
+
+    cQuery += " JOIN "+ retSqlName("FK7") +" FK7 "
+    cQuery += " ON FK7_IDDOC = HRJ_IDDOC "
+    cQuery += " AND FK7.D_E_L_E_T_ = ? "
+
+    cQuery += " JOIN "+ retSqlName("SE1") +" SE1 "
+    cQuery += " ON  FK7_ALIAS = ? "
+    cQuery += " AND E1_FILIAL = FK7_FILTIT "
+    cQuery += " AND E1_PREFIXO = FK7_PREFIX "
+    cQuery += " AND E1_NUM = FK7_NUM "
+    cQuery += " AND E1_PARCELA = FK7_PARCEL "
+    cQuery += " AND E1_TIPO = FK7_TIPO "
+    cQuery += " AND SE1.D_E_L_E_T_ = ? "
+
+    cQuery += " LEFT JOIN "+ retSqlName("FRV") +" FRV "
+    cQuery += " ON " + fwJoinFilial("FRV", "SE1")
+    cQuery += " AND FRV_CODIGO = E1_SITUACA "
+    
+    cQuery += " WHERE (E1_SALDO = ? "
+    cQuery += " OR COALESCE(FRV_GRRCOD,?) = ? )"
+    cQuery += " AND HRJ_STAT IN (?) "
+return cQuery
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setDeleteQueryParameters
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setDeleteQueryParameters(oExec as object, nParamOrder as numeric) class FinancialIntegration
+    oExec:setString(nParamOrder++, " ")
+    oExec:setString(nParamOrder++, "SE1")
+    oExec:setString(nParamOrder++, " ")
+    oExec:setNumeric(nParamOrder++, 0)
+    oExec:setString(nParamOrder++, " ")
+    oExec:setString(nParamOrder++, " ")
+    oExec:setIn(nParamOrder++, {'05','11'})
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} deleteItems
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 07/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method deleteItems() class FinancialIntegration
+    local cQuery as character
+    local oExec as object
+    local nParamOrder := 1 as numeric
+    local cAlias as character
+
+    cQuery := self:getDeleteQuery()
+    cQuery += self:getIdDocFilter("HRJ")
+
+    cQuery := changeQuery(cQuery)
+
+    oExec := FWExecStatement():new(cQuery)
+
+    self:setDeleteQueryParameters(oExec, @nParamOrder)
+
+    FlowControl():logDebug("DELETE")
+    FlowControl():logDebug(oExec:getFixQuery())
+    cAlias := oExec:openAlias()
+
+    while !(cAlias)->(eof())
+        HRJ->(dbGoTo((cAlias)->HRJRECNO))
+        recLock("HRJ", .F.)
+        HRJ->HRJ_STAT := '03'
+        HRJ->(msUnlock())
+        (cAlias)->(dbSkip())
+    endDo
+
+    (cAlias)->(dbCloseArea())
+
+    freeObj(oExec)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} sendAllMessages
+    @description Envia todas as mensagens para o smart link.
+    Se houver algum erro no envio de criação, isso não deve atrapalhar o envio
+    das mensagens de alteração, e assim por diante.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 14/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method sendAllMessages() class FinancialIntegration
+    local oMessages := ReceivableMessages():new()    
+
+    try
+        oMessages:sendCreateMessages()
+    catch oError
+        FlowControl():logErrorMessage(oError)
+    endtry
+
+    try
+        oMessages:sendUpdateMessages()
+    catch oError
+        FlowControl():logErrorMessage(oError)
+    endtry
+    
+    try
+        oMessages:sendDeleteMessages()
+    catch oError
+        FlowControl():logErrorMessage(oError)
+    endtry
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setStatus
+    @description Atualiza o status de um ou mais registros da HRJ pelo IDDOC.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 14/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setStatus(cStatus as character, aIdDocs as array) class FinancialIntegration
+    local cCmd as character
+
+    if FinancialIntegration():getIsValidStatus(cStatus) .and. !empty(aIdDocs)
+        cCmd := " UPDATE "+ retSqlName("HRJ")
+        cCmd += " SET HRJ_STAT = '"+ cStatus +"' "
+        cCmd += " WHERE HRJ_IDDOC IN ("+ DatabaseUtil():formatIn(aIdDocs, ",") +") "
+        cCmd += " AND D_E_L_E_T_ = ' ' "
+
+        DatabaseUtil():execSql(cCmd)
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setDeleted
+    @description Exclui um ou mais registros da HRJ pelo IDDOC.
+    @type method
+    @author claudio.yoshio@totvs.com.br
+	@since 11/09/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setDeleted(aIdDocs as array) class FinancialIntegration
+    local cCmd as character
+
+    if !empty(aIdDocs)
+        cCmd := " UPDATE "+ retSqlName("HRJ")
+        cCmd += " SET D_E_L_E_T_ = '*', R_E_C_D_E_L_ = R_E_C_N_O_ "
+        cCmd += " WHERE HRJ_IDDOC IN ("+ DatabaseUtil():formatIn(aIdDocs, ",") +") "
+        cCmd += " AND D_E_L_E_T_ = ' ' "
+
+        DatabaseUtil():execSql(cCmd)
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setError
+    @description Atualiza a tabela HRJ com informações sobre erro de processamento da integração.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 14/03/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setError(cIdDoc as character, cErrorMessage as character, cErrorCategory as character, jErrorDetail as json) class FinancialIntegration
+    local jDetails := JsonObject():new()
+    
+    default jErrorDetail := JsonObject():new()
+    default cErrorCategory := "lastError"
+
+    FlowControl():logDebug(" *** ERRO *** ")
+    FlowControl():logDebug(cIdDoc)
+    FlowControl():logDebug(cErrorMessage)
+    FlowControl():logDebug(cErrorCategory)
+
+    if empty(jErrorDetail:getNames())
+        jDetails[cErrorCategory] := cErrorMessage
+    else
+        jDetails[cErrorCategory] := jErrorDetail
+    endIf
+
+    HRJ->(dbSetOrder(2)) //HRJ_IDDOC
+
+    if HRJ->(dbSeek(cIdDoc))
+        recLock("HRJ", .F.)
+        HRJ->HRJ_ERRO := '1'//Sim
+        HRJ->HRJ_MSGERR := cErrorMessage
+        HRJ->HRJ_DET := Util():getJsonUpdate(HRJ->HRJ_DET, jDetails)
+        HRJ->(msUnlock())
+    endIf
+
+    freeObj(jDetails)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getExecProc
+    @description Retorna um objeto FWExecStatement pronto para abrir o 
+    alias com os registros da tabela HRJ que devem ser processados.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getExecProc(cStatus as character) as object class FinancialIntegration
+    local cQuery as character
+    local aNoErrors := {"2","3"} as array
+    local cNoDeleted := " " as character
+    local nParamOrder := 1 as numeric
+    local cBranchSe1 := xFilial("SE1") as character
+
+    if self:oExecProc == NIL
+        cQuery := " SELECT HRJ_IDHRJ, HRJ_IDDOC, FK7_FILTIT, FK7_PREFIX, FK7_NUM, FK7_PARCEL, FK7_TIPO, HRJ_DET "
+        cQuery += " FROM " + retSqlName("HRJ") + " HRJ "
+        
+        cQuery += " JOIN " + retSqlName("FK7") + " FK7 "
+        cQuery += " ON FK7_IDDOC = HRJ_IDDOC "
+        
+        cQuery += " JOIN "+ retSqlName("SE1") +" SE1  "
+        cQuery += " ON FK7.FK7_ALIAS = 'SE1' "
+        cQuery += " AND FK7.FK7_FILTIT = SE1.E1_FILIAL "
+        cQuery += " AND FK7.FK7_PREFIX = SE1.E1_PREFIXO "
+        cQuery += " AND FK7.FK7_NUM = SE1.E1_NUM "
+        cQuery += " AND FK7.FK7_PARCEL = SE1.E1_PARCELA "
+        cQuery += " AND FK7.FK7_TIPO = SE1.E1_TIPO "
+        cQuery += " AND SE1.E1_FILIAL = ? "        
+        cQuery += " AND SE1.D_E_L_E_T_ = ? "
+
+        cQuery += " AND FK7.D_E_L_E_T_ = ? "
+        cQuery += " WHERE HRJ_STAT = ? "
+        cQuery += " AND HRJ_ERRO IN (?)"
+        cQuery += self:getIdDocFilter("HRJ")
+        cQuery += " AND HRJ.D_E_L_E_T_ = ? "
+
+        cQuery := changeQuery(cQuery)
+        self:oExecProc := FWExecStatement():new(cQuery)
+    endIf
+    
+    self:oExecProc:setString(nParamOrder++, cBranchSe1)
+    self:oExecProc:setString(nParamOrder++, cNoDeleted)
+    self:oExecProc:setString(nParamOrder++, cNoDeleted)
+    self:oExecProc:setString(nParamOrder++, cStatus)
+    self:oExecProc:setIn(nParamOrder++, aNoErrors)
+    self:oExecProc:setString(nParamOrder++, cNoDeleted)
+return self:oExecProc
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} needsToProcessBranch
+    @description Verifica se a filial deve ser processada comparando
+    a última filial processada com a filial atual. A comparação é feita
+    com base no campo E1_FILIAL da SE1 para contemplar os modos de
+    compartilhamento entre filiais. Exemplo: Caso a SE1 seja totalmente 
+    compartilhada, não é necessário processar a próxima filial, pois o 
+    processamento anterior já contemplou os dados de todas as filiais.
+    @type method
+    @author claudio.yoshio@totvs.com.br
+	@since 02/06/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method needsToProcessBranch() as logical class FinancialIntegration
+    local cCurrentBranch := xFilial("SE1") as character
+    local lDifferentBranch := .F. as logical
+    
+    if self:cLastProcessedBranch <> cCurrentBranch
+        self:cLastProcessedBranch := cCurrentBranch
+        lDifferentBranch := .T.
+    endif
+return lDifferentBranch
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} createFk7BillIdRelation
+    @description Cria um registro na HRH para fazer o relacionamento
+    entre o FK7_IDDOC e o BillId.
+    @type method
+    @param cIdDoc, character, IDDOC da FK7
+    @param cFilTit, character, filial do título
+    @param cBillId, character, billId da mensagem BillPaidCreated
+    @author claudio.yoshio@totvs.com.br
+	@since 02/06/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method createFk7BillIdRelation(cIdDoc as character, cFilTit as character, cBillId as character) class FinancialIntegration
+    local aSeek as array
+    local cBranch as character
+
+    cBranch := PadR(cFilTit, FWSizeFilial())
+    aSeek := {cBranch, "FK7", cIdDoc}
+
+    GRRA050({xFilial("FK7"), "FK7", "GRRI110", cIdDoc, "", "", "", ""})
+    GRRSetBillId(aSeek, cBillId)
+
+    ASize(aSeek, 0)
+    aSeek := NIL
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} procStatus07
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method processStatus07(cAlias as character) class FinancialIntegration
+    local aSe1Data as array
+    local cBillId as character
+    local cSettledStatus := "08" as character
+    local cErrorMessage := STR0012 // "Erro no processo de implantação dos títulos do provedor"
+    local cErrorCategory := "onProcessStatus07"
+    local jErrorDetail := JsonObject():new() as json
+    local cPropertyName := "BillPaidCreated.billId" as character
+    
+    self:setIdDoc((cAlias)->HRJ_IDDOC)
+    aSe1Data := {,;
+        (cAlias)->FK7_FILTIT,;
+        (cAlias)->FK7_PREFIX,;
+        (cAlias)->FK7_NUM,;
+        (cAlias)->FK7_PARCEL,;
+        (cAlias)->FK7_TIPO}
+    
+    Util():validateJSONProperty((cAlias)->HRJ_DET, cPropertyName)
+    cBillId := Util():getContentFromJson((cAlias)->HRJ_DET, cPropertyName)
+    
+    BEGIN TRANSACTION
+        if GRRProcTit(aSe1Data)
+            self:createFk7BillIdRelation(self:cIdDoc, (cAlias)->FK7_FILTIT, cBillId)
+            self:setStatus(cSettledStatus, {self:cIdDoc})
+        else
+            //O tratamento com throw não foi feito aqui por um problema identificado quando
+            //é chamado um Help dentro da transação. Issue aberta para verificação
+            //do problema DFRM1-38055.
+            self:setError(self:cIdDoc, cErrorMessage, cErrorCategory, jErrorDetail)
+            FlowControl():logMessage({{"IDDOC", self:cIdDoc}, {"ERRO", cErrorMessage}})
+        endif
+    END TRANSACTION
+
+    self:setIdDoc("")
+
+    aSize(aSe1Data, 0)
+    aSe1Data := NIL
+
+    jErrorDetail:fromJson("{}")
+    freeObj(jErrorDetail)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} processStatus08
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method processStatus08(cAlias as character) class FinancialIntegration
+//to-do
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} processStatus09
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+
+method processStatus09(cAlias as character) class FinancialIntegration
+    local cDeletedStatus := "06" as character
+
+    self:setIdDoc((cAlias)->HRJ_IDDOC)
+    self:undoBillMovements()
+    self:setStatus(cDeletedStatus, {self:cIdDoc})
+    self:setDeleted({self:cIdDoc})
+    self:setIdDoc("")
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} processStatus10
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method processStatus10(cAlias as character) class FinancialIntegration
+    local cDeletedStatus := "06" as character
+    
+    self:setIdDoc((cAlias)->HRJ_IDDOC)
+    self:undoBillMovements()
+    self:setStatus(cDeletedStatus, {self:cIdDoc})
+    self:setDeleted({self:cIdDoc})
+    self:setIdDoc("")
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} processByStatus
+    @description Processa todos os registros da tabela HRJ que possuam o campo
+    HRJ_STAT com o status passado no primeiro parâmetro.
+    A ideia é centralizar o tratamento de erros. Qualquer erro que houver no processamento
+    será registrato na tabela HRJ e o procesamento avança para o próximo registro.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method processByStatus(cStatus as character) class FinancialIntegration
+    local cAlias as character
+    local cIdDoc as character
+    local cErrorMessage as character
+    local cErrorCategory as character
+    local jErrorDetail := JsonObject():new() as json
+    
+    cErrorCategory := "onProcessStatus"
+
+    cAlias := self:getExecProc(cStatus):openAlias()
+    while !(cAlias)->(eof())
+
+        try
+            cIdDoc := (cAlias)->HRJ_IDDOC
+            do case
+                case cStatus == "07"
+                    self:processStatus07(cAlias)
+                case cStatus == "08"
+                    self:processStatus08(cAlias)
+                case cStatus == "09"
+                    self:processStatus09(cAlias)
+                case cStatus == "10"
+                    self:processStatus10(cAlias)
+            endCase
+        catch oError
+            //to-do: Quando o oError gerado por FlowControl estiver retornando um objeto, separar mensagem do detalhe ao chamar setError
+            cErrorMessage := oError:description
+            self:setError(cIdDoc, cErrorMessage, cErrorCategory, jErrorDetail)
+            FlowControl():logMessage({{"IDDOC", cIdDoc}, {"ERRO", cErrorMessage}})
+        endTry
+
+        (cAlias)->(dbSkip())
+    endDo
+    (cAlias)->(dbCloseArea())
+
+    jErrorDetail:fromJson("{}")
+    freeObj(jErrorDetail)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} handleAllEvents
+    @description Faz o processamento de todos os registros da HRJ.
+    Lembrando que o processo é assíncrono. A mensagem do Smart Link altera o status
+    e esse método, chamado em um segundo momento, fará o processamento efetivamente.
+    A ideia é isolar os pontos de falha, facilitar os testes e aumentar a resiliência.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method handleAllEvents() class FinancialIntegration
+    if self:needsToProcessBranch()
+        self:processByStatus("07") //"A liquidar (ERP)"
+    endif
+    self:processByStatus("08") //"Liquidado (ERP)"
+    self:processByStatus("09") //"Pendente remover da carteira (ERP)"
+    self:processByStatus("10") //"A estornar (ERP)"
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getBranchesToRun
+    @description Retorna um vetor com a lista de filiais que devem ser processadas pelo Job.
+    Usa a função do legado para identificar as filiais com integração com o GRR ativa.
+    Considera o compartilhamento da SE1, assim como as consultas desse processo devem fazer.
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 16/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getBranchesToRun() as array class FinancialIntegration
+    local aActiveBranches as array
+    local lFilterCompany := .T. as logical
+    local aBranchesToRun := {} as array
+    local aSe1Branches := {} as array
+    local cBranch as character
+    local aSplit := {} as array
+    local nX as numeric
+
+    aActiveBranches := GRRActBranches(lFilterCompany)
+
+    for nX := 1 to len(aActiveBranches)
+        cBranch := ""
+        aSplit := StrTokArr(aActiveBranches[nX],'-')
+
+        if len(aSplit) >= 2
+            cBranch := allTrim(aSplit[2])
+        endIf
+        if !empty(cBranch) .and. aScan(aSe1Branches, xFilial("SE1", cBranch)) == 0
+            aAdd(aBranchesToRun, cBranch)
+            aAdd(aSe1Branches, xFilial("SE1", cBranch))
+        endIf
+    next
+
+    aSize(aActiveBranches, 0)
+    aActiveBranches := NIL
+    aSize(aSplit, 0)
+    aSplit := NIL
+    aSize(aSe1Branches, 0)
+    aSe1Branches := NIL
+
+return aBranchesToRun
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} undoBillMovements
+    @type method Desfaz as movimentações de geração de títulos provisórios
+    do provedor e baixa do título principal realizadas pelo processo 
+    de pagamento da fatura.
+    @author claudio.yoshio@totvs.com.br
+	@since 28/07/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method undoBillMovements() class FinancialIntegration
+    local cCustomerProviderAlias as character
+
+    if self:oBills == Nil
+        self:oBills := totvs.protheus.backoffice.apps.grr.integration.financial.Bills():new()
+    endif
+    self:oBills:setIdDoc(self:cIdDoc)
+
+    cCustomerProviderAlias := self:oBills:getCustomerProviderBillData():openAlias()
+    if (cCustomerProviderAlias)->(eof())
+        (cCustomerProviderAlias)->(dbCloseArea())
+        throw FlowControl():newException("Record not found - FK7_IDDOC = " + self:cIdDoc)
+    endif
+
+    if !empty((cCustomerProviderAlias)->FK7PRREC_IDDOC) .and. (cCustomerProviderAlias)->E1PR_SALDO == 0
+        (cCustomerProviderAlias)->(dbCloseArea())
+        throw FlowControl():newException(STR0017) //"Não é permitido realizar o processamento pois o título provisório do provedor já foi efetivado."
+    endif
+
+    self:deleteReceivableProviderPredictiveBill(cCustomerProviderAlias)
+    self:deletePayableProviderPredictiveBill(cCustomerProviderAlias)
+    self:unsettleReceivableBill(cCustomerProviderAlias)
+    self:changeReceivableBillCollection(cCustomerProviderAlias)
+
+    (cCustomerProviderAlias)->(dbCloseArea())
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} deleteReceivableProviderPredictiveBill
+    @type method Deleta os títulos a receber provisórios do provedor
+    @author claudio.yoshio@totvs.com.br
+	@since 28/07/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method deleteReceivableProviderPredictiveBill(cCustomerProviderAlias as character) class FinancialIntegration
+    local cProviderIdDoc as character
+
+    if !empty((cCustomerProviderAlias)->FK7PRREC_IDDOC) .and. (cCustomerProviderAlias)->E1PR_SALDO > 0
+        if self:oFina040 == Nil
+            self:oFina040 := Fina040():new()
+        endif
+        cProviderIdDoc := (cCustomerProviderAlias)->FK7PRREC_IDDOC
+        self:oFina040:setIdDoc(cProviderIdDoc)
+        self:oFina040:deleteBill()
+    endif
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} deletePayableProviderPredictiveBill
+    @type method Deleta os títulos a pagar provisórios do provedor
+    @author claudio.yoshio@totvs.com.br
+	@since 28/07/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method deletePayableProviderPredictiveBill(cCustomerProviderAlias as character) class FinancialIntegration
+    local cProviderIdDoc as character
+
+    if !empty((cCustomerProviderAlias)->FK7PRPAY_IDDOC) .and. (cCustomerProviderAlias)->E2PR_SALDO > 0
+        if self:oFina050 == Nil
+            self:oFina050 := Fina050():new()
+        endif
+        cProviderIdDoc := (cCustomerProviderAlias)->FK7PRPAY_IDDOC
+        self:oFina050:setIdDoc(cProviderIdDoc)
+        self:oFina050:deleteBill()
+    endif
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} unsettleReceivableBill
+    @type method Exclui a baixa do título a receber do cliente
+    @author claudio.yoshio@totvs.com.br
+	@since 28/07/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method unsettleReceivableBill(cCustomerProviderAlias as character) class FinancialIntegration
+    if (cCustomerProviderAlias)->E1_SALDO == 0
+        if self:oFina070 == Nil
+            self:oFina070 := Fina070():new()
+        endif
+        self:oFina070:setIdDoc(self:cIdDoc)
+        self:oFina070:unsettleBill()
+    endif
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} changeReceivableBillCollection
+    @type method Realiza a mudança da situação de cobrança do título,
+    transferindo da carteira GR para carteira (situação 0)
+    @author claudio.yoshio@totvs.com.br
+	@since 28/07/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method changeReceivableBillCollection(cCustomerProviderAlias as character) class FinancialIntegration
+    local jCollectionStatus as json
+
+    self:oFina060:setIdDoc(self:cIdDoc)
+    jCollectionStatus := self:oFina060:getCollectionStatus()
+
+    if !empty(jCollectionStatus['walletId'])
+        self:oFina060:changeCollectionStatus("0")
+    endIf
+return

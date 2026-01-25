@@ -1,0 +1,503 @@
+#include 'tlpp-core.th'
+#include 'backoffice.ngf.payment.service.ch'
+
+NAMESPACE totvs.protheus.backoffice.ngf.payment
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+USING NAMESPACE gfin.util
+USING NAMESPACE totvs.protheus.backoffice.ngf.template
+
+/*/{Protheus.doc} CalculationPayment
+    Calculo do pagamento da parcela ou amortização nos emprestimos
+    @type  Function
+    @author Vitor Duca
+    @since 01/08/2023
+    @version 1.0
+    @param jData, Json, Body da requisição
+		Exemplo do jData que deve ser enviado
+		{
+            filial: "D MG 01",
+            numero: "EMP001",
+            revisao: "01",
+            titulo: {
+                filial: "D MG 01",
+                prefixo: "EMP",
+                numero: "EMP001",
+                parcela: "1"
+            },
+			operation: "trigger" ou "open" (Define como o calculo irá ocorrer)
+			field: "vlCredito_nA181VlCrd", (Campo que esta sendo alterado no front)
+			forms: {
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+			}
+		}
+    @return jRet, Json, Resposta em formato Json que sera enviado
+		Exemplo do jRet que deve ser enviado
+		{
+			response: {
+				result: .t.
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+			}
+		}
+/*/
+Function CalculationPayment(jData As Json) As Json
+    Local jResponse := JsonObject():new()           As Json
+    Local jForms := JsonObject():new()              As Json
+    Local isParcel := jData:hasProperty("titulo")   As Logical
+    Local cIndexEH := ""                            As Character
+
+    cIndexEH := Padr(jData["filial"], TamSx3("EH_FILIAL")[1]) + Padr(jData["numero"], TamSx3("EH_NUMERO")[1]) + ;
+                Padr(jData["revisao"], TamSx3("EH_REVISAO")[1])
+
+    DbSelectArea('SEH')
+    SEH->(DbSetOrder(1))
+    If SEH->(MsSeek(cIndexEH))
+        If Lower(Alltrim(jData["operation"])) == "open"
+            If isParcel
+                jForms := InitPayment(jData)
+            Else
+                jForms := InitAmortization(jData)
+            Endif
+        Else
+            jForms := CalculateTrigger(jData)
+        Endif
+
+        jResponse["statusCode"] := 200  
+        jResponse["response"] := JsonObject():new()
+        jResponse["response"]:FromJson(jForms:ToJson())
+
+    Else
+
+        jResponse := answerFormat(.F., 400, "Não foi possivel realizar o calculo dos valores", "Emprestimo não existe na base de dados")
+
+    Endif    
+
+Return jResponse
+
+/*/{Protheus.doc} InitPayment
+    Calculo do valor de pagamento de uma parcela
+    @type  Function
+    @author Vitor Duca
+    @since 19/01/2022
+    @version 1.0
+    @param jBodyRequest, Json, Body da requisição
+		Exemplo do jBodyRequest que deve ser enviado
+		{
+            filial: "D MG 01",
+            numero: "EMP001",
+            revisao: "01",
+            titulo: {
+                filial: "D MG 01",
+                prefixo: "EMP",
+                numero: "EMP001",
+                parcela: "1"
+            },
+			operation: "trigger" ou "open" (Define como o calculo irá ocorrer)
+			field: "vlCredito_nA181VlCrd", (Campo que esta sendo alterado no front)
+			forms: {
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+			}
+		}
+    @return jResponse, Json, Resposta da requisição
+  /*/
+Function InitPayment(jBodyRequest As Json) As Json
+    Local jForms := JsonObject():new() As Json
+    Local aA181Calc := {} As Array
+    Local cIndexE2 := "" As Character
+    Local lTemplateOK := .F. as Logical
+	Local oTemplate  as Object
+    Local jParcel := JsonObject():new() As Json
+    Local nValorE2 := 0 As Numeric
+    Local nValJuros := 0 As Numeric
+    Local nValDeb := 0 As Numeric
+    Local dDataAnt := dDataBase As Date
+    Local lL11033 := SuperGetMv("MV_L11033",,.F.) as Logical
+
+    jParcel:FromJson(jBodyRequest['titulo']:ToJson())
+
+    cIndexE2 := Padr(jParcel["filial"],TamSx3("E2_FILIAL")[1]) + Padr(jParcel["prefixo"],TamSx3("E2_PREFIXO")[1]) + ;
+                Padr(jParcel["numero"],TamSx3("E2_NUM")[1]) + Padr(jParcel["parcela"],TamSx3("E2_PARCELA")[1])
+
+    jForms := JsonObject():new()
+    jForms:FromJson(jBodyRequest["forms"]:ToJson())
+
+    SE2->(dbSetOrder(1))
+    If SE2->(MsSeek(cIndexE2))
+
+        jForms["valoriof_n181vliof"]            := 0
+        jForms["valorir_nA181vlirf"]            := 0
+        jForms["valordespesas_nA181vldes"]      := 0
+        jForms["valorgap_nA181vlgap"]           := 0
+
+        jForms["taxa_nA181VlMoed"] := RecMoeda(dDataBase,SEH->EH_MOEDA)
+
+        If SEH->EH_TIPO <> "TEM"
+            aA181Calc	:= Fa171Calc(dDataBase,SEH->EH_SALDO,.T.,jForms["taxa_nA181VlMoed"])
+        Else
+            oTemplate := totvs.protheus.backoffice.ngf.template.Template():new()
+            dDataAnt := getDataBaseParcel()
+            
+            If oTemplate:openTemplate(SEH->EH_FILIAL, SEH->EH_NUMERO, SEH->EH_REVISAO)
+                lTemplateOK := .T.
+                oTemplate:setValorBase(SEH->EH_SALDO)
+                oTemplate:setDateBase(dDataAnt)
+                oTemplate:setDateJur(SE2->E2_VENCTO) // Vencimento personalizado para calculo do Juros
+                oTemplate:setDateVenc(dDataBase)
+                oTemplate:setTaxaMoeda(jForms["taxa_nA181VlMoed"])
+                oTemplate:calcTemplate()
+                aA181Calc := oTemplate:getEmpLegado()
+
+                jForms["valorir_nA181vlirf"] := oTemplate:getValor('ir')
+                jForms["valoriof_n181vliof"] := oTemplate:getValor('iof')
+            EndIf
+        EndIf
+
+        If SEH->EH_TIPO <> "TEM" .Or. (SEH->EH_TIPO == "TEM" .And. lTemplateOK)
+            jForms["sldcurtoprazo2_nA181spcp2"] := 0
+            jForms["sldlongoprazo2_nA181splp2"] := SEH->EH_SALDO - jForms["sldcurtoprazo2_nA181spcp2"]
+            jForms["sldcurtoprazo1_nA181spcp1"] := 0
+            jForms["sldlongoprazo1_nA181splp1"] := SEH->EH_VLCRUZ - jForms["sldcurtoprazo1_nA181spcp1"]
+            jForms["sldjuros2_nA181sjur2"] := aA181Calc[1,2]
+            
+            //Template ja vem com valor convertido
+            If SEH->EH_TIPO == "TEM"
+                jForms["sldjuros1_nA181sjur1"] := aA181Calc[2,2]
+            Else
+                jForms["sldjuros1_nA181sjur1"] := aA181Calc[2,2] * jForms["taxa_nA181VlMoed"]
+            Endif
+
+            jForms["sldvarcambiallp_nA181svclp"]    := aA181Calc[2,3]
+            jForms["sldvarcambialcp_nA181svccp"]    := aA181Calc[2,4]
+            jForms["sldvcjuros_nA181svcjr"]         := Iif(Empty(SEH->EH_FORMULA) .Or. SEH->EH_MOEDA > 1,aA181Calc[2,5],0)
+            jForms["sldtot1_nA181stot1"]            := jForms["sldlongoprazo1_nA181splp1"] + jForms["sldcurtoprazo1_nA181spcp1"] + jForms["sldjuros1_nA181sjur1"] + ;
+                                    jForms["sldvarcambiallp_nA181svclp"] + jForms["sldvarcambialcp_nA181svccp"] + jForms["sldvcjuros_nA181svcjr"]
+
+            jForms["sldtot2_nA181stot2"]            := jForms["sldlongoprazo2_nA181splp2"] + jForms["sldcurtoprazo2_nA181spcp2"] + jForms["sldjuros2_nA181sjur2"]
+            jForms["pagcurtoprazo1_nA181vpcp1"]     := jForms["sldcurtoprazo1_nA181spcp1"]
+            jForms["pagcurtoprazo2_nA181vpcp2"]     := jForms["sldcurtoprazo2_nA181spcp2"]
+            jForms["pagjuros2_nA181vjur2"]          := jForms["sldjuros2_nA181sjur2"]
+            jForms["pagvarcambiallp_nA181vvclp"]    := jForms["sldvarcambiallp_nA181svclp"]
+            jForms["pagvarcambialcp_nA181vvccp"]    := jForms["sldvarcambialcp_nA181svccp"]
+            jForms["pagvcjuros_nA181vvcjr"]         := jForms["sldvcjuros_nA181svcjr"]
+
+            jForms["taxa_nA181VlMoed"]              := If( jForms["taxa_nA181VlMoed"] == 0, 1, jForms["taxa_nA181VlMoed"] )
+
+            nValorE2 := SE2->E2_VALOR - SE2->E2_JUROS
+
+            If SEH->EH_TIPO == "TEM"
+                nValJuros := aA181Calc[2,2]
+                nValDeb   := nValorE2 + nValJuros
+            Else
+                nValJuros := SE2->E2_JUROS
+                nValDeb   := SE2->E2_VALOR
+            EndIf
+
+            // Trecho para contratos incluídos antes da liberação da issue DSTFC-6246
+            // Antes: as parcelas de carência eram gravadas no valor de R$0,01
+            // Atual: as parcelas de carência com juros o valor de pagamento
+            // deve ser igual ao valor de juros
+            If SE2->E2_VALOR == 0.01 .And. SE2->E2_JUROS > 0
+                nValDeb  := nValJuros
+                nValorE2 := 0
+            EndIf
+
+            If SE2->E2_MOEDA > 1
+                jForms["paglongoprazo1_nA181vplp1"] := xMoeda(nValorE2,SE2->E2_MOEDA,1)
+                jForms["paglongoprazo2_nA181vplp2"] := nValorE2
+                jForms["valordeb_nA181vldeb"]       := xMoeda(nValDeb,SE2->E2_MOEDA,1)
+
+                If SEH->EH_TIPO == "TEM"
+                    jForms["pagjuros1_nA181vjur1"] := nValJuros
+                    jForms["sldjuros1_nA181sjur1"] := nValJuros
+                Else
+                    jForms["pagjuros1_nA181vjur1"] := xMoeda(nValJuros,SE2->E2_MOEDA,1)
+                    jForms["sldjuros1_nA181sjur1"] := xMoeda(nValJuros,SE2->E2_MOEDA,1)
+                Endif    
+            Else
+                jForms["paglongoprazo1_nA181vplp1"] := nValorE2
+                jForms["paglongoprazo2_nA181vplp2"] := nValorE2
+                jForms["valordeb_nA181vldeb"]       := nValDeb
+                jForms["pagjuros1_nA181vjur1"]      := nValJuros
+                jForms["sldjuros1_nA181sjur1"]      := nValJuros
+            EndIf
+
+            jForms["pagjuros2_nA181vjur2"]          := nValJuros
+            jForms["sldjuros2_nA181sjur2"]          := nValJuros
+
+            jForms["sldtot1_nA181stot1"]            := jForms["sldlongoprazo1_nA181splp1"] + jForms["pagjuros1_nA181vjur1"]
+            jForms["sldtot2_nA181stot2"]            := jForms["sldlongoprazo2_nA181splp2"] + jForms["pagjuros2_nA181vjur2"]
+            jForms["DA181DTAPR"]                    := Dtos(SE2->E2_VENCREA)
+
+            jForms["pagtot1_nA181vtot1"] := jForms["paglongoprazo1_nA181vplp1"] + jForms["pagcurtoprazo1_nA181vpcp1"] + jForms["pagjuros1_nA181vjur1"] + ;
+                                        jForms["pagvarcambiallp_nA181vvclp"] + jForms["pagvarcambialcp_nA181vvccp"] + jForms["pagvcjuros_nA181vvcjr"]
+
+            jForms["pagtot2_nA181vtot2"]            := jForms["paglongoprazo2_nA181vplp2"]+jForms["pagcurtoprazo2_nA181vpcp2"]+jForms["pagjuros2_nA181vjur2"]
+
+            If lL11033
+                jForms["valordeb_nA181vldeb"] -= jForms["valorir_nA181vlirf"]
+            Endif
+
+            IF !EMPTY(SEH->EH_TAXAIOF) .and. jForms["valoriof_n181vliof"] == 0
+                jForms["valoriof_n181vliof"] := FIN_IOF(SEH->EH_APLEMP,jForms["paglongoprazo1_nA181vplp1"],(dDataBase-SEH->EH_DATA),SEH->EH_TAXAIOF)
+            ENDIF
+            
+            If lTemplateOk
+                jForms['template'] := oTemplate:getResults()
+                FreeObj(oTemplate)
+            EndIf
+    
+        EndIf
+    Endif
+
+Return jForms
+
+/*/{Protheus.doc} InitAmortization
+    Calculo do valor de amortização de um emprestimo
+    @type  Function
+    @author Vitor Duca
+    @since 28/01/2022
+    @version 1.0
+    @param jBodyRequest, Json, Body da requisição
+    @return jResponse, Json, Resposta da requisição
+  /*/
+Function InitAmortization(jBodyRequest As Json) As Json
+	Local nTaxaMoeda    := 1                            as Numeric
+	Local nSaldoDecimal := TamSX3("EH_SALDO")[2]        as Numeric
+	Local aA181Calc     := {}                           as Array
+	Local jForms        := JsonObject():New()           as Json
+	Local lL11033       := SuperGetMv("MV_L11033",,.F.) as Logical
+	Local lTemplateOK   := .F.                          as Logical
+	Local oTemplate                                     as Object
+
+    jForms:FromJson(jBodyRequest["forms"]:ToJson())
+
+    If SEH->EH_MOEDA > 1
+        nTaxaMoeda := RecMoeda(dDataBase, SEH->EH_MOEDA)
+    EndIf
+
+    If SEH->EH_TIPO <> "TEM"
+        aA181Calc := Fa171Calc(dDataBase, SEH->EH_SALDO, .T., nTaxaMoeda)
+    Else
+        oTemplate := totvs.protheus.backoffice.ngf.template.Template():new()
+        If oTemplate:openTemplate(SEH->EH_FILIAL, SEH->EH_NUMERO, SEH->EH_REVISAO)
+            lTemplateOK := .T.
+            oTemplate:setValorBase(SEH->EH_SALDO)
+            oTemplate:setDateVenc(dDataBase)
+            oTemplate:setTaxaMoeda(nTaxaMoeda)
+            oTemplate:calcTemplate()
+            aA181Calc := oTemplate:getEmpLegado()
+        EndIf
+    EndIf
+
+    If SEH->EH_TIPO <> "TEM" .Or. (SEH->EH_TIPO == "TEM" .And. lTemplateOK)
+
+        //Template ja traz o valor convertido
+        If SEH->EH_TIPO == "TEM"
+            jForms["sldjuros1_nA181sjur1"]  := aA181Calc[2,2]
+        Else
+            jForms["sldjuros1_nA181sjur1"]  := aA181Calc[2,2] * nTaxaMoeda
+        Endif
+
+        jForms["sldjuros2_nA181sjur2"]  := aA181Calc[1,2]
+        jForms["sldvarcambiallp_nA181svclp"]  := aA181Calc[2,3]
+        jForms["sldvarcambialcp_nA181svccp"]  := aA181Calc[2,4]
+        jForms["sldvcjuros_nA181svcjr"]  := Iif(Empty(SEH->EH_FORMULA) .Or. SEH->EH_MOEDA > 1,aA181Calc[2,5],0)
+        jForms["sldcurtoprazo2_nA181spcp2"]  := Round( SEH->EH_SALDO * SEH->EH_PERCPLP/100 , nSaldoDecimal)
+        jForms["taxa_nA181VlMoed"] := nTaxaMoeda
+        jForms["sldlongoprazo2_nA181splp2"]  := SEH->EH_SALDO - jForms["sldcurtoprazo2_nA181spcp2"]
+        jForms["sldcurtoprazo1_nA181spcp1"]  := Round(SEH->EH_VLCRUZ * SEH->EH_PERCPLP/100, nSaldoDecimal)
+        jForms["sldlongoprazo1_nA181splp1"]  := SEH->EH_VLCRUZ - jForms["sldcurtoprazo1_nA181spcp1"]
+        jForms["sldtot1_nA181stot1"]  := jForms["sldlongoprazo1_nA181splp1"] + jForms["sldcurtoprazo1_nA181spcp1"] + jForms["sldjuros1_nA181sjur1"] + jForms["sldvarcambiallp_nA181svclp"] + jForms["sldvarcambialcp_nA181svccp"] + jForms["sldvcjuros_nA181svcjr"]
+        jForms["sldtot2_nA181stot2"]  := jForms["sldlongoprazo2_nA181splp2"] + jForms["sldcurtoprazo2_nA181spcp2"] + jForms["sldjuros2_nA181sjur2"]
+        jForms["paglongoprazo1_nA181vplp1"]  := jForms["sldlongoprazo1_nA181splp1"]
+        jForms["pagcurtoprazo1_nA181vpcp1"]  := jForms["sldcurtoprazo1_nA181spcp1"]
+        jForms["paglongoprazo2_nA181vplp2"]  := jForms["sldlongoprazo2_nA181splp2"]
+        jForms["pagcurtoprazo2_nA181vpcp2"]  := jForms["sldcurtoprazo2_nA181spcp2"]
+        jForms["pagjuros1_nA181vjur1"]  := jForms["sldjuros1_nA181sjur1"]
+        jForms["pagjuros2_nA181vjur2"]  := jForms["sldjuros2_nA181sjur2"]
+        jForms["pagvarcambiallp_nA181vvclp"]  := jForms["sldvarcambiallp_nA181svclp"]
+        jForms["pagvarcambialcp_nA181vvccp"]  := jForms["sldvarcambialcp_nA181svccp"]
+        jForms["pagvcjuros_nA181vvcjr"]  := jForms["sldvcjuros_nA181svcjr"]
+        jForms["pagtot1_nA181vtot1"]  := jForms["sldtot1_nA181stot1"]
+        jForms["pagtot2_nA181vtot2"]  := jForms["sldtot2_nA181stot2"]
+        jForms["valordeb_nA181vldeb"]  := If( lL11033, jForms["pagtot1_nA181vtot1"] - jForms["valorir_nA181vlirf"], jForms["pagtot1_nA181vtot1"])
+        
+        // Calcula o IOF conforme a tabela cadastrada no SX5, ou a taxa de IOF cadastrada na aplicacao
+        jForms["valoriof_n181vliof"] := FIN_IOF(SEH->EH_APLEMP, jForms["paglongoprazo1_nA181vplp1"], dDataBase - SEH->EH_DATA, SEH->EH_TAXAIOF)
+
+        CalculateTotais(jForms, lL11033)
+
+        If lTemplateOk
+            jForms['template'] := oTemplate:getResults()
+            FreeObj(oTemplate)
+        EndIf
+    EndIf
+
+Return jForms
+
+/*/{Protheus.doc} CalculateTrigger
+    Realiza o calculo dos pagamentos/amortização quando é alterado um campo do formulario
+    @type  Function
+    @author Vitor Duca
+    @since 01/08/2023
+    @version 1.0
+    @param jBodyRequest, Json, Body da requisição
+    @return jResponse, Json, Resposta da requisição
+/*/
+Function CalculateTrigger(jBodyRequest As Json) As Json
+	Local aCalc := {}                               As Array
+	Local lL11033 := SuperGetMv("MV_L11033",,.F.)   As Logical
+    Local jForms := JsonObject():new()              As Json
+    Local cCampo := ""                              As Character
+    Local lTemplateOk := .F.                        As Logical
+
+    jForms:FromJson(jBodyRequest["forms"]:ToJson())
+
+    cCampo := jBodyRequest["field"]
+
+    If ( cCampo $ "paglongoprazo1_nA181vplp1#DA181DTAPR#taxa_nA181VlMoed" ) .Or. ( lL11033 .And. ( cCampo $ "pagjuros1_nA181vjur1#sldjuros1_nA181sjur1" ))
+    	If SEH->EH_TIPO <> "TEM" 
+			aCalc := Fa171Calc(dDataBase/*jForms["DA181DTAPR"]*/,Iif(lL11033, jForms["paglongoprazo1_nA181vplp1"],SEH->EH_SALDO),.T.,jForms["taxa_nA181VlMoed"])
+		Else
+			oTemplate := totvs.protheus.backoffice.ngf.template.Template():new()
+			If oTemplate:openTemplate(SEH->EH_FILIAL, SEH->EH_NUMERO, SEH->EH_REVISAO)
+				lTemplateOK := .T.
+				oTemplate:setValorBase(jForms["paglongoprazo1_nA181vplp1"])
+				oTemplate:setDateVenc(dDataBase/*jForms["DA181DTAPR"]*/)
+                oTemplate:setTaxaMoeda(jForms["taxa_nA181VlMoed"])
+				oTemplate:calcTemplate()
+				aCalc := oTemplate:getEmpLegado()
+			EndIf
+		EndIf
+
+        If ( cCampo $ "paglongoprazo1_nA181vplp1" )
+            jForms["valoriof_n181vliof"]	:= aCalc[2,10]
+        Else
+            jForms["sldcurtoprazo2_nA181spcp2"]	:= Round(SEH->EH_SALDO * SEH->EH_PERCPLP / 100 , TamSX3("EH_SALDO")[2])
+            jForms["sldlongoprazo2_nA181splp2"]	:= SEH->EH_SALDO - jForms["sldcurtoprazo2_nA181spcp2"]
+            jForms["sldcurtoprazo1_nA181spcp1"]	:= Round(SEH->EH_VLCRUZ * SEH->EH_PERCPLP/100,TamSX3("EH_SALDO")[2])
+            jForms["sldlongoprazo1_nA181splp1"]	:= SEH->EH_VLCRUZ - jForms["sldcurtoprazo1_nA181spcp1"]
+            jForms["sldjuros2_nA181sjur2"]	:= aCalc[1,2]
+            jForms["sldjuros1_nA181sjur1"]	:= Iif (aCalc[2,2] == 0, jForms["sldjuros1_nA181sjur1"], aCalc[2,2] * jForms["taxa_nA181VlMoed"])
+            jForms["sldvarcambiallp_nA181svclp"]	:= aCalc[2,3]
+            jForms["sldvarcambialcp_nA181svccp"]	:= aCalc[2,4]
+            jForms["sldvcjuros_nA181svcjr"]	:= Iif( Empty(SEH->EH_FORMULA) .OR. SEH->EH_MOEDA > 1, aCalc[2,5], 0 )
+        EndIf
+    EndIf
+
+    CalculateTotais(jForms, lL11033)
+
+    If lTemplateOk
+        jForms['template'] := oTemplate:getResults()
+        FreeObj(oTemplate)
+    EndIf
+    
+Return jForms
+
+/*/{Protheus.doc} CalculateTotais
+    Calcula os totais
+    @type  Function
+    @author Vitor Duca
+    @since 01/08/2023
+    @version 1.0
+    @param jForms, Json, Json, contendo os campos que serão devolvidos na API
+    @param lL11033, Logical, Conteudo do parametro MV_L11033
+/*/
+Function CalculateTotais(jForms As Json, lL11033 As Logical)
+    Local nValor := 0 As Numeric
+
+    If ( SEH->EH_MOEDA <> 1 )
+        nValor     := Round(jForms["paglongoprazo2_nA181vplp2"]/jForms["sldlongoprazo2_nA181splp2"]*jForms["sldlongoprazo1_nA181splp1"],TamSX3("EH_SALDO")[2])
+        jForms["paglongoprazo1_nA181vplp1"] := VerifyAceitavel(nValor, jForms["paglongoprazo1_nA181vplp1"])
+
+        nValor     := Round(jForms["pagcurtoprazo2_nA181vpcp2"]/jForms["sldcurtoprazo2_nA181spcp2"]*jForms["sldcurtoprazo1_nA181spcp1"],TamSX3("EH_SALDO")[2])
+        jForms["pagcurtoprazo1_nA181vpcp1"] := VerifyAceitavel(nValor, jForms["pagcurtoprazo1_nA181vpcp1"])
+        
+        nValor     := Round(jForms["pagjuros2_nA181vjur2"]/jForms["sldjuros2_nA181sjur2"]*jForms["sldjuros1_nA181sjur1"],TamSX3("EH_SALDO")[2])
+        jForms["pagjuros1_nA181vjur1"] := VerifyAceitavel(nValor, jForms["pagjuros1_nA181vjur1"])
+        
+        nValor     := Round(jForms["paglongoprazo2_nA181vplp2"] * jForms["taxa_nA181VlMoed"],TamSX3("EH_SALDO")[2])-jForms["paglongoprazo1_nA181vplp1"]
+        jForms["pagvarcambiallp_nA181vvclp"] := VerifyAceitavel(nValor, jForms["pagvarcambiallp_nA181vvclp"])
+        
+        nValor     := Round(jForms["pagcurtoprazo2_nA181vpcp2"]*jForms["taxa_nA181VlMoed"],TamSX3("EH_SALDO")[2])-jForms["pagcurtoprazo1_nA181vpcp1"]
+        jForms["pagvarcambialcp_nA181vvccp"] := VerifyAceitavel(nValor, jForms["pagvarcambialcp_nA181vvccp"])
+        
+        nValor     := Round(jForms["pagjuros2_nA181vjur2"]*jForms["taxa_nA181VlMoed"],TamSX3("EH_SALDO")[2])-jForms["pagjuros1_nA181vjur1"]
+        jForms["pagvcjuros_nA181vvcjr"] := VerifyAceitavel(nValor, jForms["pagvcjuros_nA181vvcjr"])
+    EndIf
+
+    jForms["sldtot1_nA181stot1"] := jForms["sldlongoprazo1_nA181splp1"]+jForms["sldcurtoprazo1_nA181spcp1"]+jForms["sldjuros1_nA181sjur1"]+jForms["sldvarcambiallp_nA181svclp"]+jForms["sldvarcambialcp_nA181svccp"]+jForms["sldvcjuros_nA181svcjr"]
+    jForms["sldtot2_nA181stot2"] := jForms["sldlongoprazo2_nA181splp2"]+jForms["sldcurtoprazo2_nA181spcp2"]+jForms["sldjuros2_nA181sjur2"]
+    jForms["pagtot1_nA181vtot1"] := jForms["paglongoprazo1_nA181vplp1"]+jForms["pagcurtoprazo1_nA181vpcp1"]+jForms["pagjuros1_nA181vjur1"]+jForms["pagvarcambiallp_nA181vvclp"]+jForms["pagvarcambialcp_nA181vvccp"]+jForms["pagvcjuros_nA181vvcjr"]
+    jForms["pagtot2_nA181vtot2"] := jForms["paglongoprazo2_nA181vplp2"]+jForms["pagcurtoprazo2_nA181vpcp2"]+jForms["pagjuros2_nA181vjur2"]
+    jForms["valordeb_nA181vldeb"] := jForms["pagtot1_nA181vtot1"]+(Iif(lL11033, ( jForms["valorir_nA181vlirf"] * (-1)), jForms["valorir_nA181vlirf"]))+jForms["valordespesas_nA181vldes"]+If(SEH->EH_MOEDA==1,jForms["valorgap_nA181vlgap"],0)
+
+Return 
+
+/*/{Protheus.doc} VerifyAceitavel
+    Verifica se atingiu o valor aceitavel (10)
+    @type  Function
+    @author Vitor Duca
+    @since 01/08/2023
+    @version 1.0
+    @param nValor, Numeric, Valor a ser considerado
+    @param nFormValor, Numeric, Valor do campo no formulario
+    @return nRetorno, Numeric, Valor verificado
+/*/
+Function VerifyAceitavel(nValor As Numeric, nFormValor As Numeric) As Numeric
+    Local nRetorno := 0 As Numeric
+
+    Default nValor := 0
+    Default nFormValor := 0
+
+    nRetorno := nValor
+
+    If Abs(nValor - nFormValor) <= 10
+        nRetorno := nFormValor
+    Endif
+
+Return nRetorno
+
+/*/{Protheus.doc} getSequenceParcelService
+    Serviço para obter a sequência referente ao pagemento da parcela (SEI)
+    @type  Function
+    @author Vinicius Prado
+    @since 28/01/2022
+    @version 1.0
+    @param oQueryRequest, Json, parametros da requisição
+    @return jResponse, Json, Resposta da requisição contendo a sequencia
+  /*/
+Function getSequenceParcelService(oQueryRequest As Json) As Json
+  Local cNumber := "" As Character
+  Local cBranch := "" As Character
+  Local cRevision := "" As Character
+  Local cParcel := "" As Character
+  Local cSequence := "" As Character
+  Local jResponse as json
+
+  jResponse := JsonObject():New()
+  cBranch   := oQueryRequest["branch"]
+  cNumber   := oQueryRequest["number"]
+  cRevision := oQueryRequest["revision"]
+  cParcel   := oQueryRequest["parcel"]
+
+  cSequence := getSequenceParcels(cNumber, cRevision, cParcel, cBranch)
+
+  If Empty(cSequence)
+    jResponse := answerErrorFormat(400 , 'Bad Request')
+  Else
+    jResponse["result"] := .T.
+    jResponse["response"]	:= JsonObject():new()
+    jResponse["response"]	:= { "sequence": cSequence }
+    jResponse["statusCode"] := 200
+  Endif
+
+Return jResponse

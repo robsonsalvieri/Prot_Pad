@@ -1,0 +1,695 @@
+#include 'tlpp-core.th'
+#include 'agd.negocio.historico.versionamento.service.ch'
+
+namespace agd.negocioHistoricoVersionamentoService
+using namespace agd.negocioStatusService
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento
+Classe responsavel por gerar o historico de versionamento do negocio
+@type class
+@version 12
+@author jc.maldonado
+@since 3/24/2025
+/*/
+class agdNegocioHistoricoVersionamento
+	public data cCodigoFilial                            as character
+	public data cCodigoNegocio                           as character
+	private data aTabelaChaveCampos                      as array
+	private data cNodeId                                 as character
+
+	public method new()
+	public method getHistory()                           as json
+	public method getHistoryForDBTree()                  as array
+
+	private method getAlterFieldsFromTable()             as array
+	private method getChanges()                          as array
+	private method getDifferenceFromVersions()           as json
+	private method getValuesFromTableFields()            as array
+	private method getDivergentItemsBetweenVersions()    as array
+	private method getChangedItemsBetweenVersions()      as array
+	private method getAllVersionsAfterFirstFromNegocio() as array
+	private method getUserDateTimeFromHistoryTable()     as array
+	private method getDescriptonFromField()              as character
+	private method addItensFromHistoryToNodes()
+	private method getNextNodeId()                       as character
+	private method valueToChar()                         as character
+	private method getTextFormatedForNode()              as character
+endClass
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::new
+Construtor
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cCodigoFilial, character, codigo da filial
+@param cCodigoNegocio, character, codigo do negocio
+/*/
+method new(cCodigoFilial as character, cCodigoNegocio as character) class agdNegocioHistoricoVersionamento
+	::cCodigoFilial  := cCodigoFilial
+	::cCodigoNegocio := cCodigoNegocio
+return Self
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getHistory
+Obtem o historico de versionamento do negocio.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@return json, historico
+/*/
+method getHistory() as json class agdNegocioHistoricoVersionamento
+	local aVersoes                       as array
+	local aJson    := {}                 as array
+	local jHistory := JsonObject():New() as json
+	local aUserDateTimeHistory           as array
+	local nX                             as numeric
+	local cVersaoAnterior                as character
+
+	if empty(aVersoes := ::getAllVersionsAfterFirstFromNegocio())
+		return jHistory
+	endIf
+
+	::aTabelaChaveCampos := {; // { cTabela, cChave, aCamposAlteraveis, cCampoItem }
+	{'NEA', 'NEA_FILIAL+NEA_CODIGO+NEA_VERSAO', ::getAlterFieldsFromTable('NEA'), ""},;
+		{'NEB', 'NEB_FILIAL+NEB_CODBRT+NEB_VERSAO+NEB_ITEM', ::getAlterFieldsFromTable('NEB'), "NEB_ITEM"},;
+		{'NEE', 'NEE_FILIAL+NEE_CODBRT+NEE_VERSAO+NEE_ITEM', ::getAlterFieldsFromTable('NEE'), "NEE_ITEM"};
+		}
+
+	for nX := 1 to len(aVersoes)
+		cVersaoAnterior := strZero(val(aVersoes[nX]) -1, 3)
+
+		aAdd(aJson, JsonObject():New())
+		aJson[nX]['versao']     := aVersoes[nX]
+		aJson[nX]['alteracoes'] := ::getChanges(cVersaoAnterior, aVersoes[nX])
+
+		aUserDateTimeHistory := ::getUserDateTimeFromHistoryTable(::cCodigoFilial + ::cCodigoNegocio + cVersaoAnterior)
+		if !empty(aUserDateTimeHistory)
+			aJson[nX]['usuario'] := aUserDateTimeHistory[1]
+			aJson[nX]['data']    := aUserDateTimeHistory[2]
+			aJson[nX]['hora']    := aUserDateTimeHistory[3]
+		endif
+	next
+
+	jHistory['filial']    := ::cCodigoFilial
+	jHistory['negocio']   := ::cCodigoNegocio
+	jHistory['historico'] := aJson
+return jHistory
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getAlterFieldsFromTable
+Obtem a lista de campos alteraveis da tabela informada.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cTabela, character, codigo da tabela
+@return array, {TAB_CAMPO, TAB_CAMPO ...}
+/*/
+method getAlterFieldsFromTable(cTabela as character) as array class agdNegocioHistoricoVersionamento
+	local aFieldsSX3 := FWSX3Util():GetAllFields(cTabela, .F. /*lVirtual*/) as array
+	local nX                                                                as numeric
+	local aFields    := {}                                                  as array
+
+	for nX := 1 to len(aFieldsSX3)
+		if FwGetSx3Cache(aFieldsSX3[nX], 'X3_VISUAL') == 'A'
+			aAdd(aFields, aFieldsSX3[nX])
+		endIf
+	next nX
+return aFields
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getChanges
+Obtem as alteracoes entre as versoes informadas.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cCodigoVersaoAnterior, character, codigo da versao anterior
+@param cCodigoVersaoSeguinte, character, codigo da versao seguinte
+@return array, array de objetos json
+/*/
+method getChanges(cCodigoVersaoAnterior as character, cCodigoVersaoSeguinte as character) as array class agdNegocioHistoricoVersionamento
+	local nX                    as numeric
+	local nIt                   as numeric
+	local aJsonAlteracoes := {} as array
+	Local jDifference           as json
+
+	for nX := 1 to len(::aTabelaChaveCampos)
+		jDifference := ::getDifferenceFromVersions(cCodigoVersaoAnterior, cCodigoVersaoSeguinte, ::aTabelaChaveCampos[nX])
+
+		if !empty(jDifference:GetNames())
+			nIt++
+			aAdd(aJsonAlteracoes, JsonObject():New())
+
+			aJsonAlteracoes[nIt]['tabela'] := ::aTabelaChaveCampos[nX, 1 /*1=cCodigoTabela*/]
+			if empty(::aTabelaChaveCampos[nX, 4 /*4=cCampoItem*/])
+				aJsonAlteracoes[nIt]['campos'] := jDifference
+			else
+				aJsonAlteracoes[nIt]['itens'] := jDifference
+			endif
+		endIf
+	next nX
+return aJsonAlteracoes
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getDifferenceFromVersions
+Obtem as diferenças entre os itens das duas versões informadas.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cCodigoVersaoA, character, codigo da versao
+@param cCodigoVersaoB, character, codigo da versao
+@param aTabela, array, tabela/campos e etc da tabela a ser consultada { cTabela, cChave, aCamposAlteraveis, cCampoItem }
+@return json, objeto com as diferencas encontradas
+/*/
+method getDifferenceFromVersions(cCodigoVersaoA as character, cCodigoVersaoB as character, aTabela as array) as json class agdNegocioHistoricoVersionamento
+	local lTabelaPossuiItens                as logical
+	local aInseridos                        as array
+	local aRemovidos                        as array
+	local aAtualizados                      as array
+	local aCamposValoresVersaoA             as array
+	local aCamposValoresVersaoB             as array
+	local jDiferencas := JsonObject():New() as json
+	local nX                                as numeric
+	local jValues                           as json
+
+	if (lTabelaPossuiItens := !empty(aTabela[4 /*4=cCampoItem*/]))
+		if !empty(aInseridos := ::getDivergentItemsBetweenVersions(aTabela, cCodigoVersaoB, cCodigoVersaoA, .f.))
+			jDiferencas['inseridos'] := aInseridos
+		endif
+		if !empty(aRemovidos := ::getDivergentItemsBetweenVersions(aTabela, cCodigoVersaoA, cCodigoVersaoB, .t.))
+			jDiferencas['removidos'] := aRemovidos
+		endif
+		if !empty(aAtualizados := ::getChangedItemsBetweenVersions(aTabela, cCodigoVersaoB, cCodigoVersaoA, .f.))
+			jDiferencas['atualizados'] := aAtualizados
+		endif
+	else
+		aCamposValoresVersaoA := ::getValuesFromTableFields(aTabela, cCodigoVersaoA)
+		aCamposValoresVersaoB := ::getValuesFromTableFields(aTabela, cCodigoVersaoB)
+
+		if !empty(aCamposValoresVersaoA) .And. !empty(aCamposValoresVersaoB)
+			for nX := 1 to len(aCamposValoresVersaoA)
+				if aCamposValoresVersaoA[nX, 2 /*2=xValorCampo*/] != aCamposValoresVersaoB[nX, 2]
+					jValues := JsonObject():New()
+					jValues['valor_antigo'] := aCamposValoresVersaoA[nX, 2]
+					jValues['valor_atual']  := aCamposValoresVersaoB[nX, 2]
+					jDiferencas[lower(aCamposValoresVersaoB[nX, 1/*1=cNomeCampo*/])] := jValues
+				endif
+			next nX
+		endif
+	endIf
+return jDiferencas
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getValuesFromTableFields
+Obtem uma lista com os campos e seus respectivos valores de acordo com a tabela e a versao informadas.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param aTabela, array, tabela/campos e etc da tabela a ser consultada { cTabela, cChave, aCamposAlteraveis, cCampoItem }
+@param cCodigoVersao, character, codigo da versao
+@return array, {{TAB_CAMPO, xVALOR}, {TAB_CAMPO, xVALOR}, ...}
+/*/
+method getValuesFromTableFields(aTabela as array, cCodigoVersao as character) as array class agdNegocioHistoricoVersionamento
+	local aCamposChave := StrTokArr(aTabela[2 /*2=cIndex*/], '+') as array
+	local cAlias       := aTabela[1]                              as character
+	local aArea                                                   as character
+	local nX                                                      as numeric
+	local aCampoValor  := {}                                      as array
+
+	if len(aCamposChave) = 3
+		dbSelectArea(cAlias)
+		aArea := (cAlias)->(FWgetArea()) 
+		(cAlias)->(dbSetOrder(retOrdem(cAlias, aTabela[2])))
+		(cAlias)->(dbGoTop())
+
+		if (cAlias)->(dbSeek(::cCodigoFilial + ::cCodigoNegocio + cCodigoVersao))
+			while (cAlias)->(!eof()) ;
+					.And. &((cAlias)->(aCamposChave[1])) == ::cCodigoFilial ;
+					.And. &((cAlias)->(aCamposChave[2])) == ::cCodigoNegocio ;
+					.And. &((cAlias)->(aCamposChave[3])) == cCodigoVersao
+
+				for nX := 1 to len(aTabela[3 /*3=cCampos*/])
+					aAdd(aCampoValor, {aTabela[3, nX], ::valueToChar(aTabela[3, nX], &((cAlias)->(aTabela[3, nX])))})
+				next nX
+
+				(cAlias)->(dbSkip())
+			endDo
+		endif
+
+		FWrestArea(aArea)
+	endif
+return aCampoValor
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getChangedItemsBetweenVersions
+Obtem os itens/valores que mudaram em relacao as versoes
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param aTabela, array, tabela/campos e etc da tabela a ser consultada { cTabela, cChave, aCamposAlteraveis, cCampoItem }
+@param cVersaoA, character, codigo da versao A
+@param cVersaoB, character, codigo da versao B
+@return array, array de json
+/*/
+method getChangedItemsBetweenVersions(aTabela as array, cVersaoA as character, cVersaoB as character) as array class agdNegocioHistoricoVersionamento
+	local cCamposSelect                                            as character
+	local cQuery                                                   as character
+	local aParamsQuery  := {}                                      as array
+	local cCampoItem    := aTabela[4]                              as character
+	local cAlias        := aTabela[1]                              as character
+	local aCamposChave  := StrTokArr(aTabela[2 /*2=cIndex*/], '+') as array
+	local cCampoFilial  := aCamposChave[1]                         as character
+	local cCampoNegocio := aCamposChave[2]                         as character
+	local cCampoVersao  := aCamposChave[3]                         as character
+	local nIt                                                      as numeric
+	local nX                                                       as numeric
+	local cValueA                                                  as character
+	local cValueB                                                  as character
+	local jValues                                                  as json
+	local aJsonItens    := {}                                      as array
+	local cNewAlias                                                as character
+	local aArea                                                    as array
+	local oJsonHistoryItem                                         as object
+
+	cCamposSelect := cCampoItem
+	aEval(aTabela[3/*3=aCamposAlteraveis*/], {|xIt| cCamposSelect += ', ' + xIt})
+
+	cQuery := "SELECT"
+	cQuery += "	    " + cCamposSelect
+	cQuery += " FROM"
+	cQuery += "	    " + retSQLName(cAlias)
+	cQuery += " WHERE"
+	cQuery += "		" + cCampoFilial + " = ?"      ; aAdd(aParamsQuery, ::cCodigoFilial)  
+	cQuery += "		AND " + cCampoNegocio + " = ?" ; aAdd(aParamsQuery, ::cCodigoNegocio) 
+	cQuery += "		AND " + cCampoVersao + " = ?"  ; aAdd(aParamsQuery, cVersaoA)
+	cQuery += "		AND D_E_L_E_T_ = ''"
+	cQuery += " ORDER BY"
+	cQuery += " 	" + cCampoItem
+	cQuery := changeQuery(cQuery)
+
+	cNewAlias := GetNextAlias()
+	dbUseArea(.T., "TOPCONN", TcGenQry2(,,cQuery, aParamsQuery), cNewAlias, .F., .T.)
+
+	if (cNewAlias)->(!EOF())
+		dbSelectArea(cAlias)
+		aArea := (cAlias)->(FWGetArea())
+		(cAlias)->(dbSetOrder(retOrdem(cAlias, aTabela[2 /*2=cIndex*/])))
+		(cAlias)->(dbGoTop())
+
+		while (cNewAlias)->(!EOF())
+			if (cAlias)->(dbSeek(::cCodigoFilial + ::cCodigoNegocio + cVersaoB + &(cNewAlias + "->" + cCampoItem)))
+				oJsonHistoryItem := JsonObject():New()
+
+				for nX := 1 to len(aTabela[3 /*3=aCamposAlteraveis*/])
+					cValueA := ::valueToChar(aTabela[3, nX], &((cAlias)->(aTabela[3, nX])))
+					cValueB := ::valueToChar(aTabela[3, nX], &(cNewAlias + "->" + aTabela[3, nX]))
+
+					if cValueA != cValueB
+						jValues := JsonObject():New()
+						jValues['valor_antigo'] := cValueA
+						jValues['valor_atual']  := cValueB
+						oJsonHistoryItem[lower(aTabela[3, nX])] := jValues
+					endIf
+				next nX
+
+				if !empty(oJsonHistoryItem:getNames())
+					nIt++
+					aAdd(aJsonItens, JsonObject():New())
+					oJsonHistoryItem['item'] := &(cNewAlias + "->" + cCampoItem)
+					aJsonItens[nIt] := oJsonHistoryItem
+				endif
+			endIf
+
+			(cNewAlias)->(dbSkip())
+		endDo
+
+		FWrestArea(aArea)
+	endIf
+
+	(cNewAlias)->(dbCloseArea())
+return aJsonItens
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getDivergentItemsBetweenVersions
+Retorna os itens que não existem entre a versaoA e versaoB informadas
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param aTabela, array, tabela/campos e etc da tabela a ser consultada { cTabela, cChave, aCamposAlteraveis, cCampoItem }
+@param cVersaoA, character, codigo da versaoA
+@param cVersaoB, character, codigo da versaoB
+@param lShowOldValue, logical, mostra o valor anterior do campo (Sim/Nao)
+@return array, array de json 
+/*/
+method getDivergentItemsBetweenVersions(aTabela as array, cVersaoA as character, cVersaoB as character, lShowOldValue as logical) as array class agdNegocioHistoricoVersionamento
+	local cCamposSelect                                                   as character
+	local cQuery                                                          as character
+	local aParamsQuery  := {}                                             as array
+	local cCampoItem    := aTabela[4]                                     as character
+	local cAlias        := aTabela[1]                                     as character
+	local cTable        := retSQLName(cAlias)                             as character
+	local aCamposChave  := StrTokArr(aTabela[2 /*2=cIndex*/], '+')        as array
+	local cCampoFilial  := aCamposChave[1]                                as character
+	local cCampoNegocio := aCamposChave[2]                                as character
+	local cCampoVersao  := aCamposChave[3]                                as character
+	local nIt                                                             as numeric
+	local nX                                                              as numeric
+	local jValue                                                          as json
+	local aJsonItens    := {}                                             as array
+	local cNewAlias                                                       as character
+	local cCampoJson := iif(lShowOldValue, 'valor_antigo', 'valor_atual') as character
+
+	cCamposSelect := "TAB1." + cCampoItem
+	aEval(aTabela[3 /*3=aCamposAlteraveis*/], {|cCampos| cCamposSelect += ", TAB1." + cCampos})
+
+	cQuery := "SELECT"
+	cQuery += "     " + cCamposSelect
+	cQuery += " FROM"
+	cQuery += " 	" + cTable + " TAB1"
+	cQuery += " WHERE"
+	cQuery += " 	NOT EXISTS ("
+	cQuery += " 		SELECT"
+	cQuery += " 			1"
+	cQuery += " 		FROM"
+	cQuery += " 		" + cTable + " TAB2"
+	cQuery += " 		WHERE"
+	cQuery += " 			TAB2." + cCampoFilial + " = ?"       ; aAdd(aParamsQuery, ::cCodigoFilial)
+	cQuery += " 			AND TAB2." + cCampoNegocio + " = ?"  ; aAdd(aParamsQuery, ::cCodigoNegocio)
+	cQuery += " 			AND TAB2." + cCampoItem + " = TAB1." + cCampoItem
+	cQuery += " 			AND TAB2." + cCampoVersao + " = ?"   ; aAdd(aParamsQuery, cVersaoB)
+	cQuery += " 			AND TAB2.D_E_L_E_T_ = ''"
+	cQuery += " 	)"
+	cQuery += "		AND TAB1." + cCampoFilial + " = ?"           ; aAdd(aParamsQuery, ::cCodigoFilial)
+	cQuery += "		AND TAB1." + cCampoNegocio + " = ?"          ; aAdd(aParamsQuery, ::cCodigoNegocio)
+	cQuery += "		AND TAB1." + cCampoVersao + " = ?"           ; aAdd(aParamsQuery, cVersaoA)
+	cQuery += "		AND TAB1.D_E_L_E_T_ = ''"
+	cQuery += " ORDER BY"
+	cQuery += " 	" + cCampoItem
+	cQuery := changeQuery(cQuery)
+
+	cNewAlias := GetNextAlias()
+	dbUseArea(.T., "TOPCONN", TcGenQry2(,,cQuery, aParamsQuery), cNewAlias, .F., .T.)
+
+	while (cNewAlias)->(!EOF())
+		nIt++
+
+		aAdd(aJsonItens, JsonObject():New())
+		aJsonItens[nIt]['item'] := &((cNewAlias)->(cCampoItem))
+
+		for nX := 1 to len(aTabela[3 /*3=aCamposAlteraveis*/])
+			jValue := JsonObject():New()
+			jValue[cCampoJson] := ::valueToChar(aTabela[3,nX], &((cNewAlias)->(aTabela[3, nX])))
+			aJsonItens[nIt][lower(aTabela[3, nX])] := jValue
+		next nX
+
+		(cNewAlias)->(dbSkip())
+	endDo
+
+	(cNewAlias)->(dbCloseArea())
+return aJsonItens
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getAllVersionsAfterFirstFromNegocio
+Retorna todas as versoes do negocio após a primeira.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@return array, lista com as versoes { cCodVersao, cCodVersao, ...}
+/*/
+method getAllVersionsAfterFirstFromNegocio() as array class agdNegocioHistoricoVersionamento
+	local cQuery             as character
+	local aParamsQuery := {} as array
+	local cAlias             as character
+	local aVersion := {}     as array
+
+	cQuery := " SELECT"
+	cQuery += " 	NEA_VERSAO"
+	cQuery += " FROM"
+	cQuery += " 	" + retSqlName("NEA")
+	cQuery += " WHERE"
+	cQuery += " 	NEA_FILIAL = ?"     ; aAdd(aParamsQuery, ::cCodigoFilial)
+	cQuery += " 	AND NEA_CODIGO = ?" ; aAdd(aParamsQuery, ::cCodigoNegocio)
+	cQuery += " 	AND NEA_VERSAO > '001'"
+	cQuery += " 	AND D_E_L_E_T_ = ''"
+	cQuery += " ORDER BY"
+	cQuery += " 	NEA_VERSAO"
+	cQuery := changeQuery(cQuery)
+
+	cAlias := GetNextAlias()
+	dbUseArea(.T., "TOPCONN", TcGenQry2(,,cQuery, aParamsQuery), cAlias, .F., .T.)
+
+	while (cAlias)->(!EOF())
+		aAdd(aVersion, (cAlias)->NEA_VERSAO)
+		(cAlias)->(dbSkip())
+	endDo
+
+	(cAlias)->(dbCloseArea())
+return aVersion
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getUserDateTimeFromHistoryTable
+Retorna um array com usuario, data e hora da chave informada.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cChave, character, chave da tabela (Filial + CodigoNegocio + Versao)
+@return array, {cUser, cData, cTime}
+/*/
+method getUserDateTimeFromHistoryTable(cChave as character) as array class agdNegocioHistoricoVersionamento
+	local cQuery                as character
+	local oNegocioStatusService as object
+	local cAcao                 as character
+	local aParamsQuery  := {}   as array
+	local cAlias                as character
+	local aUserDateTime := {}   as array
+
+	oNegocioStatusService := agdNegocioStatusService():New(cChave)
+	cAcao := oNegocioStatusService:getStatusMessage('6') //='6' VERSIONADO
+	FreeObj(oNegocioStatusService)
+	
+	cQuery := " SELECT"
+	cQuery += " 	NE0_DATA,"
+	cQuery += " 	NE0_HORA,"
+	cQuery += " 	NE0_NOMUSU"
+	cQuery += " FROM "
+	cQuery += " 	" + retSQLname("NE0")
+	cQuery += " WHERE"
+	cQuery += " 	NE0_FILIAL = ?"        ; aAdd(aParamsQuery, FWxFilial("NE0"))
+	cQuery += " 	AND NE0_TABLE = 'NEA'" 
+	cQuery += " 	AND NE0_CHAVE = ?"     ; aAdd(aParamsQuery, cChave)
+	cQuery += " 	AND NE0_ACAO = ?"      ; aAdd(aParamsQuery, cAcao)
+	cQuery += " 	AND D_E_L_E_T_ = ''"
+	cQuery := changeQuery(cQuery)
+
+	cAlias := GetNextAlias()
+	dbUseArea(.T., "TOPCONN", TcGenQry2(,,cQuery, aParamsQuery), cAlias, .F., .T.)
+
+	if (cAlias)->(!EOF())
+		aUserDateTime := {alltrim((cAlias)->NE0_NOMUSU), (cAlias)->NE0_DATA, (cAlias)->NE0_HORA}
+	endif
+
+	(cAlias)->(dbCloseArea())
+return aUserDateTime
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getHistoryForDBTree
+Retorna o historico de versionamento no formato utilizado para DBtree()
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@return array, array com historico
+/*/
+method getHistoryForDBTree() as array class agdNegocioHistoricoVersionamento
+	local oJsonHistory := ::getHistory() as json
+	local aNodes := {}                   as array
+	local aDescricaoUserDateTime         as array
+	local nX                             as numeric
+	local cNivel                         as character
+	local cSubNivel                      as character
+	local cImgOpened                     as character
+	local cImgClosed                     as character
+	local nY                             as numeric
+	local cText                          as character
+	local nZ                             as numeric
+	local aNamesJson                     as array
+
+	if empty(oJsonHistory:getNames())
+		return aNodes
+	endIf
+
+	::cNodeId := replicate("0", 7)
+
+	aDescricaoUserDateTime := { ::getDescriptonFromField('NE0_NOMUSU'),;
+		::getDescriptonFromField('NE0_DATA'),;
+		::getDescriptonFromField('NE0_HORA') }
+
+	For nX := 1 To len(oJsonHistory['historico'])
+		cNivel := "00"
+
+		aAdd(aNodes, {cNivel, ::getNextNodeId(), "", Pad(STR0001 + " " + oJsonHistory['historico'][nX]['versao'], 60), cImgClosed,  cImgOpened}) //Versão
+
+		cNivel := soma1(cNivel)
+		aAdd(aNodes, {cNivel, ::getNextNodeId(), "", aDescricaoUserDateTime[1] + ";;" + oJsonHistory['historico'][nX]['usuario']         ,, cImgClosed, cImgOpened})
+		aAdd(aNodes, {cNivel, ::getNextNodeId(), "", aDescricaoUserDateTime[2] + ";;" + DtoC(sTod(oJsonHistory['historico'][nX]['data'])),, cImgClosed, cImgOpened})
+		aAdd(aNodes, {cNivel, ::getNextNodeId(), "", aDescricaoUserDateTime[3] + ";;" + oJsonHistory['historico'][nX]['hora']            ,, cImgClosed, cImgOpened})
+
+		If !empty(oJsonHistory['historico'][nX]['alteracoes'])
+			aAdd(aNodes, {cNivel, ::getNextNodeId(), "", STR0002,, cImgClosed, cImgOpened}) // "Alterações"
+
+			cNivel := soma1(cNivel)
+			cSubNivel := soma1(cNivel)
+			For nY := 1 To len(oJsonHistory['historico'][nX]['alteracoes'])
+				cText := alltrim(FwSX2Util():GetX2Name(oJsonHistory['historico'][nX]['alteracoes'][nY]['tabela']))
+				aAdd(aNodes, {cNivel, ::getNextNodeId(), "",cText,, cImgClosed, cImgOpened})
+
+				If oJsonHistory['historico'][nX]['alteracoes'][nY]:hasProperty("campos")
+					aNamesJson := oJsonHistory['historico'][nX]['alteracoes'][nY]['campos']:getNames()
+					For nZ := 1 To len(aNamesJson)
+						cText := ::getTextFormatedForNode(aNamesJson[nZ], oJsonHistory['historico'][nX]['alteracoes'][nY]['campos'][aNamesJson[nZ]])
+						aAdd(aNodes, {cSubNivel, ::getNextNodeId(), "", cText,, cImgClosed, cImgOpened})
+					Next nZ
+				EndIf
+
+				If oJsonHistory['historico'][nX]['alteracoes'][nY]:hasProperty("itens")
+					aNamesJson := oJsonHistory['historico'][nX]['alteracoes'][nY]['itens']:getNames()
+					For nZ := 1 to len(aNamesJson)
+						::addItensFromHistoryToNodes(@aNodes, soma1(cSubNivel), oJsonHistory['historico'][nX]['alteracoes'][nY]['itens'][aNamesJson[nZ]], aNamesJson[nZ])
+					Next nZ
+				Endif
+			Next nY
+		EndIf
+	Next nX
+
+	freeObj(oJsonHistory)
+return aNodes
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getNextNodeId
+Obtem o próximo NodeId
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@return character, proximo node id
+/*/
+method getNextNodeId() as character class agdNegocioHistoricoVersionamento
+return ::cNodeId := soma1(::cNodeId)
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getDescriptonFromField
+Retorna a descricao do campo informado atraves do dicionario de dados.
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cCampo, character, codigo do campo
+@return character, descricao do campo
+/*/
+method getDescriptonFromField(cCampo as character) as character class agdNegocioHistoricoVersionamento
+Return alltrim(FWSX3Util():GetDescription(upper(cCampo)))
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::getTextFormatedForNode
+Obtem o valor do campo e formata em um texto para o array da DBTree()
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cCampo, character, codigo do campo
+@param oJson, json, objeto com os valores do campo
+@return character, texto formatado
+/*/
+method getTextFormatedForNode(cCampo as character, oJson as json) as character class agdNegocioHistoricoVersionamento
+	local cText  as character
+
+	cText := ::getDescriptonFromField(upper(cCampo)) + ";"
+
+	if oJson:hasProperty('valor_antigo')
+		cText += oJson['valor_antigo']
+	endif
+	
+	if oJson:hasProperty('valor_atual')
+		cText += ";" + oJson['valor_atual']
+	endif
+	FreeObj(oJson)
+return cText
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::valueToChar
+Converte valores para character e limita o tamanho se necessario
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param cCampo, character, codigo do campo
+@param xValue, variant, valor a ser convertido
+@return character, valor convertido
+/*/
+method valueToChar(cCampo as character, xValue as variant) as character class agdNegocioHistoricoVersionamento
+	local cValor                                             as character
+	local cX3Tipo     := FwGetSx3Cache(cCampo, 'X3_TIPO')    as character
+	local nLimiteChar := 60                                  as numeric
+	local cPicture    := FwGetSx3Cache(cCampo, 'X3_PICTURE') as character
+
+	if cX3Tipo == 'M'
+		cValor := Alltrim(cValToChar(xValue))
+		if len(cValor) > nLimiteChar
+			cValor := left(cValor, nLimiteChar) + ' ...'
+		endif
+	elseIf cX3Tipo == 'D'
+		if valType(xValue) != 'D'
+			xValue := stoD(xValue)
+		endif
+		cValor := DtoC(xValue)
+	else
+		if empty(cPicture)
+			cValor := cValToChar(xValue)
+		else
+			cValor := Transform(xValue, cPicture)
+		endif
+	endif
+return alltrim(cValor)
+
+/*/{Protheus.doc} agdNegocioHistoricoVersionamento::addItensFromHistoryToNodes
+Funcao para auxilar no incremento dos 'itens' na array para o DBTREE
+@type method
+@version 12
+@author jc.maldonado
+@since 28/03/2025
+@param aNodes, array, variavel passada por referencia para ser incrementada
+@param cNivel, character, nivel utilizado na DBTREE
+@param oArrayJson, object, campos e seus valores
+@param cTitle, character, informa qual a origem dos dados (inseridos, atualizados ou removidos)
+/*/
+method addItensFromHistoryToNodes(aNodes, cNivel, oArrayJson, cTitle) class agdNegocioHistoricoVersionamento
+	local cText             as character
+	local nX                as numeric
+	local nY                as numeric
+	local cSubNvl           as character
+	Local aJsonNames        as array
+	local cImgOpened        as character
+	local cImgClosed        as character
+	local lAddComma  := .t. as logical
+
+	if cTitle == "inseridos"
+		cText := STR0003
+	elseIf cTitle == "atualizados"
+		cText := STR0004
+		lAddComma := .F.
+	elseIf cTitle == "removidos"
+		cText := STR0005
+	endif
+
+	cNivel := soma1(cNivel)
+	aAdd(aNodes, {cNivel, ::getNextNodeId(), "", cText,, cImgClosed, cImgOpened})
+
+	cNivel := soma1(cNivel)
+	cSubNvl := soma1(cNivel)
+	for nX := 1 to Len(oArrayJson)
+		aAdd(aNodes, {cNivel, ::getNextNodeId(), "", STR0006 + " " + oArrayJson[nX]['item'],, "", ""})
+
+		aJsonNames := oArrayJson[nX]:getNames()
+		for nY := 1 to Len(aJsonNames)
+			if aJsonNames[nY] != 'item'
+				cText := ::getTextFormatedForNode(aJsonNames[nY], oArrayJson[nX][aJsonNames[nY]])
+				aAdd(aNodes, {cSubNvl, ::getNextNodeId(), "", cText,, cImgClosed, cImgOpened})
+			endif
+		next nY
+	next nX
+return

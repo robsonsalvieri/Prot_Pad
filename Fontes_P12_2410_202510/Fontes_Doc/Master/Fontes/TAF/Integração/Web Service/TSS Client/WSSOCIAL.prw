@@ -1,0 +1,1287 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "apwebsrv.ch"
+#INCLUDE "TOTVS.ch"
+
+/* ===============================================================================
+WSDL Location    http://172.16.93.175:8060/TSSWSSOCIAL.apw?WSDL  
+Gerado em        11/09/18 16:39:29
+Observações      Código-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Alterações neste arquivo podem causar funcionamento incorreto
+                 e serão perdidas caso o código-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function WSSOCIAL ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSTSSWSSOCIAL
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSTSSWSSOCIAL
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD CONSULTAIDENTIFICADORES
+	WSMETHOD CONSULTARDOCUMENTOS
+	WSMETHOD ENVIARDOCUMENTOS
+	WSMETHOD EXPORTARDOCUMENTOS
+	WSMETHOD VALIDARDOCUMENTOS
+
+	WSDATA   _URL                      			AS String
+	WSDATA   _HEADOUT                  			AS Array of String
+	WSDATA   _COOKIES                  			AS Array of String
+	WSDATA   oWSENTCONSIDENT           			AS TSSWSSOCIAL_ENTCONSIDENT
+	WSDATA   oWSCONSULTAIDENTIFICADORESRESULT 	AS TSSWSSOCIAL_SAIDACONSIDENT
+	WSDATA   oWSENTCONSDADOS           			AS TSSWSSOCIAL_ENTCONSDADOS
+	WSDATA   oWSCONSULTARDOCUMENTOSRESULT 		AS TSSWSSOCIAL_SAIDACONSDADOS
+	WSDATA   oWSENTENVDADOS            			AS TSSWSSOCIAL_ENTENVDADOS
+	WSDATA   oWSENVIARDOCUMENTOSRESULT 			AS TSSWSSOCIAL_SAIDAENVDADOS
+	WSDATA   oWSENTEXPDADOS            			AS TSSWSSOCIAL_ENTEXPDADOS
+	WSDATA   oWSEXPORTARDOCUMENTOSRESULT 		AS TSSWSSOCIAL_SAIDAEXPDADOS
+	WSDATA   oWSENTXSDDADOS            			AS TSSWSSOCIAL_ENTXSDDADOS
+	WSDATA   oWSVALIDARDOCUMENTOSRESULT 		AS TSSWSSOCIAL_SAIDAXSDDADOS
+
+	WSDATA   cBearerToken 						AS String  
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSSEND cBearerToken WSCLIENT WSTSSWSSOCIAL
+
+Default cBearerToken := ""
+
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O Código-Fonte Client atual requer os executáveis do Protheus Build [7.00.131227A-20180712 NG] ou superior. Atualize o Protheus ou gere o Código-Fonte novamente utilizando o Build atual.")
+EndIf
+
+::cBearerToken := cBearerToken
+
+Return Self
+
+WSMETHOD INIT WSCLIENT WSTSSWSSOCIAL
+	::oWSENTCONSIDENT    := TSSWSSOCIAL_ENTCONSIDENT():New()
+	::oWSCONSULTAIDENTIFICADORESRESULT := TSSWSSOCIAL_SAIDACONSIDENT():New()
+	::oWSENTCONSDADOS    := TSSWSSOCIAL_ENTCONSDADOS():New()
+	::oWSCONSULTARDOCUMENTOSRESULT := TSSWSSOCIAL_SAIDACONSDADOS():New()
+	::oWSENTENVDADOS     := TSSWSSOCIAL_ENTENVDADOS():New()
+	::oWSENVIARDOCUMENTOSRESULT := TSSWSSOCIAL_SAIDAENVDADOS():New()
+	::oWSENTEXPDADOS     := TSSWSSOCIAL_ENTEXPDADOS():New()
+	::oWSEXPORTARDOCUMENTOSRESULT := TSSWSSOCIAL_SAIDAEXPDADOS():New()
+	::oWSENTXSDDADOS     := TSSWSSOCIAL_ENTXSDDADOS():New()
+	::oWSVALIDARDOCUMENTOSRESULT := TSSWSSOCIAL_SAIDAXSDDADOS():New()
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSENTCONSIDENT    := ::oWSENTCONSIDENT
+	::oWSENTCONSDADOS    := ::oWSENTCONSDADOS
+	::oWSENTENVDADOS     := ::oWSENTENVDADOS
+	::oWSENTEXPDADOS     := ::oWSENTEXPDADOS
+	::oWSENTXSDDADOS     := ::oWSENTXSDDADOS
+Return
+
+WSMETHOD RESET WSCLIENT WSTSSWSSOCIAL
+	::oWSENTCONSIDENT    := NIL 
+	::oWSCONSULTAIDENTIFICADORESRESULT := NIL 
+	::oWSENTCONSDADOS    := NIL 
+	::oWSCONSULTARDOCUMENTOSRESULT := NIL 
+	::oWSENTENVDADOS     := NIL 
+	::oWSENVIARDOCUMENTOSRESULT := NIL 
+	::oWSENTEXPDADOS     := NIL 
+	::oWSEXPORTARDOCUMENTOSRESULT := NIL 
+	::oWSENTXSDDADOS     := NIL 
+	::oWSVALIDARDOCUMENTOSRESULT := NIL 
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSENTCONSIDENT    := NIL
+	::oWSENTCONSDADOS    := NIL
+	::oWSENTENVDADOS     := NIL
+	::oWSENTEXPDADOS     := NIL
+	::oWSENTXSDDADOS     := NIL
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSTSSWSSOCIAL
+Local oClone := WSTSSWSSOCIAL():New()
+	oClone:_URL          := ::_URL 
+	oClone:oWSENTCONSIDENT :=  IIF(::oWSENTCONSIDENT = NIL , NIL ,::oWSENTCONSIDENT:Clone() )
+	oClone:oWSCONSULTAIDENTIFICADORESRESULT :=  IIF(::oWSCONSULTAIDENTIFICADORESRESULT = NIL , NIL ,::oWSCONSULTAIDENTIFICADORESRESULT:Clone() )
+	oClone:oWSENTCONSDADOS :=  IIF(::oWSENTCONSDADOS = NIL , NIL ,::oWSENTCONSDADOS:Clone() )
+	oClone:oWSCONSULTARDOCUMENTOSRESULT :=  IIF(::oWSCONSULTARDOCUMENTOSRESULT = NIL , NIL ,::oWSCONSULTARDOCUMENTOSRESULT:Clone() )
+	oClone:oWSENTENVDADOS :=  IIF(::oWSENTENVDADOS = NIL , NIL ,::oWSENTENVDADOS:Clone() )
+	oClone:oWSENVIARDOCUMENTOSRESULT :=  IIF(::oWSENVIARDOCUMENTOSRESULT = NIL , NIL ,::oWSENVIARDOCUMENTOSRESULT:Clone() )
+	oClone:oWSENTEXPDADOS :=  IIF(::oWSENTEXPDADOS = NIL , NIL ,::oWSENTEXPDADOS:Clone() )
+	oClone:oWSEXPORTARDOCUMENTOSRESULT :=  IIF(::oWSEXPORTARDOCUMENTOSRESULT = NIL , NIL ,::oWSEXPORTARDOCUMENTOSRESULT:Clone() )
+	oClone:oWSENTXSDDADOS :=  IIF(::oWSENTXSDDADOS = NIL , NIL ,::oWSENTXSDDADOS:Clone() )
+	oClone:oWSVALIDARDOCUMENTOSRESULT :=  IIF(::oWSVALIDARDOCUMENTOSRESULT = NIL , NIL ,::oWSVALIDARDOCUMENTOSRESULT:Clone() )
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	oClone:oWSENTCONSIDENT := oClone:oWSENTCONSIDENT
+	oClone:oWSENTCONSDADOS := oClone:oWSENTCONSDADOS
+	oClone:oWSENTENVDADOS := oClone:oWSENTENVDADOS
+	oClone:oWSENTEXPDADOS := oClone:oWSENTEXPDADOS
+	oClone:oWSENTXSDDADOS := oClone:oWSENTXSDDADOS
+Return oClone
+
+// WSDL Method CONSULTAIDENTIFICADORES of Service WSTSSWSSOCIAL
+
+WSMETHOD CONSULTAIDENTIFICADORES WSSEND oWSENTCONSIDENT WSRECEIVE oWSCONSULTAIDENTIFICADORESRESULT WSCLIENT WSTSSWSSOCIAL
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CONSULTAIDENTIFICADORES xmlns="http://webservices.totvs.com.br/tsswssocial.apw">'
+cSoap += WSSoapValue("ENTCONSIDENT", ::oWSENTCONSIDENT, oWSENTCONSIDENT , "ENTCONSIDENT", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CONSULTAIDENTIFICADORES>"
+
+oXmlRet := SvcSoapCall(	Iif( FindFunction( "TafSetTssHeader" ), TafSetTssHeader(Self,::cBearerToken), Self ),cSoap,; 
+	"http://webservices.totvs.com.br/tsswssocial.apw/CONSULTAIDENTIFICADORES",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswssocial.apw",,"1.031217",; 
+	"http://localhost:8080/TSSWSSOCIAL.apw")
+
+::Init()
+::oWSCONSULTAIDENTIFICADORESRESULT:SoapRecv( WSAdvValue( oXmlRet,"_CONSULTAIDENTIFICADORESRESPONSE:_CONSULTAIDENTIFICADORESRESULT","SAIDACONSIDENT",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CONSULTARDOCUMENTOS of Service WSTSSWSSOCIAL
+
+WSMETHOD CONSULTARDOCUMENTOS WSSEND oWSENTCONSDADOS WSRECEIVE oWSCONSULTARDOCUMENTOSRESULT WSCLIENT WSTSSWSSOCIAL
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CONSULTARDOCUMENTOS xmlns="http://webservices.totvs.com.br/tsswssocial.apw">'
+cSoap += WSSoapValue("ENTCONSDADOS", ::oWSENTCONSDADOS, oWSENTCONSDADOS , "ENTCONSDADOS", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CONSULTARDOCUMENTOS>"
+
+oXmlRet := SvcSoapCall(	Iif( FindFunction( "TafSetTssHeader" ), TafSetTssHeader(Self,::cBearerToken), Self ),cSoap,; 
+	"http://webservices.totvs.com.br/tsswssocial.apw/CONSULTARDOCUMENTOS",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswssocial.apw",,"1.031217",; 
+	"http://172.16.93.175:8060/TSSWSSOCIAL.apw")
+
+::Init()
+::oWSCONSULTARDOCUMENTOSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_CONSULTARDOCUMENTOSRESPONSE:_CONSULTARDOCUMENTOSRESULT","SAIDACONSDADOS",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method ENVIARDOCUMENTOS of Service WSTSSWSSOCIAL
+
+WSMETHOD ENVIARDOCUMENTOS WSSEND oWSENTENVDADOS WSRECEIVE oWSENVIARDOCUMENTOSRESULT WSCLIENT WSTSSWSSOCIAL
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<ENVIARDOCUMENTOS xmlns="http://webservices.totvs.com.br/tsswssocial.apw">'
+cSoap += WSSoapValue("ENTENVDADOS", ::oWSENTENVDADOS, oWSENTENVDADOS , "ENTENVDADOS", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</ENVIARDOCUMENTOS>"
+
+oXmlRet := SvcSoapCall(	Iif( FindFunction( "TafSetTssHeader" ), TafSetTssHeader(Self,::cBearerToken), Self ),cSoap,; 
+	"http://webservices.totvs.com.br/tsswssocial.apw/ENVIARDOCUMENTOS",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswssocial.apw",,"1.031217",; 
+	"http://172.16.93.175:8060/TSSWSSOCIAL.apw")
+
+::Init()
+::oWSENVIARDOCUMENTOSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_ENVIARDOCUMENTOSRESPONSE:_ENVIARDOCUMENTOSRESULT","SAIDAENVDADOS",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method EXPORTARDOCUMENTOS of Service WSTSSWSSOCIAL
+
+WSMETHOD EXPORTARDOCUMENTOS WSSEND oWSENTEXPDADOS WSRECEIVE oWSEXPORTARDOCUMENTOSRESULT WSCLIENT WSTSSWSSOCIAL
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<EXPORTARDOCUMENTOS xmlns="http://webservices.totvs.com.br/tsswssocial.apw">'
+cSoap += WSSoapValue("ENTEXPDADOS", ::oWSENTEXPDADOS, oWSENTEXPDADOS , "ENTEXPDADOS", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</EXPORTARDOCUMENTOS>"
+
+oXmlRet := SvcSoapCall(	Iif( FindFunction( "TafSetTssHeader" ), TafSetTssHeader(Self,::cBearerToken), Self ),cSoap,; 
+	"http://webservices.totvs.com.br/tsswssocial.apw/EXPORTARDOCUMENTOS",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswssocial.apw",,"1.031217",; 
+	"http://172.16.93.175:8060/TSSWSSOCIAL.apw")
+
+::Init()
+::oWSEXPORTARDOCUMENTOSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_EXPORTARDOCUMENTOSRESPONSE:_EXPORTARDOCUMENTOSRESULT","SAIDAEXPDADOS",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method VALIDARDOCUMENTOS of Service WSTSSWSSOCIAL
+
+WSMETHOD VALIDARDOCUMENTOS WSSEND oWSENTXSDDADOS WSRECEIVE oWSVALIDARDOCUMENTOSRESULT WSCLIENT WSTSSWSSOCIAL
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<VALIDARDOCUMENTOS xmlns="http://webservices.totvs.com.br/tsswssocial.apw">'
+cSoap += WSSoapValue("ENTXSDDADOS", ::oWSENTXSDDADOS, oWSENTXSDDADOS , "ENTXSDDADOS", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</VALIDARDOCUMENTOS>"
+
+oXmlRet := SvcSoapCall(	Iif( FindFunction( "TafSetTssHeader" ), TafSetTssHeader(Self,::cBearerToken), Self ),cSoap,; 
+	"http://webservices.totvs.com.br/tsswssocial.apw/VALIDARDOCUMENTOS",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswssocial.apw",,"1.031217",; 
+	"http://172.16.93.175:8060/TSSWSSOCIAL.apw")
+
+::Init()
+::oWSVALIDARDOCUMENTOSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_VALIDARDOCUMENTOSRESPONSE:_VALIDARDOCUMENTOSRESULT","SAIDAXSDDADOS",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure ENTCONSIDENT
+
+WSSTRUCT TSSWSSOCIAL_ENTCONSIDENT
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   cID_ENT                   AS string
+	WSDATA   cTIPOCONSULTA             AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSDATA   cXML                      AS base64Binary
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTCONSIDENT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTCONSIDENT
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTCONSIDENT
+	Local oClone := TSSWSSOCIAL_ENTCONSIDENT():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:cTIPOCONSULTA        := ::cTIPOCONSULTA
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+	oClone:cXML                 := ::cXML
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTCONSIDENT
+	Local cSoap := ""
+	cSoap += WSSoapValue("AMBIENTE", ::cAMBIENTE, ::cAMBIENTE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID_ENT", ::cID_ENT, ::cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TIPOCONSULTA", ::cTIPOCONSULTA, ::cTIPOCONSULTA , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("XML", ::cXML, ::cXML , "base64Binary", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDACONSIDENT
+
+WSSTRUCT TSSWSSOCIAL_SAIDACONSIDENT
+	WSDATA   cMENSAGEM                 AS string OPTIONAL
+	WSDATA   lRESULT                   AS boolean
+	WSDATA   cXMLRESULT                AS base64Binary OPTIONAL
+	WSDATA   cXMLSIG                   AS base64Binary OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDACONSIDENT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDACONSIDENT
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDACONSIDENT
+	Local oClone := TSSWSSOCIAL_SAIDACONSIDENT():NEW()
+	oClone:cMENSAGEM            := ::cMENSAGEM
+	oClone:lRESULT              := ::lRESULT
+	oClone:cXMLRESULT           := ::cXMLRESULT
+	oClone:cXMLSIG              := ::cXMLSIG
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDACONSIDENT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cMENSAGEM          :=  WSAdvValue( oResponse,"_MENSAGEM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::lRESULT            :=  WSAdvValue( oResponse,"_RESULT","boolean",NIL,"Property lRESULT as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+	::cXMLRESULT         :=  WSAdvValue( oResponse,"_XMLRESULT","base64Binary",NIL,NIL,NIL,"SB",NIL,NIL) 
+	::cXMLSIG            :=  WSAdvValue( oResponse,"_XMLSIG","base64Binary",NIL,NIL,NIL,"SB",NIL,NIL) 
+Return
+
+// WSDL Data Structure ENTCONSDADOS
+
+WSSTRUCT TSSWSSOCIAL_ENTCONSDADOS
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   oWSENTCONSDOCS            AS TSSWSSOCIAL_ARRAYOFENTCONSDOC
+	WSDATA   cID_ENT                   AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTCONSDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTCONSDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTCONSDADOS
+	Local oClone := TSSWSSOCIAL_ENTCONSDADOS():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:oWSENTCONSDOCS       := IIF(::oWSENTCONSDOCS = NIL , NIL , ::oWSENTCONSDOCS:Clone() )
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTCONSDADOS
+	Local cSoap := ""
+	cSoap += WSSoapValue("AMBIENTE", ::cAMBIENTE, ::cAMBIENTE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTCONSDOCS", ::oWSENTCONSDOCS, ::oWSENTCONSDOCS , "ARRAYOFENTCONSDOC", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID_ENT", ::cID_ENT, ::cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDACONSDADOS
+
+WSSTRUCT TSSWSSOCIAL_SAIDACONSDADOS
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   cID_ENT                   AS string
+	WSDATA   oWSSAIDACONSDOCS          AS TSSWSSOCIAL_ARRAYOFSAIDACONSDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDACONSDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDACONSDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDACONSDADOS
+	Local oClone := TSSWSSOCIAL_SAIDACONSDADOS():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:oWSSAIDACONSDOCS     := IIF(::oWSSAIDACONSDOCS = NIL , NIL , ::oWSSAIDACONSDOCS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDACONSDADOS
+	Local oNode3
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTE          :=  WSAdvValue( oResponse,"_AMBIENTE","string",NIL,"Property cAMBIENTE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cID_ENT            :=  WSAdvValue( oResponse,"_ID_ENT","string",NIL,"Property cID_ENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode3 :=  WSAdvValue( oResponse,"_SAIDACONSDOCS","ARRAYOFSAIDACONSDOC",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode3 != NIL
+		::oWSSAIDACONSDOCS := TSSWSSOCIAL_ARRAYOFSAIDACONSDOC():New()
+		::oWSSAIDACONSDOCS:SoapRecv(oNode3)
+	EndIf
+Return
+
+// WSDL Data Structure ENTENVDADOS
+
+WSSTRUCT TSSWSSOCIAL_ENTENVDADOS
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   oWSENTENVDOCS             AS TSSWSSOCIAL_ARRAYOFENTENVDOC
+	WSDATA   cID_ENT                   AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTENVDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTENVDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTENVDADOS
+	Local oClone := TSSWSSOCIAL_ENTENVDADOS():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:oWSENTENVDOCS        := IIF(::oWSENTENVDOCS = NIL , NIL , ::oWSENTENVDOCS:Clone() )
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTENVDADOS
+	Local cSoap := ""
+	cSoap += WSSoapValue("AMBIENTE", ::cAMBIENTE, ::cAMBIENTE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTENVDOCS", ::oWSENTENVDOCS, ::oWSENTENVDOCS , "ARRAYOFENTENVDOC", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID_ENT", ::cID_ENT, ::cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDAENVDADOS
+
+WSSTRUCT TSSWSSOCIAL_SAIDAENVDADOS
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   cID_ENT                   AS string
+	WSDATA   oWSSAIDAENVDOCS           AS TSSWSSOCIAL_ARRAYOFSAIDAENVDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDAENVDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDAENVDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDAENVDADOS
+	Local oClone := TSSWSSOCIAL_SAIDAENVDADOS():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:oWSSAIDAENVDOCS      := IIF(::oWSSAIDAENVDOCS = NIL , NIL , ::oWSSAIDAENVDOCS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDAENVDADOS
+	Local oNode3
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTE          :=  WSAdvValue( oResponse,"_AMBIENTE","string",NIL,"Property cAMBIENTE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cID_ENT            :=  WSAdvValue( oResponse,"_ID_ENT","string",NIL,"Property cID_ENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode3 :=  WSAdvValue( oResponse,"_SAIDAENVDOCS","ARRAYOFSAIDAENVDOC",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode3 != NIL
+		::oWSSAIDAENVDOCS := TSSWSSOCIAL_ARRAYOFSAIDAENVDOC():New()
+		::oWSSAIDAENVDOCS:SoapRecv(oNode3)
+	EndIf
+Return
+
+// WSDL Data Structure ENTEXPDADOS
+
+WSSTRUCT TSSWSSOCIAL_ENTEXPDADOS
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   oWSENTEXPDOCS             AS TSSWSSOCIAL_ARRAYOFENTEXPDOC
+	WSDATA   cID_ENT                   AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTEXPDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTEXPDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTEXPDADOS
+	Local oClone := TSSWSSOCIAL_ENTEXPDADOS():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:oWSENTEXPDOCS        := IIF(::oWSENTEXPDOCS = NIL , NIL , ::oWSENTEXPDOCS:Clone() )
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTEXPDADOS
+	Local cSoap := ""
+	cSoap += WSSoapValue("AMBIENTE", ::cAMBIENTE, ::cAMBIENTE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTEXPDOCS", ::oWSENTEXPDOCS, ::oWSENTEXPDOCS , "ARRAYOFENTEXPDOC", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID_ENT", ::cID_ENT, ::cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDAEXPDADOS
+
+WSSTRUCT TSSWSSOCIAL_SAIDAEXPDADOS
+	WSDATA   cAMBIENTE                 AS string
+	WSDATA   cID_ENT                   AS string
+	WSDATA   oWSSAIDAEXPDOCS           AS TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDAEXPDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDAEXPDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDAEXPDADOS
+	Local oClone := TSSWSSOCIAL_SAIDAEXPDADOS():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:oWSSAIDAEXPDOCS      := IIF(::oWSSAIDAEXPDOCS = NIL , NIL , ::oWSSAIDAEXPDOCS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDAEXPDADOS
+	Local oNode3
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTE          :=  WSAdvValue( oResponse,"_AMBIENTE","string",NIL,"Property cAMBIENTE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cID_ENT            :=  WSAdvValue( oResponse,"_ID_ENT","string",NIL,"Property cID_ENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode3 :=  WSAdvValue( oResponse,"_SAIDAEXPDOCS","ARRAYOFSAIDAEXPDOC",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode3 != NIL
+		::oWSSAIDAEXPDOCS := TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC():New()
+		::oWSSAIDAEXPDOCS:SoapRecv(oNode3)
+	EndIf
+Return
+
+// WSDL Data Structure ENTXSDDADOS
+
+WSSTRUCT TSSWSSOCIAL_ENTXSDDADOS
+	WSDATA   oWSENTXSDDOCS             AS TSSWSSOCIAL_ARRAYOFENTXSDDOC
+	WSDATA   cID_ENT                   AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTXSDDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTXSDDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTXSDDADOS
+	Local oClone := TSSWSSOCIAL_ENTXSDDADOS():NEW()
+	oClone:oWSENTXSDDOCS        := IIF(::oWSENTXSDDOCS = NIL , NIL , ::oWSENTXSDDOCS:Clone() )
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTXSDDADOS
+	Local cSoap := ""
+	cSoap += WSSoapValue("ENTXSDDOCS", ::oWSENTXSDDOCS, ::oWSENTXSDDOCS , "ARRAYOFENTXSDDOC", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID_ENT", ::cID_ENT, ::cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDAXSDDADOS
+
+WSSTRUCT TSSWSSOCIAL_SAIDAXSDDADOS
+	WSDATA   cID_ENT                   AS string
+	WSDATA   oWSSAIDAXSDDOCS           AS TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDAXSDDADOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDAXSDDADOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDAXSDDADOS
+	Local oClone := TSSWSSOCIAL_SAIDAXSDDADOS():NEW()
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:oWSSAIDAXSDDOCS      := IIF(::oWSSAIDAXSDDOCS = NIL , NIL , ::oWSSAIDAXSDDOCS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDAXSDDADOS
+	Local oNode2
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cID_ENT            :=  WSAdvValue( oResponse,"_ID_ENT","string",NIL,"Property cID_ENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode2 :=  WSAdvValue( oResponse,"_SAIDAXSDDOCS","ARRAYOFSAIDAXSDDOC",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSSAIDAXSDDOCS := TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC():New()
+		::oWSSAIDAXSDDOCS:SoapRecv(oNode2)
+	EndIf
+Return
+
+// WSDL Data Structure ARRAYOFENTCONSDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFENTCONSDOC
+	WSDATA   oWSENTCONSDOC             AS TSSWSSOCIAL_ENTCONSDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFENTCONSDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFENTCONSDOC
+	::oWSENTCONSDOC        := {} // Array Of  TSSWSSOCIAL_ENTCONSDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFENTCONSDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFENTCONSDOC():NEW()
+	oClone:oWSENTCONSDOC := NIL
+	If ::oWSENTCONSDOC <> NIL 
+		oClone:oWSENTCONSDOC := {}
+		aEval( ::oWSENTCONSDOC , { |x| aadd( oClone:oWSENTCONSDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ARRAYOFENTCONSDOC
+	Local cSoap := ""
+	aEval( ::oWSENTCONSDOC , {|x| cSoap := cSoap  +  WSSoapValue("ENTCONSDOC", x , x , "ENTCONSDOC", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFSAIDACONSDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFSAIDACONSDOC
+	WSDATA   oWSSAIDACONSDOC           AS TSSWSSOCIAL_SAIDACONSDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDACONSDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDACONSDOC
+	::oWSSAIDACONSDOC      := {} // Array Of  TSSWSSOCIAL_SAIDACONSDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDACONSDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFSAIDACONSDOC():NEW()
+	oClone:oWSSAIDACONSDOC := NIL
+	If ::oWSSAIDACONSDOC <> NIL 
+		oClone:oWSSAIDACONSDOC := {}
+		aEval( ::oWSSAIDACONSDOC , { |x| aadd( oClone:oWSSAIDACONSDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDACONSDOC
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_SAIDACONSDOC","SAIDACONSDOC",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSSAIDACONSDOC , TSSWSSOCIAL_SAIDACONSDOC():New() )
+			::oWSSAIDACONSDOC[len(::oWSSAIDACONSDOC)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFENTENVDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFENTENVDOC
+	WSDATA   oWSENTENVDOC              AS TSSWSSOCIAL_ENTENVDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFENTENVDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFENTENVDOC
+	::oWSENTENVDOC         := {} // Array Of  TSSWSSOCIAL_ENTENVDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFENTENVDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFENTENVDOC():NEW()
+	oClone:oWSENTENVDOC := NIL
+	If ::oWSENTENVDOC <> NIL 
+		oClone:oWSENTENVDOC := {}
+		aEval( ::oWSENTENVDOC , { |x| aadd( oClone:oWSENTENVDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ARRAYOFENTENVDOC
+	Local cSoap := ""
+	aEval( ::oWSENTENVDOC , {|x| cSoap := cSoap  +  WSSoapValue("ENTENVDOC", x , x , "ENTENVDOC", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFSAIDAENVDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFSAIDAENVDOC
+	WSDATA   oWSSAIDAENVDOC            AS TSSWSSOCIAL_SAIDAENVDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAENVDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAENVDOC
+	::oWSSAIDAENVDOC       := {} // Array Of  TSSWSSOCIAL_SAIDAENVDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAENVDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFSAIDAENVDOC():NEW()
+	oClone:oWSSAIDAENVDOC := NIL
+	If ::oWSSAIDAENVDOC <> NIL 
+		oClone:oWSSAIDAENVDOC := {}
+		aEval( ::oWSSAIDAENVDOC , { |x| aadd( oClone:oWSSAIDAENVDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAENVDOC
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_SAIDAENVDOC","SAIDAENVDOC",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSSAIDAENVDOC , TSSWSSOCIAL_SAIDAENVDOC():New() )
+			::oWSSAIDAENVDOC[len(::oWSSAIDAENVDOC)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFENTEXPDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFENTEXPDOC
+	WSDATA   oWSENTEXPDOC              AS TSSWSSOCIAL_ENTEXPDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFENTEXPDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFENTEXPDOC
+	::oWSENTEXPDOC         := {} // Array Of  TSSWSSOCIAL_ENTEXPDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFENTEXPDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFENTEXPDOC():NEW()
+	oClone:oWSENTEXPDOC := NIL
+	If ::oWSENTEXPDOC <> NIL 
+		oClone:oWSENTEXPDOC := {}
+		aEval( ::oWSENTEXPDOC , { |x| aadd( oClone:oWSENTEXPDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ARRAYOFENTEXPDOC
+	Local cSoap := ""
+	aEval( ::oWSENTEXPDOC , {|x| cSoap := cSoap  +  WSSoapValue("ENTEXPDOC", x , x , "ENTEXPDOC", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFSAIDAEXPDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC
+	WSDATA   oWSSAIDAEXPDOC            AS TSSWSSOCIAL_SAIDAEXPDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC
+	::oWSSAIDAEXPDOC       := {} // Array Of  TSSWSSOCIAL_SAIDAEXPDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC():NEW()
+	oClone:oWSSAIDAEXPDOC := NIL
+	If ::oWSSAIDAEXPDOC <> NIL 
+		oClone:oWSSAIDAEXPDOC := {}
+		aEval( ::oWSSAIDAEXPDOC , { |x| aadd( oClone:oWSSAIDAEXPDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAEXPDOC
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_SAIDAEXPDOC","SAIDAEXPDOC",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSSAIDAEXPDOC , TSSWSSOCIAL_SAIDAEXPDOC():New() )
+			::oWSSAIDAEXPDOC[len(::oWSSAIDAEXPDOC)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFENTXSDDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFENTXSDDOC
+	WSDATA   oWSENTXSDDOC              AS TSSWSSOCIAL_ENTXSDDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFENTXSDDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFENTXSDDOC
+	::oWSENTXSDDOC         := {} // Array Of  TSSWSSOCIAL_ENTXSDDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFENTXSDDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFENTXSDDOC():NEW()
+	oClone:oWSENTXSDDOC := NIL
+	If ::oWSENTXSDDOC <> NIL 
+		oClone:oWSENTXSDDOC := {}
+		aEval( ::oWSENTXSDDOC , { |x| aadd( oClone:oWSENTXSDDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ARRAYOFENTXSDDOC
+	Local cSoap := ""
+	aEval( ::oWSENTXSDDOC , {|x| cSoap := cSoap  +  WSSoapValue("ENTXSDDOC", x , x , "ENTXSDDOC", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFSAIDAXSDDOC
+
+WSSTRUCT TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC
+	WSDATA   oWSSAIDAXSDDOC            AS TSSWSSOCIAL_SAIDAXSDDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC
+	::oWSSAIDAXSDDOC       := {} // Array Of  TSSWSSOCIAL_SAIDAXSDDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC
+	Local oClone := TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC():NEW()
+	oClone:oWSSAIDAXSDDOC := NIL
+	If ::oWSSAIDAXSDDOC <> NIL 
+		oClone:oWSSAIDAXSDDOC := {}
+		aEval( ::oWSSAIDAXSDDOC , { |x| aadd( oClone:oWSSAIDAXSDDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_ARRAYOFSAIDAXSDDOC
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_SAIDAXSDDOC","SAIDAXSDDOC",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSSAIDAXSDDOC , TSSWSSOCIAL_SAIDAXSDDOC():New() )
+			::oWSSAIDAXSDDOC[len(::oWSSAIDAXSDDOC)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ENTCONSDOC
+
+WSSTRUCT TSSWSSOCIAL_ENTCONSDOC
+	WSDATA   cCODIGO                   AS string
+	WSDATA   lHISTPROC                 AS boolean OPTIONAL
+	WSDATA   cID                       AS string
+	WSDATA   lRETORNAXML               AS boolean
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTCONSDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTCONSDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTCONSDOC
+	Local oClone := TSSWSSOCIAL_ENTCONSDOC():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:lHISTPROC            := ::lHISTPROC
+	oClone:cID                  := ::cID
+	oClone:lRETORNAXML          := ::lRETORNAXML
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTCONSDOC
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODIGO", ::cCODIGO, ::cCODIGO , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("HISTPROC", ::lHISTPROC, ::lHISTPROC , "boolean", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("RETORNAXML", ::lRETORNAXML, ::lRETORNAXML , "boolean", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDACONSDOC
+
+WSSTRUCT TSSWSSOCIAL_SAIDACONSDOC
+	WSDATA   cAMBIENTE                 AS string OPTIONAL
+	WSDATA   cCHAVE                    AS string OPTIONAL
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cCODRECEITA               AS string OPTIONAL
+	WSDATA   cDETSTATUS                AS string OPTIONAL
+	WSDATA   cDHRECEPCAO               AS string OPTIONAL
+	WSDATA   cDSCRECEITA               AS string OPTIONAL
+	WSDATA   dDTENTRADA                AS date OPTIONAL
+	WSDATA   dDTTRANS                  AS date OPTIONAL
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   cHISTPROC                 AS string OPTIONAL
+	WSDATA   cHRENTRADA                AS string OPTIONAL
+	WSDATA   cHRTRANS                  AS string OPTIONAL
+	WSDATA   cID                       AS string
+	WSDATA   cLOTE                     AS string OPTIONAL
+	WSDATA   cPROTOCOLO                AS string OPTIONAL
+	WSDATA   cRECIBO                   AS string OPTIONAL
+	WSDATA   cSTATUS                   AS string
+	WSDATA   lSUCESSO                  AS boolean
+	WSDATA   cVERSAO                   AS string OPTIONAL
+	WSDATA   cXMLBASE64                AS base64Binary OPTIONAL
+	WSDATA   cXMLERRORET               AS string OPTIONAL
+	WSDATA   cXMLEVENTO                AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDACONSDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDACONSDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDACONSDOC
+	Local oClone := TSSWSSOCIAL_SAIDACONSDOC():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cCHAVE               := ::cCHAVE
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cCODRECEITA          := ::cCODRECEITA
+	oClone:cDETSTATUS           := ::cDETSTATUS
+	oClone:cDHRECEPCAO          := ::cDHRECEPCAO
+	oClone:cDSCRECEITA          := ::cDSCRECEITA
+	oClone:dDTENTRADA           := ::dDTENTRADA
+	oClone:dDTTRANS             := ::dDTTRANS
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:cHISTPROC            := ::cHISTPROC
+	oClone:cHRENTRADA           := ::cHRENTRADA
+	oClone:cHRTRANS             := ::cHRTRANS
+	oClone:cID                  := ::cID
+	oClone:cLOTE                := ::cLOTE
+	oClone:cPROTOCOLO           := ::cPROTOCOLO
+	oClone:cRECIBO              := ::cRECIBO
+	oClone:cSTATUS              := ::cSTATUS
+	oClone:lSUCESSO             := ::lSUCESSO
+	oClone:cVERSAO              := ::cVERSAO
+	oClone:cXMLBASE64           := ::cXMLBASE64
+	oClone:cXMLERRORET          := ::cXMLERRORET
+	oClone:cXMLEVENTO           := ::cXMLEVENTO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDACONSDOC
+    
+	Local cBase64 := ""
+
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTE          :=  WSAdvValue( oResponse,"_AMBIENTE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCHAVE             :=  WSAdvValue( oResponse,"_CHAVE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODIGO            :=  WSAdvValue( oResponse,"_CODIGO","string",NIL,"Property cCODIGO as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cCODRECEITA        :=  WSAdvValue( oResponse,"_CODRECEITA","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDETSTATUS         :=  WSAdvValue( oResponse,"_DETSTATUS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDHRECEPCAO        :=  WSAdvValue( oResponse,"_DHRECEPCAO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDSCRECEITA        :=  WSAdvValue( oResponse,"_DSCRECEITA","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dDTENTRADA         :=  WSAdvValue( oResponse,"_DTENTRADA","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::dDTTRANS           :=  WSAdvValue( oResponse,"_DTTRANS","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cENTIDADE          :=  WSAdvValue( oResponse,"_ENTIDADE","string",NIL,"Property cENTIDADE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cHISTPROC          :=  WSAdvValue( oResponse,"_HISTPROC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHRENTRADA         :=  WSAdvValue( oResponse,"_HRENTRADA","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHRTRANS           :=  WSAdvValue( oResponse,"_HRTRANS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cLOTE              :=  WSAdvValue( oResponse,"_LOTE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cPROTOCOLO         :=  WSAdvValue( oResponse,"_PROTOCOLO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cRECIBO            :=  WSAdvValue( oResponse,"_RECIBO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATUS            :=  WSAdvValue( oResponse,"_STATUS","string",NIL,"Property cSTATUS as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSUCESSO           :=  WSAdvValue( oResponse,"_SUCESSO","boolean",NIL,"Property lSUCESSO as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+	::cVERSAO            :=  WSAdvValue( oResponse,"_VERSAO","string",NIL,NIL,NIL,"S",NIL,NIL)
+	
+	If type("oResponse:_xmlbase64:text") == "U" .AND. !Empty(oResponse:_xmlbase64:text)
+		GzStrDecomp(Decode64(oResponse:_xmlbase64:text), Len(Decode64(oResponse:_xmlbase64:text)), @cBase64)
+		::cXMLBASE64         :=  cBase64
+	EndIf
+	
+	::cXMLERRORET        :=  WSAdvValue( oResponse,"_XMLERRORET","string",NIL,NIL,NIL,"S",NIL,NIL)
+	
+	If Empty(cBase64) 
+	    ::cXMLEVENTO     :=  WSAdvValue( oResponse,"_XMLEVENTO","string",NIL,NIL,NIL,"S",NIL,NIL)
+	EndIf
+
+Return
+
+// WSDL Data Structure ENTENVDOC
+
+WSSTRUCT TSSWSSOCIAL_ENTENVDOC
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cID                       AS string
+	WSDATA   cVERSAO                   AS string OPTIONAL
+	WSDATA   cXML                      AS base64Binary
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTENVDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTENVDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTENVDOC
+	Local oClone := TSSWSSOCIAL_ENTENVDOC():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cID                  := ::cID
+	oClone:cVERSAO              := ::cVERSAO
+	oClone:cXML                 := ::cXML
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTENVDOC
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODIGO", ::cCODIGO, ::cCODIGO , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VERSAO", ::cVERSAO, ::cVERSAO , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("XML", ::cXML, ::cXML , "base64Binary", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDAENVDOC
+
+WSSTRUCT TSSWSSOCIAL_SAIDAENVDOC
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cDESCRICAO                AS string OPTIONAL
+	WSDATA   cID                       AS string
+	WSDATA   lSUCESSO                  AS boolean
+	WSDATA   dDTENTRADA                AS date OPTIONAL
+	WSDATA   cHRENTRADA                AS string OPTIONAL
+	WSDATA   cCODRECEITA               AS string OPTIONAL
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDAENVDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDAENVDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDAENVDOC
+	Local oClone := TSSWSSOCIAL_SAIDAENVDOC():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cDESCRICAO           := ::cDESCRICAO
+	oClone:cID                  := ::cID
+	oClone:lSUCESSO             := ::lSUCESSO
+	oClone:dDTENTRADA			:= ::dDTENTRADA
+	oClone:cHRENTRADA			:= ::cHRENTRADA
+	oClone:cCODRECEITA			:= ::cCODRECEITA
+
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDAENVDOC
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODIGO            :=  WSAdvValue( oResponse,"_CODIGO","string",NIL,"Property cCODIGO as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cDESCRICAO         :=  WSAdvValue( oResponse,"_DESCRICAO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSUCESSO           :=  WSAdvValue( oResponse,"_SUCESSO","boolean",NIL,"Property lSUCESSO as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+	::dDTENTRADA         :=  WSAdvValue( oResponse,"_DTENTRADA","date",STOD(""),NIL,NIL,"D",NIL,NIL)
+	::cHRENTRADA         :=  WSAdvValue( oResponse,"_HRENTRADA","string","",NIL,NIL,"S",NIL,NIL)
+	::cCODRECEITA        :=  WSAdvValue( oResponse,"_CODRECEITA","string","",NIL,NIL,"S",NIL,NIL)
+
+Return
+
+// WSDL Data Structure ENTEXPDOC
+
+WSSTRUCT TSSWSSOCIAL_ENTEXPDOC
+	WSDATA   cID                       AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTEXPDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTEXPDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTEXPDOC
+	Local oClone := TSSWSSOCIAL_ENTEXPDOC():NEW()
+	oClone:cID                  := ::cID
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTEXPDOC
+	Local cSoap := ""
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDAEXPDOC
+
+WSSTRUCT TSSWSSOCIAL_SAIDAEXPDOC
+	WSDATA   cID                       AS string
+	WSDATA   lSUCESSO                  AS boolean
+	WSDATA   cXMLERP                   AS string
+	WSDATA   cXMLRET                   AS string
+	WSDATA   cXMLRET64                 AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDAEXPDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDAEXPDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDAEXPDOC
+	Local oClone := TSSWSSOCIAL_SAIDAEXPDOC():NEW()
+	oClone:cID                  := ::cID
+	oClone:lSUCESSO             := ::lSUCESSO
+	oClone:cXMLERP              := ::cXMLERP
+	oClone:cXMLRET              := ::cXMLRET
+	oClone:cXMLRET64            := ::cXMLRET64
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDAEXPDOC
+
+	Local cBase64 := ""
+
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSUCESSO           :=  WSAdvValue( oResponse,"_SUCESSO","boolean",NIL,"Property lSUCESSO as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+	::cXMLERP            :=  WSAdvValue( oResponse,"_XMLERP","string",NIL,"Property cXMLERP as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+
+	//proteger
+	If type("oResponse:_xmlret64:text") == "U" .AND. !Empty(oResponse:_xmlret64:text)
+		GzStrDecomp(Decode64(oResponse:_xmlret64:text), Len(Decode64(oResponse:_xmlret64:text)), @cBase64)
+		::cXMLRET64         := cBase64
+	Else
+	    ::cXMLRET            :=  WSAdvValue( oResponse,"_XMLRET","string",NIL,"Property cXMLRET as s:string on SOAP Response not found.",NIL,"S",NIL,NIL)
+	EndIf
+
+	
+	
+Return
+
+// WSDL Data Structure ENTXSDDOC
+
+WSSTRUCT TSSWSSOCIAL_ENTXSDDOC
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cID                       AS string
+	WSDATA   cVERSAO                   AS string OPTIONAL
+	WSDATA   cXML                      AS base64Binary
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_ENTXSDDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_ENTXSDDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_ENTXSDDOC
+	Local oClone := TSSWSSOCIAL_ENTXSDDOC():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cID                  := ::cID
+	oClone:cVERSAO              := ::cVERSAO
+	oClone:cXML                 := ::cXML
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSSOCIAL_ENTXSDDOC
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODIGO", ::cCODIGO, ::cCODIGO , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VERSAO", ::cVERSAO, ::cVERSAO , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("XML", ::cXML, ::cXML , "base64Binary", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure SAIDAXSDDOC
+
+WSSTRUCT TSSWSSOCIAL_SAIDAXSDDOC
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cID                       AS string
+	WSDATA   cMENSAGEM                 AS string OPTIONAL
+	WSDATA   lSUCESSO                  AS boolean
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSSOCIAL_SAIDAXSDDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSSOCIAL_SAIDAXSDDOC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSSOCIAL_SAIDAXSDDOC
+	Local oClone := TSSWSSOCIAL_SAIDAXSDDOC():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cID                  := ::cID
+	oClone:cMENSAGEM            := ::cMENSAGEM
+	oClone:lSUCESSO             := ::lSUCESSO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSSOCIAL_SAIDAXSDDOC
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODIGO            :=  WSAdvValue( oResponse,"_CODIGO","string",NIL,"Property cCODIGO as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMENSAGEM          :=  WSAdvValue( oResponse,"_MENSAGEM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::lSUCESSO           :=  WSAdvValue( oResponse,"_SUCESSO","boolean",NIL,"Property lSUCESSO as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+Return
+
+

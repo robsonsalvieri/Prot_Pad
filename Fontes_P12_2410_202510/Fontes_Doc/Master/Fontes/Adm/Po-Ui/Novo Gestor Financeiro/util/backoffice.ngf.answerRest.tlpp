@@ -1,0 +1,194 @@
+#INCLUDE "tlpp-core.th"
+
+NAMESPACE totvs.protheus.backoffice.ngf.util
+
+/*/{Protheus.doc} Tables
+  Envio o resultado de sucesso ou falha para o serviço rest,
+  fazendo ja o tratamento do statusCode
+  @param jServiceResponse Objeto json de resposta. Deve conter os seguintes atributos:
+      - {
+          "result" : true ou false
+          "response" : json de resposta
+          "statusCode": código http de resposta quando necessário
+      }
+  @author Renato Ito
+  @since 16/09/2021
+/*/
+Function answerBaseV2(jResponse as Json)
+  Local lServLGPD := .F. as Logical
+  Local aFields   := {}  as Array
+  Local cField    := ''  as Character  // auxiliar para armazenar o campo que está sendo validade
+  Local aFormat   := {}  as Array // [1] = nome do campo; [2] = tipo de formatação; [3] = mascara do campo
+  Local nStruct   := 1   as Numeric
+  Local nItem     := 1   as Numeric
+  lServLGPD       := FindClass("gfin.util.LgpdConversion")
+
+  // adiciona o content-type
+  oRest:setKeyHeaderResponse("Content-Type", "application/json")
+  // se o resultado for true aplica as regras de formatação
+  if (jResponse["result"])
+    if len(jResponse["response"]["items"]) > 0
+      // verifica a regra para cada campo
+      for nStruct := 1 to len(jResponse["response"]["struct"])
+        cField := jResponse["response"]["struct"][nStruct]['field']
+        // armazena os campos utilizado para validar LGPD
+        Aadd(aFields, UPPER(cField))
+        // formatação de moeda
+        if UPPER(cField) $ 'E1_MOEDA|E2_MOEDA|F76_MOEDA|E7_MOEDA|EH_MOEDA'
+          jResponse["response"]["struct"][nStruct]['type'] := 'C'
+          Aadd(aFormat, {cField, 'moeda', ''})
+        endif
+        // formatação de campo numérico
+        if jResponse["response"]["struct"][nStruct]['type'] == 'N' .and. !empty(jResponse["response"]["struct"][nStruct]['picture'])
+          Aadd(aFormat, {cField, 'format', jResponse["response"]["struct"][nStruct]['picture']})
+        endif
+        // formatação X3_CBOX
+        if jResponse["response"]["struct"][nStruct]:hasProperty('xBox') .and. jResponse["response"]["struct"][nStruct]['xBox']
+          Aadd(aFormat, {cField, 'x3_cbox', ''})
+        endif
+      next
+      // se existir campos para formatação entra no laço de items
+      if len(aFormat) > 0
+        for nItem := 1 to len(jResponse["response"]["items"])
+          // para cada item é aplicada as regras de campos
+          for nStruct := 1 to len(aFormat)
+            cField := aFormat[nStruct][1]
+            if aFormat[nStruct][2] == 'format'
+              jResponse["response"]["items"][nItem][cField + '_value'] := jResponse["response"]["items"][nItem][cField]
+              jResponse["response"]["items"][nItem][cField] := AllTrim(Transform(jResponse["response"]["items"][nItem][cField], aFormat[nStruct][3]))
+            elseif aFormat[nStruct][2] == 'moeda'
+              jResponse["response"]["items"][nItem][cField] := SUPERGETMV('MV_SIMB'+ cValToChar(jResponse["response"]["items"][nItem][cField]),.F.,'')
+            elseif aFormat[nStruct][2] == 'x3_cbox'
+              jResponse["response"]["items"][nItem][cField] := AllTrim(X3COMBO(UPPER(cField), Alltrim(jResponse["response"]["items"][nItem][cField])))
+            endif
+          next
+        next
+      endif
+      // aplica regra de LGPD
+      if lServLGPD
+        oServLGPD := gfin.util.LgpdConversion():new()
+        oServLGPD:prepareFields(aFields) // adiciona os campos utilizados
+        jResponse["response"]['items'] := oServLGPD:applyLGPD(jResponse["response"]['items'])
+        oServLgpd:destroy()
+        FreeObj(oServLgpd)
+      endif
+    endif
+    oRest:setResponse(jResponse["response"])
+  else
+    oRest:setFault(jResponse["response"]:toJson())
+  endif
+  // configura o status code se encaminhado
+  if ( jResponse["statusCode"] != nil )
+    oRest:setStatusCode(jResponse["statusCode"])
+  endif
+  FreeObj(jResponse)
+return
+
+/*/
+{Protheus.doc} mapFieldsBaseV2
+  com base em uma lista de campos é adicionado no mapFields do FWAdapterBaseV2
+  e retorna o struct padrão utilizado no retorno das api's do NGF
+
+  @Param oSelf   as Object, oSelf com FWAdapterBaseV2
+  @Param aFields as Array, campos para que devem ser inclusos
+  @Param aStructBaseV2 as Array, array para retorno do struct da API
+
+  @author Renato Ito
+  @since 17/09/2021
+/*/
+Function mapFieldsBaseV2(oSelf as Object, aStructBaseV2 as Array, aFields as Array)
+  Local cX3Title       := ''  as Character
+  Local cX3Descri      := ''  as Character
+  Local cX3Picture     := ''  as Character
+  Local cField         := ''  as Character
+  Local lX3Cbox        := .F. as Logical
+  Local nStruct        := 1   as Numeric
+  Local aStruct        := {}  as Array
+
+  // adiciona os campos enviados
+  for nStruct := 1 to Len(aFields)
+    cField := aFields[nStruct]
+    cX3Title   := AllTrim(FwX3Titulo(cField))
+    aStruct    := FWSX3Util():GetFieldStruct(cField)
+    cX3Descri  := FWSX3Util():GetDescription(cField)
+    cX3Picture := IIF(aStruct[2] == 'N' , AllTrim(GetSX3Cache(cField, 'X3_PICTURE' )), '' )
+    lX3Cbox    := IIF(Len(AllTrim(GetSX3Cache(cField, 'X3_CBOX' ))) > 0, .T., .F.)
+    oSelf:AddMapFields(cField, cField, .T., .T., {cField, aStruct[2], aStruct[3], aStruct[4]})
+    aAdd(aStructBaseV2, {;
+      {'field'      , lower(cField)},;
+      {'type'       , aStruct[2]},;
+      {'title'      , cX3Title},;
+      {'description', cX3Descri},;
+      {'picture'    , cX3Picture},;
+      {'xBox'       , lX3Cbox};
+      })
+  next
+return
+
+/*/
+{Protheus.doc} mapTableFieldsBaseV2
+com base em uma lista de campos é adicionado no mapFields do FWAdapterBaseV2
+e retorna o struct padrão utilizado no retorno das api's do NGF
+
+@Param oSelf   as Object, oSelf com FWAdapterBaseV2
+@Param aFields as Array, campos para que devem ser inclusos
+@Param aStructBaseV2 as Array, array para retorno do struct da API
+
+@author Renato Ito
+@since 17/09/2021
+/*/
+Function mapTableFieldsBaseV2(oSelf as Object, aStructBaseV2 as Array, cTable as Character, lFilial as logical, lBrowser as logical)
+  Local cX3Title       := ''  as Character
+  Local cX3Descri      := ''  as Character
+  Local cX3Picture     := ''  as Character
+  Local cField         := ''  as Character
+  Local lX3Cbox        := .F. as Logical
+  Local nStruct        := 1   as Numeric
+  Local aStruct        := {}  as Array
+  Local aSX3Struct     := {}  as Array
+  Local bBrowser              as Codeblock
+  Local cSetFields     := ''  as character
+
+  bBrowser       := {|x| if(lBrowser, GetSX3Cache(x, 'X3_BROWSE') == 'S', .T.)}
+  aStruct := FWFormStruct(2, cTable, bBrowser, !lBrowser, .F., lFilial)['AFIELDS']
+  for nStruct := 1 to Len(aStruct)
+    cField     := aStruct[nStruct][1]
+    cSetFields += cField + ','
+    aSX3Struct := FWSX3Util():GetFieldStruct(cField)
+    cX3Title   := AllTrim(aStruct[nStruct][3])
+    cX3Descri  := aStruct[nStruct][4]
+    cX3Picture := IIF(aSX3Struct[2] == 'N' , AllTrim(GetSX3Cache(cField, 'X3_PICTURE' )), '' )
+    lX3Cbox    := IIF(Len(aStruct[nStruct][13]) > 0, .T., .F.)
+    oSelf:AddMapFields(cField, cField, .T., .T., {cField, aSX3Struct[2], aSX3Struct[3], aSX3Struct[4]})
+    aAdd(aStructBaseV2, {;
+      {'field'      , lower(cField)},;
+      {'type'       , aSX3Struct[2]},;
+      {'title'      , cX3Title},;
+      {'description', cX3Descri},;
+      {'picture'    , cX3Picture},;
+      {'xBox'       , lX3Cbox};
+      })
+  next
+  oSelf:setFields(cSetFields)
+return
+
+/*/
+{Protheus.doc} mapFields
+Mapeia os campos adicionando os mesmos 
+ao mapfields do adapter. 
+
+@author Renato Ito
+@since 09/11/2021
+/*/
+Function mapFields(oSelf as Object, aFields as Array)
+  Local cField  := '' as Character
+  Local nStruct := 1  as Numeric
+  Local aStruct := {} as Array
+
+  // adiciona os campos enviados
+  for nStruct := 1 to Len(aFields)
+    cField  := aFields[nStruct]
+    aStruct := FWSX3Util():GetFieldStruct(cField)
+    oSelf:AddMapFields(cField, cField, .F., .F., {cField, aStruct[2], aStruct[3], aStruct[4]})
+  next
+return

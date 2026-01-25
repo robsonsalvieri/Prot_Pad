@@ -1,0 +1,478 @@
+#include "tlpp-core.th"
+
+namespace totvs.protheus.health.plans.api.attendance.refund.expense
+
+using namespace totvs.protheus.health.plans.api.attendance.refund
+
+/*/{Protheus.doc} ExpenseService
+Classe responsavel por validar/processar a requisição da api das
+despesas do protocolo de reembolso
+
+@type class
+@version Protheus 12.1.2310
+@author vinicius.queiros
+@since 02/05/2023
+/*/
+class ExpenseService from RefundService
+    
+    private data oAdapter as object
+    private data oStructRefund as object
+    private data cSeqExpense as character
+    private data cRecnoB1N as character
+
+    public method new() constructor
+    public method getExpenses() as logical
+    public method deleteExpenses() as logical
+    public method postExpenses() as logical
+    public method putExpenses() as logical
+    public method getReasonDenied() as logical
+
+    private method setExpenseStruct(lUpdate as logical) as logical
+    private method addExpenses(cRecnoUpdate as character) as logical
+    private method setExpensesJsonResponse(cRecno as character) as logical
+    private method checkProtocolStatus(cProtocolNumber as character, cSeqExpense as character) as logical
+    private method getFieldsExpensesJson(lAddProtocol as logical) as array
+
+endclass
+
+/*/{Protheus.doc} new
+Contrutor da classe
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 02/05/2023
+@return object, objecto da classe ExpenseService
+/*/
+method new() class ExpenseService
+
+    _Super:new()
+
+return self
+
+/*/{Protheus.doc} getExpenses
+Valida os dados recebidos pela api e processa a classe adapter para retornar
+as despesas do protocolo de reembolso
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 02/05/2023
+@return logical, se houve sucesso ao retornar as despesas do protocolo
+/*/
+method getExpenses() as Logical class ExpenseService
+
+    local lSucess := .F. as logical
+    local aFields := {} as array
+
+    aAdd(aFields, {"field" : "protocol", "required" : .T., "type" : "C", "size" : tamSX3("BOW_PROTOC")[1]})
+    
+    if self:oBaseService:checkBodyFields(aFields, "E001", self:oBaseService:jPath, nil, nil, "A chave do path param está inválida")
+        BOW->(dbSetOrder(1)) // BOW_FILIAL + BOW_PROTOC
+        if BOW->(msSeek(xFilial("BOW")+self:oBaseService:jPath["protocol"]))
+        
+            self:oAdapter := ExpenseAdapter():new()
+            self:oAdapter:setQueryParams(self:oBaseService:jParams)
+            self:oAdapter:setPathParams(self:oBaseService:jPath)
+            
+            if self:oAdapter:getPageExpenses()
+                lSucess := .T.
+                self:oBaseService:nCodeStatus := 200 // Ok
+                self:oBaseService:jResult := self:oAdapter:getJsonResult()
+            endif
+        else
+            self:oBaseService:setError("E002", "Protocolo de reembolso não encontrado",;
+                                       "Não foi encontrado nenhum protocolo de reembolso com o numero "+self:oBaseService:jPath["protocol"]+" (BOW_PROTOC)",;
+                                       404) // Not found
+        endif
+    endif
+   
+return lSucess
+
+/*/{Protheus.doc} deleteRefunds
+Deleta a despesa do protocolo de reembolso enviado pelo path param da requisição
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 03/05/2023
+@return logical, se houve sucesso ao deletar a despesa
+/*/
+method deleteExpenses() as logical class ExpenseService
+
+    local lSucess := .F. as logical
+    local aFields := {} as array
+    
+    aAdd(aFields, {"field" : "protocol", "required" : .T., "type" : "C", "size" : tamSX3("BOW_PROTOC")[1]})
+    aAdd(aFields, {"field" : "sequential", "required" : .T., "type" : "C", "size" : tamSX3("B1N_SEQUEN")[1]})
+
+    if self:oBaseService:checkBodyFields(aFields, "E001", self:oBaseService:jPath, nil, nil, "As chaves do path param estão inválidas")
+        if self:checkProtocolStatus(self:oBaseService:jPath["protocol"], self:oBaseService:jPath["sequential"])
+            begin transaction
+                lSucess := PLSOUTB1N(B1N->(recno()))
+            end transaction
+
+            if lSucess
+                self:oBaseService:nCodeStatus := 204 // No content
+            endif
+        endif
+    endif
+   
+return lSucess
+
+/*/{Protheus.doc} postExpenses
+Adiciona despesas ao protocolo de reembolso
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 30/05/2023
+@return logical, se houve sucesso ao incluir despesa
+/*/
+method postExpenses() as logical class ExpenseService
+
+    local lSucess := .f. as logical
+    local aFieldsExpenses := {} as Array
+
+    // Verifica se os campos do body estão validos
+    aFieldsExpenses := self:getFieldsExpensesJson(.t.)
+   
+    if self:oBaseService:checkBodyFields(aFieldsExpenses, "E002")
+        if self:checkProtocolStatus(self:oBaseService:jBody["protocol"])
+            if self:setExpenseStruct()
+                if self:addExpenses()
+                    lSucess := .t.
+                    self:oBaseService:nCodeStatus := 201 // Create 
+                endif
+            endif
+        endif     
+    endif 
+
+return lSucess
+
+/*/{Protheus.doc} putExpenses
+Altera despesas do protocolo de reembolso
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 30/05/2023
+@return logical, se houve sucesso ao alterar despesa
+/*/
+method putExpenses() as logical class ExpenseService
+
+    local lSucess := .f. as logical
+    local aFieldsExpenses := {} as array
+    local aPathsExpenses := {} as array
+
+    aAdd(aPathsExpenses, {"field" : "protocol", "required" : .T., "type" : "C", "size" : tamSX3("BOW_PROTOC")[1]})
+    aAdd(aPathsExpenses, {"field" : "sequential", "required" : .T., "type" : "C", "size" : tamSX3("B1N_SEQUEN")[1]})
+
+    if self:oBaseService:checkBodyFields(aPathsExpenses, "E002", self:oBaseService:jPath, nil, nil, "As chaves do path param estão inválidas")
+        // Verifica se os campos do body estão validos
+        aFieldsExpenses := self:getFieldsExpensesJson(.f.)
+
+        if self:oBaseService:checkBodyFields(aFieldsExpenses, "E003")
+            if self:checkProtocolStatus(self:oBaseService:jPath["protocol"], self:oBaseService:jPath["sequential"])
+                if self:setExpenseStruct(.t.)
+                    if self:addExpenses(self:cRecnoB1N)
+                        lSucess := .t.
+                        self:oBaseService:nCodeStatus := 200 // Ok 
+                    endif
+                endif
+            endif
+        endif    
+    endif 
+
+return lSucess
+
+/*/{Protheus.doc} getReasonDenied
+Retorna o motivo de glosa (não autorizado) da despesa do protocolo
+de reembolso
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 02/05/2023
+@return logical, se houve sucesso ao retornar o motivo de glosa da despesa
+/*/
+method getReasonDenied() as Logical class ExpenseService
+
+    local lSucess := .F. as logical
+    local aFields := {} as array
+  
+    aAdd(aFields, {"field" : "protocol", "required" : .T., "type" : "C", "size" : tamSX3("B1N_PROTOC")[1]})
+    aAdd(aFields, {"field" : "sequential", "required" : .T., "type" : "C", "size" : tamSX3("B1N_SEQUEN")[1]})
+    
+    if self:oBaseService:checkBodyFields(aFields, "E001", self:oBaseService:jPath, nil, nil, "As chave do path param está inválida")
+        BOW->(dbSetOrder(1)) // BOW_FILIAL + BOW_PROTOC
+        if BOW->(msSeek(xFilial("BOW")+self:oBaseService:jPath["protocol"]))
+
+            B1N->(dbSetOrder(2)) // B1N_FILIAL + B1N_PROTOC + B1N_SEQUEN
+            if B1N->(msSeek(xFilial("B1N")+self:oBaseService:jPath["protocol"]+self:oBaseService:jPath["sequential"]))
+     
+                B14->(dbSetOrder(1))
+		        If B14->(msSeek(xFilial("B14")+B1N->(B1N_PROTOC+B1N_CODPRO+B1N_MATRIC+B1N_SEQUEN)))
+                    self:oBaseService:setAttributeJson({"attribute" : "date", "value" : B14->B14_DATA, "type" : "D", "setResponse" : .T.})
+                    self:oBaseService:setAttributeJson({"attribute" : "reason", "value" : B14->B14_MOTIVO, "type" : "C", "setResponse" : .T.})
+                    self:oBaseService:nCodeStatus := 200 // Ok
+                    lSucess := .t.
+                else
+                    self:oBaseService:setError("E004", "Não encontrada motivo de glosa para a despesa",;
+                                               "Não foi encontrada nenhum motivo de glosa do sequencial "+self:oBaseService:jPath["sequential"]+" (B1N_SEQUEN) para o protocolo "+self:oBaseService:jPath["protocol"]+" (BOW_PROTOC) na tabela B14",;
+                                               404) // Not found
+                endif            
+            else
+                self:oBaseService:setError("E003", "Despesa não encontrada para o protocolo de reembolso "+self:oBaseService:jPath["protocol"],;
+                                           "Não foi encontrada a despesa de sequencial "+self:oBaseService:jPath["sequential"]+" (B1N_SEQUEN) para o protocolo "+self:oBaseService:jPath["protocol"]+" (BOW_PROTOC)",;
+                                           404) // Not found
+            endif
+        else
+            self:oBaseService:setError("E002", "Protocolo de reembolso não encontrado",;
+                                       "Não foi encontrado nenhum protocolo de reembolso com o numero "+self:oBaseService:jPath["protocol"]+" (BOW_PROTOC)",;
+                                       404) // Not found
+        endif
+    endif
+   
+return lSucess
+
+/*/{Protheus.doc} setExpenseStruct
+define/valida a estrutura da despesa para gravação
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 30/05/2023
+@return logical, se os dados da despesa estão prontos para gravação
+/*/
+method setExpenseStruct(lUpdate as logical) as logical class ExpenseService
+
+    local aDetailsErro := {} as array
+    local aRefundExpenses as array
+    local lOk := .f. as logical
+
+    default lUpdate := .f.
+
+    self:oBaseService:jBody["toleranceDate"] := self:getToleranceDate(subStr(self:cSubscriberId, 1, 14))
+
+    // Validações do comprovante
+    if self:validReceipts("E005", @aDetailsErro, self:oBaseService:jBody)
+        self:oStructRefund := RefundStruct():new()
+
+        // Informações do comprovante
+        self:oStructRefund:TipDoc := self:oBaseService:jBody["documentType"]
+        self:oStructRefund:CPFCNPJ := self:oBaseService:jBody["unreferencedNetworkIdentifier"]
+        self:oStructRefund:NomRDA := self:oBaseService:jBody["unreferencedNetworkName"]
+        self:oStructRefund:UF := self:oBaseService:jBody["stateAbbreviation"]
+        self:oStructRefund:Cidade := self:oBaseService:jBody["cityCode"]
+        self:oStructRefund:NroDoc := self:oBaseService:jBody["documentNumber"]
+        self:oStructRefund:DatDoc := self:oBaseService:convertDateFormat(self:oBaseService:jBody["documentDate"])
+
+        // Dados da despesa
+        self:oStructRefund:Matric := self:oBaseService:jBody["subscriberId"]
+        self:oStructRefund:CodPad := self:oBaseService:jBody["tableCode"]
+        self:oStructRefund:CodPro := self:oBaseService:jBody["procedureCode"]
+        self:oStructRefund:TipSer := self:oBaseService:jBody["procedureClass"]
+
+        self:oStructRefund:UsoC := self:oBaseService:jBody["continuousUse"]
+        if self:oStructRefund:UsoC == "1" // Medicamento de uso continuo
+            if self:oBaseService:checkBodyFields({{"field" : "prescriptionCode", "required" : .T., "type" : "C"}}, "E006", self:oBaseService:jBody, @aDetailsErro, .F.)
+                self:oStructRefund:CodRec := self:oBaseService:jBody["prescriptionCode"]
+                self:oStructRefund:CodMed := self:oBaseService:jBody["procedureCode"]
+            endif
+        endif
+
+        self:oStructRefund:VlrPro := cValToChar(self:oBaseService:jBody["expenseAmount"] * 100) // Converte em caracter sem casas decimais - Função PLSREEMBIT espera dessa forma
+        self:oStructRefund:QtdPro := cValToChar(self:oBaseService:jBody["quantity"]) // Converte em caracter - Função PLSREEMBIT espera dessa forma
+        self:oStructRefund:DatComprov := self:oBaseService:convertDateFormat(self:oBaseService:jBody["executionDate"])
+        self:oStructRefund:cDocObr := self:oBaseService:jBody["requiredDocument"]
+
+        aRefundExpenses := self:getRefundExpenses(self:cProtocolNumber, iif(lUpdate, self:cSeqExpense, "")) // Despesas do protocolo já incluidas para validação
+
+        self:oBaseService:jBody["subscriberId"] := self:cSubscriberId // Altera para a matricula do solicitante do protocolo para validações
+        // Validações da despesa
+        if self:validExpenses("E007", @aDetailsErro, self:oStructRefund, aRefundExpenses) .and. len(aDetailsErro) == 0
+            lOk := .t. 
+        endif
+    endif
+
+    if !lOk
+        self:oBaseService:setError("E003", "Dados inválidos para realizar a inclusão da despesa",;
+                                   "Verifique os detalhes dos erros no campo details",;
+                                    400,; // Bad Request
+                                    aDetailsErro)
+    endif
+
+return lOk
+
+/*/{Protheus.doc} addExpenses
+Gravação da despesa no protocolo de reembolso
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 30/05/2023
+@return logical, se a despesa foi gravada com sucesso no protocolo
+/*/
+method addExpenses(cRecnoUpdate as character) as logical class ExpenseService
+
+    local lSucess := .f. as logical
+    local lInsertBOW as logical
+    local lInsertB1N as logical
+    local lUpdateBOW as logical
+    local aResult as array
+    local cRecno as character
+
+    default cRecnoUpdate := "0"
+
+    lInsertBOW := .f.
+    lInsertB1N := iif(cRecnoUpdate == "0", .t., .f.)
+    lUpdateBOW := .f.
+
+    aResult := PLSREEMBIT(lInsertBOW, lInsertB1N, self:cProtocolNumber, self:oStructRefund, cRecnoUpdate, self:cSubscriberId, lUpdateBOW, "0", "01")
+
+    if valType(aResult) == "A" .And. len(aResult) > 0
+        cRecno := strToKarr(aResult[1], "|")[2]
+        
+        if !empty(cRecno)
+            lSucess := .T.  
+        endif
+    endif
+   
+    if lSucess
+        lSucess := self:setExpensesJsonResponse(cRecno)
+    endif
+
+return lSucess
+
+/*/{Protheus.doc} setExpensesJsonResponse
+Retorna o json de resposta da despesa incluida/alterado no protocolo de reembolso
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 30/05/2023
+@return logical, se a despesa foi gravada com sucesso no protocolo
+/*/
+method setExpensesJsonResponse(cRecno as character) as logical class ExpenseService
+
+    local lSucess := .f. as logical
+    local nRecno as numeric
+
+    nRecno := val(cRecno)
+
+    B1N->(dbGoTo(nRecno))
+
+    if !B1N->(eof())
+
+        self:oBaseService:setAttributeJson({"attribute" : "status", "value" : iif(alltrim(B1N->B1N_IMGSTA) == "ENABLE", "1", "0"), "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "subscriberId", "value" : B1N->B1N_MATRIC, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "beneficiaryName", "value" : posicione("BA1", 2, xFilial("BA1")+B1N->B1N_MATRIC, "BA1_NOMUSR"), "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "protocol", "value" : B1N->B1N_PROTOC, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "sequential", "value" : B1N->B1N_SEQUEN, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "procedureClass", "value" : B1N->B1N_TIPSER, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "tableCode", "value" : B1N->B1N_CODPAD, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "procedureCode", "value" : B1N->B1N_CODPRO, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "procedureDescription", "value" : posicione("BR8", 1, xFilial("BR8")+B1N->(B1N_CODPAD+B1N_CODPRO), "BR8_DESCRI"), "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "continuousUse", "value" : B1N->B1N_USOCON, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "quantity", "value" : B1N->B1N_QTDPRO, "type" : "N", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "expenseAmount", "value" : B1N->B1N_VLRAPR, "type" : "N", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "totalExpenseAmount", "value" : B1N->B1N_VLRTOT, "type" : "N", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "refundedAmount", "value" : B1N->B1N_VLRREE, "type" : "N", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "unreferencedNetworkIdentifier", "value" : B1N->B1N_CODREF, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "unreferencedNetworkName", "value" : B1N->B1N_NOMREF, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "stateAbbreviation", "value" : B1N->B1N_EST, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "cityCode", "value" : B1N->B1N_CODMUN, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "documentCode", "value" : posicione("BBS", 2, xFilial("BBS")+B1N->B1N_TIPDOC, "BBS_COD"), "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "documentDescription", "value" : B1N->B1N_TIPDOC, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "documentNumber", "value" : B1N->B1N_NUMDOC, "type" : "C", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "documentDate", "value" : B1N->B1N_DATDOC, "type" : "D", "setResponse" : .T.})
+        self:oBaseService:setAttributeJson({"attribute" : "executionDate", "value" : B1N->B1N_DATPRO, "type" : "D", "setResponse" : .T.})
+
+        lSucess := .t.
+    endif
+
+return lSucess
+
+/*/{Protheus.doc} checkProtocolStatus
+Verifica o status do protocolo para deletar, incluir ou alterar despesa
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 31/05/2023
+@return logical, se o protocolo permite realizar alteração/inclusão/exclusão de despesa
+/*/
+method checkProtocolStatus(cProtocolNumber as character, cSeqExpense as character) as logical class ExpenseService
+
+    local lCheck := .f. as logical
+
+    default cSeqExpense := ""
+
+    BOW->(dbSetOrder(1))
+    if BOW->(msSeek(xFilial("BOW")+cProtocolNumber))
+        if BOW->BOW_STATUS == "A" // Solicitação não concluida
+            self:cSubscriberId := alltrim(BOW->BOW_USUARI) // Matricula do solicitante do protocolo de reembolso
+            self:cProtocolNumber := alltrim(BOW->BOW_PROTOC)
+
+            if !empty(cSeqExpense)
+                B1N->(dbSetOrder(2)) // B1N_FILIAL + B1N_PROTOC + B1N_SEQUEN
+                if B1N->(msSeek(xFilial("B1N")+cProtocolNumber+cSeqExpense))
+                    lCheck := .t.
+                    self:cSeqExpense := B1N->B1N_SEQUEN
+                    self:cRecnoB1N := cValtoChar(B1N->(recno()))
+                else
+                    self:oBaseService:setError("E006", "Despesa não encontrada para o protocolo de reembolso "+cProtocolNumber,;
+                                                "Não foi encontrada a despesa de sequencial "+cSeqExpense+" (B1N_SEQUEN) para o protocolo "+cProtocolNumber+" (BOW_PROTOC)",;
+                                                404) // Not found
+                endif
+            else
+                lCheck := .t.
+            endif
+        else
+            self:oBaseService:setError("E005", "Não permitido incluir, alterar ou excluir despesa pois a solicitação já esta protocolada, entre em contato com a operadora",;
+                                        "Permitido somente incluir, alterar, excluir despesas para protocolos com o status (BOW_STATUS) igual a A (Solicitação não concluida)",;
+                                        400) // Bad Request
+        endif
+    else
+        self:oBaseService:setError("E004", "Protocolo de reembolso não encontrado",;
+                                    "Não foi encontrado o protocolo de reembolso "+cProtocolNumber+" (BOW_PROTOC) na base de dados (BOW)",;
+                                    404) // Not found
+    endif    
+
+return lCheck
+
+/*/{Protheus.doc} getFieldsExpensesJson
+Retorna os campos do json corresponde ao body de despesa da alteração/inclusão para validar
+
+@type method
+@version Protheus 12.1.2310  
+@author vinicius.queiros
+@since 31/05/2023
+@return array, Campos do json da despesa
+/*/
+method getFieldsExpensesJson(lAddProtocol as logical) as array class ExpenseService
+
+    local aFieldsExpenses := {} as array
+
+    if lAddProtocol
+        aAdd(aFieldsExpenses, {"field" : "protocol", "required" : .t., "type" : "C", "size" : tamSX3("B1N_PROTOC")[1]})
+    endif
+
+    aAdd(aFieldsExpenses, {"field" : "subscriberId", "required" : .t., "type" : "C", "size" : tamSX3("BA1_CODINT")[1]+tamSX3("BA1_CODEMP")[1]+tamSX3("BA1_MATRIC")[1]+tamSX3("BA1_TIPREG")[1]+tamSX3("BA1_DIGITO")[1]})
+    aAdd(aFieldsExpenses, {"field" : "unreferencedNetworkIdentifier", "required" : .t., "type" : "C"})
+    aAdd(aFieldsExpenses, {"field" : "unreferencedNetworkName", "required" : .t., "type" : "C"})
+    aAdd(aFieldsExpenses, {"field" : "stateAbbreviation", "required" : .t., "type" : "C", "size" : tamSX3("BID_EST")[1]})
+    aAdd(aFieldsExpenses, {"field" : "cityCode", "required" : .t., "type" : "C", "size" : tamSX3("BID_CODMUN")[1]})
+    aAdd(aFieldsExpenses, {"field" : "documentCode", "required" : .t., "type" : "C", "size" : tamSX3("BBS_COD")[1]})
+    aAdd(aFieldsExpenses, {"field" : "documentNumber", "required" : .F., "type" : "C"})
+    aAdd(aFieldsExpenses, {"field" : "documentDate", "required" : .t., "type" : "D"})
+    aAdd(aFieldsExpenses, {"field" : "procedureClass", "required" : .t., "type" : "C"})
+    aAdd(aFieldsExpenses, {"field" : "tableCode", "required" : .t., "type" : "C"})
+    aAdd(aFieldsExpenses, {"field" : "procedureCode", "required" : .t., "type" : "C"})
+    aAdd(aFieldsExpenses, {"field" : "continuousUse", "required" : .t., "type" : "C", "options" : {"0", "1"}}) // 0 = Não ; 1 = Sim
+    aAdd(aFieldsExpenses, {"field" : "expenseAmount", "required" : .t., "type" : "N"})
+    aAdd(aFieldsExpenses, {"field" : "quantity", "required" : .t., "type" : "N"})
+    aAdd(aFieldsExpenses, {"field" : "executionDate", "required" : .t., "type" : "D"})
+
+return aFieldsExpenses

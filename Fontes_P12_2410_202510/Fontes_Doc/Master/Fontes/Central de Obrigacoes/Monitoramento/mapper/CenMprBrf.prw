@@ -1,0 +1,66 @@
+#include "TOTVS.CH"
+
+Class CenMprBrf from CenMapper
+
+    Method New() Constructor
+
+EndClass
+
+Method New() Class CenMprBrf
+    _Super:new()
+
+    aAdd(self:aFields,{"BRF_CODOPE" ,"operatorRecord"})
+    aAdd(self:aFields,{"BRF_NMGOPE" ,"operatorFormNumber"})
+    aAdd(self:aFields,{"BRF_NMGPRE" ,"providerFormNumber"})
+    aAdd(self:aFields,{"BRF_NMGPRI" ,"mainFormNumb"})
+    aAdd(self:aFields,{"BRF_OREVAT" ,"eventOrigin"})
+    aAdd(self:aFields,{"BRF_REGINT" ,"hospRegime"})
+    aAdd(self:aFields,{"BRF_RGOPIN" ,"ansRecordNumber"})
+    aAdd(self:aFields,{"BRF_SOLINT" ,"hospitalizationRequest"})
+    aAdd(self:aFields,{"BRF_TIPADM" ,"admissionType"})
+    aAdd(self:aFields,{"BRF_TIPATE" ,"serviceType"})
+    aAdd(self:aFields,{"BRF_TIPCON" ,"appointmentType"})
+    aAdd(self:aFields,{"BRF_TIPFAT" ,"invoicingTp"})
+    aAdd(self:aFields,{"BRF_TIPINT" ,"hospTp"})
+    aAdd(self:aFields,{"BRF_TPEVAT" ,"aEventType"})
+    aAdd(self:aFields,{"BRF_VLTCOP" ,"coPaymentTotalValue"})
+    aAdd(self:aFields,{"BRF_VLTDIA" ,"dailyRatesTotalValue"})
+    aAdd(self:aFields,{"BRF_VLTFOR" ,"valuePaidSuppliers"})
+    aAdd(self:aFields,{"BRF_VLTGLO" ,"formDisallowanceValue"})
+    aAdd(self:aFields,{"BRF_VLTGUI" ,"valuePaidForm"})
+    aAdd(self:aFields,{"BRF_VLTINF" ,"totalValueEntered"})
+    aAdd(self:aFields,{"BRF_VLTMAT" ,"materialsTotalValue"})
+    aAdd(self:aFields,{"BRF_VLTMED" ,"medicationTotalValue"})
+    aAdd(self:aFields,{"BRF_VLTOPM" ,"totalOpmeValue"})
+    aAdd(self:aFields,{"BRF_VLTPGP" ,"procedureTotalValuePai"})
+    aAdd(self:aFields,{"BRF_VLTPRO" ,"valueProcessed"})
+    aAdd(self:aFields,{"BRF_VLTTAX" ,"feesTotalValue"})
+    aAdd(self:aFields,{"BRF_VLTTBP" ,"ownTableTotalValue"})
+    aAdd(self:aFields,{"BRF_VTISPR" ,"tissProviderVersion"})
+    aAdd(self:aFields,{"BRF_CPFCNP" ,"providerCpfCnpj"})
+    aAdd(self:aFields,{"BRF_DATAUT" ,"authorizationDate"})
+    aAdd(self:aFields,{"BRF_DATREA" ,"executionDate"})
+    aAdd(self:aFields,{"BRF_DATSOL" ,"requestDate"})
+    aAdd(self:aFields,{"BRF_DIAACP" ,"escortDailyRates"})
+    aAdd(self:aFields,{"BRF_DIAUTI" ,"icuDailyRates"})
+    aAdd(self:aFields,{"BRF_DTFIFT" ,"invoicingEndDate"})
+    aAdd(self:aFields,{"BRF_DTINFT" ,"invoicingStartDate"})
+    aAdd(self:aFields,{"BRF_DTPAGT" ,"paymentDt"})
+    aAdd(self:aFields,{"BRF_DTPROT" ,"collectionProtocolDate"})
+    aAdd(self:aFields,{"BRF_FORENV" ,"submissionMethod"})
+    aAdd(self:aFields,{"BRF_IDEEXC" ,"executerId"})
+    aAdd(self:aFields,{"BRF_IDEREE" ,"refundId"})
+    aAdd(self:aFields,{"BRF_IDVLRP" ,"presetValueIdent"})
+    aAdd(self:aFields,{"BRF_INAVIV" ,"newborn"})
+    aAdd(self:aFields,{"BRF_INDACI" ,"indicAccident"})
+    aAdd(self:aFields,{"BRF_MATRIC" ,"registration"})
+    aAdd(self:aFields,{"BRF_MOTSAI" ,"outflowType"})
+    aAdd(self:aFields,{"BRF_CBOS" ,"cboSCode"})
+    aAdd(self:aFields,{"BRF_CDCID1" ,"icdDiagnosis1"})
+    aAdd(self:aFields,{"BRF_CDCID2" ,"icdDiagnosis2"})
+    aAdd(self:aFields,{"BRF_CDCID3" ,"icdDiagnosis3"})
+    aAdd(self:aFields,{"BRF_CDCID4" ,"icdDiagnosis4"})
+    aAdd(self:aFields,{"BRF_CDMNEX" ,"executingCityCode"})
+    aAdd(self:aFields,{"BRF_CNES" ,"cnes"})
+
+Return self

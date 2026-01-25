@@ -1,0 +1,180 @@
+#INCLUDE "PROTHEUS.CH"                            	
+Function LOJA1103()
+Return Nil
+
+/* 
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออออออัอออออออออออหออออออัออออออออออออออออออออหออออออัอออออออออออออปฑฑ
+ฑฑบClasse    ณLjACadastroบAutor ณVendas Clientes     บ Data ณ  21/02/08   บฑฑ
+ฑฑฬออออออออออุอออออออออออสออออออฯออออออออออออออออออออสออออออฯอออออออออออออนฑฑ
+ฑฑบDesc.     ณ Classe para criacao de Cadastros a partir da rotina        บฑฑ
+ฑฑบ          ณ AxCadastro.                                                บฑฑ
+ฑฑฬออออออออออุออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso       ณ SIGALOJA                                                   บฑฑ
+ฑฑศออออออออออฯออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Class LjACadastro
+	
+	Data cAlias												//Tabela
+	Data cTitle												//Titulo
+	Data cValDel											//Validacao Exclusao
+	Data cValOK												//Validacao Botao OK
+	Data bValFim    
+
+	Method New(cAlias, cTitle, cValDel, cValOK, ;
+			   bValFim)										//Construtor
+	Method Show()											//Exibe o Cadastro
+	Method ValExc()											//Validacao Exclusao
+	Method ValOK()											//Validacao Botao OK
+	Method ProcessOff(cTabela, cChave, nIndice, cTipo, ;
+					  cProcesso)						   	//Integra o processo offline
+	Method ValFim()
+
+EndClass
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออัอออออออออออออออหอออออออัอออออออออออออออออหออออออัออออออออออออออปฑฑ
+ฑฑบMetodoณNew            บAutor  ณVendas Clientes  บ Data ณ 25/02/08     บฑฑ
+ฑฑฬออออออุอออออออออออออออสอออออออฯอออออออออออออออออสออออออฯออออออออออออออนฑฑ
+ฑฑบDesc. ณ Instancia a Classe LjACadastro                                บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบParam.ณ ExpC1 - Alias para montagem do Browse                         บฑฑ
+ฑฑบ      ณ ExpC2 - Titulo do Cadastro                                    บฑฑ
+ฑฑบ      ณ ExpC3 - Funcao para validacao da Exclusao                     บฑฑ
+ฑฑบ      ณ ExpC4 - Funcao para validacao do botao OK                     บฑฑ
+ฑฑบ      ณ ExpB1 - Bloco de fim do processo'''''''''                     บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso   ณ LjACadastro                                                   บฑฑ
+ฑฑศออออออฯอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Method New(cAlias, cTitle, cValDel, cValOK, ;
+		   bValFim) Class LjACadastro
+	
+	Default	cAlias	:= ""		//Tabela
+	Default	cTitle	:= ""		//Titulo
+	Default cValDel	:= ".T."	//Validacao para Exclusao
+	Default cValOK	:= ".T."	//Validacao botao OK
+
+	::cAlias	:= cAlias
+	::cTitle	:= cTitle
+	::cValDel	:= cValDel
+	::cValOK	:= cValOK
+	::bValFim   := bValFim
+
+Return Self
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออัอออออออออออออออหอออออออัอออออออออออออออออหออออออัออออออออออออออปฑฑ
+ฑฑบMetodoณ Show          บAutor  ณVendas Clientes  บ Data ณ 25/02/08     บฑฑ
+ฑฑฬออออออุอออออออออออออออสอออออออฯอออออออออออออออออสออออออฯออออออออออออออนฑฑ
+ฑฑบDesc. ณ Exibe o Browse com as opcoes Incluir, Alterar e Excluir.      บฑฑ
+ฑฑบ      ณ                                                               บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso   ณ LjACadastro                                                   บฑฑ
+ฑฑศออออออฯอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Method Show() Class LjACadastro
+
+	AxCadastro(::cAlias	, ::cTitle	, ::cValDel	, ::cValOK	, ;
+	           NIL		, NIL		, NIL		, NIL		, ; 
+	           ::bValFim)
+
+Return Nil
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออัอออออออออออออออหอออออออัอออออออออออออออออหออออออัออออออออออออออปฑฑ
+ฑฑบMetodoณ ValExc        บAutor  ณVendas Clientes  บ Data ณ 25/02/08     บฑฑ
+ฑฑฬออออออุอออออออออออออออสอออออออฯอออออออออออออออออสออออออฯออออออออออออออนฑฑ
+ฑฑบDesc. ณ Validacao da Exclusao.                                        บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบRet.  ณ ExpL1 - Permite ou nao a exclusao do Registro                 บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso   ณ LjACadastro                                                   บฑฑ
+ฑฑศออออออฯอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Method ValExc() Class LjACadastro
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออัอออออออออออออออหอออออออัอออออออออออออออออหออออออัออออออออออออออปฑฑ
+ฑฑบMetodoณ ValOK         บAutor  ณVendas Clientes  บ Data ณ 25/02/08     บฑฑ
+ฑฑฬออออออุอออออออออออออออสอออออออฯอออออออออออออออออสออออออฯออออออออออออออนฑฑ
+ฑฑบDesc. ณ Validacao do botao OK.                                        บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบRet.  ณ ExpL1 - Permite ou nao a confirmacao da Alteracao ou Inclusao บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso   ณ LjACadastro                                                   บฑฑ
+ฑฑศออออออฯอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Method ValOK() Class LjACadastro
+Return .T.
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออออออัออออออออออหอออออออัออออออออออออออออออออหออออออัอออออออออออออปฑฑ
+ฑฑบMetodo    ณInserir   บAutor  ณVendas Clientes     บ Data ณ  13/03/08   บฑฑ
+ฑฑฬออออออออออุออออออออออสอออออออฯออออออออออออออออออออสออออออฯอออออออออออออนฑฑ
+ฑฑบDesc.     ณResponsavel em integrar os cadastros ao processo offline.   บฑฑ
+ฑฑฬออออออออออุออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso       ณSigaLoja / FrontLoja                                        บฑฑ
+ฑฑฬออออออออออุออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบParametrosณExpC1 (1 - cTabela) - Nome da tabela. 					  บฑฑ
+ฑฑบ			 ณExpC2 (2 - cChave)  - Dados da chave.						  บฑฑ
+ฑฑบ			 ณExpN1 (3 - nIndice) - Codigo do indice.			          บฑฑ
+ฑฑบ			 ณExpC3 (4 - cTipo)   - Tipo de integracao do dado.	          บฑฑ
+ฑฑบ			 ณExpC4 (5 - cProcesso)  - Codigo do processo.  	          บฑฑ
+ฑฑศออออออออออฯออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Method ProcessOff(cTabela, cChave, nIndice, cTipo, ;
+				  cProcesso) Class LjACadastro
+	
+	Local oProcessOff := Nil				//Objeto do tipo LJCProcessoOffLine
+	
+	//Estancia o objeto LJCProcessoOffLine
+	oProcessOff := LJCProcessoOffLine():New(cProcesso)
+	
+	//Insere os dados do processo (registro da tabela)
+	oProcessOff:Inserir(cTabela, cChave, nIndice, cTipo)	
+	
+	//Processa os dados 
+	oProcessOff:Processar()
+		
+Return Nil
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+ฑฑษออออออัอออออออออออออออหอออออออัอออออออออออออออออหออออออัออออออออออออออปฑฑ
+ฑฑบMetodoณ ValFim        บAutor  ณVendas Clientes  บ Data ณ 25/02/08     บฑฑ
+ฑฑฬออออออุอออออออออออออออสอออออออฯอออออออออออออออออสออออออฯออออออออออออออนฑฑ
+ฑฑบDesc. ณ Validacao do fim do processo.                                 บฑฑ
+ฑฑฬออออออุอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออนฑฑ
+ฑฑบUso   ณ LjACadastro                                                   บฑฑ
+ฑฑศออออออฯอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผฑฑ
+ฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑฑ
+฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿฿
+*/
+Method ValFim() Class LjACadastro
+Return Nil

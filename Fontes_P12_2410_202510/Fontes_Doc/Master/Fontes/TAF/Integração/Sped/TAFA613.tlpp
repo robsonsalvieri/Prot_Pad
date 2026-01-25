@@ -1,0 +1,2475 @@
+#INCLUDE "TLPP-CORE.TH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TOPCONN.CH"
+#INCLUDE "TBICONN.CH"
+#INCLUDE "TAFA613.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+#DEFINE ENGSPS27SIGNATURE 			"001"
+#DEFINE PROCEDURE_CODE 				"27"
+#DEFINE PROCEDURE_NAME 				"TAF613"
+#DEFINE PROCEDURE_STATUS_ERROR 		"0"
+#DEFINE PENDING_STATUS 				"0"
+#DEFINE IN_PROGRESS_STATUS			"1" //Integração iniciada
+#define	SUCCESS_STATUS		    	"2" //Integração concluída
+#DEFINE PROCESS_INCLUSION			"1"
+#DEFINE PROCESS_CANCEL          	"2"
+#DEFINE PROCESS_REPROCESS			"3"
+#DEFINE PROCESS_COMPLEMENT			"4"
+#DEFINE PROCESS_EXCLUSION			"5"
+#DEFINE CODSIT_DOCUMENT_CANCELED	"02"
+
+Static __aChildrenDelete	:= Nil	as array
+Static __aFiliais			:= Nil 	as array
+Static __cProcedure			:= "" 	as character
+Static __cIDChFil			:= ""	as character
+Static __iTamFilC20			:= 0	as integer
+Static __jProcQueryStat		:= Nil	as json
+Static __oTAFProcedure		:= Nil 	as object
+Static __oInsert			:= Nil	as object
+Static __oProcC20			:= Nil 	as object
+Static __oDeleteV7R			:= Nil 	as object
+Static __oDeleteChildren	:= Nil 	as object
+Static __oReprocessedUpdate	:= Nil	as object
+Static __oStatusUpdate		:= Nil	as object
+Static __xTables			:= Nil	as variant
+Static __oSearchChvNf		as object
+Static __xProcedures		:= Nil	as variant
+Static __xCanInitProcess    := Nil as variant
+Static oError 				:= ErrorClass():New() as object
+Static oQueryRetPart        := Nil	as object
+Static oQryAtuPar			:= Nil	as object
+Static cQryExNf				:= ""   as character
+Static oAtuPar              := Nil	as object
+Static oInsV14				:= Nil	as object
+Static lVerifica 			:= .F.  as logical
+Static oExecUpC1h           := Nil  as object
+
+/*/{Protheus.doc} TAFDocInt
+@description Função responsável por garavar a chave da nota fiscal (Protheus) na 
+				tabela C20 do TAF, para depois conseguirmos localizar esta nota no ERP
+@author Adilson Roberto
+@since 25/04/2023
+@version 12.1.2410
+@param cNumNF - Número da Nota
+@param cSerie - Serie da Nota
+@param cTpOper - Tipo de Operação
+@param cCliFor - Código Cliente/Fornecedor
+@param cLoja - Loja Cliente/Fornecedor
+@param dEmissao - Data da Emissão da Nota
+@param cHorEmis - Hora de emissão da nota
+@param dEntrada - Data da Entrada da Nota
+@param cEspecie - Espécie da Nota
+@param lNfCancTaf - Variavel indicando se o documento esta cancelado
+@param lExcTaf - Variavel indicando se está ocorrendo uma exclusão de documento Fiscal
+@param aCamposAlt - Array contendo os campos que foram alterados na nota
+@return Nil
+/*/
+Function TAFDocInt(cNumNF as character, cSerie as character, cTpOper as character, cCliFor as character,;
+		cLoja as character, dEmissao as date, cHorEmis as character, dEntrada as date, cEspecie as character,;
+		lNfCancTaf as logical, lExcTaf as logical, aCamposAlt as array)
+
+	Local cIndOper      := "" as character
+	Local cChvNf		:= "" as character
+	Local cProcC20		:= "" as character
+	Local cFilialC20	:= "" as character
+	Local nExNf         := 0  as numeric
+
+	Default aCamposAlt	:= {}
+	Default cNumNF      := ""
+	Default cSerie      := ""
+	Default cTpOper     := ""
+	Default cCliFor     := ""
+	Default cLoja       := ""
+	Default cEspecie	:= ""
+	Default cHorEmis    := ""
+	Default dEntrada    := CToD("")
+	Default dEmissao    := CToD("")
+	Default lNfCancTaf  := .F.
+	Default lExcTaf		:= .F.
+
+	If __xCanInitProcess == Nil
+		__xCanInitProcess := FindFunction('TAFExecInt') .And. TAFExecInt()
+	EndIf
+
+	If __xCanInitProcess
+		If !lVerifica
+			If !SuperGetMV("MV_HISTTAB",, .F.)
+				PutMV("MV_HISTTAB", .T.)
+			Endif
+
+			lVerifica := .T.
+		EndIf
+
+		If !Empty(cNumNF) .And. !Empty(cTpOper) .And. !Empty(cCliFor) .And.;
+				!Empty(cLoja) .And. !Empty(dEmissao)
+			cIndOper 	:= IIf(cTpOper == "S", "1", "0")
+			cProcC20 	:= GetProcC20(lNfCancTaf, lExcTaf)
+			cFilialC20	:= xFilial("C20")
+			// Se for nota cancelada verifica se a nota existe na C20
+			If lNfCancTaf .Or. lExcTaf
+				nExNf := VerExNf(cFilialC20, cIndOper, cSerie, cNumNF, cCliFor, cLoja, cEspecie, dEmissao)
+			Endif
+
+			If !(lNfCancTaf .And. lExcTaf) .Or. nExNf > 0
+				Do Case
+				Case cProcC20 == PROCESS_INCLUSION
+					cChvNf 		:= TAFGeraID("TAF")
+
+					If C20->(RecLock("C20", .T.))
+						C20->C20_FILIAL := cFilialC20
+						C20->C20_CHVNF	:= cChvNf
+						C20->C20_NUMDOC := cNumNF
+						C20->C20_SERIE	:= cSerie
+						C20->C20_INDOPE	:= cIndOper
+						C20->C20_CLIFOR	:= cCliFor
+						C20->C20_LOJA	:= cLoja
+						C20->C20_DTDOC  := dEmissao
+						C20->C20_DTES	:= dEntrada
+						C20->C20_HORMIS	:= cHorEmis
+						C20->C20_ESPECI	:= cEspecie
+						C20->C20_ATUDOC	:= PROCESS_INCLUSION
+						C20->C20_STATUS := PENDING_STATUS
+						C20->(MsUnlock())
+					EndIf
+
+				Otherwise
+					ReprocessedDocuments(cCliFor, cLoja, cNumNF, cSerie, cIndOper, cEspecie,;
+						cHorEmis, dEmissao, dEntrada, lNfCancTaf, lExcTaf, aCamposAlt)
+
+				EndCase
+			Endif
+		EndIf
+
+		If !lNfCancTaf .And. !lExcTaf .and. !IsBlind()
+			TAFIntegSched()
+		Endif
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuscProcC20
+@description Função responsável retornar o número de registros a ser processados por filial
+@author Adilson Roberto
+@since 25/04/2023
+@version 12.1.2410
+@return cAlias - Alias contendo as filiais a serem processadas na integração das notas
+/*/
+//-------------------------------------------------------------------
+Function BuscProcC20() as character
+
+	Local cQuery 	:= "" as character
+	Local cAlias 	:= "" as character
+	Local cFiliais	:= "" as character
+
+	If __oProcC20 == Nil
+		__iTamFilC20	:= Len(AllTrim(xFilial("C20")))
+
+		cQuery := " SELECT FILIAIS.FILIAL "
+		cQuery += "		FROM ? FILIAIS "
+
+		If __iTamFilC20 > 0 // Se a tabela C20 não estiver compartilhada pega todas as filiais das notas que estiverem com o status igual a 0
+			cQuery += " 	WHERE FILIAIS.FILIAL <> ' ' AND "
+			cQuery += " 		SUBSTRING(FILIAIS.FILIAL, 1, ?) IN ( "
+			cQuery += " 			SELECT TRIM(C20.C20_FILIAL) FILIAL "
+			cQuery += " 				FROM " + RetSQLName("C20") + " C20 "
+			cQuery += " 				WHERE C20.D_E_L_E_T_ = ' ' "
+			cQuery += " 					AND C20.C20_STATUS = '?' "
+			cQuery += " 					AND C20.C20_ATUDOC = '?' "
+			cQuery += " 				GROUP BY C20.C20_FILIAL) "
+		EndIf
+
+		cQuery += " 	ORDER BY FILIAIS.FILIAL "
+
+		cQuery := ChangeQuery(cQuery)
+
+		__oProcC20 := FwExecStatement():New(cQuery)
+	EndIf
+
+	If Empty(__cIDChFil)
+		__cIDChFil := FWUUIDv4(.T.)
+	EndIf
+
+	If __aFiliais == Nil
+		__aFiliais := FWAllFilial(Nil, Nil, Nil, .F.)
+	EndIf
+
+	If __oProcC20 != Nil
+		cFiliais := TAFCacheFil("C20", __aFiliais,,, __cIDChFil)
+
+		If !Empty(cFiliais)
+			__oProcC20:SetUnsafe(1, cFiliais)
+
+			If __iTamFilC20 > 0
+				__oProcC20:SetUnsafe(2, cValToChar(__iTamFilC20))
+				__oProcC20:SetUnsafe(3, PENDING_STATUS)
+				__oProcC20:SetUnsafe(4, PROCESS_INCLUSION)
+			EndIf
+
+			cAlias := __oProcC20:OpenAlias()
+		EndIf
+	EndIf
+
+Return cAlias
+
+/*/{Protheus.doc} IntegraCadastrosSped
+@type			static function
+@description	Executa a procedure
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@return			Nil
+/*/
+Static Function IntegraCadastrosSped()
+
+	Local aProcedures := {} as array
+
+	TAFConout(STR0015,,, STR0010) // "Iniciando o processo de integração dos cadastros predecessores..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+	If CheckTables()
+		If SetStatus(IN_PROGRESS_STATUS, PENDING_STATUS, PROCESS_INCLUSION)
+			If CheckProcedure()
+				aProcedures := ProceduresCadastros()
+
+				TAFConout(STR0016,,, STR0010) // "Iniciando processo de execução das procedures..." // "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+				AEVal(aProcedures, {|x| ExecProcedure(x)})
+				FWFreeArray(aProcedures)
+
+				//Atualiza dados do participante na V14 e na C1H
+				IntegraParticipante()
+				AtuPartic()
+			EndIf
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} GetParams
+@type			static function
+@description	Retorna os parâmetros do sistema que serão passados como parâmetro
+				e utilizados dentro das procedures
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@return         jParams - JSON contendo o conteúdo dos parâmetros no 
+					formato: {"MV_ICMPAD": 0, "MV_BLKTP00": ""}
+/*/
+Static Function GetParams() as json
+
+	Local jParams := JsonObject():New() as json
+
+	TAFConout(STR0017,,, STR0010) // "Carregando parâmetros usados na execução das procedures..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+	jParams["MV_ICMPAD"]	:= SuperGetMV("MV_ICMPAD", .F., 0)
+	jParams["MV_BLKTP00"] 	:= SuperGetMV("MV_BLKTP00", .F., "")
+	jParams["MV_BLKTP01"] 	:= SuperGetMV("MV_BLKTP01", .F., "")
+	jParams["MV_BLKTP02"] 	:= SuperGetMV("MV_BLKTP02", .F., "")
+	jParams["MV_BLKTP03"] 	:= SuperGetMV("MV_BLKTP03", .F., "")
+	jParams["MV_BLKTP04"] 	:= SuperGetMV("MV_BLKTP04", .F., "")
+	jParams["MV_BLKTP06"] 	:= SuperGetMV("MV_BLKTP06", .F., "")
+	jParams["MV_BLKTP10"] 	:= SuperGetMV("MV_BLKTP10", .F., "")
+	jParams["MV_CSDXML"] 	:= cValToChar(SuperGetMV("MV_CSDXML", .F., .F.))
+	jParams["MV_SPEDNAT"] 	:= cValToChar(SuperGetMV("MV_SPEDNAT", .F., .F.))
+
+Return jParams
+
+/*/{Protheus.doc} CheckProcedure
+@type			static function
+@description	Verifica se a procedure está instalada ou se deve ser atualizada
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@return			_xProcedure - Retorna se a procedure está pronta para ser usada
+					.T. - Pronta para uso; .F. - Indisponível para uso
+/*/
+Static Function CheckProcedure() as logical
+
+	TAFConout(STR0018,,, STR0010) // "Verificando procedures de integração de cadastros precedessores..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+	If __oTAFProcedure == Nil .Or. __xProcedures == Nil
+		__oTAFProcedure	:= TAFProcedure():New(PROCEDURE_CODE)
+		__cProcedure 	:= xProcedures(GetSPName(PROCEDURE_NAME, PROCEDURE_CODE))
+		__xProcedures	:= .T.
+
+		If !__oTAFProcedure:IsInstalled()
+			TAFConout(STR0019 + __cProcedure,,, STR0010) // "Instalando procedures: " / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+			__xProcedures := __oTAFProcedure:Install()
+		EndIf
+
+		If __xProcedures .And. !__oTAFProcedure:IsUpdated()
+			TAFConout(STR0020 + __cProcedure,,, STR0010) // "Atualizando procedures: " / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+			__xProcedures := __oTAFProcedure:Update()
+		EndIf
+	EndIf
+
+	If !__xProcedures .Or. !Empty(__oTAFProcedure:cError)
+		ErrorHandler(STR0021 + __cProcedure + __oTAFProcedure:cError) // "Falha na instalação ou atualização das procedures: "
+	EndIf
+
+Return __xProcedures
+
+/*/{Protheus.doc} ProceduresCadastros
+@type			static function
+@description	Lista de procedures disponíveis para integração
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@return			aProcedures - Array contendo as procedures disponíveis para integração
+				no formato:
+				
+				[1][1] - Descrição do cadastro
+				[1][2] - Nome da procedure
+				[1][3] - Tabela do cadastro
+				[1][4] - .T. - Se gera o ID sequencial
+				[1][5] - Ordem do índice usado para gerar o ID sequencial 
+/*/	
+Static Function ProceduresCadastros() as array
+
+	Local aProcedures := {} as array
+
+	TAFConout(STR0022,,, STR0010) // "Carregando procedures a serem executadas..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+	aProcedures := {	{STR0023, "TAF613L", "C0A", .T., 3		},;		// "NCM"
+	{STR0024, "TAF613M", "C1N", .T., 1		},;		// "Natureza de Operação"
+	{STR0025, "TAF613I", "C1P", .T., 1		},;		// "Centro de Custos"
+	{STR0026, "TAF613C", "C1J", .T., 1		},;		// "Unidades de Medida"
+	{STR0027, "TAF613B", "C1K", .T., 1		},;		// "Fatores de Conversão"
+	{STR0028, "TAF613D", "C1O", .F., Nil	},;		// "Plano de Contas"
+	{STR0029, "TAF613A", "C1L", .F., Nil	}	}	// "Produtos"
+
+Return aProcedures
+
+/*/{Protheus.doc} ExecProcedure
+@type			static function
+@description	Executa a procedure
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@param          aProcedure - Array contendo a procedure a ser executada no 
+					formato: {{"Cadastro de Produtos", "TAF613A"}}
+@return			Nil
+/*/
+Static Function ExecProcedure(aProcedure as array)
+
+	Local aOutput		:= {} 	as array
+	Local cProcesso		:= ""	as character
+	Local jParams		:= Nil 	as json
+
+	Default aProcedure	:= {}
+
+	If !Empty(aProcedure)
+		GetIDTable(aProcedure, @cProcesso)
+
+		jParams := GetParams()
+
+		TAFConout(STR0030 + aProcedure[2] + " - " + aProcedure[1],,, STR0010) // "Executando procedure: " // "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+		aOutput := TCSPExec(__cProcedure, cFilAnt, aProcedure[2], cProcesso, IN_PROGRESS_STATUS, PROCESS_INCLUSION, jParams["MV_ICMPAD"],;
+			jParams["MV_BLKTP00"], jParams["MV_BLKTP01"], jParams["MV_BLKTP02"], jParams["MV_BLKTP03"], jParams["MV_BLKTP04"],;
+			jParams["MV_BLKTP06"], jParams["MV_BLKTP10"], jParams["MV_CSDXML"], jParams["MV_SPEDNAT"], "", "", "")
+
+		CleanIDsTable(cProcesso)
+
+		If Empty(aOutput) .Or. Empty(aOutput[1]) .Or. (aOutput[1] == PROCEDURE_STATUS_ERROR)
+			ErrorHandler(STR0006 + aProcedure[2] + " - " + aProcedure[1] + CRLF + TcSqlError()) // "Falha na execução da procedure: "
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} ErrorHandler
+@type			static function
+@description	Realiza o tratamento dos erros
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@param          cError - Mensagem de erro a ser tratada
+@return			Nil
+/*/
+Static Function ErrorHandler(cError as character)
+
+	Default cError := ""
+
+	oError:Description := cError
+
+	THROW oError
+
+Return
+
+/*/{Protheus.doc} CheckTables
+@type			static function
+@description	Verifica se as tabelas necessárias estão criadas, e se não estiverem, cria elas
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@return			Nil
+/*/
+Static Function CheckTables() as logical
+
+	If __xTables == Nil
+		__xTables := .F.
+
+		TAFConout(STR0031,,, STR0010) // "Verificando tabelas necessárias para execução das procedures de integração dos cadastros predecessores..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+		If TAFAlsInDic("V80") .And. TAFAlsInDic("V7R")
+			__xTables := ChkFile("V80") .And. ChkFile("V7R")
+		EndIf
+	EndIf
+
+Return __xTables
+
+/*/{Protheus.doc} GetIDTable
+@type			static function
+@description	Gera os IDs sequenciais e grava na tabela V7R
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@param          aProcedure - Procedure em que os IDs serão gerados
+@param          cProcesso - Processo em que a procedure será executada
+@return			Nil
+/*/
+Static Function GetIDTable(aProcedure as array, cProcesso as character)
+
+	Local iIDs					:= 0	as integer
+	Local iX					:= 0 	as integer
+
+	Default aProcedure			:= {}
+	Default cProcesso			:= ""
+
+	If !Empty(aProcedure) .And. !Empty(aProcedure[2]) .And. !Empty(aProcedure[3]) .And. aProcedure[4]
+		cProcesso 	:= FWUUIDv4(.T.)
+		iIDs 		:= GetIDsQuantity(aProcedure[2])
+
+		TAFConout(STR0032 + aProcedure[2] + " - " + aProcedure[1] + STR0033 + aProcedure[3] + STR0034 + cProcesso + "...",,, STR0010) // "Gerando os IDs sequenciais usados para a integração da procedure " / " tabela: " / " processo: " / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+		If iIDs > 0
+			TAFConout(cValToChar(iIDs) + STR0035 + aProcedure[2] + " - " + aProcedure[1] + STR0033 + aProcedure[3] + STR0034 + cProcesso,,, STR0010) // " IDs sequenciais reservados na tabela V7R para a integração da procedure: " / " tabela: " / " processo: " / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+			If __oInsert == Nil .Or. !Empty(__oInsert:GetError()) .Or. Empty(__oInsert:cFields)
+				__oInsert := FwBulk():New(RetSQLName("V7R"))
+
+				__oInsert:SetFields(V7R->(DbStruct()))
+			EndIf
+
+			For iX := 1 To iIDs
+				If !__oInsert:AddData({	xFilial("V7R"),;
+						cProcesso,;
+						aProcedure[2],;
+						aProcedure[3],;
+						iX,;
+						GetSX8Num(aProcedure[3], aProcedure[3] + "_ID",, aProcedure[5])	})
+					RollBackSX8()
+					Exit
+				EndIf
+
+				ConfirmSX8()
+			Next
+
+			If !Empty(__oInsert:GetError()) .Or. !__oInsert:Flush()
+				ErrorHandler(STR0007 + aProcedure[2] + CRLF + CRLF + __oInsert:GetError()) // "Falha na reserva dos IDs para executar a Procedure: "
+			EndIf
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} GetIDsQuantity
+@type			static function
+@description	Retorna a quantidade de registros a serem incluídos no cadastro
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@param          cProcedure - Procedure a ser verificada
+@return			iIDs - Quantidade de registros a serem incluídos
+/*/
+Static Function GetIDsQuantity(cProcedure as character) as integer
+
+	Local cQuery		:= "" 	as character
+	Local cAliasIDs		:= ""	as character
+	Local iIDs 			:= 0	as integer
+
+	Default cProcedure 	:= ""
+
+	If !Empty(cProcedure)
+		If __jProcQueryStat == Nil
+			__jProcQueryStat := JsonObject():New()
+		EndIf
+
+		TAFConout(STR0036 + cProcedure,,, STR0010) // "Carregando a quantidade de IDs sequenciais necessários na integração da procedure: " / "INTEGRAÇÄO LIVROS FISCAIS X TAF"
+
+		Do Case
+		Case cProcedure == "TAF613B"
+			If __jProcQueryStat[cProcedure] == Nil
+				cQuery := "	SELECT COUNT(distinct C1J.C1J_ID) IDS "
+				cQuery += "		FROM " + RetSQLName("SB1") + " SB1 "
+				cQuery += "		INNER JOIN " + RetSQLName("SFT") + " SFT "
+				cQuery += "		    ON SFT.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND SFT.FT_FILIAL = ? "
+				cQuery += "		        AND SFT.FT_PRODUTO = SB1.B1_COD "
+				cQuery += "		INNER JOIN " + RetSQLName("C20") + " C20 "
+				cQuery += "		    ON C20.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND C20.C20_FILIAL = ? "
+				cQuery += "		        AND C20.C20_STATUS = ? "
+				cQuery += "		        AND C20.C20_ATUDOC = ? "
+				cQuery += "		        AND C20.C20_NUMDOC = SFT.FT_NFISCAL "
+				cQuery += "		        AND C20.C20_SERIE = SFT.FT_SERIE "
+				cQuery += "		        AND C20.C20_CLIFOR = SFT.FT_CLIEFOR "
+				cQuery += "		        AND C20.C20_LOJA = SFT.FT_LOJA "
+				cQuery += "		        AND (C20.C20_DTES = SFT.FT_ENTRADA "
+				cQuery += "					OR C20.C20_DTDOC = SFT.FT_EMISSAO) "
+				cQuery += "		LEFT JOIN " + RetSQLName("DKC") + " DKC "
+				cQuery += "		    ON DKC.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND DKC.DKC_FILIAL = ? "
+				cQuery += "		        AND DKC.DKC_DOC = SFT.FT_NFISCAL "
+				cQuery += "		        AND DKC.DKC_SERIE = SFT.FT_SERIE "
+				cQuery += "		        AND DKC.DKC_FORNEC = SFT.FT_CLIEFOR "
+				cQuery += "		        AND DKC.DKC_LOJA = SFT.FT_LOJA "
+				cQuery += "		        AND DKC.DKC_ITEMNF = SFT.FT_ITEM "
+				cQuery += "		LEFT JOIN " + RetSQLName("DKA") + " DKA "
+				cQuery += "		    ON DKA.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND DKA.DKA_FILIAL = ? "
+				cQuery += "		        AND DKA.DKA_DOC = DKC.DKC_DOC "
+				cQuery += "		        AND DKA.DKA_SERIE = DKC.DKC_SERIE "
+				cQuery += "		        AND DKA.DKA_FORNEC = DKC.DKC_FORNEC "
+				cQuery += "		        AND DKA.DKA_LOJA = DKC.DKC_LOJA "
+				cQuery += "		        AND DKA.DKA_ITXML = DKC.DKC_ITXML "
+				cQuery += "		INNER JOIN " + RetSQLName("C1J") + " C1J "
+				cQuery += "		    ON C1J.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND C1J.C1J_FILIAL = ? "
+				cQuery += "				AND (C1J.C1J_CODIGO = COALESCE(DKA.DKA_UM, ' ') "
+				cQuery += "					OR C1J.C1J_CODIGO = SB1.B1_UM) "
+				cQuery += "		LEFT JOIN " + RetSQLName("C1K") + " C1K "
+				cQuery += "		    ON C1K.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND C1K.C1K_FILIAL = ? "
+				cQuery += "		        AND C1K.C1K_CODIGO = C1J.C1J_ID "
+				cQuery += "		WHERE "
+				cQuery += "		    SB1.D_E_L_E_T_ = ' ' "
+				cQuery += "		        AND SB1.B1_FILIAL = ? "
+				cQuery += "		        AND C1K.C1K_ID IS NULL "
+
+				cQuery := ChangeQuery(cQuery)
+
+				__jProcQueryStat[cProcedure] := FwExecStatement():New(cQuery)
+			EndIf
+
+			If __jProcQueryStat[cProcedure] != Nil
+				__jProcQueryStat[cProcedure]:SetString(1, xFilial("SFT"))
+				__jProcQueryStat[cProcedure]:SetString(2, xFilial("C20"))
+				__jProcQueryStat[cProcedure]:SetString(3, IN_PROGRESS_STATUS)
+				__jProcQueryStat[cProcedure]:SetString(4, PROCESS_INCLUSION)
+				__jProcQueryStat[cProcedure]:SetString(5, xFilial("DKC"))
+				__jProcQueryStat[cProcedure]:SetString(6, xFilial("DKA"))
+				__jProcQueryStat[cProcedure]:SetString(7, xFilial("C1J"))
+				__jProcQueryStat[cProcedure]:SetString(8, xFilial("C1K"))
+				__jProcQueryStat[cProcedure]:SetString(9, xFilial("SB1"))
+			EndIf
+
+		Case cProcedure == "TAF613C"
+			If __jProcQueryStat[cProcedure] == Nil
+				cQuery := "	SELECT COUNT(SAH.AH_UNIMED) IDS "
+				cQuery += "		FROM " + RetSQLName("SAH") + " SAH "
+				cQuery += "		LEFT JOIN " + RetSQLName("C1J") + " C1J "
+				cQuery += "			ON C1J.D_E_L_E_T_ = ' ' "
+				cQuery += "				AND C1J.C1J_FILIAL = ? "
+				cQuery += "				AND C1J.C1J_CODIGO = SAH.AH_UNIMED "
+				cQuery += "		WHERE SAH.D_E_L_E_T_ = ' ' "
+				cQuery += "			AND SAH.AH_FILIAL = ? "
+				cQuery += "			AND C1J.C1J_CODIGO IS NULL "
+
+				cQuery := ChangeQuery(cQuery)
+
+				__jProcQueryStat[cProcedure] := FwExecStatement():New(cQuery)
+			EndIf
+
+			If __jProcQueryStat[cProcedure] != Nil
+				__jProcQueryStat[cProcedure]:SetString(1, xFilial("C1J"))
+				__jProcQueryStat[cProcedure]:SetString(2, xFilial("SAH"))
+			EndIf
+
+		Case cProcedure == "TAF613I"
+			If __jProcQueryStat[cProcedure] == Nil
+				cQuery := "	SELECT COUNT(CTT.CTT_CUSTO) IDS "
+				cQuery += "		FROM " + RetSQLName("CTT") + " CTT "
+				cQuery += "		LEFT JOIN " + RetSQLName("C1P") + " C1P "
+				cQuery += "			ON C1P.D_E_L_E_T_ = ' ' "
+				cQuery += "				AND C1P.C1P_FILIAL = ? "
+				cQuery += "				AND C1P.C1P_CODCUS = CTT.CTT_CUSTO "
+				cQuery += "		WHERE CTT.D_E_L_E_T_ = ' ' "
+				cQuery += "			AND CTT.CTT_FILIAL = ? "
+				cQuery += "			AND C1P.C1P_CODCUS IS NULL "
+
+				cQuery := ChangeQuery(cQuery)
+
+				__jProcQueryStat[cProcedure] := FwExecStatement():New(cQuery)
+			EndIf
+
+			If __jProcQueryStat[cProcedure] != Nil
+				__jProcQueryStat[cProcedure]:SetString(1, xFilial("C1P"))
+				__jProcQueryStat[cProcedure]:SetString(2, xFilial("CTT"))
+			EndIf
+
+		Case cProcedure == "TAF613L"
+			If __jProcQueryStat[cProcedure] == Nil
+				cQuery := "	SELECT COUNT(SYD.YD_TEC) IDS "
+				cQuery += "		FROM " + RetSQLName("SYD") + " SYD "
+				cQuery += "		LEFT JOIN " + RetSQLName("C0A") + " C0A "
+				cQuery += "			ON C0A.D_E_L_E_T_ = ' ' "
+				cQuery += "				AND C0A.C0A_FILIAL = ? "
+				cQuery += "				AND C0A.C0A_CODIGO = SYD.YD_TEC "
+				cQuery += "		WHERE SYD.D_E_L_E_T_ = ' ' "
+				cQuery += "			AND SYD.YD_FILIAL = ? "
+				cQuery += "			AND C0A.C0A_CODIGO IS NULL "
+
+				cQuery := ChangeQuery(cQuery)
+
+				__jProcQueryStat[cProcedure] := FwExecStatement():New(cQuery)
+			EndIf
+
+			If __jProcQueryStat[cProcedure] != Nil
+				__jProcQueryStat[cProcedure]:SetString(1, xFilial("C0A"))
+				__jProcQueryStat[cProcedure]:SetString(2, xFilial("SYD"))
+			EndIf
+
+		EndCase
+
+		If __jProcQueryStat[cProcedure] != Nil
+			cAliasIDs := __jProcQueryStat[cProcedure]:OpenAlias()
+
+			If !(cAliasIDs)->(EOF())
+				iIDs := (cAliasIDs)->IDS
+			EndIf
+
+			(cAliasIDs)->(DbCloseArea())
+		EndIf
+	EndIf
+
+Return iIDs
+
+/*/{Protheus.doc} CleanIDsTable
+@type			static function
+@description	Realiza a limpeza da tabela V7R para o processo executado
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@param          cProcesso - Código do processo da procedure
+@return			Nil
+/*/
+Static Function CleanIDsTable(cProcesso as character)
+
+	Local cQuery 		:= "" as character
+
+	Default cProcesso 	:= ""
+
+	If !Empty(cProcesso)
+		TAFConout(STR0037 + cProcesso + "..." ,,, STR0010) // "Limpando a tabela de reserva de IDs V7R para o processo: " / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+		If __oDeleteV7R == Nil
+			cQuery := "	DELETE FROM " + RetSQLName("V7R")
+			cQuery += "		WHERE V7R_FILIAL = ? "
+			cQuery += "        AND V7R_PROCES = ? "
+
+			__oDeleteV7R := FwExecStatement():New(cQuery)
+		EndIf
+
+		If __oDeleteV7R != Nil
+			__oDeleteV7R:SetString(1, xFilial("V7R"))
+			__oDeleteV7R:SetString(2, cProcesso)
+
+			cQuery := __oDeleteV7R:GetFixQuery()
+
+			If TCSQLExec(cQuery) < 0; ErrorHandler(STR0038 + CRLF + TcSqlError()); EndIf // "Falha na limpeza da tabela V7R."
+			EndIf
+		EndIf
+
+		Return
+
+/*/{Protheus.doc} GetProcC20
+@type			static function
+@description	Retorna o tipo de processo do documento fiscal
+@author			Melkz Siqueira
+@since			18/10/2023
+@version		1.0
+@param lNfCancTaf - Variavel indicando se o documento esta cancelado
+@return			cProcC20 - 1 - Inclusão; 2 - Cancelamento; 3 - Reprocessamento; 4 = Complemento; 5 = Exclusão 
+/*/
+Static Function GetProcC20(lNfCancTaf as logical, lExcTaf as logical) as character
+
+	Local cProcC20 := "" as character
+
+	Default lNfCancTaf := .F.
+	Default lExcTaf	   := .F.
+
+	Do Case
+	Case FWIsInCallStack("A930RPEntrada")
+		cProcC20 := PROCESS_REPROCESS
+
+	Case FWIsInCallStack("A930RPSaida")
+		cProcC20 := PROCESS_REPROCESS
+
+	Case FWIsInCallStack("A900Altera")
+		cProcC20 := PROCESS_REPROCESS
+
+	Case FWIsInCallStack("MATA917")
+		cProcC20 := PROCESS_REPROCESS
+
+	Case FWIsInCallStack("TafIntegTSS")
+		cProcC20 := PROCESS_REPROCESS
+		
+	Case FWIsInCallStack("M926Fim")
+		cProcC20 := PROCESS_COMPLEMENT
+
+	Case lNfCancTaf
+		cProcC20 := PROCESS_CANCEL
+
+	Case lExcTaf
+		cProcC20 := PROCESS_EXCLUSION
+
+	Otherwise
+		cProcC20 := PROCESS_INCLUSION
+
+	EndCase
+
+Return cProcC20
+
+/*/{Protheus.doc} ReprocessedDocuments
+@type			static function
+@description	Realiza o delete lógico dos dados das tabelas filhas relacionadas à tabela C20
+				do documento fiscal
+@author			Melkz Siqueira
+@since			18/10/2023
+@version		1.0
+@return			Nil
+/*/
+Static Function ReprocessedDocuments(cCliFor as character, cLoja as character, cNumNF as character, cSerie as character,;
+		cIndOper as character, cEspecie as character, cHorEmis as character, dEmissao as date, dEntrada as date,;
+		lNfCancTaf as logical, lExcTaf as logical, aCamposAlt as array)
+
+	Local cError		:= ""	as character
+	Local cChildAlias	:= "" 	as character
+	Local cChildTable	:= "" 	as character
+	Local cQuery		:= "" 	as character
+	Local iX			:= 0	as integer
+	Local iBind			:= 0	as integer
+	Local oModelDelete	:= Nil	as object
+	Local cAliasReproc	as character
+	Local cChvNfReproc	as character
+
+
+	Default aCamposAlt	:= {}
+	Default cCliFor		:= ""
+	Default cLoja		:= ""
+	Default cNumNF		:= ""
+	Default cSerie		:= ""
+	Default cIndOper	:= ""
+	Default cEspecie	:= ""
+	Default cHorEmis	:= ""
+	Default dEmissao	:= CToD("")
+	Default dEntrada	:= CToD("")
+	Default lNfCancTaf  := .F.
+	Default lExcTaf		:= .F.
+
+	If !Empty(cNumNF) .And. !Empty(cCliFor) .And. !Empty(cLoja) .And. !Empty(dEmissao)
+
+		//Consulta chave do coumento fiscal (C20)
+		if __oSearchChvNf == nil
+			cQuery += " SELECT C20.C20_CHVNF "
+			cQuery += " 	FROM " + RetSQLName("C20") + " C20 "
+			cQuery += " 	WHERE C20.D_E_L_E_T_ = ' ' "
+			cQuery += "						AND C20.C20_FILIAL = ? "
+			cQuery += " 					AND C20.C20_CLIFOR = ? "
+			cQuery += " 					AND C20.C20_LOJA = ? "
+			cQuery += " 					AND C20.C20_NUMDOC = ? "
+			cQuery += " 					AND C20.C20_SERIE = ? "
+			cQuery += " 					AND C20.C20_INDOPE = ? "
+			cQuery += " 					AND C20.C20_ESPECI = ? "
+			cQuery += " 					AND C20.C20_HORMIS = ? "
+			cQuery += " 					AND C20.C20_DTDOC = ? "
+			cQuery += " 					AND C20.C20_DTES = ? "
+
+			cQuery := ChangeQuery(cQuery)
+			__oSearchChvNf := FwExecStatement():New(cQuery)
+
+		endif
+
+		//Monta atualização das tabelas filhas da C20
+		If __oDeleteChildren == Nil
+			cQuery := " UPDATE ? "
+			cQuery += " 	SET D_E_L_E_T_ = '*', "
+			cQuery += "			R_E_C_D_E_L_ = R_E_C_N_O_ "
+			cQuery += " 	WHERE D_E_L_E_T_ = ' ' "
+			cQuery += "			AND ?_FILIAL = ? "
+			cQuery += " 		AND ?_CHVNF  = ? "
+
+			__oDeleteChildren := FwExecStatement():New(cQuery)
+		EndIf
+
+		//Atualiza a tabela C20
+		If __oReprocessedUpdate == Nil .Or. !Empty(aCamposAlt)
+			cQuery := " UPDATE " + RetSQLName("C20")
+			cQuery += " 	SET "
+
+			For iX := 1 To Len(aCamposAlt)
+				If aCamposAlt[iX][2] != Nil
+					cQuery += aCamposAlt[iX][1] + " = ?, "
+				Endif
+			Next
+
+			cQuery += " 		C20_ATUDOC   = ?, "
+			cQuery += " 		C20_STATUS   = ?, "
+			cQuery += " 		C20_DTCANC   = ?, "
+			cQuery += " 		C20_CODSIT   = ?, "
+			cQuery += " 		D_E_L_E_T_   = ?, "
+			cQuery += " 		R_E_C_D_E_L_ = ? "
+			cQuery += "		WHERE D_E_L_E_T_ = ' ' "
+			cQuery += "			AND C20_FILIAL = ? "
+			cQuery += "			AND C20_CHVNF  = ? "
+
+			__oReprocessedUpdate := FwExecStatement():New(cQuery)
+		EndIf
+
+
+		//Relaciona em __aChildrenDelete todos os modelos que são dependentes do modelo instaciado
+		If __aChildrenDelete == Nil
+			oModelDelete := FWLoadModel("TAFA062")
+
+			If oModelDelete != Nil
+				__aChildrenDelete := TableChildrenModel(oModelDelete:GetDependency()[1])
+			EndIf
+
+			FWFreeObj(oModelDelete)
+		EndIf
+
+		//Adiciona ao __aChildrenDelete as tabelas que fazem da parte do documento, porém não são dependentes do modelo instanciado, ou seja, não aparecem na tela de documentos fiscais.
+		GetChildTables(@__aChildrenDelete)
+
+		If __oSearchChvNf != nil .and. __oDeleteChildren != Nil .And. __aChildrenDelete != Nil
+			cQuery		:= ""
+			cC20Filial	:= xFilial("C20")
+
+			//Busca chava da C20
+			__oSearchChvNf:SetString(01, cC20Filial)
+			__oSearchChvNf:SetString(02, cCliFor)
+			__oSearchChvNf:SetString(03, cLoja)
+			__oSearchChvNf:SetString(04, cNumNF)
+			__oSearchChvNf:SetString(05, cSerie)
+			__oSearchChvNf:SetString(06, cIndOper)
+			__oSearchChvNf:SetString(07, cEspecie)
+			__oSearchChvNf:SetString(08, cHorEmis)
+			__oSearchChvNf:setDate  (09, dEmissao)
+			__oSearchChvNf:setDate  (10, dEntrada)
+
+			cAliasReproc := __oSearchChvNf:OpenAlias()
+			cChvNfReproc :=  (cAliasReproc)->C20_CHVNF
+			(cAliasReproc)->(DbCloseArea())
+
+
+			//Monta os UpDates das tabelas filhas da C20
+			For iX := 1 To Len(__aChildrenDelete)
+				cChildAlias		:= __aChildrenDelete[iX]
+				cChildTable		:= RetSQLName(cChildAlias)
+				cChildFilial	:= xFilial(cChildAlias)
+
+				__oDeleteChildren:SetUnsafe(1,  cChildTable)
+				__oDeleteChildren:SetUnsafe(2,  cChildAlias)
+				__oDeleteChildren:SetString(3,  cChildFilial)
+				__oDeleteChildren:SetUnsafe(4,  cChildAlias)
+				__oDeleteChildren:SetString(5,  cChvNfReproc)
+
+				cQuery += __oDeleteChildren:GetFixQuery() + ";"
+			Next
+
+			//Monta o update da C20
+			If __oReprocessedUpdate != Nil .And. !Empty(cQuery)
+				For iX := 1 To Len(aCamposAlt)
+					Do Case
+					Case GetSX3Cache(aCamposAlt[iX][1], "X3_TIPO") == "C" .And. aCamposAlt[iX][2] != Nil
+						__oReprocessedUpdate:SetString(++iBind, AllTrim(aCamposAlt[iX][2]))
+
+					Case GetSX3Cache(aCamposAlt[iX][1], "X3_TIPO") == "D" .And. aCamposAlt[iX][2] != Nil
+						__oReprocessedUpdate:SetDate(++iBind, aCamposAlt[iX][2])
+
+					EndCase
+				Next
+
+				If !lNfCancTaf .And. !lExcTaf
+					__oReprocessedUpdate:SetString(++iBind, PROCESS_INCLUSION)
+					__oReprocessedUpdate:SetString(++iBind, PENDING_STATUS)
+					__oReprocessedUpdate:SetString(++iBind, "")
+					__oReprocessedUpdate:SetString(++iBind, "")
+					__oReprocessedUpdate:SetString(++iBind, "")
+					__oReprocessedUpdate:SetNumeric(++iBind, 0)
+				ElseIf lNfCancTaf
+					__oReprocessedUpdate:SetString(++iBind, PROCESS_CANCEL)
+					__oReprocessedUpdate:SetString(++iBind, SUCCESS_STATUS)
+					__oReprocessedUpdate:setDate(++iBind, dDataBase)
+					__oReprocessedUpdate:SetString(++iBind, TAFGetIDCodSit(CODSIT_DOCUMENT_CANCELED))
+					__oReprocessedUpdate:SetString(++iBind, "")
+					__oReprocessedUpdate:SetNumeric(++iBind, 0)
+				Else
+					__oReprocessedUpdate:SetString(++iBind, PROCESS_EXCLUSION)
+					__oReprocessedUpdate:SetString(++iBind, SUCCESS_STATUS)
+					__oReprocessedUpdate:SetString(++iBind, "")
+					__oReprocessedUpdate:SetString(++iBind, "")
+					__oReprocessedUpdate:SetString(++iBind, "*")
+					__oReprocessedUpdate:SetUnsafe(++iBind, 'R_E_C_N_O_')
+				EndIf
+
+				__oReprocessedUpdate:SetString(++iBind, cC20Filial)
+				__oReprocessedUpdate:SetString(++iBind, cChvNfReproc)
+
+				cQuery += __oReprocessedUpdate:GetFixQuery() + ";"
+			EndIf
+
+			//Atualiza as tabelas do documento fiscal com execução direta no banco de dados
+			If !TAFExecQuery(cQuery, .T., @cError); TAFConOut(cError, 3,, STR0010); EndIf // "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+			EndIf
+		EndIf
+
+		Return
+
+/*{Protheus.doc} TableChildrenModel
+@description Função recursiva que retorna as tabelas filhas relacionadas à uma tabela
+				baseado no relacionamento definido na model do MVC
+@param aModel - Array contendo a model das tabelas filhas relacionadas à tabela
+@author Melkz Siqueira
+@since 20/10/2023
+@version 1.0
+@return aChildren - Array contendo as tabelas filhas relacionadas à tabela
+*/  
+Static Function TableChildrenModel(aModel as array) as array
+
+	Local aModelChildren	:= {}	as array
+	Local aChildren			:= {} 	as array
+	Local iX       			:= 0	as integer
+
+	Default aModel 			:= {}
+
+	If !Empty(aModel)
+		aModelChildren := aClone(aModel[4])
+
+		For iX := 1 To Len(aModelChildren)
+			AAdd(aChildren, Right(aModelChildren[iX][2], 3))
+
+			If !Empty(aModelChildren[iX][4])
+				AEVal(TableChildrenModel(aModelChildren[iX]), {|x| AAdd(aChildren, x)})
+			EndIf
+		Next
+	EndIf
+
+Return aChildren
+
+
+/*/{Protheus.doc} EngSPS27Signature
+@type			function
+@description	Ponto de entrada do SPMANAGER responsavel por retornar a assinatura
+				do fonte TAFA613.TLPP
+@author			Melkz Siqueira
+@since			19/07/2023
+@version		1.0
+@param          cProcesso - Código do processo da procedure
+@return			cAssinatura - Assinatura do fonte TAFA613.TLPP
+/*/
+Function EngSPS27Signature(cProcesso as character) as character
+
+	Local cAssinatura := "" as character
+
+	cAssinatura := ENGSPS27SIGNATURE
+
+Return cAssinatura
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} EngPos27Compile
+Ponto de entrada executado após compilação das procedures de um determinado 
+processo pela MsParse usada para fazer ajustes no código já adaptado ao tipo 
+de banco de dados em uso. Esses ajustes só podem ser realizados após a MsParse 
+traduzir o script original para a linguagem do banco que está sendo utilizado.
+
+@author Carlos Eduardo Nonato
+@since 24/10/2023
+//------------------------------------------------------------------------*/
+Function EngPos27Compile(cProcesso as character, cEmpresa as character, cProcName as character, cLocalDB as character, cBuffer as character, cError as character) as logical
+	
+	Local cBufferUp := upper(cBuffer) as character
+
+	do case
+		case cLocalDB == 'POSTGRES'
+			if cProcName == 'TAF613K'
+				//Tratamento para incluir os parenteses no final da função "GEN_RANDOM_UUID". Por algum erro, o marge padrão que é feito na instalação das procedures 
+				//os retira, ocasionando erro em sua execução.
+				if at('GEN_RANDOM_UUID()', cBufferUp) == 0
+					if at('GEN_RANDOM_UUID', cBufferUp) > 0
+						cBuffer := strtran(cBufferUp,'GEN_RANDOM_UUID','GEN_RANDOM_UUID()')
+					endif   
+				endif       
+			endif
+	endcase
+ 
+return .t.
+
+/*/{Protheus.doc} SetStatus
+Atualiza o status dos documentos fiscais a serem integrados
+@param cSetStatus, character, Status a ser inserido nos registros
+@param cCurrentStatus, character, Status atual dos registros a serem filtrados
+@param cAtuDoc, character, Processo atual dos registros a serem filtrados
+@type static function
+@author Melkz Siqueira
+@since 29/01/2024
+@version 2.0
+@return logical, .T. se o status foi atualizado com sucesso
+/*/
+Static Function SetStatus(cSetStatus as character, cCurrentStatus as character, cAtuDoc as character) as logical
+
+	Local cQuery			:= "" 	as character
+	Local cError			:= "" 	as character
+	Local lRet				:= .F. 	as logical
+
+	Default cSetStatus		:= ""
+	Default cCurrentStatus	:= ""
+	Default cAtuDoc			:= ""
+
+	If !Empty(cSetStatus) .And. !Empty(cCurrentStatus) .And. !Empty(cAtuDoc)
+		TAFConout(STR0039,,, STR0010) // "Atualizando o status dos documentos fiscais..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+		If __oStatusUpdate == Nil
+			cQuery := " UPDATE " + RetSQLName("C20")
+			cQuery += " 	SET C20_STATUS = ? "
+			cQuery += "		WHERE D_E_L_E_T_ = ' ' "
+			cQuery += "			AND C20_FILIAL = '?' "
+			cQuery += "			AND C20_STATUS = '?' "
+			cQuery += "			AND C20_ATUDOC = '?' "
+
+			__oStatusUpdate := FwExecStatement():New(cQuery)
+		EndIf
+
+		If __oStatusUpdate != Nil
+			__oStatusUpdate:SetUnsafe(1, cSetStatus)
+			__oStatusUpdate:SetUnsafe(2, xFilial("C20"))
+			__oStatusUpdate:SetUnsafe(3, cCurrentStatus)
+			__oStatusUpdate:SetUnsafe(4, cAtuDoc)
+				
+			cQuery := __oStatusUpdate:GetFixQuery()
+
+			BEGIN TRANSACTION
+
+				lRet := TAFExecQuery(cQuery, .F., @cError)
+
+			END TRANSACTION
+			
+			If !lRet; TAFConout(STR0040, 3,, STR0010); ErrorHandler(cError); EndIf // "Falha na atualização do status dos documentos fiscais." // "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+		EndIf
+	EndIf
+
+Return lRet
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} IntegraParticipante
+Função responsável por localizar se o participante do movimento esta integrado 
+ou não na tabela C1H e atualizar a Tabela V14 com informações do participante
+@author adilson.roberto
+@since 23/02/2024
+//------------------------------------------------------------------------*/
+Static Function IntegraParticipante()
+
+	Local cRetQry   	:= ""	as character
+	Local cChave    	:= ""  	as character
+	Local cIdC1H		:= ""  	as character
+	Local cCodPar   	:= ""  	as character
+	Local cQueryRetPart	:= ""  	as character
+	Local cIntegr		:= ""	as character
+	Local iCNPJ			:= 0	as integer
+	Local iIE			:= 0	as integer
+	Local iINSCM		:= 0	as integer
+	Local iCODMUN		:= 0	as integer
+	Local iCEP			:= 0	as integer
+	Local iESTADO		:= 0	as integer
+	Local iCODPAR		:= 0	as integer
+	Local iCont			:= 1	as integer
+	Local lCallBulk 	:= .F. 	as logical
+	Local lInsV14 		:= .t.  as logical
+	Local cMsgErro as character
+	Local aFieldBulk   := {} as array
+	
+	If oQueryRetPart == Nil
+		cQueryRetPart := " SELECT "
+		cQueryRetPart += " coalesce(SA1.A1_CGC,SA2.A2_CGC) CNPJ, "
+		cQueryRetPart += " coalesce(SA1.A1_INSCR, SA2.A2_INSCR) IE, "
+		cQueryRetPart += " coalesce(SA1.A1_INSCRM, SA2.A2_INSCRM) INSCM, "
+		cQueryRetPart += " coalesce(SA1.A1_COD_MUN, SA2.A2_COD_MUN) CODMUN, "
+		cQueryRetPart += " coalesce(SA1.A1_CEP, SA2.A2_CEP) CEP, "
+		cQueryRetPart += " coalesce(SA1.A1_EST, SA2.A2_EST) ESTADO, "
+		cQueryRetPart += " V14.V14_ORIG, "
+		cQueryRetPart += " V14.V14_INTEGR, "
+		cQueryRetPart += " V14.V14_IDC1H, "
+		cQueryRetPart += " V14.V14_CODPAR, "
+		cQueryRetPart += " SFT.FT_TIPO, "
+		cQueryRetPart += " SFT.FT_TIPOMOV, "
+		cQueryRetPart += " C20.C20_FILIAL, "
+		cQueryRetPart += " CASE WHEN (SFT.FT_TIPOMOV = 'S' AND SFT.FT_TIPO NOT IN ('D','B')) "
+		cQueryRetPart += "  OR (SFT.FT_TIPOMOV = 'E' AND SFT.FT_TIPO IN ('D','B')) "
+		cQueryRetPart += "   THEN 'SA1' ELSE 'SA2' END ORIG " 
+		cQueryRetPart += " FROM " + RetSqlName('C20') + " C20 "
+		cQueryRetPart += " 	INNER JOIN " + RetSqlName('SFT') + " SFT ON "
+		cQueryRetPart += " 			    SFT.FT_FILIAL = ? AND "
+		cQueryRetPart += " 				SFT.FT_TIPOMOV = (case when C20.C20_INDOPE = '0' then 'E' else 'S' end) AND "
+		cQueryRetPart += " 				SFT.FT_NFISCAL = C20.C20_NUMDOC AND "
+		cQueryRetPart += " 				SFT.FT_SERIE   = C20.C20_SERIE AND "
+		cQueryRetPart += " 				SFT.FT_CLIEFOR = C20.C20_CLIFOR AND "
+		cQueryRetPart += " 				SFT.FT_LOJA    = C20.C20_LOJA AND "
+		cQueryRetPart += " 				SFT.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	LEFT JOIN " + RetSqlName('SA1') + " SA1 ON "
+		cQueryRetPart += " 			    SA1.A1_FILIAL = ? AND "
+		cQueryRetPart += " 				((SFT.FT_TIPOMOV = 'S' AND SFT.FT_TIPO NOT IN ('D','B')) OR (SFT.FT_TIPOMOV = 'E' AND SFT.FT_TIPO IN ('D','B'))) AND "
+		cQueryRetPart += " 				SA1.A1_COD       = SFT.FT_CLIEFOR AND "
+		cQueryRetPart += " 				SA1.A1_LOJA      = SFT.FT_LOJA AND "
+		cQueryRetPart += " 				SA1.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	LEFT JOIN " + RetSqlName('SA2') + " SA2 ON "
+		cQueryRetPart += " 			    SA2.A2_FILIAL = ? AND "
+		cQueryRetPart += " 				((SFT.FT_TIPOMOV = 'E' AND SFT.FT_TIPO NOT IN ('D','B')) OR (SFT.FT_TIPOMOV = 'S' AND SFT.FT_TIPO IN ('D','B'))) AND "
+		cQueryRetPart += " 				SA2.A2_COD       = SFT.FT_CLIEFOR AND "
+		cQueryRetPart += " 				SA2.A2_LOJA      = SFT.FT_LOJA AND "
+		cQueryRetPart += " 				SA2.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	LEFT JOIN " + RetSqlName('V14') + " V14 ON "
+		cQueryRetPart += " 			    V14.V14_FILIAL = ? AND "
+		cQueryRetPart += " 				V14.V14_CNPJ   = coalesce(SA1.A1_CGC,SA2.A2_CGC) AND "
+		cQueryRetPart += "				V14.V14_IE 		= REPLACE(REPLACE(REPLACE( coalesce(SA1.A1_INSCR, SA2.A2_INSCR) , '-', ''),'.', ''),'/', '') AND "
+		cQueryRetPart += "				V14.V14_INSCMU 	= REPLACE(REPLACE(REPLACE( coalesce(SA1.A1_INSCRM, SA2.A2_INSCRM) , '-', ''),'.', ''),'/', '') AND "
+		cQueryRetPart += " 				V14.V14_CODMUN = (case when ((SFT.FT_TIPOMOV = 'S' AND SFT.FT_TIPO NOT IN ('D','B')) OR (SFT.FT_TIPOMOV = 'E' AND SFT.FT_TIPO IN ('D','B'))) then "
+		cQueryRetPart += " 							( CASE WHEN SA1.A1_EST = 'EX' THEN '99999' ELSE  SA1.A1_COD_MUN END)  "
+		cQueryRetPart += " 					   else ( CASE WHEN SA2.A2_EST = 'EX' THEN '99999' ELSE SA2.A2_COD_MUN END) end) AND "
+		cQueryRetPart += " 				V14.V14_CEP    = coalesce(SA1.A1_CEP, SA2.A2_CEP) AND "
+		cQueryRetPart += " 				V14.V14_UF     = coalesce(SA1.A1_EST, SA2.A2_EST) AND "
+		cQueryRetPart += " 				V14.V14_ORIG   = (case when ((SFT.FT_TIPOMOV = 'S' AND SFT.FT_TIPO NOT IN ('D','B')) OR (SFT.FT_TIPOMOV = 'E' AND SFT.FT_TIPO IN ('D','B'))) then 'SA1' else 'SA2' end) AND "
+		cQueryRetPart += " 				V14.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	WHERE C20.D_E_L_E_T_ =   ? "
+		cQueryRetPart += " 		AND C20.C20_FILIAL = ? "
+		cQueryRetPart += " 		AND C20.C20_STATUS = ? "
+
+		cQueryRetPart += " UNION "
+
+		cQueryRetPart += " SELECT "
+		cQueryRetPart += " COALESCE(SA4.A4_CGC, ' ') CNPJ, "
+		cQueryRetPart += " COALESCE(SA4.A4_INSEST, ' ') IE, "
+		cQueryRetPart += " COALESCE(SA4.A4_INSCRM, ' ') INSCM, "
+		cQueryRetPart += " COALESCE(SA4.A4_COD_MUN, ' ') CODMUN, "
+		cQueryRetPart += " COALESCE(SA4.A4_CEP, ' ') CEP, "
+		cQueryRetPart += " COALESCE(SA4.A4_EST, ' ') ESTADO, "
+		cQueryRetPart += " V14.V14_ORIG, "
+		cQueryRetPart += " V14.V14_INTEGR, "
+		cQueryRetPart += " V14.V14_IDC1H, "
+		cQueryRetPart += " V14.V14_CODPAR, "
+		cQueryRetPart += " SFT.FT_TIPO, "
+		cQueryRetPart += " SFT.FT_TIPOMOV, "
+		cQueryRetPart += " C20.C20_FILIAL, "
+		cQueryRetPart += " 'SA4' ORIG "
+		cQueryRetPart += " FROM " + RetSQLName("C20") + " C20 "
+		cQueryRetPart += " 	INNER JOIN " + RetSQLName("SFT") + " SFT ON "
+		cQueryRetPart += " 			    SFT.FT_FILIAL = ? AND "
+		cQueryRetPart += " 				SFT.FT_TIPOMOV = (CASE WHEN C20.C20_INDOPE = '0' THEN 'E' ELSE 'S' END) AND "
+		cQueryRetPart += " 				SFT.FT_NFISCAL = C20.C20_NUMDOC AND "
+		cQueryRetPart += " 				SFT.FT_SERIE = C20.C20_SERIE AND "
+		cQueryRetPart += " 				SFT.FT_CLIEFOR = C20.C20_CLIFOR AND "
+		cQueryRetPart += " 				SFT.FT_LOJA = C20.C20_LOJA AND "
+		cQueryRetPart += " 				SFT.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	LEFT JOIN " + RetSQLName("SF1") + " SF1 ON "
+		cQueryRetPart += " 			    SF1.F1_FILIAL = ? AND "
+		cQueryRetPart += " 				SF1.F1_DOC = SFT.FT_NFISCAL AND "
+		cQueryRetPart += " 				SF1.F1_SERIE = SFT.FT_SERIE AND "
+		cQueryRetPart += " 				SF1.F1_FORNECE = SFT.FT_CLIEFOR AND "
+		cQueryRetPart += " 				SF1.F1_LOJA = SFT.FT_LOJA AND "
+		cQueryRetPart += " 				SF1.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	LEFT JOIN " + RetSQLName("SF2") + " SF2 ON "
+		cQueryRetPart += " 			    SF2.F2_FILIAL = ? AND "
+		cQueryRetPart += " 				SF2.F2_DOC = SFT.FT_NFISCAL AND "
+		cQueryRetPart += " 				SF2.F2_SERIE = SFT.FT_SERIE AND "
+		cQueryRetPart += " 				SF2.F2_CLIENTE = SFT.FT_CLIEFOR AND "
+		cQueryRetPart += " 				SF2.F2_LOJA = SFT.FT_LOJA AND "
+		cQueryRetPart += " 				SF2.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	INNER JOIN " + RetSQLName("SA4") + " SA4 ON "
+		cQueryRetPart += " 			    SA4.A4_FILIAL = ? AND "
+		cQueryRetPart += " 				SA4.A4_COD = (CASE WHEN SFT.FT_TIPOMOV = 'E' THEN SF1.F1_TRANSP ELSE SF2.F2_TRANSP END) AND "
+		cQueryRetPart += " 				SA4.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	LEFT JOIN " + RetSQLName("V14") + " V14 ON "
+		cQueryRetPart += " 			    V14.V14_FILIAL = ? AND "
+		cQueryRetPart += " 				V14.V14_CNPJ = SA4.A4_CGC AND "
+		cQueryRetPart += " 				V14.V14_IE 		= REPLACE(REPLACE(REPLACE(SA4.A4_INSEST, '-', ''),'.', ''),'/', '') AND "
+		cQueryRetPart += " 				V14.V14_INSCMU	= REPLACE(REPLACE(REPLACE(SA4.A4_INSCRM, '-', ''),'.', ''),'/', '') AND "
+		cQueryRetPart += " 				V14.V14_CODMUN = SA4.A4_COD_MUN AND "
+		cQueryRetPart += " 				V14.V14_CEP = SA4.A4_CEP AND "
+		cQueryRetPart += " 				V14.V14_UF = SA4.A4_EST AND "
+		cQueryRetPart += " 				V14.V14_ORIG = 'SA4' AND "
+		cQueryRetPart += " 				V14.D_E_L_E_T_ = ? "
+		cQueryRetPart += " 	WHERE C20.D_E_L_E_T_ =   ? "
+		cQueryRetPart += " 		AND C20.C20_FILIAL = ? "
+		cQueryRetPart += " 		AND C20.C20_STATUS = ? "
+
+		cQueryRetPart += " GROUP BY SA4.A4_CGC, SA4.A4_INSEST, SA4.A4_INSCRM, SA4.A4_COD_MUN, SA4.A4_CEP, SA4.A4_EST, V14.V14_ORIG, V14.V14_INTEGR, V14.V14_IDC1H, V14.V14_CODPAR, SFT.FT_TIPO, C20.C20_FILIAL, SA4.A4_COD, SA4.A4_LOCAL, SFT.FT_TIPOMOV "	
+
+		cQueryRetPart += " ORDER BY C20_FILIAL, CNPJ, IE, INSCM, CODMUN, CEP, ESTADO, V14_ORIG "	 		
+		cQueryRetPart := ChangeQuery(cQueryRetPart)
+		oQueryRetPart := FwExecStatement():New(cQueryRetPart)
+	Endif	
+
+	If oQueryRetPart != Nil
+		oQueryRetPart:setString(iCont++, xFilial('SFT') )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('SA1')  )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('SA2') )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('V14')  )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('C20') )
+		oQueryRetPart:setString(iCont++, IN_PROGRESS_STATUS )
+		oQueryRetPart:setString(iCont++, xFilial('SFT') )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('SF1') )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('SF2') )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('SA4') )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('V14'))
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, " " )
+		oQueryRetPart:setString(iCont++, xFilial('C20') )
+		oQueryRetPart:setString(iCont++, IN_PROGRESS_STATUS )
+
+		cRetQry := oQueryRetPart:OpenAlias()
+	Endif
+
+	If  oInsV14 == Nil .Or. !Empty(oInsV14:GetError()) .Or. Empty(oInsV14:cFields)
+		oInsV14   := FwBulk():New(RetSQLName("V14"))
+		lCallBulk := FwBulk():CanBulk()
+		If lCallBulk
+			aFieldBulk := {	{'V14_FILIAL'}, {'V14_IDC1H'}, {'V14_CNPJ'}, {'V14_IE'}, {'V14_INSCMU'}, {'V14_CODMUN'},;
+							{'V14_CEP'}, {'V14_ORIG' }, {'V14_INTEGR'}, {'V14_CODIGO'},{'V14_LOJA'}, {'V14_UF'},;
+							{'V14_CODPAR'}}
+
+			oInsV14:SetFields(aFieldBulk)
+		Endif	
+	EndIf	
+
+	cIntegr	:= "1"
+	iCNPJ	:= GetSX3Cache("V14_CNPJ"	, "X3_TAMANHO")
+	iIE		:= GetSX3Cache("V14_IE"		, "X3_TAMANHO")
+	iINSCM	:= GetSX3Cache("V14_INSCMU"	, "X3_TAMANHO")
+	iCODMUN	:= GetSX3Cache("V14_CODMUN"	, "X3_TAMANHO")
+	iCEP	:= GetSX3Cache("V14_CEP"	, "X3_TAMANHO")
+	iESTADO	:= GetSX3Cache("V14_UF"		, "X3_TAMANHO")
+	iCODPAR	:= GetSX3Cache("V14_CODPAR"	, "X3_TAMANHO")
+
+	V14->(DbSetOrder(1)) //V14_FILIAL+V14_CNPJ+V14_IE+V14_INSCMU+V14_CODMUN+V14_CEP+V14_UF+V14_ORIG+V14_CODIGO+V14_LOJA
+
+	While (cRetQry)->(!Eof())
+
+		If (!cChave == ((cRetQry)->(C20_FILIAL+CNPJ+IE+INSCM+CODMUN+CEP+ESTADO+V14_ORIG))) .And. Empty((cRetQry)->V14_INTEGR)
+			cChave := ((cRetQry)->(C20_FILIAL+CNPJ+IE+INSCM+CODMUN+CEP+ESTADO+V14_ORIG))
+
+			If V14->(MsSeek(xFilial('V14') + (cRetQry)->(PadR(CNPJ, iCNPJ) + PadR(IE, iIE) + PadR(INSCM, iINSCM) + PadR(CODMUN, iCODMUN) + PadR(CEP, iCEP) + PadR(ESTADO, iESTADO))))
+				If V14->V14_INTEGR == cIntegr
+					(cRetQry)->(DbSkip())
+					loop
+				Else
+					cIdC1H  := V14->V14_IDC1H
+					cCodPar := v14->V14_CODPAR
+				Endif	
+			Else
+				//CNPJ, Codigo do municipio, cep e estado devem estar preenchidos
+				if !empty((cRetQry)->CNPJ) .and. !empty((cRetQry)->CODMUN) .and. !empty((cRetQry)->CEP) .and. !empty((cRetQry)->ESTADO) 
+					cIdC1H  := FWUUIDv4(.T.)
+					cCodPar := Right(GetSX8Num("C1H", "C1H_CODPAR"), iCODPAR)
+					lInsV14 := .t.
+				else
+					//Caso o cadastro do aprticipante estiver errado no ERP, mostra uma mensagem no console e passa para o próximo registro.
+					TAFConOut('Cadastro no ERP(' + (cRetQry)->ORIG + ') esta incompleto. Não foi possível integrar o participante ao TAF e consequentemente o documento fiscal')
+					(cRetQry)->(DbSkip())
+					loop
+				endif	
+			Endif
+
+			if lInsV14
+				lInsV14 :=  oInsV14:AddData( {; 	
+												xFilial('V14'),;
+												cIdC1H,;
+												AllTrim((cRetQry)->CNPJ),;
+												AllTrim(SPEDConType(SPEDVldIE((cRetQry)->IE,, .F.))),;
+												AllTrim(SPEDConType(SPEDVldIE((cRetQry)->INSCM,, .F.))),;
+												AllTrim(IIf((cRetQry)->ESTADO == 'EX', '99999', (cRetQry)->CODMUN)),;
+												AllTrim((cRetQry)->CEP),;
+												Alltrim((cRetQry)->ORIG),;
+												cIntegr,;							
+												'',;
+												'',;
+												AllTrim((cRetQry)->ESTADO),;  
+												cCodPar;
+											 };
+											) 
+			endif								
+			
+			//Não gravou e reservou o id, estorna a reserva do id e sai do loop
+			if !lInsV14 
+			    if __lSx8; RollBackSX8('C1H'); endif 
+				ErrorHandler(cMsgErro)
+			endif
+			
+			//Se gravou e reservou o id, confirma o SX8
+			if lInsV14 .and. __lSx8
+				ConfirmSX8('C1H')
+			endif	
+
+		Endif	
+
+		(cRetQry)->(DbSkip())
+	Enddo
+
+	If lCallBulk
+		oInsV14:close()
+		oInsV14:destroy()
+		oInsV14 := Nil
+	Endif	
+
+	(cRetQry)->(DbCloseArea())
+
+Return	
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} AtuPartic
+Função responsável por efetuar a leitura na V14 e incluir ou atualizar
+ a C1H com dados do participante conforme disposto na V14.
+
+@author adilson.roberto
+@since 22/03/2024
+//------------------------------------------------------------------------*/
+Function AtuPartic()
+Local cRetQPar     := GetNextAlias() as character
+Local lCallBPar    := .F. as logical
+Local aFisGetEnd   := {}  as array
+Local aGetEndExt   := {}  as array 
+Local aSpTAF613U   := {STR0049, 'TAF613U', 'V14', .f., nil} as array // "Saneamento de Participantes"
+Local lBulkOk	   as logical
+Local cQryAtuPar   := "" as character 
+Local cDbType 	   := alltrim(TCGetDB()) as character
+Local cFunctionLen := iif( cDbType $ 'MSSQL/MSSQL7', 'LEN', 'LENGTH') as character
+Local aFieldBulk   := nil
+Local cFilialC1H   := xFilial('C1H')
+Local cIdC1h       as character
+Local lAtuPar	   as logical
+Local nContRegs	   as integer
+Local iCont		   := 1	as integer
+
+If oQryAtuPar == Nil
+	cQryAtuPar := " SELECT "
+	cQryAtuPar += " V14.V14_FILIAL  FILIAL, "
+	cQryAtuPar += " V14.V14_IDC1H   ID_C1H, "
+	cQryAtuPar += " COALESCE(V14.V14_CNPJ,' ')   CNPJV14, "
+	cQryAtuPar += " COALESCE(V14.V14_CODMUN,' ') CODMV14, "
+	cQryAtuPar += " COALESCE(C07.C07_ID,' ') ID_CODMUN_TAF,"
+	cQryAtuPar += " COALESCE(V14.V14_IE,' ')          IE, "       
+	cQryAtuPar += " COALESCE(V14.V14_INSCMU,' ')  INSCMU, "     
+	cQryAtuPar += " COALESCE(V14.V14_CEP,' ')        CEP, "
+	cQryAtuPar += " V14.V14_ORIG      ORIG, "
+	cQryAtuPar += " V14.V14_INTEGR  INTEGR, "
+	cQryAtuPar += " V14.V14_UF          UF, "   
+	cQryAtuPar += " COALESCE(C09.C09_ID,' ') ID_UF_TAF, "  
+	cQryAtuPar += " V14.V14_CODPAR  CODPAR, "
+	cQryAtuPar += " C1H.C1H_NEWCAD  NEWCAD, "
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN SA1.A1_TIPO != 'X' AND SA1.A1_PESSOA = 'F' THEN '1' "
+	cQryAtuPar += " 	WHEN SA1.A1_TIPO != 'X' AND SA1.A1_PESSOA = 'J' THEN '2' "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'F' THEN '1' "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'J' AND SA2.A2_IRPROG = '1' THEN '1' "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'J' THEN '2' "
+	cQryAtuPar += " 	WHEN " + cFunctionLen + "(TRIM(SA4.A4_CGC)) = 11 THEN '1' "
+	cQryAtuPar += " 	WHEN " + cFunctionLen + "(TRIM(SA4.A4_CGC)) = 14 THEN '2' "
+	cQryAtuPar += " 	ELSE '3' "
+	cQryAtuPar += " END TP_PESSOA, "                                                                                        
+	cQryAtuPar += " CASE "         
+	cQryAtuPar += " 	WHEN SA1.A1_FAX != ' ' THEN SA1.A1_DDD "
+	cQryAtuPar += " 	WHEN SA2.A2_FAX != ' ' THEN SA2.A2_DDD "
+	cQryAtuPar += " 	ELSE ' ' "
+	cQryAtuPar += " END DDDFAX, "
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN SA1.A1_TIPO != 'X' AND SA1.A1_PESSOA = 'F' THEN SA1.A1_CGC "       
+	cQryAtuPar += " 	WHEN SA1.A1_TIPO = 'X' AND " + cFunctionLen + "(TRIM(SA1.A1_CGC)) = 11 THEN SA1.A1_CGC "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'F' AND TRIM(SA2.A2_INDRUR) != ' ' "
+	cQryAtuPar += " 		AND TRIM(SA2.A2_INDRUR) != '0' AND TRIM(SA2.A2_EST) IN ('SP','MG') THEN TRIM(SA2.A2_CPFRUR) "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'F' THEN SA2.A2_CGC "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'J' AND SA2.A2_IRPROG = '1' "
+	cQryAtuPar += " 		THEN SA2.A2_CPFIRP "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO = 'X' AND " + cFunctionLen + "(TRIM(SA2.A2_CGC)) = 11 THEN SA2.A2_CGC "     
+	cQryAtuPar += " 	WHEN " + cFunctionLen + "(TRIM(SA4.A4_CGC)) = 11 THEN SA4.A4_CGC "     
+	cQryAtuPar += " 	ELSE ' ' "
+	cQryAtuPar += " END CPF_PAR, " 
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN SA1.A1_TIPO != 'X' AND SA1.A1_PESSOA = 'J' THEN SA1.A1_CGC "                        
+	cQryAtuPar += " 	WHEN SA1.A1_TIPO = 'X' AND " + cFunctionLen + "(TRIM(SA1.A1_CGC)) = 14 THEN SA1.A1_CGC "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'F' AND TRIM(SA2.A2_INDRUR) != ' ' "
+	cQryAtuPar += " 		AND TRIM(SA2.A2_INDRUR) != '0' AND TRIM(SA2.A2_EST) IN ('SP','MG') THEN SA2.A2_CGC "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO != 'X' AND SA2.A2_TIPO = 'J' THEN SA2.A2_CGC "
+	cQryAtuPar += " 	WHEN SA2.A2_TIPO = 'X' AND " + cFunctionLen + "(TRIM(SA2.A2_CGC)) = 14 THEN SA2.A2_CGC "   
+	cQryAtuPar += " 	WHEN " + cFunctionLen + "(TRIM(SA4.A4_CGC)) = 14 THEN SA4.A4_CGC "    
+	cQryAtuPar += " 	ELSE ' '"
+	cQryAtuPar += " END CNPJ_PAR, "  
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN  SA2.A2_TIPORUR != ' ' THEN '4' "
+	cQryAtuPar += " 	ELSE ' ' "
+	cQryAtuPar += " END RAMO, "   
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN SA2.A2_CPRB != ' ' AND SA2.A2_CPRB != '2' THEN '1' "
+	cQryAtuPar += " 	ELSE '0' "
+	cQryAtuPar += " END CPRB, "    
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN AI0.AI0_INDPAA = '1' THEN '1' "
+	cQryAtuPar += " 	ELSE '0' "
+	cQryAtuPar += " END INDPAA, "   
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN SA2.A2_NIFEX != ' ' THEN '1' "
+	cQryAtuPar += " 	WHEN SA2.A2_NIFEX = ' ' AND SA2.A2_MOTNIF = '1' THEN '2' "
+	cQryAtuPar += " 	WHEN SA2.A2_NIFEX = ' ' AND SA2.A2_MOTNIF = '2' THEN '3' "
+	cQryAtuPar += " 	WHEN SA2.A2_MOTNIF != ' ' THEN SA2.A2_MOTNIF "
+	cQryAtuPar += " 	ELSE ' ' "
+	cQryAtuPar += " END IND_NIF, "   
+	cQryAtuPar += " CASE "
+	cQryAtuPar += " 	WHEN SA2.A2_DESPORT = '1' THEN '1' "
+	cQryAtuPar += " 	ELSE '2' "
+	cQryAtuPar += " END DESPORT, "    
+	cQryAtuPar += " COALESCE(DKE.DKE_PEEXTE,' ') PEEXTE, "  
+	cQryAtuPar += " COALESCE(DKE.DKE_ISEIMU,' ') ISEIMU, "
+	
+	//Dados comuns entre os participantes.
+	cQryAtuPar += " COALESCE(SA1.A1_END,SA2.A2_END,SA4.A4_END,' ') END_PAR, "                               
+	cQryAtuPar += " COALESCE(SA1.A1_CONTRIB,SA2.A2_CONTRIB,' ') CONTRIB, "                              
+	cQryAtuPar += " COALESCE(SA1.A1_FAX,SA2.A2_FAX,' ') FAX, "                                           
+	cQryAtuPar += " COALESCE(SA1.A1_COMPLEM,SA2.A2_COMPLEM,' ') COMP_END, "                              
+	cQryAtuPar += " COALESCE(SA1.A1_NOME,SA2.A2_NOME,SA4.A4_NOME,' ') NOME, "                              
+	cQryAtuPar += " COALESCE(SA1.A1_BAIRRO,SA2.A2_BAIRRO,SA4.A4_BAIRRO,' ') BAIRRO, "                    
+	cQryAtuPar += " COALESCE(C08.C08_ID,' ') ID_PAIS_TAF, "            
+	cQryAtuPar += " COALESCE(SA1.A1_DDD, SA2.A2_DDD, SA4.A4_DDD,' ') DDD_TEL, "                         
+	cQryAtuPar += " COALESCE(SA1.A1_TEL, SA2.A2_TEL, SA4.A4_TEL,' ') TEL, "                             
+	cQryAtuPar += " COALESCE(SA1.A1_EMAIL, SA2.A2_EMAIL, SA4.A4_EMAIL,' ') EMAIL, "                      
+
+	cQryAtuPar += " COALESCE(SA1.A1_DTCAD,' ')       DTCAD, "                                                    
+	cQryAtuPar += " COALESCE(SA1.A1_SUFRAMA,' ')     SUFRAMA, "                                                  
+	cQryAtuPar += " COALESCE(SA2.A2_PAISEX,' ')      PAISEX, "                                                     
+	cQryAtuPar += " COALESCE(SA2.A2_COMPLR,' ')      COMPLR, "                                                    
+	cQryAtuPar += " COALESCE(SA2.A2_BAIEX,' ')       BAIEX, "                                                     
+	cQryAtuPar += " COALESCE(SA2.A2_POSEX,' ')       POSEX, "                                                      
+	cQryAtuPar += " COALESCE(SA2.A2_BREEX,' ')       BREEX,	"                                                   
+	cQryAtuPar += " COALESCE(SA2.A2_INDCP,' ')       INDCP, "                                                    
+	cQryAtuPar += " COALESCE(SA2.A2_NIFEX,' ')       NIFEX, "                                                     
+	cQryAtuPar += " COALESCE(SA2.A2_ESTEX,' ')       ESTEX, "                                                      
+	cQryAtuPar += " COALESCE(SA2.A2_TELRE,' ')       TELRE, "                                                           
+	cQryAtuPar += " COALESCE(SA2.A2_CIDEX,' ')       CIDEX, "                                                     
+	cQryAtuPar += " COALESCE(SA2.A2_LOGEX,' ')       LOGEX "                                                       
+	cQryAtuPar += " FROM " + RetSqlName('V14') + " V14 "
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('SA1') + " SA1 " 
+	cQryAtuPar += " 	ON V14.V14_ORIG = ? " 
+	cQryAtuPar += "		AND SA1.D_E_L_E_T_ = ? "
+	cQryAtuPar += " 	AND SA1.A1_FILIAL = ?" 
+	cQryAtuPar += " 	AND SA1.A1_CGC     = V14.V14_CNPJ "
+	cQryAtuPar += " 	AND V14.V14_IE     = (CASE WHEN  V14.V14_IE = SA1.A1_INSCR THEN SA1.A1_INSCR ELSE "
+	cQryAtuPar += " 	    REPLACE(REPLACE(REPLACE(SA1.A1_INSCR, '-', ''),'.', ''),'/', '') END ) "
+	cQryAtuPar += " 	AND SA1.A1_EST     = V14.V14_UF "
+	cQryAtuPar += " 	AND SA1.A1_INSCRM  = V14.V14_INSCMU "
+	cQryAtuPar += " 	AND ( (SA1.A1_COD_MUN = V14.V14_CODMUN) OR (V14.V14_CODMUN = ? AND SA1.A1_EST = ?)) "
+	cQryAtuPar += " 	AND SA1.A1_CEP     = V14.V14_CEP "
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('SA2') + " SA2 "
+	cQryAtuPar += " 	ON V14.V14_ORIG = ? " 
+	cQryAtuPar += "		AND SA2.D_E_L_E_T_ = ? "
+	cQryAtuPar += " 	AND SA2.A2_FILIAL = ?" 
+	cQryAtuPar += " 	AND SA2.A2_CGC     = V14.V14_CNPJ "
+	cQryAtuPar += " 	AND V14.V14_IE     = (CASE WHEN V14.V14_IE = SA2.A2_INSCR THEN SA2.A2_INSCR ELSE "
+	cQryAtuPar += " 	    REPLACE(REPLACE(REPLACE(SA2.A2_INSCR, '-', ''),'.', ''),'/', '')  END ) "
+	cQryAtuPar += " 	AND SA2.A2_EST     = V14.V14_UF "
+	cQryAtuPar += " 	AND SA2.A2_INSCRM  = V14.V14_INSCMU "
+	cQryAtuPar += " 	AND ( (SA2.A2_COD_MUN = V14.V14_CODMUN) OR (V14.V14_CODMUN = ? AND SA2.A2_EST = ?)) "
+	cQryAtuPar += " 	AND SA2.A2_CEP     = V14.V14_CEP "       
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('SA4') + " SA4 "
+	cQryAtuPar += " 	ON V14.V14_ORIG = ? " 
+	cQryAtuPar += " 	AND SA4.D_E_L_E_T_ = ? "
+	cQryAtuPar += " 	AND SA4.A4_FILIAL = ? " 
+	cQryAtuPar += " 	AND SA4.A4_CGC     = V14.V14_CNPJ "
+	cQryAtuPar += " 	AND V14.V14_IE     = (CASE WHEN V14.V14_IE = SA4.A4_INSEST THEN SA4.A4_INSEST ELSE "
+	cQryAtuPar += " 	    REPLACE(REPLACE(REPLACE(SA4.A4_INSEST, '-', ''),'.', ''),'/', '') END ) "
+	cQryAtuPar += " 	AND SA4.A4_EST     = V14.V14_UF "
+	cQryAtuPar += " 	AND SA4.A4_INSCRM  = V14.V14_INSCMU "
+	cQryAtuPar += " 	AND ( (SA4.A4_COD_MUN = V14.V14_CODMUN) OR (V14.V14_CODMUN = ? AND SA4.A4_EST = ?)) "
+	cQryAtuPar += " 	AND SA4.A4_CEP     = V14.V14_CEP "
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('C1H') + " C1H "                        
+	cQryAtuPar += " 	ON C1H.D_E_L_E_T_ = ? "
+	cQryAtuPar += " 	AND C1H.C1H_FILIAL = ? " 
+	cQryAtuPar += " 	AND C1H.C1H_ID = V14.V14_IDC1H "
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('AI0') + " AI0 "
+	cQryAtuPar += " 	ON AI0.D_E_L_E_T_ = ? "
+	cQryAtuPar += " 	AND V14.V14_ORIG   = ? "
+	cQryAtuPar += " 	AND AI0.AI0_FILIAL = ? " 
+	cQryAtuPar += " 	AND AI0.AI0_CODCLI = SA1.A1_COD "       
+	cQryAtuPar += " 	AND AI0.AI0_LOJA   = SA1.A1_LOJA "            
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('DKE') + " DKE "
+	cQryAtuPar += " 	ON DKE.D_E_L_E_T_ = ? "
+	cQryAtuPar += " 	AND V14.V14_ORIG    = ? "
+	cQryAtuPar += " 	AND DKE.DKE_FILIAL = ? " 
+	cQryAtuPar += " 	AND DKE.DKE_COD     = SA2.A2_COD "
+	cQryAtuPar += " 	AND DKE.DKE_LOJA    = SA2.A2_LOJA "     
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('C08') + " C08 "
+	cQryAtuPar += " 	ON C08.C08_FILIAL = ? " 
+	cQryAtuPar += "		AND C08.C08_CODIGO = COALESCE(SA1.A1_CODPAIS, SA2.A2_CODPAIS, SA4.A4_CODPAIS, ' ') "
+	cQryAtuPar += "     AND C08.C08_CODIGO !=  ? "
+	cQryAtuPar += "		AND C08.D_E_L_E_T_ = ? "
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('C09') + " C09 "
+	cQryAtuPar += " 	ON C09.C09_FILIAL = ? " 
+	cQryAtuPar += "		AND C09.C09_UF = V14.V14_UF "
+	cQryAtuPar += "		AND C09.D_E_L_E_T_ = ? "
+	cQryAtuPar += " LEFT JOIN " + RetSqlName('C07') + " C07 "
+	cQryAtuPar += "		ON C07.C07_FILIAL = ? " 
+	cQryAtuPar += "		AND C07.C07_UF = C09.C09_ID "
+	cQryAtuPar += "		AND C07.C07_CODIGO = V14.V14_CODMUN     
+	cQryAtuPar += "		AND C07.D_E_L_E_T_ = ? "
+	cQryAtuPar += " WHERE "
+	cQryAtuPar += " 	V14.D_E_L_E_T_ = ? "
+	cQryAtuPar += "		AND V14.V14_FILIAL = ? "
+	cQryAtuPar += " 	AND V14.V14_INTEGR = ? "
+	cQryAtuPar += " ORDER BY FILIAL,ID_C1H "
+	cQryAtuPar := ChangeQuery(cQryAtuPar)
+
+	oQryAtuPar := FwExecStatement():New(cQryAtuPar)
+
+Endif
+
+If oQryAtuPar <> Nil
+	oQryAtuPar:setString(iCont++, 'SA1' )
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, xFilial('SA1') )
+	oQryAtuPar:setString(iCont++, '99999' )
+	oQryAtuPar:setString(iCont++, 'EX' )
+
+	oQryAtuPar:setString(iCont++, 'SA2' )
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, xFilial('SA2') )
+	oQryAtuPar:setString(iCont++, '99999' )
+	oQryAtuPar:setString(iCont++, 'EX' )
+
+	oQryAtuPar:setString(iCont++, 'SA4' )
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, xFilial('SA4') )
+	oQryAtuPar:setString(iCont++, '99999' )
+	oQryAtuPar:setString(iCont++, 'EX' )
+	
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, xFilial('C1H') )
+
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, 'SA1' )
+	oQryAtuPar:setString(iCont++, xFilial('AI0') )
+
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, 'SA2' )
+	oQryAtuPar:setString(iCont++, xFilial('DKE') )
+	
+	oQryAtuPar:setString(iCont++, xFilial('C08') )
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, ' ' )
+
+	oQryAtuPar:setString(iCont++, xFilial('C09') )
+	oQryAtuPar:setString(iCont++, ' ' )
+
+	oQryAtuPar:setString(iCont++, xFilial('C07') )
+	oQryAtuPar:setString(iCont++, ' ' )
+
+	oQryAtuPar:setString(iCont++, ' ' )
+	oQryAtuPar:setString(iCont++, xFilial('V14') )
+	oQryAtuPar:setString(iCont++, '1' )
+
+	cRetQPar := oQryAtuPar:OpenAlias()
+EndIf
+
+If  oAtuPar == Nil .Or. !Empty(oAtuPar:GetError()) .Or. Empty(oAtuPar:cFields)
+	oAtuPar   := FwBulk():New(RetSQLName("C1H"))
+	lCallBPar := FwBulk():CanBulk()
+	If lCallBPar
+
+		//Strutura de campos do bulk -- Obs.: A gravação dos campos deve seguir essa mesma ordem
+		aFieldBulk := {	{'C1H_FILIAL'}, {'C1H_ID'	 }, {'C1H_CODPAR'}, {'C1H_PPES'  }, {'C1H_NOME'  }, {'C1H_END'   } , {'C1H_NUM'   }, {'C1H_COMPL' }, {'C1H_BAIRRO'}, {'C1H_CEP'   },;
+						{'C1H_CODPAI'}, {'C1H_UF'	 }, {'C1H_CODMUN'}, {'C1H_DDD'   }, {'C1H_FONE'  }, {'C1H_DDDFAX'} , {'C1H_FAX'   }, {'C1H_EMAIL' }, {'C1H_CNPJ'  }, {'C1H_CPF'   },;
+						{'C1H_IE'	 }, {'C1H_SUFRAM'}, {'C1H_DTINCL'}, {'C1H_RAMO'  }, {'C1H_IM'    }, {'C1H_PAISEX'} , {'C1H_LOGEXT'}, {'C1H_NUMEXT'}, {'C1H_COMEXT'}, {'C1H_BAIEXT'},;
+						{'C1H_NMCEXT'}, {'C1H_CDPOSE'}, {'C1H_RELFON'}, {'C1H_PAA'   }, {'C1H_CONTRI'}, {'C1H_INDDES'} , {'C1H_CPRB'  }, {'C1H_INDCP' }, {'C1H_ISEIMU'}, {'C1H_ESTEXT'},;
+						{'C1H_TELEXT'}, {'C1H_INDNIF'}, {'C1H_NIF'   }, {'C1H_PEEXTE'}, {'C1H_NEWCAD'} }
+
+		oAtuPar:SetFields( aFieldBulk )
+	Endif	
+EndIf
+
+While (cRetQPar)->(!Eof())
+	nContRegs++
+	aFisGetEnd := FisGetEnd((cRetQPar)->END_PAR,(cRetQPar)->UF)
+	aGetEndExt := FisGetEnd((cRetQPar)->LOGEX,(cRetQPar)->ESTEX)
+	IF Empty((cRetQPar)->NEWCAD) .And. !((cRetQPar)->ID_C1H == cIdC1h) 
+		cIdC1h := (cRetQPar)->ID_C1H
+		lAtuPar := oAtuPar:AddData({	cFilialC1H		  ,;
+								(cRetQPar)->ID_C1H,; 
+								(cRetQPar)->CODPAR,;  
+								alltrim((cRetQPar)->TP_PESSOA),;
+								Alltrim((cRetQPar)->NOME),;
+								left(aFisGetEnd[1],220),; //C1H_END   
+								IIf(!Empty(aFisGetEnd[2]),aFisGetEnd[3],"SN"),; //C1H_NUM   
+								Alltrim((cRetQPar)->COMP_END),;  //C1H_COMPL  
+								Alltrim((cRetQPar)->BAIRRO),;
+								alltrim((cRetQPar)->CEP),;
+								alltrim((cRetQPar)->ID_PAIS_TAF),;  //c08
+								alltrim((cRetQPar)->ID_UF_TAF),;  //c09 
+								alltrim((cRetQPar)->ID_CODMUN_TAF),;  //c07
+								alltrim((cRetQPar)->DDD_TEL),;
+								Left(Alltrim((cRetQPar)->TEL),20),;
+								alltrim((cRetQPar)->DDDFAX),;
+								Left(Alltrim((cRetQPar)->FAX),20),;
+								Alltrim((cRetQPar)->EMAIL),;								
+								alltrim((cRetQPar)->CNPJ_PAR),;
+								Left(Alltrim((cRetQPar)->CPF_PAR),11),;  
+								Left(Alltrim((cRetQPar)->IE),14),;  
+								Left(Alltrim((cRetQPar)->SUFRAMA),9),;
+								alltrim((cRetQPar)->DTCAD),; 
+								alltrim((cRetQPar)->RAMO),;
+								alltrim((cRetQPar)->INSCMU),;      
+								alltrim((cRetQPar)->PAISEX),;  //c08
+								alltrim(aGetEndExt[1]),;  //C1H_LOGEXT
+								IIf(!Empty(aFisGetEnd[2]),aFisGetEnd[3],"SN"),;  //C1H_NUMEXT
+								Alltrim((cRetQPar)->COMPLR),; //C1H_COMEXT
+								alltrim((cRetQPar)->BAIEX),;  //C1H_BAIEXT
+								alltrim((cRetQPar)->CIDEX),;  //C1H_NMCEXT
+								alltrim((cRetQPar)->POSEX),;  //C1H_CDPOSE
+								alltrim((cRetQPar)->BREEX),;  //C1H_RELFON  cub
+								alltrim((cRetQPar)->INDPAA),;  //C1H_PAA   
+								alltrim((cRetQPar)->CONTRIB),;  //C1H_CONTRI
+								alltrim((cRetQPar)->DESPORT),;  //C1H_INDDES
+								alltrim((cRetQPar)->CPRB),;  //C1H_CPRB  
+								alltrim((cRetQPar)->INDCP),;  //C1H_INDCP 
+								alltrim((cRetQPar)->ISEIMU),;  //C1H_ISEIMU
+								alltrim((cRetQPar)->ESTEX),;  //C1H_ESTEXT
+								alltrim((cRetQPar)->TELRE),;  //C1H_TELEXT
+								alltrim((cRetQPar)->IND_NIF),;  //C1H_INDNIF
+								alltrim((cRetQPar)->NIFEX),;  //C1H_NIF   
+								alltrim((cRetQPar)->PEEXTE),;  //C1H_PEEXTE
+								'1'})   //C1H_NEWCAD  
+
+		if !lAtuPar; exit; endif
+
+	Else
+		// UPDATE C1H
+		UpdC1H((cRetQPar)->ID_C1H, aFisGetEnd, aGetEndExt, cRetQPar)
+	Endif
+
+	(cRetQPar)->(DbSkip())
+Enddo
+
+If lCallBPar 
+	lBulkOk := oAtuPar:close()
+	oAtuPar:destroy()
+	oAtuPar := Nil
+Endif	
+
+if nContRegs > 0
+	//Executa procedure para seneamento da tabela de participantes do TAF(C1H) apos finalizar integração.
+	ExecProcedure( aSpTAF613U )
+endif	
+
+(cRetQPar)->(DbCloseArea())
+
+Return
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} UpdC1H
+Função responsável por atualizar um registro no C1H.
+
+@author adilson.roberto
+@since 22/03/2024
+//------------------------------------------------------------------------*/
+Static Function UpdC1H(cId_C1H as character, aFisGetEnd as array, aGetEndExt as array, cRetQPar as character)
+Local cQrC1H 		:= ""  as character 
+Local cError 		:= ""	as character
+Local aAreaV14 		:= V14->(GetArea())
+Local lChaveUpdate 	as logical
+Local nBind 		as integer
+
+Default aFisGetEnd := {"",0,""}
+Default aGetEndExt := {"",0,""}
+
+V14->(DbSetOrder(2)) //V14_FILIAL+V14_IDC1H+V14_ORIG+V14_CODIGO+V14_LOJA                                                                                                               
+lChaveUpdate := (cRetQPar)->ORIG == 'SA1' .or. ( (cRetQPar)->ORIG == 'SA2' .and. !V14->(MsSeek( (cRetQPar)->(FILIAL + ID_C1H + 'SA1') )) )
+
+//Não atualiza a tabela de participantes com dados de Transportador.
+if (cRetQPar)->ORIG != 'SA4'
+	If oExecUpC1h == Nil
+		cQrC1H := " UPDATE " + RetSQLName("C1H") + " SET "
+		if lChaveUpdate
+			cQrC1H += " C1H_PPES 	= ? , " //01 
+			cQrC1H += " C1H_NOME 	= ? , " //02 
+			cQrC1H += " C1H_TPLOGR 	= ? , " //03 
+			cQrC1H += " C1H_END 	= ? , " //04 
+			cQrC1H += " C1H_NUM 	= ? , " //05 
+			cQrC1H += " C1H_COMPL 	= ? , " //06 
+			cQrC1H += " C1H_TPBAIR 	= ? , " //07 
+			cQrC1H += " C1H_BAIRRO 	= ? , " //08 
+			cQrC1H += " C1H_CEP 	= ? , " //09 
+			cQrC1H += " C1H_CODPAI	= ? , " //10 
+			cQrC1H += " C1H_UF 		= ? , " //11 
+			cQrC1H += " C1H_CODMUN 	= ? , " //12 
+			cQrC1H += " C1H_DDD 	= ? , " //13 
+			cQrC1H += " C1H_FONE 	= ? , " //14 
+			cQrC1H += " C1H_DDDFAX 	= ? , " //15 
+			cQrC1H += " C1H_FAX 	= ? , " //16 
+			cQrC1H += " C1H_EMAIL 	= ? , " //17 
+			cQrC1H += " C1H_CNPJ 	= ? , " //18 
+			cQrC1H += " C1H_CPF 	= ? , " //19 
+			cQrC1H += " C1H_IE 		= ? , " //20 
+			cQrC1H += " C1H_SUFRAM 	= ? , " //21 
+			cQrC1H += " C1H_DTINCL 	= ? , " //22 
+			cQrC1H += " C1H_STATUS 	= ? , " //23 
+			cQrC1H += " C1H_RAMO 	= ? , " //24 
+			cQrC1H += " C1H_IM 		= ? , " //25 
+			cQrC1H += " C1H_SIMPLS 	= ? , " //26 
+			cQrC1H += " C1H_CODINS 	= ? , " //27 
+			cQrC1H += " C1H_IDATV 	= ? , " //28 
+			cQrC1H += " C1H_ENQSIM 	= ? , " //29 
+			cQrC1H += " C1H_DTMOLE 	= ? , " //30 
+			cQrC1H += " C1H_CODTRI 	= ? , " //31 
+			cQrC1H += " C1H_PAA 	= ? , " //32 
+			cQrC1H += " C1H_CTISS 	= ? , " //33 
+			cQrC1H += " C1H_CONTRI 	= ? , " //34 
+			cQrC1H += " C1H_INDDES 	= ? , " //35 
+			cQrC1H += " C1H_CPRB 	= ? , " //36 
+			cQrC1H += " C1H_STAMP 	= ? , " //37 
+			cQrC1H += " C1H_INDNIF	= ? , " //38 
+			cQrC1H += " C1H_IDTRIB	= ?   " //39 
+		endif	
+		if (cRetQPar)->ORIG == 'SA2'
+			
+			if lChaveUpdate; cQrC1H += ','; endif
+
+			cQrC1H += " C1H_PAISEX 	 = ? , " //40	  26 SA2
+			cQrC1H += " C1H_LOGEXT 	 = ? , " //41	  31 SA2
+			cQrC1H += " C1H_NUMEXT 	 = ? , " //42	  32 SA2
+			cQrC1H += " C1H_COMEXT 	 = ? , " //43	  33 SA2
+			cQrC1H += " C1H_BAIEXT 	 = ? , " //44	  34 SA2
+			cQrC1H += " C1H_NMCEXT 	 = ? , " //45	  35 SA2
+			cQrC1H += " C1H_CDPOSE 	 = ? , " //46	  36 SA2	
+			cQrC1H += " C1H_RELFON 	 = ? , " //47	  38 SA2	
+			cQrC1H += " C1H_INDCP 	 = ? , " //48	  45 SA2	
+			cQrC1H += " C1H_ISEIMU   = ? , " //49	  47 SA2
+			cQrC1H += " C1H_ESTEXT   = ? , " //50	  48 SA2
+			cQrC1H += " C1H_TELEXT   = ? , " //51	  49 SA2
+			cQrC1H += " C1H_NIF 	 = ? , " //52	  51 SA2	
+			cQrC1H += " C1H_PEEXTE 	 = ?   " //53	  53 SA2	
+		endif	
+		cQrC1H += " WHERE C1H_ID = ? "	 //54
+		cQrC1H += " AND D_E_L_E_T_ = ' ' "
+
+		oExecUpC1h := FwExecStatement():New(cQrC1H)
+	Endif	
+
+	If oExecUpC1h != Nil
+		if lChaveUpdate
+			oExecUpC1h:SetString(++nBind/*01*/, (cRetQPar)->TP_PESSOA)
+			oExecUpC1h:SetString(++nBind/*02*/, Alltrim((cRetQPar)->NOME))
+			oExecUpC1h:SetString(++nBind/*03*/, '')  //C1H_TPLOGR c06
+			oExecUpC1h:SetString(++nBind/*04*/, aFisGetEnd[1]) //C1H_END
+			oExecUpC1h:SetString(++nBind/*05*/, IIf(!Empty(aFisGetEnd[2]),aFisGetEnd[3],"SN")) //C1H_NUM
+			oExecUpC1h:SetString(++nBind/*06*/, Alltrim((cRetQPar)->COMP_END)) //C1H_COMPL
+			oExecUpC1h:SetString(++nBind/*07*/, '') //C1H_TPBAIR c86
+			oExecUpC1h:SetString(++nBind/*08*/, Alltrim((cRetQPar)->BAIRRO))
+			oExecUpC1h:SetString(++nBind/*09*/, (cRetQPar)->CEP)
+			oExecUpC1h:SetString(++nBind/*10*/, (cRetQPar)->ID_PAIS_TAF) //c08
+			oExecUpC1h:SetString(++nBind/*11*/, (cRetQPar)->ID_UF_TAF) //c09
+			oExecUpC1h:SetString(++nBind/*12*/, (cRetQPar)->ID_CODMUN_TAF) //c07
+			oExecUpC1h:SetString(++nBind/*13*/, (cRetQPar)->DDD_TEL)
+			oExecUpC1h:SetString(++nBind/*14*/, Left(Alltrim((cRetQPar)->TEL),20))
+			oExecUpC1h:SetString(++nBind/*15*/, (cRetQPar)->DDDFAX)
+			oExecUpC1h:SetString(++nBind/*16*/, Left(Alltrim((cRetQPar)->FAX),20))
+			oExecUpC1h:SetString(++nBind/*17*/, Alltrim((cRetQPar)->EMAIL))
+			oExecUpC1h:SetString(++nBind/*18*/, (cRetQPar)->CNPJ_PAR)
+			oExecUpC1h:SetString(++nBind/*19*/, Left(Alltrim((cRetQPar)->CPF_PAR),11))
+			oExecUpC1h:SetString(++nBind/*20*/, Left(Alltrim((cRetQPar)->IE),14))
+			oExecUpC1h:SetString(++nBind/*21*/, Left(Alltrim((cRetQPar)->SUFRAMA),9))
+			oExecUpC1h:SetString(++nBind/*22*/, (cRetQPar)->DTCAD)
+			oExecUpC1h:SetString(++nBind/*23*/, '') //C1H_STATUS
+			oExecUpC1h:SetString(++nBind/*24*/, (cRetQPar)->RAMO)
+			oExecUpC1h:SetString(++nBind/*25*/, (cRetQPar)->INSCMU)
+			oExecUpC1h:SetString(++nBind/*26*/, '') //C1H_SIMPLS
+			oExecUpC1h:SetString(++nBind/*27*/, '') //C1H_CODINS
+			oExecUpC1h:SetString(++nBind/*28*/, '') //C1H_IDATV
+			oExecUpC1h:SetString(++nBind/*29*/, '') //C1H_ENQSIM
+			oExecUpC1h:SetString(++nBind/*30*/, StoD(''))  //C1H_DTMOLE 
+			oExecUpC1h:SetString(++nBind/*31*/, '')  //C1H_CODTRI 
+			oExecUpC1h:SetString(++nBind/*32*/, (cRetQPar)->INDPAA)  //C1H_PAA 
+			oExecUpC1h:SetString(++nBind/*33*/, '')  //C1H_CTISS  
+			oExecUpC1h:SetString(++nBind/*34*/, (cRetQPar)->CONTRIB)  //C1H_CONTRI
+			oExecUpC1h:SetString(++nBind/*35*/, (cRetQPar)->DESPORT)  //C1H_INDDES)
+			oExecUpC1h:SetString(++nBind/*36*/, (cRetQPar)->CPRB)  //C1H_CPRB
+			oExecUpC1h:SetString(++nBind/*37*/, '')  //C1H_STAMP
+			oExecUpC1h:SetString(++nBind/*38*/, (cRetQPar)->IND_NIF)  //C1H_INDNIF
+			oExecUpC1h:SetString(++nBind/*39*/, '')  //C1H_IDTRIB
+		endif	
+		if (cRetQPar)->ORIG == 'SA2'
+			oExecUpC1h:SetString(++nBind/*40*/, (cRetQPar)->PAISEX) //c08
+			oExecUpC1h:SetString(++nBind/*41*/, aGetEndExt[1]) //C1H_LOGEXT
+			oExecUpC1h:SetString(++nBind/*42*/, IIf(!Empty(aFisGetEnd[2]),aFisGetEnd[3],"SN")) //C1H_NUMEXT
+			oExecUpC1h:SetString(++nBind/*43*/, Alltrim((cRetQPar)->COMPLR)) //C1H_COMEXT
+			oExecUpC1h:SetString(++nBind/*44*/, (cRetQPar)->BAIEX) //C1H_BAIEXT
+			oExecUpC1h:SetString(++nBind/*45*/, (cRetQPar)->CIDEX) //C1H_NMCEXT 
+			oExecUpC1h:SetString(++nBind/*46*/, (cRetQPar)->POSEX) //C1H_CDPOSE 	
+			oExecUpC1h:SetString(++nBind/*47*/, (cRetQPar)->BREEX)  //C1H_RELFON  cub 	
+			oExecUpC1h:SetString(++nBind/*48*/, (cRetQPar)->INDCP)  //C1H_INDCP	
+			oExecUpC1h:SetString(++nBind/*49*/, (cRetQPar)->ISEIMU)  //C1H_ISEIMU
+			oExecUpC1h:SetString(++nBind/*50*/, (cRetQPar)->ESTEX)  //C1H_ESTEXT
+			oExecUpC1h:SetString(++nBind/*51*/, (cRetQPar)->TELRE)  //C1H_TELEXT	
+			oExecUpC1h:SetString(++nBind/*52*/, (cRetQPar)->NIFEX)  //C1H_NIF	
+			oExecUpC1h:SetString(++nBind/*53*/, (cRetQPar)->PEEXTE)  //C1H_PEEXTE
+		endif	
+		oExecUpC1h:SetString(++nBind/*40|54*/, cId_C1H)
+
+		cQrC1H := oExecUpC1h:GetFixQuery()
+
+		//Executa o update
+		If !TAFExecQuery(cQrC1H, .F., @cError); ErrorHandler(cError); EndIf
+
+	EndIf
+endif	
+
+V14->(RestArea(aAreaV14))		
+
+Return
+
+
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} TafIntegUpdPart()
+Integra os campos atualizados nos participantes do ERP ao TAF
+
+@author Carlos Eduardo
+@since 18/12/2024
+//------------------------------------------------------------------------*/
+Function TafIntegUpdPart(cOrigem as character, oModelMaster as object, oModelChild as object)
+Local aFieldsMaster := oModelMaster:GetStruct():GetFields() as array
+Local aFieldsUpdate := {} as array
+Local cFieldC1H 	as character
+Local cFieldV14 	as character
+LocaL cFieldName 	as character
+Local cNumCampoHist as character
+Local i 			as integer
+Local cAliasUpdate  := GetPartUpdate(cOrigem, oModelMaster) as character
+
+//Posiciona as tabelas que serão usadas dentro do while
+V14->(DbSetOrder(2)) //V14_FILIAL+V14_IDC1H+V14_ORIG
+C1H->(DbSetOrder(5)) //C1H_FILIAL+C1H_ID                                                                                                                                               
+
+while (cAliasUpdate)->(!eof())
+	i := 0
+	aFieldsUpdate := {}
+	if V14->(DbSeek( (cAliasUpdate)->( V14_FILIAL + V14_IDC1H + V14_ORIG)  ) )
+		if C1H->(DbSeek( (cAliasUpdate)->( V14_FILIAL + V14_IDC1H )) )
+			begin transaction
+				try
+					//Preencho o array que sera para passado para a função de gravação somente com os campos que foram alterados, 
+					//isso vai facilitar a busca dos dados dentro do array quando necessário.
+					For i := 1 to len(aFieldsMaster)
+						cFieldName := aFieldsMaster[i][MODEL_FIELD_IDFIELD]
+						if oModelMaster:IsFieldUpdated(cFieldName)
+							cFieldC1H := ''
+							cFieldV14 := ''
+							cNumCampoHist := ''
+
+							//Busca o nome dos campos que deverão ser gravados nas tabelas do TAF
+							TafGetIntegraPart(cFieldName, C1H->C1H_PPES, @cNumCampoHist, @cFieldC1H, @cFieldV14)                						
+							
+							aadd(aFieldsUpdate, {cFieldName, oModelMaster:GetValue(cFieldName), cNumCampoHist, cFieldC1H, cFieldV14} )
+						endif	
+					next
+
+					//Chama a função que gravar os dados alterados nas tabelas do taf
+					TafPutIntegraPart(aFieldsUpdate)
+				catch oError
+					TafConout(STR0051, 3,, STR0046) //#'Erro na atualização das tabelas do TAF. Os dados foram atualizados somente nas tabelas do ERP!' #'Integração TAF'
+					DisarmTransaction()
+					Break
+				endtry
+			end transaction    
+		endif
+	endif
+	(cAliasUpdate)->(DbSkip())
+enddo	
+
+(cAliasUpdate)->(DbCloseArea())
+
+return
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} TafPutIntegrationUpdateFieldsPart
+Integra os campos atualizados nos participantes do ERP ao TAF
+
+@author Carlos Eduardo
+@since 18/12/2024
+//------------------------------------------------------------------------*/
+Function TafPutIntegraPart(aFieldsUpdate as array)
+Local cContAtual    as character
+Local i             as integer
+Local nScan			as integer
+Local cIdUf			as character
+
+//Estrutura do array aFieldsUpdate
+//aFieldsUpdate[x][1] - Nome do campo alterado
+//aFieldsUpdate[x][2] - Conteudo do campo após alteração
+//aFieldsUpdate[x][3] - Numero do campo para tabela de histórido de alteração (C1I)
+//aFieldsUpdate[x][4] - Nome do campo de participantes do TAF (C1H)
+//aFieldsUpdate[x][5] - Nome do campo da tabela intermediária de integração dos participantes (V14)
+
+For i := 1 to len(aFieldsUpdate)
+
+	//Se é um campo que tem referencia com a tabela de hstórico
+	if !empty(aFieldsUpdate[i][3])
+		//Grava o valor anterior à alteração na tabela de histórico do TAF(C1I)
+		if C1I->(RecLock('C1I', .t.))
+			C1I->C1I_FILIAL := C1H->C1H_FILIAL
+			C1I->C1I_ID     := C1H->C1H_ID
+			C1I->C1I_DTALT  := date()
+			C1I->C1I_HRALT  := time()
+			C1I->C1I_NRCAMP := aFieldsUpdate[i][3]
+			C1I->C1I_CTDANT := C1H->&(aFieldsUpdate[i][4])
+			C1I->(MsUnlock())
+		endif 
+	endif	
+
+	//Se é um campo que tem referencia com a tabela de participantes do TAF
+	if !empty(aFieldsUpdate[i][4])
+
+		//conforme o campo que foi alterado no ERP, o campo a ser gravado no TAF tem que ser o id das tabelas autocontidas
+		if aFieldsUpdate[i][4] == 'C1H_CODPAI'
+
+			cContAtual := GetAdvFval('C08','C08_ID',xFilial('C08') + aFieldsUpdate[i][2], 1)
+
+		elseif aFieldsUpdate[i][4] == 'C1H_UF'
+
+			cContAtual := GetAdvFval('C09','C09_ID',xFilial('C09') + aFieldsUpdate[i][2], 1)
+		
+		elseif aFieldsUpdate[i][4] == 'C1H_CODMUN'
+			
+			//A consulta do id do municipio dependE do codigo id da uf, então se a uf tambem
+			//foi alterada, tenho que buscar a informação dentro do array
+			nScan := aScan(aFieldsUpdate, {|x| x[4] == 'C1H_UF' }  )
+			
+			if nScan > 0
+				cIdUf := GetAdvFval('C09','C09_ID',xFilial('C09') + aFieldsUpdate[nScan][2], 1)
+			else
+				cIdUf := C1H->C1H_UF
+			endif	
+
+			cContAtual := GetAdvFval('C07','C07_ID', xFilial('C07') + cIdUf + aFieldsUpdate[i][2] )
+
+		else
+
+			cContAtual := aFieldsUpdate[i][2]
+		
+		endif	
+
+		//Grava o novo conteúdo na tabela de participantes
+		if C1H->(RecLock('C1H',.f.))
+			C1H->&(aFieldsUpdate[i][4]) := cContAtual
+			C1H->(MsUnLock())
+		endif    
+
+	endif
+
+	//Se é um campo chave para de integração entre as tabelas do ERP e TAF
+	if !empty(aFieldsUpdate[i][5])
+		//Grava o campo e o novo conteúdo
+		if V14->(RecLock('V14',.f.))
+			V14->&(aFieldsUpdate[i][5]) := aFieldsUpdate[i][2]
+			V14->(MsUnLock())
+		endif    
+	endif	                        	
+
+next
+
+return
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} TafGetIntegraPart
+Baseado nos campos do ERP, retorno o campo correspondente do cadastro de 
+participantes do TAF (C1H) e também seu número correspondente no histórico
+de alterações (C1R)
+
+@author Carlos Eduardo
+@since 18/12/2024
+//------------------------------------------------------------------------*/
+Function TafGetIntegraPart(cCampo as character, cTypePerson as character, cNumCampo as character, cCampoC1H as character, cCampoV14 as character)
+Local lRetorno 	:= .t. as logical
+Local lContent  := .F. as Logical
+
+//Caso formos gravar qualquer campo alterado que tem relação com a C1H, podemos usar o array abaixo
+//aFieldBulk := {	{'C1H_FILIAL'}, {'C1H_ID'	 }, {'C1H_CODPAR'}, {'C1H_PPES'  }, {'C1H_NOME'  }, {'C1H_END'   } , {'C1H_NUM'   }, {'C1H_COMPL' }, {'C1H_BAIRRO'}, {'C1H_CEP'   },;
+//					{'C1H_CODPAI'}, {'C1H_UF'	 }, {'C1H_CODMUN'}, {'C1H_DDD'   }, {'C1H_FONE'  }, {'C1H_DDDFAX'} , {'C1H_FAX'   }, {'C1H_EMAIL' }, {'C1H_CNPJ'  }, {'C1H_CPF'   },;
+//					{'C1H_IE'	 }, {'C1H_SUFRAM'}, {'C1H_DTINCL'}, {'C1H_RAMO'  }, {'C1H_IM'    }, {'C1H_PAISEX'} , {'C1H_LOGEXT'}, {'C1H_NUMEXT'}, {'C1H_COMEXT'}, {'C1H_BAIEXT'},;
+//					{'C1H_NMCEXT'}, {'C1H_CDPOSE'}, {'C1H_RELFON'}, {'C1H_PAA'   }, {'C1H_CONTRI'}, {'C1H_INDDES'} , {'C1H_CPRB'  }, {'C1H_INDCP' }, {'C1H_ISEIMU'}, {'C1H_ESTEXT'},;
+//					{'C1H_TELEXT'}, {'C1H_INDNIF'}, {'C1H_NIF'   }, {'C1H_PEEXTE'}, {'C1H_NEWCAD'} }
+
+If right(cCampo,4) == '_CGC' .or. left(cCampo,6) $ 'A2_CPF'
+	lContent := .T.
+EndIf
+
+IF !Empty(cTypePerson) .And. lContent
+	If cTypePerson == '1'
+		If  right(cCampo,4) == '_CGC' .or. cCampo == 'A2_CPFRUR'
+			cCampoC1H := 'C1H_CPF'
+			cNumCampo := '000005'
+		EndIf
+	Else
+		If right(cCampo,4) == '_CGC'
+			cCampoC1H := 	'C1H_CNPJ'
+			cNumCampo := '000004'
+		EndIf
+	EndIf
+	cCampoV14 := 'V14_CNPJ'
+EndIf
+							
+If right(cCampo,5) == '_NOME' 
+	cCampoC1H := 'C1H_NOME' 
+	cNumCampo := '000002'
+ElseIf right(cCampo,5) == '_PAIS' .or. cCampo == 'A4_CODPAIS'
+	cCampoC1H := 'C1H_CODPAI' 
+	cNumCampo := '000003'
+ElseIf right(cCampo,6) == '_INSCR' .or. cCampo == 'A4_INSEST' 
+	cCampoC1H := 'C1H_IE'
+	cCampoV14 := 'V14_IE'	 
+	cNumCampo := '000006'
+ElseIf right(cCampo,7) == 'COD_MUN' 
+	cCampoC1H := 'C1H_CODMUN'
+	cCampoV14 := 'V14_CODMUN'
+	cNumCampo := '000007'
+ElseIf right(cCampo,8) == '_SUFRAMA'
+	cCampoC1H := 'C1H_SUFRAM' 
+	cNumCampo := '000008'
+ElseIf right(cCampo,4) == '_END'
+	cCampoC1H := 'C1H_END' 
+	cNumCampo := '000010'
+ElseIf cCampo == 'A1_COMPLEM' .or. cCampo == 'A2_ENDCOMP'
+	cCampoC1H := 'C1H_COMPL' 
+	cNumCampo := '000012'
+ElseIf right(cCampo,7) == '_BAIRRO' 
+	cCampoC1H := 'C1H_BAIRRO' 
+	cNumCampo := '000014'
+ElseIf right(cCampo,4) == '_EST'  
+	cCampoC1H := 'C1H_UF'
+	cCampoV14 := 'V14_UF' 
+	cNumCampo := '000015'
+ElseIf right(cCampo,4) == '_CEP
+	cCampoC1H := 'C1H_CEP' 
+	cCampoV14 := 'V14_CEP'
+	cNumCampo := '000016'
+ElseIf right(cCampo,4) == '_DDD'
+	cCampoC1H := 'C1H_DDD' 
+	cNumCampo := '000017'
+ElseIf right(cCampo,4) = '_TEL'
+	cCampoC1H := 'C1H_FONE' 
+	cNumCampo := '000018'
+ElseIf right(cCampo,4) == '_FAX'
+	cCampoC1H := 'C1H_FAX' 
+	cNumCampo := '000020'
+ElseIf right(cCampo,6) == '_EMAIL'
+	cCampoC1H := 'C1H_EMAIL' 
+	cNumCampo := '000021'
+ElseIf	right(cCampo,7) == '_INSCRM'
+	cCampoC1H := 'C1H_IM'
+	cCampoV14 := 'V14_INSCMU'
+ElseIf right(cCampo,5) == '_CPRB'
+	cCampoC1H := 'C1H_CPRB' 
+
+EndIf
+
+return lRetorno
+
+/*-------------------------------------------------------------------------
+{Protheus.doc} VerExNf
+Função responsavel por verirficar no ato do cancelamento se existe o registro na C20 para que caso esteja cancelando
+uma nota que foi inserida no Protheus antes de ter a integração rodando não ocasione error.log
+@author adilson.roberto
+Parâmetro de entrada
+cFilialC20 = Filial a ser processada
+cIndOper   = Indicador de operação 1 = Saída 0 = Entrada
+cSerie     = Serie do documento fiscal
+cNumNF	   = Numero do documento fiscal
+cCliFor	   = Códido do participante do documento
+cLoja	   = loja do Participante do documento
+cEspecie   = Especie do documento
+dEmissao   = Emissção do documento
+@since 09/04/2024
+//------------------------------------------------------------------------*/
+Static Function VerExNf(cFilialC20 as character, cIndOper as character, cSerie as character, cNumNF as character,;
+						 cCliFor as character, cLoja as character, cEspecie as character, dEmissao as date)
+
+Local cVerextNf := GetNextAlias() as character
+Local aExNf		:= {} as array
+
+Default cFilialC20 := ""
+Default cIndOper   := ""
+Default cSerie     := ""
+Default cNumNF     := ""
+Default cCliFor    := ""
+Default cLoja      := ""
+Default cEspecie   := ""
+Default dEmissao   := CToD(" ")
+
+If Empty(cQryExNf)
+	cQryExNf := " SELECT COUNT(C20.R_E_C_N_O_) NREG "
+	cQryExNf += " FROM " + RetSqlName('C20') + " C20 "
+	cQryExNf += " WHERE C20.D_E_L_E_T_ = ' ' "
+	cQryExNf += " 	AND C20.C20_FILIAL = ? "
+	cQryExNf += " 	AND C20.C20_INDOPE = ? "
+	cQryExNf += " 	AND C20.C20_SERIE =  ? "
+	cQryExNf += " 	AND C20.C20_NUMDOC = ? "
+	cQryExNf += " 	AND C20.C20_CLIFOR = ? "
+	cQryExNf += " 	AND C20.C20_LOJA = ? " 
+	cQryExNf += " 	AND C20.C20_ESPECI = ? "
+	cQryExNf += " 	AND C20.C20_DTDOC = ? "
+Endif
+
+If !Empty(cQryExNf)
+	Aadd(aExNf, cFilialC20)
+	Aadd(aExNf, cIndOper)
+	Aadd(aExNf, cSerie)
+	Aadd(aExNf, cNumNF)
+	Aadd(aExNf, cCliFor)
+	Aadd(aExNf, cLoja) 
+	Aadd(aExNf, cEspecie)
+	Aadd(aExNf, DtoS(dEmissao))
+Endif
+
+dbUseArea(.T., "TOPCONN", TCGenQry2( , , cQryExNf, aExNf), cVerextNf, .F., .T.)
+
+Return (cVerextNf)->NREG
+
+/*/{Protheus.doc} TAFIntegSched
+Inicia uma task para integração dos documentos fiscais via schedule
+@type static function
+@author Melkz Siqueira
+@since 19/07/2023
+@version 1.0
+@return Nil
+/*/
+Static Function TAFIntegSched()
+	Local cAmbiente:= "" as character
+
+	TAFConout(STR0041,,, STR0010) // "O processo de integração via Smart Schedule está habilitado." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+	cAmbiente:= TafContScd()
+	//As validações referente ao Smart Schedule devem ser retiradas assim que estiver confirmado que todas as suas funcionalidades estarão disponível
+	//no rpo do ARTE para teste. Nesse momento esta em uso somente para controle interno.
+	If !Empty(cAmbiente)
+		If totvs.framework.schedule.utils.createTask(cAmbiente, /*cEmpAnt*/, /*cFilAnt*/, 'TAFA621', 84, __cUserID, '', {}, .T.) == Nil; TAFConout(STR0008, 3,, STR0010); Return; EndIf // "Falha na criação da task via Smart Schedule." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+			
+		TAFConout(STR0042,,, STR0010) // "Processo de integração enviado para a fila de processamento do Smart Schedule." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+	EndIf
+	
+Return
+
+/*/{Protheus.doc} TAFInitInt
+Inicia o processo de integração dos documentos fiscais
+@type function
+@author Melkz Siqueira
+@since 19/07/2023
+@version 1.0
+@return Nil
+/*/
+Function TAFInitInt()
+
+	Local cFilBkp	:= cFilAnt			as character
+	Local cAliasChk := BuscProcC20() 	as character
+
+	TAFConout(STR0043,,, STR0010) // "Processo de integração via Smart Schedule iniciado." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+	If !Empty(cAliasChk)
+		If (cAliasChk)->(EOF())
+			TAFConout(STR0044,,, STR0010) // "Nenhum documento fiscal disponível para integração." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+			TAFConout(STR0045,,, STR0010) // "Processo de integração via Smart Schedule finalizado." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+			
+			Return
+		EndIf
+		
+		While !(cAliasChk)->(EOF())
+			TRY
+
+				cFilAnt := (cAliasChk)->FILIAL
+
+				TAFConout(STR0003 + cEmpAnt + Space(1) + STR0004 + cFilAnt + Space(1) + STR0046,,, STR0010) // "Empresa: " / "Filial: " / "Processando..." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+				
+				IntegraCadastrosSped()
+				TAFA614()
+			
+			CATCH oError
+
+				TAFConout(STR0047, 3,, STR0010) // "Falha no processo de integração via Smart Schedule." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+				TAFConout(oError:Description, 3,, STR0010) // "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+				
+				SetStatus(PENDING_STATUS, IN_PROGRESS_STATUS, PROCESS_INCLUSION)
+
+			FINALLY
+
+				cFilAnt := cFilBkp
+
+			ENDTRY
+
+			(cAliasChk)->(DbSkip())
+		EndDo
+
+		(cAliasChk)->(DbCloseArea())
+	EndIf
+
+	TAFConout(STR0048,,, STR0010) // "Processo de integração via Smart Schedule finalizado." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+
+Return
+
+/*/{Protheus.doc} GetChildTables
+Adiciona ao array passado por parâmetro as tabelas que precisam ser excluidas no 
+reprocessamento dos documentos fiscais, porém não fazem parte do modelo principal
+do documento fiscal - TAFA062(MODEL_C20)
+@type function
+@author Carlos Eduardo Boy
+@since 20/05/2024
+@version 1.0
+@return Nil
+/*/
+Static Function GetChildTables(aChildTable)
+
+aadd(aChildTable, 'CWW') //Tabela de Informações adicionais dos ajustes da apuração do IPI.
+
+Return
+
+
+/*-------------------------------------------------------------------
+GetPartUpdate()
+Retorna os registros que deverão ser alterados nas tabelas do TAF
+conforme o compartilhamento das tabelas
+
+@author Carlos Eduardo Boy
+@since 19/12/2024
+@version 1.0
+@return array
+-------------------------------------------------------------------*/
+Static Function GetPartUpdate(cOrigem, oModelUpd)
+Local cAliasRet as character
+Local cQuery 	as character
+Local cIdField := right(cOrigem,2) as character
+Local cAliasField := cOrigem + '.' + cIdField as character
+Local cCodPart 	:= oModelUpd:GetValue(cIdField+'_COD') as character
+Local cLojaPart := oModelUpd:GetValue(cIdField+'_LOJA') as character
+Local cFilTab  	:= oModelUpd:GetValue(cIdField+'_FILIAL') as character
+Local oStQuery 	:= FwExecStatement():New() as object
+
+cQuery += " SELECT  "
+cQuery += " 	V14.V14_FILIAL, "
+cQuery += " 	V14.V14_IDC1H, "
+cQuery += " 	V14.V14_ORIG "
+cQuery += " FROM " + RetSqlName(cOrigem) + " " + cOrigem
+cQuery += " 	INNER JOIN " + RetSqlName('V14') + " V14 ON  "
+cQuery += 			FwJoinFilial('V14',cOrigem) + " AND "
+cQuery += " 		V14.V14_CNPJ 	= " + cAliasField + "_CGC AND "
+cQuery += " 		V14.V14_IE 		= " + cAliasField + "_INSCR AND "
+cQuery += " 		V14.V14_INSCMU 	= " + cAliasField + "_INSCRM AND "
+cQuery += " 		V14.V14_CODMUN 	= " + cAliasField + "_COD_MUN AND  "
+cQuery += " 		V14.V14_CEP 	= " + cAliasField + "_CEP AND "
+cQuery += " 		V14.V14_UF 		= " + cAliasField + "_EST AND "
+cQuery += " 		V14.V14_ORIG 	= '" + cOrigem + "' AND "
+cQuery += " 		V14.D_E_L_E_T_ 	= '' "
+cQuery += " WHERE " + cOrigem + ".D_E_L_E_T_ = ? "
+cQuery += " 	AND " + cAliasField + "_FILIAL  = ? "
+cQuery += " 	AND " + cAliasField + "_COD 	 = ? "
+cQuery += " 	AND " + cAliasField + "_LOJA 	 = ? "
+cQuery := ChangeQuery(cQuery)
+
+oStQuery:SetQuery(cQuery)
+oStQuery:SetString(1, ' ')
+oStQuery:SetString(2, cFilTab)
+oStQuery:SetString(3, cCodPart)
+oStQuery:SetString(4, cLojaPart)
+
+cAliasRet := oStQuery:OpenAlias()
+
+oStQuery:Destroy()
+
+return cAliasRet
+
+
+/*---------------------------------------------------------------------------
+TafIntegTranspUpd
+Integra ado ERP para o TAF as alterações feitas no cadastro de transportadora 
+
+@author Carlos Eduardo Boy
+@since 19/12/2024
+@version 1.0
+@return array
+----------------------------------------------------------------------------*/
+Function TafIntegTranspUpd(cCodtransp as character, aCpoAltSA4 as array)
+Local cQuery as character
+Local oStQuery := FwExecStatement():New() as object
+Local cAliasQry as character
+Local cFieldC1H := '' as character
+Local cFieldV14 := '' as character
+Local cNumCampoHist := '' as character
+Local i as integer
+Local aFieldsUpdate := {} as array
+//Na carga dos campos chave par pesquisa, considra o registro posicionado, independente de ter alteração ou não
+Local cCnpjTransp	:= SA4->A4_CGC		as character		
+Local cIeTransp		:= SA4->A4_INSEST	as character 
+Local cImTransp		:= SA4->A4_INSCRM	as character 	
+Local cCodMunTransp := SA4->A4_COD_MUN	as character
+Local cCepTransp	:= SA4->A4_CEP		as character 		
+Local cUfTransp		:= SA4->A4_EST		as character
+Local lIntTAF		:= .F.			    as logical
+Local xMV_TAFISCH   := GetMV('MV_TAFISCH',, '0' ) //Integracao via Smart Schedule com o TAF 		
+
+//Estrutura do array
+//aCpoAltSA4[x][1] - Campo alterado
+//aCpoAltSA4[x][2] - Conteudo antes da alteração
+//SA4 -> O registro posicionado ja esta salvo com todas as alterações
+
+//Valida tipo e conteudo do parâmetro MV_TAFISCH
+do case
+	case ValType( xMV_TAFISCH ) == 'C'
+		lIntTAF := iif( xMV_TAFISCH == '1', .t., .f. )
+	case ValType( xMV_TAFISCH ) == 'L'
+		lIntTAF := .F.
+endcase
+
+if lIntTAF
+
+	//Nesse passo verifico se algum cmapo chave da pesquisa sofreu alteração, se sim, considero o valor anterior a alteração
+	//Isso se faz necessário para que o registro na tabela do TAF possa ser encontrado e posteriormente alterado
+	for i := 1 to len(aCpoAltSA4)
+		do case
+			case aCpoAltSA4[i][1] == 'A4_CGC'
+				cCnpjTransp := aCpoAltSA4[i][2]
+			case aCpoAltSA4[i][1] == 'A4_INSEST'
+				cIeTransp := aCpoAltSA4[i][2]
+			case aCpoAltSA4[i][1] == 'A4_INSCRM'
+				cImTransp := aCpoAltSA4[i][2]
+			case aCpoAltSA4[i][1] == 'A4_COD_MUN'
+				cCodMunTransp := aCpoAltSA4[i][2]
+			case aCpoAltSA4[i][1] == 'A4_CEP'		
+				cCepTransp := aCpoAltSA4[i][2]
+			case aCpoAltSA4[i][1] == 'A4_EST'		
+				cUfTransp := aCpoAltSA4[i][2]
+		endcase	
+	next	
+
+	//A consulta foi feita com join na SA1 para aproveitar a função FwJoinFilial(), uma vez que o compartilhametno pode ser 
+	//diferente entre as tabelas, a query me retorna todos os registro que precisam ser alterados
+	cQuery += " SELECT  "
+	cQuery += " 	V14.V14_FILIAL, "
+	cQuery += " 	V14.V14_IDC1H, "
+	cQuery += " 	V14.V14_ORIG "
+	cQuery += " FROM " + RetSqlName('SA4') + " " + 'SA4'
+	cQuery += " 	INNER JOIN " + RetSqlName('V14') + " V14 ON  "
+	cQuery += 			FwJoinFilial('V14','SA4') + " 	AND "
+	cQuery += " 		V14.V14_CNPJ 	= ? AND " //1
+	cQuery += " 		V14.V14_IE 		= ? AND "//2
+	cQuery += " 		V14.V14_INSCMU 	= ? AND "//3
+	cQuery += " 		V14.V14_CODMUN 	= ? AND  "//4
+	cQuery += " 		V14.V14_CEP 	= ? AND "//5
+	cQuery += " 		V14.V14_UF 		= ? AND "//6
+	cQuery += " 		V14.V14_ORIG 	= ? AND "//7
+	cQuery += " 		V14.D_E_L_E_T_ 	= ? "//8
+	cQuery += " WHERE SA4.D_E_L_E_T_ 	= ? "//9
+	cQuery += " 	AND SA4.A4_FILIAL   = ? "//10
+	cQuery += " 	AND SA4.A4_COD 		= ? "//11
+	cQuery := ChangeQuery(cQuery)
+
+	oStQuery:SetQuery(cQuery)
+	oStQuery:SetString(1, cCnpjTransp)
+	oStQuery:SetString(2, cIeTransp)
+	oStQuery:SetString(3, cImTransp)
+	oStQuery:SetString(4, cCodMunTransp)
+	oStQuery:SetString(5, cCepTransp)
+	oStQuery:SetString(6, cUfTransp)
+	oStQuery:SetString(7, 'SA4')
+	oStQuery:SetString(8, Space(01))
+	oStQuery:SetString(9, Space(01))
+	oStQuery:SetString(10, xFilial('SA4'))
+	oStQuery:SetString(11, cCodtransp)
+	cAliasQry := oStQuery:OpenAlias()
+
+	//Posiciona as tabelas que serão usadas dentro do while
+	V14->(DbSetOrder(2)) //V14_FILIAL+V14_IDC1H+V14_ORIG
+	C1H->(DbSetOrder(5)) //C1H_FILIAL+C1H_ID   
+
+	//Só integra os dados alterados no transportador caso não tenha sido integrado nenhum outro participante com a mesma chave
+	//pois a prioridade das informações são SA1,SA2 e SA4 respectivamente
+	if (cAliasQry)->(!eof()) .and. !V14->(DbSeek( (cAliasQry)->( V14_FILIAL + V14_IDC1H + 'SA1'))) .and. !V14->(DbSeek( (cAliasQry)->( V14_FILIAL + V14_IDC1H + 'SA2')))
+
+		while (cAliasQry)->(!eof())
+			if V14->(DbSeek( (cAliasQry)->( V14_FILIAL + V14_IDC1H + V14_ORIG)))
+				if C1H->(DbSeek( (cAliasQry)->( V14_FILIAL + V14_IDC1H )))	
+					begin transaction
+						try
+							for i := 1 to len(aCpoAltSA4)
+								cFieldC1H := ''
+								cFieldV14 := ''
+								cNumCampoHist := ''
+
+								//Busca o nome dos campos que deverão ser gravados nas tabelas do TAF
+								TafGetIntegraPart(aCpoAltSA4[i][1], C1H->C1H_PPES, @cNumCampoHist, @cFieldC1H, @cFieldV14)
+								
+								aadd(aFieldsUpdate, {aCpoAltSA4[i][1], SA4->&(aCpoAltSA4[i][1]), cNumCampoHist, cFieldC1H, cFieldV14} )					
+							next
+
+							//Chama a função que gravar os dados alterados nas tabelas do taf
+							TafPutIntegraPart(aFieldsUpdate)
+						catch oError
+							TafConout(STR0051, 3,, STR0046) //#'Erro na atualização das tabelas do TAF. Os dados foram atualizados somente nas tabelas do ERP!' #'Integração TAF'
+							DisarmTransaction()
+							Break
+						endtry
+					end transaction	
+				endif
+			endif		
+
+			(cAliasQry)->(DbSkip())
+		enddo
+	endif
+
+	oStQuery:Destroy()
+	(cAliasQry)->(DbCloseArea())
+
+endif
+
+return
+/*---------------------------------------------------------------------------
+TafIntegTSS
+Integração com a transimissão de documento fiscal, para atualização do campo C20_NUMDOC
+
+@author Pâmela Bernardo
+@since 01/09/2025
+@version 1.0
+@return array
+----------------------------------------------------------------------------*/
+Function TafIntegTSS(cNumero as character, cSerie as character, cEntSai as character, cNota as character)
+	Local aCamposAlt := {} as array
+	Local cSaiEnt	 := "E" as character
+	Local nTamDoc	 := TamSx3("F3_NFELETR")[1] as numeric
+
+	Default cNumero := ""    
+	Default cSerie := ""    
+	Default cEntSai := ""    
+	Default cNota := ""    
+
+	SF3->(dbSetOrder(5))
+	If SF3->(MsSeek(xFilial("SF3") + cSerie + cNumero))
+		If cEntSai == "1"
+			cSaiEnt := "S"
+		Endif
+		aCamposAlt := {{"C20_NUMDOC", RIGHT(cNota,nTamDoc)}}
+		
+		// Integração Livros Fiscais X TAF - Inicia a integração
+		TAFDocInt(cNumero, cSerie, cSaiEnt, SF3->F3_CLIEFOR, SF3->F3_LOJA, SF3->F3_EMISSAO, "", If(cSaiEnt="S", SF3->F3_EMISSAO,SF3->F3_ENTRADA), SF3->F3_ESPECIE,,, aCamposAlt)
+	EndIf
+Return

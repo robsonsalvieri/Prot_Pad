@@ -1,0 +1,1255 @@
+#INCLUDE 'tlpp-core.th'
+
+NameSpace gfin.job
+USING NAMESPACE gfin.api.orders
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+
+Static __FK7ChaveTit as Logical
+Static __typeDb      as Character
+Static __hashCache   as Object
+Static __oHashDtVld	 as Object
+Static __oFindF75	 as Object
+Static __lF75FILORI := F75->(FieldPos("F75_FILORI")) > 0
+Static __lNGFJOBQR 	:= ExistBlock("NGFJOBQR")
+Static __lNGFJOBF7	:= ExistBlock("NGFJOBF7")
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DocumentsBalance
+Atualiza o saldo dos títulos financeiro para o Novo Gestor Financeiro
+@author Renato.ito
+@since 22/02/2021
+/*/
+//-------------------------------------------------------------------
+Class DocumentsBalance
+  Public Data lOk             as Logical
+  Public Data stamp           as Logical
+  Public Data errorMessage    as Character
+  Public Data insertions      as Numeric
+  Public Data lastUpdateDate  as Character
+  Public Data realNameTable   as Character
+  Private Data oStRecordsToInsert as object
+
+  Public Method new()
+  Public Method setLastUpdateDate()
+  Public Method processDocuments()
+  Private Method prepareRecordsToInsert()
+
+EndClass
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+@author renato.ito
+@since 22/02/2021
+/*/
+//-------------------------------------------------------------------
+Method new() Class DocumentsBalance
+  Self:lOk          := .T.
+  Self:errorMessage := ''
+  Self:insertions   := 0
+  __hashCache       := FwHashMap():New()
+  __FK7ChaveTit     := FK7->(ColumnPos("FK7_CLIFOR")) > 0
+  __typeDb          := Upper(TcGetDb())
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setLastUpdateDate
+  configura a data da última atualização
+  @param date as Character, datetime
+  @author renato.ito
+  @since 22/02/2021
+/*/
+//-------------------------------------------------------------------
+Method setLastUpdateDate(date as Character) Class DocumentsBalance
+  Self:lastUpdateDate := date
+Return Self:lastUpdateDate
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} processDocuments
+aciona as funções para atualizar os saldos dos títulos na F75
+
+@author renato.ito
+@since 22/02/2021
+
+/*/
+//-------------------------------------------------------------------
+Method processDocuments() Class DocumentsBalance
+  Local querySE1      as Character
+  Local querySE2      as Character
+  Local tempTable     as Character
+  Local tableStruct   as Array
+  Local insertFields  as Character
+  Local cAliasRecordsToInsert := "" as Character
+
+  If __oHashDtVld == Nil
+	__oHashDtVld := THashMap():New()
+  EndIf
+
+  // carrega as cotações de moedas na memória
+  currenciesQuote()
+
+  // gera struct para a tabela temporaria
+  tableStruct := tempTableStruct()
+  // gera os campos para o insert com base no struct
+  insertFields := insertFields(tableStruct)
+  // cria a tabela temporaria
+  tempTable := createDocumentsTempTable(tableStruct)
+  Self:realNameTable := tempTable:getRealName()
+
+  // verifica exclusões de títulos
+  checkDeleted('SE1')
+  checkDeleted('SE2')
+
+  // prepara a query dos títulos que devem ser atualizados
+  getQuery("SE1", Self:lastUpdateDate, Self:realNameTable)
+  getQuery("SE2", Self:lastUpdateDate, Self:realNameTable)
+
+  // popula a tabela temporaria com os títulos
+  querySE1 := __hashCache:get('selectSE1')
+  querySE2 := __hashCache:get('selectSE2')
+  insertDocuments(Self, querySE1, insertFields)
+  insertDocuments(Self, querySE2, insertFields)
+  // query de atualizações
+  If !Empty(Self:lastUpdateDate)
+    querySE1 := __hashCache:get('selectVaSE1')
+    querySE2 := __hashCache:get('selectVaSE2')
+    insertDocuments(Self, querySE1, insertFields)
+    insertDocuments(Self, querySE2, insertFields)
+    querySE1 := __hashCache:get('selectAbtSE1')
+    querySE2 := __hashCache:get('selectAbtSE2')
+    insertDocuments(Self, querySE1, insertFields)
+    insertDocuments(Self, querySE2, insertFields)
+    querySE1 := __hashCache:get('selectMoedaSE1')
+    querySE2 := __hashCache:get('selectMoedaSE2')
+    insertDocuments(Self, querySE1, insertFields)
+    insertDocuments(Self, querySE2, insertFields)
+    querySE1 := __hashCache:get('selectVenctoSE1')
+    querySE2 := __hashCache:get('selectVenctoSE2')
+    insertDocuments(Self, querySE1, insertFields)
+    insertDocuments(Self, querySE2, insertFields)
+    querySE1 := __hashCache:get('selectDescontSE1')
+	insertDocuments(Self, querySE1, insertFields)
+  EndIf
+
+  (tempTable:getAlias())->(DBGOTOP())
+  If (tempTable:getAlias())->(!EOF())
+    //Atualiza o valor de abatimentos
+    atualizaAbt(Self , 'SE1')
+    atualizaAbt(Self , 'SE2')
+    // Atualiza os VAs
+    atualizaVA(Self)
+    //Atualiza os dias de retenção bancária
+    updateRetenc(Self)
+    // atualiza a tabela de saldos de títulos F7
+    If Self:lOk
+		self:prepareRecordsToInsert()	  
+		cAliasRecordsToInsert := self:oStRecordsToInsert:OpenAlias()
+		Self:insertions := atualizaF75(tempTable:getAlias(), cAliasRecordsToInsert)
+		(cAliasRecordsToInsert)->(dbCloseArea())
+    EndIf
+  EndIf
+
+  tempTable:Delete()
+  FreeObj(__hashCache)
+  __oHashDtVld:Clean()
+  FreeObj(__oHashDtVld)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} insertDocuments
+  insere os títulos na tabela temporária
+
+  @param oSelf as Object, self
+  @param selectQuery as Character, query para seleção de titulos
+  @param insertFields as Character, campos para o insert na tabela temporaria
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function insertDocuments(oSelf as Object, selectQuery as Character, insertFields as Character) as Logical
+  Local query as Character
+
+  If oSelf:lOk
+    //query insert principal
+    query := " INSERT INTO " + oSelf:realNameTable  + " ( " + insertFields  + " ) "
+    query += selectQuery
+
+    If TCSqlExec(query) < 0
+      oSelf:lOk := .F.
+      oSelf:errorMessage := 'Error insertDocuments ' + TCSqlError()
+      FwLogMsg("ERROR",, "NGF", FunName(), "", "01", oSelf:errorMessage, 0, 0, {})
+    EndIf
+  EndIf
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} atualizaAbt
+  atualiza o valor de abatimentos
+
+  @param oSelf as Object, self
+  @param aliasNick as Character, SE1 ou SE2
+  @return query oara listar os abatimentos
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function atualizaAbt(oSelf as Object, aliasNick as Character)
+  Local query         as character
+  Local aliasAbt      as character
+  Local queryAtualiza as Character
+  Local realNameTable as Character
+
+  realNameTable := oSelf:realNameTable
+
+  If ("SE1" $ aliasNick)
+    query := " SELECT ABT.E1_FILIAL AS FILIAL, ABT.E1_TITPAI AS TITPAI, SUM(ABT.E1_SALDO) AS ABATIMENTO, 'R' AS RECPAG  "
+    query += " FROM " + RetSqlName("SE1") + " ABT "
+    query += " JOIN " + realNameTable + " GFIN "
+    query += "     ON ABT.E1_FILIAL = GFIN.FILIAL "
+    query += "    AND ABT.E1_TITPAI = GFIN.TITPAI "
+    query += "    AND GFIN.RECPAG = 'R' "
+    query += " WHERE ABT.E1_SALDO > 0 "
+    query += " AND ABT.E1_TIPO IN " + formatIn(MVABATIM , '|' )
+    query += " AND ABT.D_E_L_E_T_ = ' ' "
+    query += " AND ABT.E1_TITPAI <> ' ' "
+    query += " GROUP BY "
+    query += " ABT.E1_FILIAL, ABT.E1_TITPAI "
+    query += " ORDER BY ABT.E1_FILIAL"
+  Else
+    query := " SELECT ABT.E2_FILIAL AS FILIAL, ABT.E2_TITPAI AS TITPAI, SUM(ABT.E2_SALDO) AS ABATIMENTO, 'P' AS RECPAG "
+    query += " FROM " + RetSqlName("SE2") + " ABT "
+    query += " JOIN " + realNameTable + " GFIN "
+    query += "    ON ABT.E2_FILIAL = GFIN.FILIAL "
+    query += "    AND ABT.E2_TITPAI = GFIN.TITPAI "
+    query += "    AND GFIN.RECPAG = 'P' "
+    query += " WHERE ABT.E2_SALDO > 0 "
+    query += " AND ABT.E2_TIPO IN " + formatIn(MVABATIM , '|' )
+    query += " AND ABT.D_E_L_E_T_ = ' ' "
+    query += " AND ABT.E2_TITPAI <> ' ' "
+    query += " GROUP BY "
+    query += " ABT.E2_FILIAL, ABT.E2_TITPAI "
+    query += " ORDER BY ABT.E2_FILIAL"
+  EndIf
+
+  aliasAbt := MpSysOpenQuery(ChangeQuery(query))
+
+  (aliasAbt)->(DbGoTop())
+
+  While (aliasAbt)->(!EOF()) .And. oSelf:lOk
+    // query para atualizar o valor no banco
+    queryAtualiza := "UPDATE " + realNameTable
+    queryAtualiza += " SET ABATIMENTO = " + cValToChar((aliasAbt)->ABATIMENTO)
+    queryAtualiza += " WHERE RECPAG = '" + (aliasAbt)->RECPAG + "'"
+    queryAtualiza += " AND FILIAL = '" + (aliasAbt)->FILIAL + "'"
+    queryAtualiza += " AND TITPAI = '" + (aliasAbt)->TITPAI + "'"
+
+    If (TCSqlExec(queryAtualiza)) < 0
+      oSelf:lOk := .F.
+      oSelf:errorMessage := 'Error updateABT ' + TCSqlError()
+      FwLogMsg("ERROR",, "NGF", FunName(), "", "01", oSelf:errorMessage, 0, 0, {})
+    EndIf
+    (aliasAbt)->(DbSkip())
+  EndDo
+  (aliasAbt)->(dbCloseArea())
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} atualizaVA
+  atualiza o valor acessório FKD
+
+  @param oSelf as Object, self
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function atualizaVA(oSelf as Object)
+  Local valorAcessorio  as Numeric
+  Local queryIDDOC      as Character
+  Local aliasIDDOC      as Character
+  Local queryAtualiza   as Character
+  Local realNameTable   as Character
+  Local serviceVA       as Object
+
+  If oSelf:lOk
+    realNameTable := oSelf:realNameTable
+    serviceVA := gfin.util.ComplementaryValue():getInstance()
+
+    queryIDDOC := "SELECT GFIN.RECNO, FK7.FK7_IDDOC, GFIN.FILORIG, GFIN.ALIAS, GFIN.SALDO, GFIN.RECPAG  FROM " + realNameTable + " GFIN "
+    queryIDDOC += " JOIN " + RetSqlName("FK7") + " FK7 ON "
+    queryIDDOC += " FK7.FK7_ALIAS = GFIN.ALIAS "
+    queryIDDOC += " AND FK7_FILTIT = GFIN.FILIAL "
+    queryIDDOC += " AND FK7.FK7_CHAVE = GFIN.CHAVEFK7 "
+	If __FK7ChaveTit
+		queryIDDOC += " AND GFIN.PREFIXO = FK7.FK7_PREFIX "
+		queryIDDOC += " AND GFIN.NUM = FK7.FK7_NUM "
+		queryIDDOC += " AND GFIN.PARCELA = FK7.FK7_PARCEL "
+		queryIDDOC += " AND GFIN.TIPO = FK7.FK7_TIPO "
+		queryIDDOC += " AND GFIN.CLIFOR = FK7.FK7_CLIFOR "
+		queryIDDOC += " AND GFIN.LOJA = FK7.FK7_LOJA "
+	EndIf
+    queryIDDOC += " AND FK7.D_E_L_E_T_=' ' "
+    queryIDDOC += " JOIN  " + RetSqlName("FKD") + " FKD ON "
+  	queryIDDOC += totvs.protheus.backoffice.ngf.util.BranchRelation( {"FK7","FK7_FILIAL","FK7"}, {"FKD","FKD_FILIAL","FKD"} )  + " AND "
+  	queryIDDOC += " FKD.FKD_IDDOC = FK7.FK7_IDDOC "
+    queryIDDOC += " AND FKD.D_E_L_E_T_ = ' ' "
+    queryIDDOC += " GROUP BY GFIN.RECNO,FK7.FK7_IDDOC,GFIN.FILORIG,GFIN.ALIAS,GFIN.SALDO,GFIN.RECPAG "
+
+    // Separa apenas os movimentos que possuem VA para o calculo
+    aliasIDDOC := MpSysOpenQuery(ChangeQuery(queryIDDOC))
+
+    //"FILIAL","RECPAG","IDDOC"
+    (aliasIDDOC)->(DbGoTop())
+
+    While (aliasIDDOC)->(!EOF()) .And. oSelf:lOk
+      valorAcessorio := serviceVA:complementaryValue((aliasIDDOC)->RECNO, (aliasIDDOC)->FK7_IDDOC, (aliasIDDOC)->FILORIG, (aliasIDDOC)->ALIAS, dDataBase, (aliasIDDOC)->SALDO)
+
+	  If valorAcessorio <> 0
+		// query para atualizar o valor no banco
+		queryAtualiza := "UPDATE " + realNameTable
+		queryAtualiza += " SET VLVA = " + cValToChar(valorAcessorio)
+		queryAtualiza += " WHERE RECPAG = '" + (aliasIDDOC)->RECPAG + "'"
+		queryAtualiza += " AND RECNO = " + cValToChar((aliasIDDOC)->RECNO)
+		If (TCSqlExec(queryAtualiza)) < 0
+			oSelf:lOk := .F.
+			oSelf:errorMessage := 'Error updateVA ' + TCSqlError()
+			FwLogMsg("ERROR",, "NGF", FunName(), "", "01", oSelf:errorMessage, 0, 0, {})
+		EndIf
+	  EndIf
+      (aliasIDDOC)->(DbSkip())
+    EndDo
+    (aliasIDDOC)->(dbCloseArea())
+    serviceVA:destroy()
+  EndIf
+Return
+//-------------------------------------------------------------------
+/*/{Protheus.doc} atualizaF75
+  atualiza a tabela de saldos
+
+  @param documentsAlias as Character, alias da tabelas com os movimentos atualizados
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function atualizaF75(documentsAlias as Character, cAlsTmp As Character)
+	Local multa       := 0													 as Numeric
+	Local juros       := 0													 as Numeric
+	Local saldo       := 0													 as Numeric    // valor na moeda do sistema
+	Local valorTitulo := 0													 as Numeric    // valor na moeda do título
+	Local countDoc    := 0													 as Numeric
+	Local mvJurTipo   := .F.												 as Logical
+	Local filBackup   := ""													 as Character
+	Local filCompart  := .F.												 as Logical
+	Local mvLjMulta   := .F.												 as Logical
+	Local mvNgfEIC    := .F.												 as Logical
+	Local dataAtu     := ""													 as Character
+	Local oBulk		  := NIL										 		 as Object
+	Local aFields	  := {}													 as Array
+	Local nDesconto  := 0                                                    as Numeric
+	Local nCont      := 0                                                    as Numeric
+	Local dtCredito  := dDataBase                                            as Date
+	Local dHshDate	 := CTOD("  /  /  ")									 as Date
+	Local lEicCalc   := .F.                                                  as Logical
+	Local aStruMulta := FWSX3Util():GetFieldStruct( 'F75_MULTA' )            as Array
+	Local aStruJuros := FWSX3Util():GetFieldStruct( 'F75_JUROS' )            as Array
+	Local aStruSaldo := FWSX3Util():GetFieldStruct( 'F75_SALDO' )            as Array
+	Local aStruVlTit := FWSX3Util():GetFieldStruct( 'F75_VLTIT' )            as Array
+	Local nMaxMulta  := VAL(PAD("", aStruMulta[3] - aStruMulta[4] - 1, "9")) as Numeric
+	Local nMaxJuros  := VAL(PAD("", aStruJuros[3] - aStruJuros[4] - 1, "9")) as Numeric
+	Local nMaxSaldo  := VAL(PAD("", aStruSaldo[3] - aStruSaldo[4] - 1, "9")) as Numeric
+	Local nMaxVltit  := VAL(PAD("", aStruVlTit[3] - aStruVlTit[4] - 1, "9")) as Numeric
+	Local cSitDsc	 := FN022LSTCB(2)										 as Character 
+
+	filCompart := Empty(FwFilial('SE1'))
+
+	mvLjMulta   := (SuperGetMv("MV_LJMULTA",,"0") > 0)
+	mvJurTipo   := (SuperGetMv("MV_JURTIPO",,"") == "L") .Or. (SuperGetMv("MV_LJINTFS", ,.F.))
+	mvNgfEIC    := SuperGetMv("MV_FNGFEIC ",,.F.)
+	countDoc    := 0
+	dataAtu     := dDataBase
+
+	dbSelectArea('F75')
+	F75->(dbSetOrder(1))	// F75_FILORI, F75_RECPAG, F75_PREFIXO, F75_NUM, F75_PARCELA, F75_TIPO, F75_CLIFOR, F75_LOJA
+		
+	If FWBulk():CanBulk()
+    
+    	oBulk := FWBulk():New(RetSqlName("F75"), 900)
+    	aFields := {}
+
+		aAdd(aFields, {"F75_FILIAL"})
+		aAdd(aFields, {"F75_PREFIX"})
+		aAdd(aFields, {"F75_NUM"})
+		aAdd(aFields, {"F75_PARCEL"})
+		aAdd(aFields, {"F75_TIPO"})
+		aAdd(aFields, {"F75_CLIFOR"})
+		aAdd(aFields, {"F75_LOJA"})
+		aAdd(aFields, {"F75_RECPAG"})
+		aAdd(aFields, {"F75_FILORI"})
+		
+		oBulk:setFields(aFields)
+
+		If !Empty(cAlsTmp)
+			While !(cAlsTmp)->(Eof())				
+				oBulk:addData({	FWxFilial('F75', (cAlsTmp)->FILORIG),;
+								(cAlsTmp)->PREFIXO,;
+								(cAlsTmp)->NUM,;
+								(cAlsTmp)->PARCELA,;
+								(cAlsTmp)->TIPO,;
+								(cAlsTmp)->CLIFOR,;
+								(cAlsTmp)->LOJA,;
+								(cAlsTmp)->RECPAG,;
+								(cAlsTmp)->FILIAL})
+				(cAlsTmp)->(DbSkip())
+			EndDo
+		EndIf
+
+		oBulk:Close()
+		oBulk:Destroy()
+
+		FreeObj(oBulk)
+
+    EndIf
+
+	F75->(DbGoTop())
+
+	(documentsAlias)->(dbSetOrder(8))
+	(documentsAlias)->(dbGoTop())
+	filBackup := cFilAnt
+	While (documentsAlias)->(!EOF())
+		countDoc    ++
+		multa       := 0
+		juros       := 0
+		quote       := 0
+		saldo       := 0
+		valorTitulo := 0
+		dtCredito   := (documentsAlias)->VENCREA
+		lEicCalc    := .F.
+		nDesconto   := 0   
+		dHshDate	:= CTOD("  /  /  ")
+
+		// definição da taxa da moeda estrangeira
+		If (documentsAlias)->MOEDA > 1
+			If !mvNgfEIC .And. Left((documentsAlias)->ORIGEM,7) $ "SIGAEEC/SIGAEFF/SIGAEDC/SIGAECO/SIGAESS/SIGAEIC"
+				lEicCalc := .T. // Desconsidera a taxa
+			EndIf
+
+			If (documentsAlias)->TXMOEDA > 0 .And. !lEicCalc // taxa contratada
+				If (documentsAlias)->TXMDCOR > 0  // se existir variação menetaria para taxa contratada utiliza ela
+					quote := (documentsAlias)->TXMDCOR
+				Else
+					quote := (documentsAlias)->TXMOEDA
+				EndIf
+			Else
+				If (documentsAlias)->SALDO > 0
+					// taxa do dia
+					If __hashCache:containsKey((documentsAlias)->MOEDA)
+						quote := __hashCache:get((documentsAlias)->MOEDA)
+					Else
+						quote := gfin.util.currencyLastQuote(cValToChar((documentsAlias)->MOEDA), Dtos(dDataBase))
+						__hashCache:put((documentsAlias)->MOEDA, quote)
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		// só recalcula se existir saldo
+		If (documentsAlias)->SALDO > 0
+
+			cFilAnt := (documentsAlias)->FILORIG
+
+			If (documentsAlias)->VENCREA < dDatabase
+				If 'R' == AllTrim((documentsAlias)->RECPAG) .And. !((documentsAlias)->TIPO $ MVRECANT + "|" + MV_CRNEG)
+
+					juros := faJuros(;
+						(documentsAlias)->VALOR,;
+						(documentsAlias)->SALDO,;
+						(documentsAlias)->VENCTO,;
+						(documentsAlias)->VALJUR,;
+						(documentsAlias)->PORCJUR,;
+						(documentsAlias)->MOEDA,;
+						(documentsAlias)->EMISSAO,;
+						dDatabase,;
+						0,;
+						(documentsAlias)->BAIXA,;
+						(documentsAlias)->VENCREA ,;
+						(documentsAlias)->ALIAS,;
+						(documentsAlias)->PREFIXO,;
+						(documentsAlias)->NUM,;
+						(documentsAlias)->PARCELA,;
+						(documentsAlias)->TIPO;
+						)
+					If mvJurTipo .And. mvLjMulta
+						// posiciona a SE1 para calcular multa
+						dbSelectArea("SE1")
+						SE1->(dbGoTo((documentsAlias)->RECNO))
+
+						multa := LojxRMul(;
+							,;
+							,;
+							,;
+							(documentsAlias)->SALDO,;
+							(documentsAlias)->SDACRES,;
+							(documentsAlias)->VENCREA,;
+							dDataBase,;
+							,;
+							(documentsAlias)->MULTA,;
+							,;
+							(documentsAlias)->PREFIXO,;
+							(documentsAlias)->NUM,;
+							(documentsAlias)->PARCELA,;
+							(documentsAlias)->TIPO,;
+							(documentsAlias)->CLIFOR,;
+							(documentsAlias)->LOJA,;
+							(documentsAlias)->ALIAS,;
+							.T.;
+						)
+					EndIf
+				EndIf
+
+				If 'P' == AllTrim((documentsAlias)->RECPAG) .And. !((documentsAlias)->TIPO $ MVPAGANT + "|" + MV_CPNEG)
+					dbSelectArea("SE2")
+					SE2->(dbGoTo((documentsAlias)->RECNO))
+					juros := fa080Juros()
+				EndIf
+
+			EndIf
+
+			//Cálculo do desconto
+			If 'R' $ (documentsAlias)->RECPAG .And. (documentsAlias)->VENCREA >= dDataBase .And. !((documentsAlias)->TIPO $ MVRECANT + "|" + MV_CRNEG) .And. (documentsAlias)->DESCFIN > 0
+				dbSelectArea("SE1")
+				SE1->(dbGoTo((documentsAlias)->RECNO))
+				nDesconto := FaDescFin("SE1",dDatabase,(documentsAlias)->SALDO,(documentsAlias)->MOEDA)
+			Endif
+
+			// valor na moeda  do título
+			valorTitulo := (documentsAlias)->SALDO + (documentsAlias)->SDACRES + (documentsAlias)->VLVA - (documentsAlias)->SDDECRE - (documentsAlias)->ABATIMENTO + multa + juros - nDesconto
+
+			// conversão quando moeda estrangeira
+			If (documentsAlias)->MOEDA > 1
+				saldo := valorTitulo * quote
+			Else
+				saldo := valorTitulo
+			EndIf
+		EndIf
+
+		__oHashDtVld:Get((documentsAlias)->VENCTO, @dHshDate)
+		If Empty(dHshDate)
+			dHshDate	:= DataValida((documentsAlias)->VENCTO)
+			__oHashDtVld:Set((documentsAlias)->VENCTO, dHshDate)
+		EndIf
+		//Verifica se o proximo dia util apos o vencimento é igual ao vencto real do titulo
+		//Se for igual e o titulo estiver em cobranca, aplico os dias de retencao do banco
+		If (documentsAlias)->RETENCA > 0 .And. DTOS(dHshDate) == DTOS(dtCredito)
+			For nCont := 1 To (documentsAlias)->RETENCA
+				dHshDate	:= CTOD("  /  /  ")
+				__oHashDtVld:Get(dtCredito+1, @dHshDate)
+				If Empty(dHshDate)
+					dHshDate	:= DataValida(dtCredito+1,.T.)	
+					__oHashDtVld:Set(dtCredito+1, dHshDate)
+				EndIf
+				dtCredito := dHshDate
+			Next nCont
+		EndIf
+
+		// tratamento para não gerar erro de tamanho de campo, deixando como default o valor máximo
+		If valorTitulo > nMaxVltit
+			valorTitulo := nMaxVltit
+		EndIf
+		If juros > nMaxJuros
+			juros := nMaxJuros
+		EndIf
+		If multa > nMaxMulta
+			multa := nMaxMulta
+		EndIf
+		If saldo > nMaxSaldo
+			saldo := nMaxSaldo
+		EndIf
+
+		//Zera o saldo do titulo se estiver em carteira descontada
+		If saldo > 0 .and. 'R' $ (documentsAlias)->RECPAG .and. (documentsAlias)->SITUACA $ cSitDsc
+			saldo := 0
+		Endif
+
+		/*
+			O FWBulk no início da atualizaF75 garante que o registro exista na F75 quando chegar aqui. Tem algum cenário que cai no ELSE?
+			Teoricamente não deveria. Avaliar remover o else no futuro. Ou, melhor ainda, fazer primeiro todos os cálculos e só depois usar o Bulk para incluir os novos registros.
+		*/
+
+		If F75->(dbSeek((documentsAlias)->(FILIAL + RECPAG + PREFIXO + NUM + PARCELA + TIPO + CLIFOR + LOJA)))
+			RecLock("F75", .F.)
+			F75->F75_VENCTO := dtCredito
+			F75->F75_SALDO  := saldo
+			F75->F75_VLTIT  := valorTitulo
+			F75->F75_MOEDA  := (documentsAlias)->MOEDA
+			F75->F75_TXMOED := quote
+			F75->F75_ABATIM := (documentsAlias)->ABATIMENTO
+			F75->F75_VLVA   := (documentsAlias)->VLVA
+			F75->F75_MULTA  := multa
+			F75->F75_JUROS  := juros
+			F75->F75_FLUXO  := (documentsAlias)->FLUXO
+			F75->F75_DTATU  := dataAtu
+			F75->(MSUnlock())
+		Else
+			RecLock("F75", !(F75->(MsSeek((documentsAlias)->(FILIAL + RECPAG + PREFIXO + NUM + PARCELA + TIPO + CLIFOR + LOJA)))))
+			If __lF75FILORI
+				F75->F75_FILIAL   := FWxFilial('F75', (documentsAlias)->FILORIG)
+				F75->F75_FILORI   := (documentsAlias)->FILIAL
+			Else
+				F75->F75_FILIAL   := FWxFilial('F75', (documentsAlias)->FILIAL)
+			EndIf
+			F75->F75_PREFIX   := (documentsAlias)->PREFIXO
+			F75->F75_NUM      := (documentsAlias)->NUM
+			F75->F75_PARCEL   := (documentsAlias)->PARCELA
+			F75->F75_TIPO     := (documentsAlias)->TIPO
+			F75->F75_CLIFOR   := (documentsAlias)->CLIFOR
+			F75->F75_LOJA     := (documentsAlias)->LOJA
+			F75->F75_RECPAG   := (documentsAlias)->RECPAG
+			F75->F75_VENCTO   := dtCredito
+			F75->F75_SALDO    := saldo
+			F75->F75_VLTIT    := valorTitulo
+			F75->F75_MOEDA    := (documentsAlias)->MOEDA
+			F75->F75_TXMOED   := quote
+			F75->F75_ABATIM   := (documentsAlias)->ABATIMENTO
+			F75->F75_VLVA     := (documentsAlias)->VLVA
+			F75->F75_MULTA    := multa
+			F75->F75_JUROS    := juros
+			F75->F75_FLUXO    := (documentsAlias)->FLUXO
+			F75->F75_DTATU    := dataAtu
+			F75->(MSUnlock())
+		EndIf
+		If __lNGFJOBF7
+			ExecBlock("NGFJOBF7", .F., .F.)
+		EndIf
+		(documentsAlias)->(dbSkip())
+	EndDo
+	cFilAnt := filBackup
+Return countDoc
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getQuery
+	prepara as query utilizadas para popular a tabela temporária
+
+	@param aliasName as Character, SE1 ou SE2
+	@param lastUpdateDate as Character, Data da última atualização
+
+	@author renato.ito
+	@since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function getQuery(aliasName as Character, lastUpdateDate as Character, cRealName as Character)
+	Local query        as Character
+	Local queryVa      as Character
+	Local queryMoeda   as Character
+	Local queryVencto  as Character
+	Local queryDesco  as Character
+	Local nick         as Character
+	Local clifor       as Character
+	Local selectFields as Character
+	Local chaveFK7     as Character
+	Local recpag       as Character
+	Local moedas       as Numeric
+	Local numMoed      as Numeric
+	Local cEicOrigins  as Character
+	Local cWherePE     as character
+	Local cSGBD        as character
+	Local lPostgre     as Logical
+	Local cTitPai      as character
+	Local cQueryAbt    as Character
+	Local cRecPag      as Character
+
+	cSGBD     := Upper(TCGetDB())
+	lPostgre  := "POSTGRES" $ cSGBD
+
+	If aliasName == 'SE1'
+		cRecPag  := 'R'
+	ElseIf aliasName == 'SE2'
+		cRecPag  := 'P'
+	EndIf
+
+	If __lNGFJOBQR
+		cWherePE := ExecBlock("NGFJOBQR", .F., .F., {aliasName})
+		If !EMPTY( cWherePE )
+		cWherePE := " AND " + cWherePE
+		EndIf
+	Endif
+
+	// pega a quantidade de moedas do sistema
+	moedas := __hashCache:get('moedas')
+
+	cEicOrigins := Formatin("SIGAEEC|SIGAEFF|SIGAEDC|SIGAECO|SIGAESS|SIGAEIC","|")
+
+	If "SE1" $ aliasName
+		recpag   := 'R'
+		nick     := "E1_"
+		clifor   := "CLIENTE"
+		If lPostgre
+			chaveFK7 := "CONCAT(E1_FILIAL, '|', E1_PREFIXO, '|', E1_NUM, '|', E1_PARCELA, '|', E1_TIPO, '|', E1_CLIENTE, '|', E1_LOJA)"
+			cTitPai := "CONCAT(E1_PREFIXO , E1_NUM , E1_PARCELA , E1_TIPO , E1_CLIENTE , E1_LOJA)"
+		Else
+			chaveFK7 := "E1_FILIAL || '|' || E1_PREFIXO || '|' || E1_NUM || '|' || E1_PARCELA || '|' || E1_TIPO || '|' || E1_CLIENTE || '|' || E1_LOJA"
+			cTitPai  := "E1_PREFIXO || E1_NUM || E1_PARCELA || E1_TIPO || E1_CLIENTE || E1_LOJA"
+		EndIf
+	Else
+		recpag   := 'P'
+		nick     := "E2_"
+		clifor   := "FORNECE"
+		If lPostgre
+			chaveFK7 := "CONCAT(E2_FILIAL, '|', E2_PREFIXO, '|', E2_NUM, '|', E2_PARCELA, '|', E2_TIPO, '|', E2_FORNECE, '|', E2_LOJA)"
+			cTitPai := "CONCAT(E2_PREFIXO , E2_NUM , E2_PARCELA , E2_TIPO , E2_FORNECE , E2_LOJA)"
+		Else
+			chaveFK7 := "E2_FILIAL || '|' || E2_PREFIXO || '|' || E2_NUM || '|' || E2_PARCELA || '|' || E2_TIPO || '|' || E2_FORNECE || '|' || E2_LOJA"
+			cTitPai := "E2_PREFIXO || E2_NUM || E2_PARCELA || E2_TIPO || E2_FORNECE || E2_LOJA"
+		EndIf
+	EndIf
+
+	// campos do select
+	selectFields := nick+"FILIAL AS FILIAL, "
+	selectFields += nick+"PREFIXO AS PREFIXO, "
+	selectFields += nick+"NUM AS NUM, "
+	selectFields += nick+"PARCELA AS PARCELA, "
+	selectFields += nick+"TIPO AS TIPO, "
+	If ('E1' $ nick)
+		selectFields += nick+"CLIENTE AS CLIFOR, "
+		selectFields += cTitPai + " AS TITPAI, "
+		selectFields += chaveFK7 + " AS CHAVEFK7, "
+		selectFields += "'R' AS RECPAG, "
+		selectFields += "'SE1' AS ALIAS, "
+		selectFields += nick+"DESCFIN AS DESCFIN, "
+		selectFields += nick+"SITUACA AS SITUACA, "
+	Else
+		selectFields += nick+"FORNECE AS CLIFOR, "
+		selectFields += cTitPai + " AS TITPAI, "
+		selectFields += chaveFK7 + " AS CHAVEFK7, "
+		selectFields += "'P' AS RECPAG, "
+		selectFields += "'SE2' AS ALIAS, "
+		selectFields += "0 AS DESCFIN, "
+		selectFields += "'P' AS SITUACA, "
+	EndIf
+	selectFields += nick+"LOJA AS LOJA, "
+	selectFields += nick+"FILORIG AS FILORIG, "
+	selectFields += aliasName + ".R_E_C_N_O_ AS RECNO, "
+	selectFields += nick+"SALDO AS SALDO, "
+	selectFields += nick+"VALOR AS VALOR, "
+	selectFields += nick+"SDACRES AS SDACRES, "
+	selectFields += nick+"SDDECRE AS SDDECRE, "
+	selectFields += nick+"MOEDA AS MOEDA, "
+	selectFields += nick+"TXMDCOR AS TXMDCOR, "
+	selectFields += nick+"TXMOEDA AS TXMOEDA, "
+	selectFields += nick+"VENCREA AS VENCREA, "
+	selectFields += nick+"VENCTO AS VENCTO, "
+	selectFields += nick+"EMISSAO AS EMISSAO, "
+	selectFields += nick+"BAIXA AS BAIXA, "
+	selectFields += nick+"VALJUR AS VALJUR, "
+	selectFields += nick+"PORCJUR AS PORCJUR, "
+	selectFields += nick+"MULTA AS MULTA, "
+	selectFields += nick+"FLUXO AS FLUXO, "
+	selectFields += nick+"ORIGEM AS ORIGEM, "
+	selectFields += "'' AS IDDOC, "
+	selectFields += "0 AS ABATIMENTO, "
+	selectFields += "0 AS VLVA, "
+	selectFields += "0 AS ATUALIZADO, "
+	selectFields += "0 AS RETENCA "
+
+	// query para seleção dos títulos
+	query := "SELECT " + selectFields
+	query += " FROM " + RetSqlName(aliasName) + " " + aliasName
+	query += " WHERE "
+	query += nick+"TIPO NOT IN "+ FormatIn(MVABATIM,"|")
+	query += cWherePE
+	query += " AND " + aliasName + ".D_E_L_E_T_ =' '"
+	If Empty(lastUpdateDate)
+		query += " AND " + nick+"SALDO > 0 "
+		// em caso de repocessamento e não existir saldo na SE1
+		query += " UNION "
+		query += "SELECT " + selectFields
+		query += " FROM " + RetSqlName(aliasName) + " " + aliasName
+		query += " JOIN " + RetSqlName("F75") + " F75 ON "
+		If __lF75FILORI
+			query += aliasName +"."+ nick +"FILIAL = F75.F75_FILORI "
+		Else
+			query += aliasName +"."+ nick +"FILIAL = F75.F75_FILIAL "
+		EndIf
+		query += " AND " + aliasName +"."+ nick +"PREFIXO = F75.F75_PREFIX "
+		query += " AND " + aliasName +"."+ nick +"NUM = F75.F75_NUM"
+		query += " AND " + aliasName +"."+ nick +"PARCELA = F75.F75_PARCEL "
+		query += " AND " + aliasName +"."+ nick +"TIPO = F75.F75_TIPO "
+		query += " AND " + aliasName +"."+ nick + clifor + " = F75.F75_CLIFOR "
+		query += " AND " + aliasName +"."+ nick +"LOJA = F75.F75_LOJA "
+		query += " WHERE F75.D_E_L_E_T_ = ' '"
+		query += " AND " + aliasName + ".D_E_L_E_T_ =' '"
+		query += " AND " + aliasName + "." + nick + "SALDO = 0 "
+		query += " AND F75.F75_SALDO > 0 "
+		query += " AND F75.F75_RECPAG = '" + recpag +"' "
+	Else
+		query += " AND " + stampWhere(aliasName) + " >= '" + lastUpdateDate + "'"
+	EndIf
+
+	__hashCache:put('select' + aliasName, ChangeQuery(query))
+
+	// quey para adicionar alterações/exclusões de VA
+	queryVa := " SELECT DISTINCT " + selectFields + " FROM " + RetSqlName(aliasName) + " " + aliasName
+	queryVa += " JOIN "+ RetSqlName("FK7") + " FK7 ON "
+	// se existir os campos busca pela chave do título
+	If __FK7ChaveTit
+		queryVa += aliasName +"."+ nick +"FILIAL = FK7.FK7_FILTIT "
+		queryVa += " AND " + aliasName +"."+ nick +"PREFIXO = FK7.FK7_PREFIX "
+		queryVa += " AND " + aliasName +"."+ nick +"NUM = FK7.FK7_NUM "
+		queryVa += " AND " + aliasName +"."+ nick +"PARCELA = FK7.FK7_PARCEL "
+		queryVa += " AND " + aliasName +"."+ nick +"TIPO = FK7.FK7_TIPO "
+		queryVa += " AND " + aliasName +"."+ nick + clifor + " = FK7.FK7_CLIFOR "
+		queryVa += " AND " + aliasName +"."+ nick +"LOJA = FK7.FK7_LOJA "
+	Else
+		queryVa += chaveFK7 + " = FK7.FK7_CHAVE "
+		queryVa += " AND " + aliasName +"."+ nick +"FILIAL = FK7.FK7_FILIAL "
+	EndIf
+	queryVa += " JOIN " + RetSqlName("FKD") + " FKD ON "
+	queryVa += " FK7.FK7_FILIAL = FKD.FKD_FILIAL "
+	queryVa += " AND FK7.FK7_IDDOC = FKD.FKD_IDDOC "
+	queryVa += " WHERE "
+	queryVa += aliasName + ".D_E_L_E_T_ =' '"
+	queryVa += " AND FK7.D_E_L_E_T_ =' ' "
+	// Não colocar AND FKD.D_E_L_E_T_ =' ' -> Se deletar VA tem que atualizar F75.
+	queryVa += " AND  " + aliasName +"."+ nick +"SALDO > 0 "
+	queryVa += " AND " + stampWhere("FKD") + " >= '" + lastUpdateDate + "'"
+	// Depois do Insert de inclusão/alteração do título, não dar insert novamente no mesmo título que sofreu alteração de VA duplicando na temporária
+	queryVa += " AND " + aliasName + ".R_E_C_N_O_ NOT IN (SELECT RECNO FROM " + cRealName + " WHERE RECPAG = '" + cRecPag + "'   )   "
+
+	queryVa += cWherePE
+
+	__hashCache:put('selectVa' + aliasName, ChangeQuery(queryVa))
+
+	// quey para adicionar alterações/exclusões de Abatimentos
+	cQueryAbt := " SELECT DISTINCT " + selectFields + " FROM " + RetSqlName(aliasName) + " " + aliasName
+	cQueryAbt += " JOIN ( "
+
+	cQueryAbt += "SELECT ABT." + nick + "FILIAL AS ABT_FILIAL, ABT." + nick + "TITPAI AS ABT_TITPAI FROM " + RetSqlName(aliasName) +" ABT "
+	cQueryAbt += "WHERE ABT." + nick+"TIPO IN "+ FormatIn(MVABATIM,"|")
+	cQueryAbt += " AND " + stampWhere('ABT') + " >= '" + lastUpdateDate + "'"
+
+	cQueryAbt += " ) ABATIMENTO "
+	cQueryAbt += " ON " + aliasName+'.'+nick+"FILIAL = ABATIMENTO.ABT_FILIAL "
+	cQueryAbt += " AND " + StrTran(cTitPai,nick,aliasName+'.'+nick) + " = ABATIMENTO.ABT_TITPAI  "
+
+	cQueryAbt += " WHERE "
+	cQueryAbt += aliasName + ".D_E_L_E_T_ =' '"
+	cQueryAbt += "AND " + aliasName+'.'+nick+"TIPO NOT IN "+ FormatIn(MVABATIM,"|")
+	cQueryAbt += " AND " + aliasName+'.'+nick+"SALDO > 0 "
+	// Depois do Insert de inclusão/alteração do título, não dar insert novamente no mesmo título que sofreu alteração de abatimento duplicando na temporária
+	cQueryAbt += " AND " + aliasName + ".R_E_C_N_O_ NOT IN (SELECT RECNO FROM " + cRealName + " WHERE RECPAG = '" + cRecPag + "'   )   "
+	cQueryAbt += cWherePE
+
+	__hashCache:put('selectAbt' + aliasName, ChangeQuery(cQueryAbt))
+
+	// quey para adicionar alterações de taxa de moeda
+	queryMoeda := "SELECT " + selectFields
+	queryMoeda += " FROM " + RetSqlName(aliasName) + " " + aliasName
+	queryMoeda += " JOIN " + RetSqlName("F75") + " F75 ON "
+	If __lF75FILORI
+		queryMoeda += aliasName +"."+ nick +"FILIAL = F75.F75_FILORI "
+	Else
+		queryMoeda += aliasName +"."+ nick +"FILIAL = F75.F75_FILIAL "
+	EndIf
+	queryMoeda += " AND " + aliasName +"."+ nick +"PREFIXO = F75.F75_PREFIX "
+	queryMoeda += " AND " + aliasName +"."+ nick +"NUM = F75.F75_NUM "
+	queryMoeda += " AND " + aliasName +"."+ nick +"PARCELA = F75.F75_PARCEL "
+	queryMoeda += " AND " + aliasName +"."+ nick +"TIPO = F75.F75_TIPO "
+	queryMoeda += " AND " + aliasName +"."+ nick + clifor +" = F75.F75_CLIFOR "
+	queryMoeda += " AND " + aliasName +"."+ nick +"LOJA = F75.F75_LOJA "
+	queryMoeda += " AND F75.F75_RECPAG = '" + recpag + "' "
+	queryMoeda += " AND F75.D_E_L_E_T_ = ' '"
+	queryMoeda += " WHERE "
+	queryMoeda +=  aliasName + ".D_E_L_E_T_ =' '"
+	queryMoeda += " AND " + aliasName +"."+ nick +"MOEDA > 1 "
+	queryMoeda += " AND (" + aliasName +"."+ nick +"TXMOEDA = 0 "
+	queryMoeda += " OR  " + aliasName +"."+ nick +"ORIGEM IN "+ cEicOrigins + ") "
+
+	queryMoeda += "AND ("
+	// taxa do dia
+	For numMoed := 2 To moedas
+		If numMoed > 2
+			queryMoeda += " OR "
+		EndIf
+		queryMoeda +=  "(" + aliasName +"."+ nick +"MOEDA = " + cValToChar(numMoed)
+		queryMoeda +=  " AND F75.F75_TXMOED <> " + cValToChar(__hashCache:get(numMoed))
+		queryMoeda +=  " )"
+	Next
+	queryMoeda +=  " )"
+	queryMoeda += cWherePE
+
+	__hashCache:put('selectMoeda' + aliasName, ChangeQuery(queryMoeda))
+
+	// query para atualizar vencidos
+	queryVencto := "SELECT " + selectFields
+	queryVencto += " FROM " + RetSqlName(aliasName) + " " + aliasName
+	queryVencto += " JOIN " + RetSqlName("F75") + " F75 ON "
+	If __lF75FILORI
+		queryVencto += aliasName +"."+ nick +"FILIAL = F75.F75_FILORI "
+	Else
+		queryVencto += aliasName +"."+ nick +"FILIAL = F75.F75_FILIAL "
+	EndIf
+	queryVencto += " AND " + aliasName +"."+ nick +"PREFIXO = F75.F75_PREFIX "
+	queryVencto += " AND " + aliasName +"."+ nick +"NUM = F75.F75_NUM "
+	queryVencto += " AND " + aliasName +"."+ nick +"PARCELA = F75.F75_PARCEL "
+	queryVencto += " AND " + aliasName +"."+ nick +"TIPO = F75.F75_TIPO "
+	queryVencto += " AND " + aliasName +"."+ nick + clifor +" = F75.F75_CLIFOR "
+	queryVencto += " AND " + aliasName +"."+ nick +"LOJA = F75.F75_LOJA "
+	queryVencto += " AND F75.F75_RECPAG = '" + recpag + "' "
+	queryVencto += " AND F75.F75_DTATU < '" + DtoS(dDataBase) + "' "
+	queryVencto += " AND F75.F75_VENCTO < '" + DtoS(dDataBase) + "' "
+	queryVencto += " AND F75.D_E_L_E_T_ = ' '"
+	queryVencto += " WHERE "
+	queryVencto +=  aliasName + ".D_E_L_E_T_ =' '"
+	queryVencto +=  " AND " + aliasName +"."+ nick +"SALDO > 0 "
+	queryVencto += cWherePE
+
+	__hashCache:put('selectVencto' + aliasName, ChangeQuery(queryVencto))
+
+	// query para atualizar descontos
+	If recpag = 'R'
+		queryDesco := "SELECT " + selectFields
+		queryDesco += " FROM " + RetSqlName(aliasName) + " " + aliasName
+		queryDesco += " JOIN " + RetSqlName("F75") + " F75 ON "
+		If __lF75FILORI
+			queryDesco += aliasName +"."+ nick +"FILIAL = F75.F75_FILORI "
+		Else
+			queryDesco += aliasName +"."+ nick +"FILIAL = F75.F75_FILIAL "
+		EndIf
+		queryDesco += " AND " + aliasName +"."+ nick +"PREFIXO = F75.F75_PREFIX "
+		queryDesco += " AND " + aliasName +"."+ nick +"NUM = F75.F75_NUM "
+		queryDesco += " AND " + aliasName +"."+ nick +"PARCELA = F75.F75_PARCEL "
+		queryDesco += " AND " + aliasName +"."+ nick +"TIPO = F75.F75_TIPO "
+		queryDesco += " AND " + aliasName +"."+ nick + clifor +" = F75.F75_CLIFOR "
+		queryDesco += " AND " + aliasName +"."+ nick +"LOJA = F75.F75_LOJA "
+		queryDesco += " AND F75.F75_RECPAG = 'R' "
+		queryDesco += " AND F75.F75_DTATU < '" + DtoS(dDataBase) + "' "
+		queryDesco += " AND F75.F75_VENCTO >= '" + DtoS(dDataBase) + "' "
+		queryDesco += " AND F75.D_E_L_E_T_ = ' '"
+		queryDesco += " WHERE "
+		queryDesco +=  aliasName + ".D_E_L_E_T_ =' '"
+		queryDesco +=  " AND " + aliasName +"."+ nick +"SALDO > 0 "
+		queryDesco +=  " AND " + aliasName +"."+ nick +"DESCFIN > 0 "		
+		queryDesco += cWherePE
+
+		__hashCache:put('selectDescont' + aliasName, ChangeQuery(queryDesco))
+	Endif
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} tempTableStruct
+  struct para tabela temporaria
+
+  @return struct as Array, struct dos campos
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function tempTableStruct() as Array
+  Local struct       as Array
+  Local valueSize    as Numeric
+  Local valueDecimal as Numeric
+
+  // campos para tabela temporaria
+  valueSize     := TamSx3('E1_VALOR')[1]
+  valueDecimal   := TamSx3('E1_VALOR')[2]
+
+  struct        := {}
+  aadd(struct, {'FILIAL'    , 'C', TamSx3( 'E1_FILIAL' )[1] , 0})
+  aadd(struct, {'PREFIXO'   , 'C', TamSx3( 'E1_PREFIXO' )[1], 0})
+  aadd(struct, {'NUM'       , 'C', TamSx3( 'E1_NUM' )[1]    , 0})
+  aadd(struct, {'PARCELA'   , 'C', TamSx3( 'E1_PARCELA' )[1], 0})
+  aadd(struct, {'TIPO'      , 'C', TamSx3( 'E1_TIPO' )[1]   , 0})
+  aadd(struct, {'CLIFOR'    , 'C', TamSx3( 'E1_CLIENTE' )[1], 0})
+  aadd(struct, {'TITPAI'    , 'C', TamSx3( 'E2_TITPAI' )[1] , 0})
+  aadd(struct, {'CHAVEFK7'  , 'C', TamSx3( 'FK7_CHAVE' )[1] , 0})
+  aadd(struct, {'RECPAG'    , 'C', 1                        , 0})
+  aadd(struct, {'ALIAS'     , 'C', 3                        , 0})
+  aadd(struct, {'DESCFIN'   , 'N', TamSx3( 'E1_DESCFIN' )[1], TamSx3( 'E1_DESCFIN' )[2]})
+  aadd(struct, {'SITUACA'   , 'C', TamSx3( 'E1_SITUACA')[1] , 0})
+  aadd(struct, {'LOJA'      , 'C', TamSx3( 'E1_LOJA' )[1]   , 0})
+  aadd(struct, {'FILORIG'   , 'C', TamSx3( 'E1_FILORIG' )[1], 0})
+  aadd(struct, {'RECNO'     , 'N', 14                       , 0})
+  aadd(struct, {'SALDO'     , 'N', valueSize                , valueDecimal})
+  aadd(struct, {'VALOR'     , 'N', valueSize                , valueDecimal})
+  aadd(struct, {'SDACRES'   , 'N', valueSize                , valueDecimal})
+  aadd(struct, {'SDDECRE'   , 'N', valueSize                , valueDecimal})
+  aadd(struct, {'MOEDA'     , 'N', TamSx3( 'E1_MOEDA' )[1]  , 0})
+  aadd(struct, {'TXMDCOR'   , 'N', TamSx3( 'E1_TXMDCOR' )[1], TamSx3( 'E1_TXMDCOR' )[2]})
+  aadd(struct, {'TXMOEDA'   , 'N', TamSx3( 'E1_TXMOEDA' )[1], TamSx3( 'E1_TXMOEDA' )[2]})
+  aadd(struct, {'VENCREA'   , 'D', TamSx3( 'E1_VENCREA' )[1], 0})
+  aadd(struct, {'VENCTO'    , 'D', TamSx3( 'E1_VENCTO' )[1] , 0})
+  aadd(struct, {'EMISSAO'   , 'D', TamSx3( 'E1_EMISSAO' )[1], 0})
+  aadd(struct, {'BAIXA'     , 'D', TamSx3( 'E1_BAIXA' )[1]  , 0})
+  aadd(struct, {'VALJUR'    , 'N', TamSx3( 'E1_VALJUR' )[1] , TamSx3( 'E1_VALJUR' )[2]})
+  aadd(struct, {'PORCJUR'   , 'N', TamSx3( 'E1_PORCJUR' )[1], TamSx3( 'E1_PORCJUR' )[2]})
+  aadd(struct, {'MULTA'     , 'N', TamSx3( 'E1_MULTA' )[1]  , TamSx3( 'E1_MULTA' )[2]})
+  aadd(struct, {'FLUXO'     , 'C', TamSx3( 'E1_FLUXO' )[1]  , 0})
+  aadd(struct, {'ORIGEM'    , 'C', TamSx3( 'E1_ORIGEM')[1]  , 0})
+  aadd(struct, {'IDDOC'     , 'C', TamSx3( 'FK7_IDDOC' )[1] , 0})
+  aadd(struct, {'ABATIMENTO', 'N', valueSize                , valueDecimal})
+  aadd(struct, {'VLVA'      , 'N', valueSize                , valueDecimal})
+  aadd(struct, {'ATUALIZADO', 'N', valueSize                , valueDecimal})
+  aadd(struct, {'RETENCA'   , 'N', valueSize                , 0})
+
+Return struct
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} insertFields
+  campos para o insert com base no struct
+
+  @param struct as Array
+  @return fields as Character, campos separados por ,
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function insertFields(struct as Array) as Character
+  Local fields as Character
+
+  fields:= ""
+  aEval(struct,{|Estrutura|  fields += "," + AllTrim(Estrutura[1]) })
+  fields := Substr(fields, 2)
+Return fields
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} createDocumentsTempTable
+  cria a tabela temporaria
+
+  @param tableStruct as Array, struct da tabela
+  @return tableTmp as Object, FWTemporaryTable
+
+  @author renato.ito
+  @since 19/02/2021
+/*/
+//-------------------------------------------------------------------
+Static Function createDocumentsTempTable(tableStruct as Array) as Object
+  Local tableTmp As Object
+
+  tableTmp := FWTemporaryTable():New()
+  tableTmp:SetFields(tableStruct)
+  tableTmp:AddIndex("1", {"RECPAG","RECNO"})
+  tableTmp:AddIndex("2", {"RECPAG","VENCREA"})
+  tableTmp:AddIndex("3", {"FILIAL","PREFIXO","NUM","PARCELA","TIPO","FILORIG","RECNO"})
+  tableTmp:AddIndex("4", {"FILIAL","RECPAG","TITPAI"})
+  tableTmp:AddIndex("5", {"FILIAL","RECPAG","CHAVEFK7"})
+  tableTmp:AddIndex("6", {"FILIAL","RECPAG","IDDOC"})
+  tableTmp:AddIndex("7", {"VENCREA"})
+  tableTmp:AddIndex("8", {"RECPAG","FILIAL","PREFIXO","NUM","PARCELA","TIPO","FILORIG","RECNO"})
+  tableTmp:Create()
+
+Return tableTmp
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} stampWhere
+retorno a condição para o campo S_T_A_M_P_ conforme o banco de dados
+
+@param nick as Character, nick do alias
+@return stamp as Character, condição apra uso na query
+
+@author renato.ito
+@since 05/03/2021
+/*/
+//-------------------------------------------------------------------
+Static Function stampWhere(nick as Character) as Character
+  Local stamp as Character
+  If "MSSQL" $ __typeDb
+    stamp := " CONVERT(VARCHAR(23), " + nick + ".S_T_A_M_P_ , 21 ) "
+  ElseIf "ORACLE" $ __typeDb
+    stamp := " CAST( TO_CHAR(" + nick + ".S_T_A_M_P_ , 'YYYY-MM-DD HH24:MI:SS.FF') AS VARCHAR(23)) "
+  ElseIf "POSTGRES" $ __typeDb
+    stamp := " CAST( TO_CHAR(" + nick + ".S_T_A_M_P_ , 'YYYY-MM-DD HH24:MI:SS.FF') AS VARCHAR(23)) "
+  EndIf
+Return stamp
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} currenciesQuote
+Carrega as cotações da moedas
+
+@return JSON
+@author renato.ito
+@since 04/03/2021
+/*/
+//-------------------------------------------------------------------
+Static Function currenciesQuote()
+  Local currency    as Numeric
+  Local quote       as Numeric
+  Local currencyAux as Character
+  Local mvSimb      as Character
+  Local date        as Character
+
+  date        := DtoS(dDataBase)
+  currency    := 2
+  currencyAux := '2'
+  mvSimb      := allTrim(SuperGetMv("MV_SIMB2"))
+
+  While !Empty(mvSimb)
+    quote := gfin.util.currencyLastQuote(currencyAux, date)
+    __hashCache:put(currency, quote)
+    currency ++
+    currencyAux := cValToChar(currency)
+    mvSimb   := allTrim(SuperGetMv("MV_SIMB" + currencyAux, .T., ""))
+  EndDo
+  __hashCache:put('moedas', currency - 1 )
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} checkDeleted
+Verifica se existe exclusão de títulos para remover seu saldo
+
+@param table as Character, SE1 ou SE2
+
+@return JSON
+@author renato.ito
+@since 05/03/2021
+/*/
+//-------------------------------------------------------------------
+Static Function checkDeleted(table as Character)
+  Local query        as Character
+  Local recpag       as Character
+  Local nick         as Character
+  Local clifor       as Character
+  Local deletedAlias as Character
+
+  If 'SE1' $ table
+    recpag := "'R'"
+    nick   := "SE1.E1_"
+    clifor := "CLIENTE"
+  Else
+    recpag := "'P'"
+    nick   := "SE2.E2_"
+    clifor := "FORNECE"
+  EndIf
+
+  query := " SELECT R_E_C_N_O_ AS RECNO FROM " + RetSqlName('F75') +" F75 "
+  query += " WHERE "
+  query += " F75.F75_RECPAG = " + recpag
+  query += " AND F75.D_E_L_E_T_ = ' ' "
+  query += " AND NOT EXISTS ("
+  query += " SELECT NULL FROM " + RetSqlName(table) + " " + table
+  If __lF75FILORI
+    query += " WHERE "+ nick + "FILIAL = F75.F75_FILORI "
+  Else
+    query += " WHERE "+ nick + "FILIAL = F75.F75_FILIAL "
+  EndIf
+  query += " AND "+ nick + "PREFIXO = F75.F75_PREFIX "
+  query += " AND "+ nick + "NUM = F75.F75_NUM "
+  query += " AND "+ nick + "PARCELA = F75.F75_PARCEL "
+  query += " AND "+ nick + "TIPO = F75.F75_TIPO "
+  query += " AND "+ nick + clifor + " = F75.F75_CLIFOR "
+  query += " AND "+ nick + "LOJA = F75.F75_LOJA "
+  query += " AND "+ table + ".D_E_L_E_T_ = ' ' "
+  query += ")"
+
+  query := ChangeQuery(query)
+
+  // cria tabela temporária com títulos deletados
+  deletedAlias :=  MpSysOpenQuery(query)
+  While !(deletedAlias)->(EOF())
+    F75->(DbGoTo((deletedAlias)->RECNO))
+    If (RecLock('F75', .F.))
+      F75->(DbDelete())
+      F75->(MsUnlock())
+    EndIf
+    (deletedAlias)->(DbSkip())
+  EndDo
+
+  (deletedAlias)->(dbCloseArea())
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} updateRetenc
+  Atualiza os dias de retenção bancária
+
+  @param oSelf as Object, self
+  @return Nil
+
+  @author vinicius.prado
+  @since 25/10/2021
+/*/
+//-------------------------------------------------------------------
+Static Function updateRetenc(oSelf as Object)
+  Local queryUpdate   := '' As Character
+  Local realNameTable := '' As Character
+  Local bankSize      := 0  As Numeric
+  Local documentSize  := 0  As Numeric
+  Local functionNull  := '' As Character
+  Local typeDb        := '' As Character
+  Local cAliasTMP     := '' As Character
+
+  bankSize      := Len(AllTrim(FWxFilial('SA6')))
+  documentSize  := Len(AllTrim(FWxFilial('SE1')))
+  realNameTable := oSelf:realNameTable
+  typeDb        := Upper(TcGetDb())
+  cAliasTMP     := IIF( typeDb $ "POSTGRES", "", realNameTable + "." )
+
+  Do case
+    case typeDb $ "ORACLE"
+      functionNull := "NVL"
+    case typeDb $ "POSTGRES"
+      functionNull := "COALESCE"
+    OTHERWISE
+      functionNull := "ISNULL"
+  End case
+
+  queryUpdate := " UPDATE " + realNameTable
+  queryUpdate += " SET " + cAliasTMP + "RETENCA = "+functionNull+"((SELECT SA6.A6_RETENCA "
+  queryUpdate += " FROM " +  RetSqlName("SE1") + " SE1 "
+  queryUpdate += " INNER JOIN " + RetSqlName("SA6") + " SA6 ON "
+
+  queryUpdate += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SE1","E1_FILIAL","SE1"}, {"SA6","A6_FILIAL","SA6"} )  + " AND "
+
+  queryUpdate +=    " SA6.A6_COD = SE1.E1_PORTADO    AND "
+  queryUpdate +=    " SA6.A6_AGENCIA = SE1.E1_AGEDEP AND "
+  queryUpdate +=    " SA6.A6_NUMCON = SE1.E1_CONTA   AND "
+  queryUpdate +=    " SA6.A6_RETENCA > 0             AND "
+  queryUpdate +=    " SA6.D_E_L_E_T_ = ' ' "
+  queryUpdate += " WHERE  "
+  queryUpdate +=    realNameTable + ".FILIAL  = SE1.E1_FILIAL  AND "
+  queryUpdate +=    realNameTable + ".PREFIXO = SE1.E1_PREFIXO AND "
+  queryUpdate +=    realNameTable + ".NUM     = SE1.E1_NUM     AND "
+  queryUpdate +=    realNameTable + ".PARCELA = SE1.E1_PARCELA AND "
+  queryUpdate +=    realNameTable + ".TIPO    = SE1.E1_TIPO    AND "
+  queryUpdate +=    realNameTable + ".CLIFOR  = SE1.E1_CLIENTE AND "
+  queryUpdate +=    realNameTable + ".LOJA    = SE1.E1_LOJA    AND "
+  queryUpdate +=    realNameTable + ".RECPAG  = 'R' AND "
+  queryUpdate +=    " SE1.E1_SALDO <> 0  AND "
+  queryUpdate +=    " SE1.D_E_L_E_T_ = ' '),0) "
+
+  If (TCSqlExec(queryUpdate)) < 0
+    oSelf:lOk := .F.
+    oSelf:errorMessage := 'Error updateRETENCA ' + TCSqlError()
+    FwLogMsg("ERROR",, "NGF", FunName(), "", "01", oSelf:errorMessage, 0, 0, {})
+  EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} prepareRecordsToInsert
+  @description Método responsável por mapear os dados a serem inseridos na F75
+  (tab. Documents)
+  @author Rodrigo.Oliveira
+  @since 19/10/2023
+/*/
+//-------------------------------------------------------------------
+method prepareRecordsToInsert() class DocumentsBalance
+	local cQuery := "" as character
+	
+	if self:oStRecordsToInsert == NIL
+		cQuery := " Select FILIAL, RECPAG, PREFIXO, NUM, PARCELA, TIPO, CLIFOR, LOJA, FILORIG "
+		cQuery += " From ? TMP "
+		cQuery += " Left Join ? F75 "
+		cQuery += " On F75_FILORI = FILIAL And F75_RECPAG = RECPAG And F75_PREFIX = PREFIXO And F75_NUM = NUM "
+		cQuery += " And F75_PARCEL = PARCELA And F75_TIPO = TIPO And F75_CLIFOR = CLIFOR And F75_LOJA = LOJA And F75.D_E_L_E_T_ = ' '"
+		cQuery += " Where F75_FILIAL IS NULL"
+
+		cQuery := ChangeQuery(cQuery)
+
+		self:oStRecordsToInsert := FwExecStatement():new(cQuery)
+	endIf
+
+	self:oStRecordsToInsert:setUnsafe(1, self:RealNameTable)
+	self:oStRecordsToInsert:setUnsafe(2, RetSqlName('F75'))
+return 

@@ -1,0 +1,175 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "protheus.ch"
+#INCLUDE "backoffice.taf.mit.initiallist.ch" 
+
+#DEFINE CodeRespBadRequest 400
+
+/*{Protheus.doc} GetInitialList
+@type			function
+@description	Api GET para retorno dos tributos incluídos no MIT
+                para serem apresentados na tela inicial do painel
+@author			Rafael de Paula Leme
+@since			13/01/2025
+@version		1.0
+@return			Nil 
+*/
+@GET(endpoint="/api/taf/fiscal/v1/initialList", description="Realiza a consulta dos tributos incluídos no MIT")
+Function TAFGetInitialList()
+
+	Local oJsResponse                as json
+    Local aCompany    := {}          as array
+    Local lExistsT1A  := .F.         as logical
+    Local cEmpRequest := ''          as character
+    Local cFilRequest := ''          as character
+    Local cAutoADVPR  := ''          as character
+    Local cCode		  := "LS006"     as character
+    Local cUser		  := RetCodUsr() as character
+    Local cModule	  := "84"        as character
+    Local cRoutine 	  := "TAFMIT"    as character
+
+    lExistsT1A := AliasInDic("T1A")
+    cAutoADVPR := oRest:getHeaderRequest()["Content-Advpr"]
+
+    If valtype( cAutoADVPR ) == 'C' .And. !Empty(cAutoADVPR) .And. "INITLIST06" $ Upper(cAutoADVPR)
+        lExistsT1A := .F.
+	EndIf
+
+    oJsResponse := JsonObject():new()
+
+    If oRest:getQueryRequest()['companyId'] == Nil
+        oJsResponse['code']    := CodeRespBadRequest
+        oJsResponse['message'] := STR0001 //"Empresa|Filial não informado no parâmetro 'companyId'. "
+        oRest:setStatusCode(CodeRespBadRequest)
+    ElseIf oRest:getQueryRequest()['period'] == Nil
+        oJsResponse['code']    := CodeRespBadRequest
+        oJsResponse['message'] := STR0002 //"Período não informado no parâmetro 'period'."
+        oRest:setStatusCode(CodeRespBadRequest)
+    Else
+        aCompany := StrTokArr(oRest:getQueryRequest()['companyId'], "|")
+        If Len(aCompany) < 2
+            oJsResponse['code']    := CodeRespBadRequest
+            oJsResponse['message'] := STR0003 //"Tamanho Empresa|Filial informado no parâmetro 'companyId' menor que o esperado."
+            oRest:setStatusCode(CodeRespBadRequest)
+        Else
+            cEmpRequest := aCompany[1]
+            cFilRequest := PADR(alltrim(aCompany[2]),FWSizeFilial())
+
+            If PrepEnv(cEmpRequest, cFilRequest)
+                If lExistsT1A
+                    cAlias := TAFQryInitialList(cFilRequest, oRest:getQueryRequest()['period'])
+                    oJsResponse := TAFJsonInitialList(cAlias)
+                    //Registra o Uso da Rotina no License Server                    
+                    FWLsPutAsyncInfo(cCode,cUser,cModule,cRoutine)
+                Else
+                    oJsResponse['message'] := STR0005 //"Dicionário não atualizado. Atualizar com a última expedição contínua disponível."
+                EndIf
+            Else
+                oJsResponse['code'] := CodeRespBadRequest
+                oJsResponse['message'] := STR0004 //"Falha na preparação do ambiente para a Empresa e/ou Filial."
+                oRest:setStatusCode(CodeRespBadRequest)
+            EndIf
+        EndIf
+    EndIf
+
+    oRest:setResponse(oJsResponse)
+
+    freeObj(oJsResponse)
+
+Return Nil
+
+/*{Protheus.doc} TAFQryInitialList
+@type			function
+@description	Função para retorno do alias conforme parâmetros de filial e período
+@author			Rafael de Paula Leme
+@since			13/01/2025
+@version		1.0
+@return			cAlias
+*/
+Function TAFQryInitialList(cFilRequest, cPeriodo) as character
+
+    Local oPrepare := Nil as object
+    Local cAlias   := ""  as character
+    Local cQuery   := ""  as character
+
+    Default cFilRequest := ''
+    Default cPeriodo := ''
+    
+    cQuery += " SELECT "
+	cQuery += " T1A.T1A_ID ID, T1A.T1A_FILORI FILORI, T1A.T1A_IDDEBI IDDEBITO, C3S.C3S_DESCRI DESTRI, T1A.T1A_CODREC CODREC, "
+	cQuery += " CASE WHEN T1A.T1A_PERIOD = ?  THEN 'Diária' "
+    cQuery += "      WHEN  T1A.T1A_PERIOD = ? THEN 'Decendial' "
+    cQuery += "      WHEN T1A.T1A_PERIOD = ?  THEN 'Quinzenal' "
+    cQuery += "      WHEN T1A.T1A_PERIOD = ?  THEN 'Mensal' "
+    cQuery += "      ELSE 'Nao Informado'     END PERIODICIDADE, "
+    cQuery += " T1A.T1A_VALTRI VALTRI, T1A.R_E_C_N_O_ RECNO "
+    cQuery += " FROM " + RetSqlName("T1A") + " T1A "
+    cQuery += " INNER JOIN " + RetSqlName("C3S") + " C3S ON "
+	cQuery += " C3S.C3S_ID = T1A.T1A_IDTRIB "
+	cQuery += " AND C3S.D_E_L_E_T_ = ? "
+    cQuery += " WHERE "
+	cQuery += " T1A.T1A_FILIAL = ? AND "
+	cQuery += " T1A.T1A_PERAPU = ? AND "
+	cQuery += " T1A.D_E_L_E_T_ = ? "
+    cQuery += " ORDER BY "
+    cQuery += " T1A.T1A_FILORI, T1A.T1A_PERAPU, T1A.T1A_IDDEBI, T1A.T1A_IDTRIB, T1A.T1A_CODREC "
+
+    cQuery := ChangeQuery(cQuery)
+    oPrepare := FwExecStatement():New(cQuery)
+
+    oPrepare:setString(1, '1')         //T1A.T1A_PERIOD
+    oPrepare:setString(2, '2')         //T1A.T1A_PERIOD
+    oPrepare:setString(3, '3')         //T1A.T1A_PERIOD
+    oPrepare:setString(4, '4')         //T1A.T1A_PERIOD
+    oPrepare:setString(5, Space(1))    //C3S.C3S.D_E_L_E_T_
+    oPrepare:setString(6, cFilRequest) //T1A.T1A_FILIAL
+    oPrepare:setString(7, cPeriodo)    //T1A.T1A_PERAPU
+    oPrepare:setString(8, Space(1))    //T1A.D_E_L_E_T_
+
+    cAlias := GetNextAlias()
+    oPrepare:OpenAlias(cAlias)
+    
+    freeObj(oPrepare)
+
+Return cAlias
+
+/*{Protheus.doc} TAFJsonInitialList
+@type			function
+@description	Função para geração do Json conforme alias recebido como parâmetro
+@author			Rafael de Paula Leme
+@since			13/01/2025
+@version		1.0
+@return			oResponse
+*/
+Function TAFJsonInitialList(cAlias) as object
+
+    Local oResponse := JsonObject():New() as object
+    Local nTot      := 0                  as numeric
+
+    oResponse["initialList"] := {}
+
+    If !(cAlias)->(EOF())
+        (cAlias)->(DbGoTop())        
+
+        While !(cAlias)->(EOF())
+            aAdd(oResponse["initialList"], JsonObject():New())
+            nTot := Len(oResponse["initialList"])
+
+            oResponse["initialList"][nTot]["id"]                := (cAlias)->ID
+            oResponse["initialList"][nTot]['documentBranch']    := AllTrim((cAlias)->FILORI)            
+            oResponse["initialList"][nTot]['taxDescription']    := AllTrim((cAlias)->DESTRI)
+            oResponse["initialList"][nTot]['recipeCode']        := AllTrim((cAlias)->CODREC)
+            oResponse["initialList"][nTot]['periodicity']       := AllTrim((cAlias)->PERIODICIDADE)
+            oResponse["initialList"][nTot]['debitId']           := (cAlias)->IDDEBITO
+            oResponse["initialList"][nTot]['taxValue']          := (cAlias)->VALTRI
+            oResponse["initialList"][nTot]['recno']             := (cAlias)->RECNO
+
+            (cAlias)->(dbSkip())
+        EndDo
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+Return oResponse
+
+

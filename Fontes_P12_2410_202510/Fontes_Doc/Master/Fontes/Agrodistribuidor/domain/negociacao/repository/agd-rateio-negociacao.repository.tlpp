@@ -1,0 +1,271 @@
+#INCLUDE "totvs.ch"
+#INCLUDE "tlpp-core.th"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "AGD.RATEIO.NEGOCIACAO.REPOSITORY.CH"
+
+namespace agd.rateioNegociacaoRepository
+
+using namespace agd.repositoryUtils
+using namespace agd.negocioService
+
+/*/{Protheus.doc} agdRateioNegociacaoRepository
+Repositório de Rateios da Negociação (tabela NEM)
+@type class
+@version 12
+@author rodrigo.nsoledade
+@since 11/04/2025
+/*/
+class agdRateioNegociacaoRepository from agdRepositoryUtils
+    public Method New()
+    public Method getListaRateio() as object
+    public Method deleteRateiosByInsumo() as Logical
+    public method save()
+	public method updateRateio()
+	public method getPayloadFields() as Array
+
+	private method getFields() as array
+endclass
+
+Method New() class agdRateioNegociacaoRepository
+    _Super:new('NEM', ::getFields())
+Return Self
+
+/*/{Protheus.doc} agdRateioNegociacaoRepository::getFields
+Retorna os campos que serao utilizados no AddMapFields da classe FWAdapterBaseV2
+@type method
+@version 12
+@author jc.maldonado
+@since 26/05/2025
+@return array, {{campoJson, campoProtheus, tipoCampo, lJsonField|lFixed}, ...}
+/*/
+method getFields() as array class agdRateioNegociacaoRepository
+	local aFields as array
+
+	aFields := {;
+		{'filial'       , 'NEM_FILIAL', 'C', .T.},;
+		{'codigoNegocio', 'NEM_CODBRT', 'C', .T.},;
+		{'item'         , 'NEM_ITEM'  , 'C', .T.},;
+		{'codigoProduto', 'NEM_CODPRO', 'C', .T.},;
+		{'quantidade'   , 'NEM_QUANT' , 'N', .T.},;
+		{'dataEntrega'  , 'NEM_DTENTR', 'D', .T.};
+		}
+return aFields
+
+/*/{Protheus.doc} agdRateioNegociacaoRepository::save
+Realiza o rateio das entregas da negociacão através do modelo mvc AGDA010N
+@type method
+@version 12
+@author jc.maldonado
+@since 26/05/2025
+@param jPayLoad, json, payload
+/*/
+method save(jPayLoad as json) class agdRateioNegociacaoRepository
+	local cNameNegocio    as character
+	local cNameitem       as character
+	local oNegocioService as object
+	local oModel          as object
+	local oGrid           as object
+	local cNameData       as character
+	local cNameQTD        as character
+	local cCodVersao      as character
+	local nX              as numeric
+
+	if ! jPayLoad:hasProperty(cNameNegocio := ::getJsonFieldName('NEM_CODBRT'));
+			.or. ! jPayLoad:hasProperty(cNameitem := ::getJsonFieldName('NEM_ITEM'));
+			.or. ! jPayLoad:hasProperty('entregas')
+		
+        ::setDefaultError(403) //"O payload não está no padrão esperado."
+		return 
+	endif
+
+	dbSelectArea("NEA")
+	NEA->(dbSetOrder(1))
+	NEA->(dbGoTop())
+
+	oNegocioService := agdNegocioService():new()
+	if Empty(cCodVersao := oNegocioService:buscarVersaoAtualValida(jPayLoad[cNameNegocio]));
+			.or. ! NEA->(DbSeek(FWxFilial("NEA") + jPayLoad[cNameNegocio] + cCodVersao))
+
+		::setError(STR0001, 404)
+		FWfreeObj(oNegocioService)
+		return 
+	endif
+
+	FWfreeObj(oNegocioService)
+
+	DbSelectArea("NEB")
+	NEB->(DbSetOrder(1))
+	NEB->(dbGoTop())
+	if ! NEB->(DbSeek(FWxFilial("NEB") + jPayLoad[cNameNegocio] + cCodVersao))
+		::setError(STR0002, 404)
+		return 
+	endIf
+
+	oModel := FwLoadModel("AGDA010N")
+	oModel:SetOperation(MODEL_OPERATION_INSERT)
+	oModel:Activate()
+
+	oModel:GetModel("CABPROD"):SetValue("X_ITEM", jPayLoad[cNameitem])
+
+	oGrid := oModel:GetModel("GRIDID")
+
+	cNameData := ::getJsonFieldName('NEM_DTENTR')
+	cNameQTD  := ::getJsonFieldName('NEM_QUANT')
+
+	for nX := 1 to len(jPayLoad['entregas'])
+		if nX > 1
+			oGrid:addLine()
+		endif
+
+		if ! jPayLoad['entregas'][nX]:hasProperty(cNameData);
+				.or. ! jPayLoad['entregas'][nX]:hasProperty(cNameQTD)
+
+			::setDefaultError(403) //"O payload não está no padrão esperado."
+
+			oModel:DeActivate()
+			FWFreeObj(oModel)
+			return
+		endif
+
+		oGrid:SetValue("NEM_QUANT" , jPayLoad['entregas'][nX][cNameQTD])
+		oGrid:SetValue("NEM_DTENTR", stoD(strTran(jPayLoad['entregas'][nX][cNameData], '-', '')))
+	next nX
+
+	if oModel:VldData();
+			.and. oModel:CommitData()
+		::setSuccess(FWxFilial("NEA") + oModel:GetValue("CABPROD", "X_CODNEG"))
+	else
+		::setErrorByErrorMessageModel(oModel, 400)
+		return
+	endif
+
+	oModel:DeActivate()
+	oModel:Destroy()
+	oModel := nil
+	FWFreeObj(oModel)
+return 
+
+/*/{Protheus.doc} getListaRateio
+Retorna os registros de rateio da tabela NEM no formato JSON, utilizando a chave
+composta da negociação (filial, código da negociação, versão e item).
+@type method
+@author rodrigo.nsoledade
+@since 11/04/2025
+@param cCodNegoc, character,código da negociação
+@param cItem, character, item do insumo
+@return object, objeto JSON com os rateios encontrados
+/*/
+Method getListaRateio(cCodNegoc as character, cItem as character) as object Class agdRateioNegociacaoRepository
+    Local cQuery      := ""
+    Local oStatement  := nil
+    Local cAliasNEM   := GetNextAlias()
+    Local jRateio     := JsonObject():New()
+    Local jItem       := JsonObject():New() as Json 
+    Local aReturn     := {} // array convencional para os itens
+    Local nField      := 0
+
+    DbSelectArea("NEM")
+    cQuery := " SELECT * FROM " + RetSqlName("NEM")
+    cQuery += " WHERE NEM_FILIAL = ? "
+    cQuery += " AND NEM_CODBRT = ? "
+    cQuery += " AND NEM_ITEM = ? "
+    cQuery += " AND D_E_L_E_T_ = '' "
+    cQuery := ChangeQuery(cQuery)
+
+    oStatement := FWPreparedStatement():New()
+    oStatement:SetQuery(cQuery)
+    oStatement:SetString(1, FWxFilial("NEM"))
+    oStatement:SetString(2, cCodNegoc)
+    oStatement:SetString(3, cItem)
+
+    cQuery := oStatement:GetFixQuery()
+
+    MPSysOpenQuery(cQuery, cAliasNEM)
+
+    While !(cAliasNEM)->(Eof())
+        jItem := JsonObject():New()
+
+        For nField := 1 To FCount()
+            jItem[AllTrim(FieldName(nField))] :=  (cAliasNEM)->(FieldGet(nField))
+        Next
+
+        aAdd(aReturn, jItem)
+        (cAliasNEM)->(DbSkip())
+    EndDo
+
+    (cAliasNEM)->(DbCloseArea())
+
+    jRateio["rateio"] := aReturn
+
+Return jRateio
+
+/*/{Protheus.doc} deleteRateiosByInsumo
+Exclui todos os registros da tabela NEM vinculados a um insumo (item da NEB)
+@type method
+@author rodrigo.nsoledade
+@since 11/04/2025
+@param cCodNegoc, CHARACTER,código da negociação
+@param cItem, CHARACTER, item do insumo
+@return logical, .T. se sucesso
+/*/
+Method deleteRateiosByInsumo(cCodNegoc as Character, cItem as Character) as Logical class agdRateioNegociacaoRepository
+    Local lSuccess := .T.
+
+    DbSelectArea("NEM")
+    DbSetOrder(1) // índice 1: NEM_FILIAL+NEM_CODBRT+NEM_ITEM+NEM_DTENTR
+
+    If NEM->(DbSeek(FWxFilial("NEM") + cCodNegoc + cItem))
+        While !NEM->(Eof()) .And. NEM->(NEM_FILIAL + NEM_CODBRT + NEM_ITEM) == (FWxFilial("NEM") + cCodNegoc + cItem)
+            Reclock("NEM", .F.)
+            DbDelete()
+            MsUnlock()
+            NEM->(DbSkip())
+        EndDo
+		::setSuccess(STR0003)//"Rateio excluído com sucesso"
+    else
+		::setError(STR0004,400) //"Rateio não encontrado"
+		lSuccess:=.F.
+	EndIf
+	
+Return lSuccess
+
+/*/{Protheus.doc} agdRateioNegociacaoRepository::updateRateiosByInsumo
+Faz Update do Rateio
+@type method
+@version P12
+@author scheronlini.martins
+@since 03/07/2025
+@param jPayLoad, json, payload
+/*/
+Method updateRateio(jPayLoad as json) class agdRateioNegociacaoRepository
+	
+	Begin Transaction
+
+   if ::deleteRateiosByInsumo(jPayLoad[::getJsonFieldName('NEM_CODBRT')],jPayLoad[::getJsonFieldName('NEM_ITEM')])
+   		
+		 ::save(jPayLoad)
+		 if ::isSuccess()
+			::setSuccess(STR0005)//"Rateio alterado com sucesso"
+		else
+			DisarmTransaction()
+		endIf
+	endIf
+
+	End Transaction
+	
+Return 
+
+/*/{Protheus.doc} getPayloadFields
+Retorna todos os campos disponiveis para o payload
+@type method
+@version 12
+@author jean.schulze
+@since 07/08/2025
+@return variant, array de campos
+/*/
+Method getPayloadFields() as Array Class agdRateioNegociacaoRepository
+	Local aFields := {}
+	
+	AEval(Self:getFields(),{|field| AAdd(aFields, field)})
+
+Return aFields

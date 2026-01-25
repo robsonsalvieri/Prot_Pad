@@ -1,0 +1,171 @@
+#INCLUDE 'protheus.ch'
+#INCLUDE 'restful.ch'
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLPegTransferReq
+Realiza a transferencia de guias em PEGS temporarias para PEGS de faturamento
+
+@author  sakai
+@version P12
+@since   04/10/2022
+/*/
+//------------------------------------------------------------------- 
+class PLPegTransferReq from CenRequest 
+
+    Data oSvc as Object 
+
+    Public Method New()
+    Public Method valida()
+    Public Method processa()
+    Public Method validaExc()
+    Public Method procExc()
+    
+endClass
+
+Method New(oRest) class PLPegTransferReq
+
+    _Super:New(oRest)
+    self:oSvc := PLPegTransferSvc():new()
+    self:oSvc:setObjRequest(self:jRequest)
+
+Return self
+
+
+Method valida() class PLPegTransferReq
+
+    Local lValid := .T.
+    _Super:checkBody()
+    
+    if self:lSuccess
+
+        if lValid
+            lValid := self:oSvc:existField('BCI','BCI_LOTHAT')
+        endIf
+
+        if lValid
+            lValid := self:oSvc:vldQtdGuias()
+        endif
+
+        if lValid
+            lValid := self:oSvc:vldLote()
+        endif
+        
+        if lValid 
+            self:lSuccess  := .T.
+            self:cResponse := self:oSvc:getResult()
+            self:nStatus   := self:oSvc:getStatusCode()
+        else
+            oErrorAux         := self:oSvc:getError()
+            self:lSuccess     := .F.
+            self:nFault       := oErrorAux['status']
+            self:nStatus      := oErrorAux['status']
+            self:cFaultDesc   := oErrorAux['message']
+            self:cFaultDetail := oErrorAux['detailedMessage']
+        endIf
+       
+    else
+        self:lSuccess   := .F.
+        self:nFault     := 400
+        self:nStatus    := 400
+        self:cFaultDesc := "Requisição invalida."
+    endif
+
+Return self:lSuccess
+
+
+Method processa() class PLPegTransferReq
+
+    if self:lSuccess
+        
+        if self:oSvc:processa()
+            self:lSuccess  := .T.
+            self:cResponse := self:oSvc:getResult()
+            self:nStatus   := self:oSvc:getStatusCode()
+        else
+            oErrorAux         := self:oSvc:getError()
+            self:lSuccess     := .F.
+            self:nFault       := oErrorAux['status']
+            self:nStatus      := oErrorAux['status']
+            self:cFaultDesc   := oErrorAux['message']
+            self:cFaultDetail := oErrorAux['detailedMessage']
+        endIf
+
+    endIf
+
+Return
+
+Method validaExc() class PLPegTransferReq
+    local cSql      := ''
+    local cSemaforo := ''
+    local nH        := 0
+    local cAlias    := GetNextAlias()
+    local lMudFasAut:= GetNewPar('MV_PLATDIG', '0') == "0"
+    BCI->(dbsetOrder(14))//BCI_FILIAL+BCI_CODPEG
+
+    if !BCI->(msseek(xfilial("BCI")+self:oRest:protocol))
+        self:cFaultDesc := "Protocolo "+self:oRest:protocol+" não localizado."
+    elseif BCI->BCI_CODRDA <> self:oRest:healthProviderId
+        self:cFaultDesc := "Protocolo não localizado para o prestador informado."
+    elseif BCI->BCI_STTISS $ '3;4;5;6;7;8;9' 
+        self:cFaultDesc := "Protocolo está com status "+X3COMBO('BCI_STTISS',BCI->BCI_STTISS)+" e não pode ser excluido."
+    elseif !lMudFasAut .and. BCI->BCI_STTISS <> '1'
+        self:cFaultDesc := "Este protocolo já está sendo analisado e não pode ser excluido."
+    else
+	    cSql := " SELECT 1 "
+	    cSql += " FROM " + RetSQLName('BD5')
+	    cSql += " WHERE BD5_FILIAL = '" + xFilial('BD5') + "' "
+	    cSql += " AND BD5_CODOPE = '" + BCI->BCI_CODOPE + "' "
+	    cSql += " AND BD5_CODLDP = '" + BCI->BCI_CODLDP + "' "
+	    cSql += " AND BD5_CODPEG = '" + BCI->BCI_CODPEG + "' "
+	    cSql += " AND BD5_FASE = '4' "
+	    cSql += " AND D_E_L_E_T_ = ' ' "
+
+	    dbUseArea(.T., "TOPCONN", tcGenQry(,,cSql), cAlias, .F., .T.)
+
+		If !(cAlias)->(Eof())
+            self:cFaultDesc := "Protocolo com guia faturada não pode ser excluida"
+		EndIf
+
+		(cAlias)->(dbCloseArea())
+    endif
+
+    if empty(self:cFaultDesc)
+        cSemaforo	= "DELPEG" + BCI->BCI_CODPEG + ".SMF"
+        nH := PLSAbreSem(cSemaforo,.f.)
+        iif(nH == 0,self:cFaultDesc := "Solicitação de exclusão em processamento, aguarde o termino!",PLSFechaSem(nH,cSemaforo))
+    endif
+
+    if !empty(self:cFaultDesc)
+	    self:lSuccess   := .F.
+        self:nFault     := 400
+        self:nStatus    := 400
+    endif
+return self:lSuccess
+
+Method procExc() class PLPegTransferReq
+    local lRet      := .f.
+    local oResult   := JsonObject():new()
+    
+    if self:lSuccess
+        if BCI->BCI_CODLDP == PLSRetLdp(2) 
+            lRet := self:oSvc:procExcBXX() 
+        else 
+            lRet := self:oSvc:procExcBCI() 
+        endif
+
+        if lRet 
+            self:lSuccess  := .T.
+            oResult['message'] := "Solicitação de exclusão realizada com sucesso."
+            self:cResponse := oResult:toJson()
+            self:nStatus   := 200
+        else
+            self:lSuccess     := .F.
+            self:nFault       := 400
+            self:nStatus      := 400
+            self:cFaultDesc   := "Erro ao realizar a exclusão do lote."
+            self:cFaultDetail := "Não foi possivel realizar a exclusão do lote enviado, tente novamente mais tarde ou entre em contato com a operadora."
+        endIf
+
+    endIf
+
+return

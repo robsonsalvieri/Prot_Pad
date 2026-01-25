@@ -1,0 +1,451 @@
+#Include "TLPP-CORE.TH"
+#Include "TLPP-REST.TH"
+#Include "DTACONVERSATION.CH"
+
+Static _lCanUseConversation := .F. as Logical
+
+#DEFINE MIN_SCORE_SIMILARITY 25
+
+/*/{Protheus.doc} DTAConversation
+Classe da API de conversação com o chat do DTA.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+/*/
+Class DTAConversation
+	Public Method new() as Object
+	
+	@Post("api/pcp/v1/DTAConversation/completion")
+	Public Method postCompletion() as Logical
+	@Post("api/pcp/v1/DTAConversation/feedback")
+	Public Method postFeedback() as Logical
+	@Get("api/pcp/v1/DTAConversation/welcome")
+	Public Method getWelcome() as Logical
+	@Get("api/pcp/v1/DTAConversation/examples")
+	Public Method getExamples() as Logical
+
+	Private Method getThreadId(oRestInstance as Object) as Character
+	Private Method getSessionId(oRestInstance as Object) as Character
+	Private Method processCompletion(jBody as Json, cThreadId as Character, cSessionId as Character) as Json
+	Private Method processFeedback(cThreadId as Character, jBody as Json)
+	Private Method setSuggestionsResponse(jSuggestions as Json) as Array
+	Private Method setThreadHeaderResponse(oRestInstance as Object, cThreadId as Character, cSessionId as Character)
+
+	Static Method canUseConversation(cMessage as Character) as Logical
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe. 
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return Self, Object, Instância da classe
+/*/
+Method new() as Object Class DTAConversation
+Return Self
+
+/*/{Protheus.doc} canUseConversation
+Verifica se o ambiente possui os pré-requisitos para utilizar a conversa do DTA CHAT
+
+@author lucas.franca/renan.roeder
+@since 27/03/2025
+@version P12
+@param 01 cMessage, Character, Enviado por referência, retorna uma mensagem indicando qual pré-requisito não é atendido
+@return _lCanUseConversation, Logical, Indica se o ambiente possui todos os pré-requisitos
+/*/
+Method canUseConversation(cMessage as Character) as Logical Class DTAConversation
+	If _lCanUseConversation == .F.
+		_lCanUseConversation := .T.
+		If !AliasInDic("HZV")
+			_lCanUseConversation := .F.
+			cMessage             := STR0001 //"Infelizmente o seu ambiente não está atualizado para utilizar esta função. Entre em contato com o administrador do sistema para providenciar as atualizações necessárias."
+		ElseIf !HZV->(dbSeek(xFilial("HZV")))
+			_lCanUseConversation := .F.
+			cMessage             := STR0002 //"O seu ambiente não possui nenhuma ferramenta disponível para utilização do DTA. Por favor, entre em contato com o administrador do sistema para realizar a configuração das ferramentas."
+		ElseIf !HZY->(dbSeek(xFilial("HZY")))
+			_lCanUseConversation := .F.
+			cMessage             := STR0003 //"Não foram definidas as permissões de acesso às ferramentas do DTA. Por favor, entre em contato com o administrador do sistema para configurar as permissões de acesso das ferramentas."
+		EndIf
+	EndIf
+Return _lCanUseConversation
+
+/*/{Protheus.doc} postFeedback
+Método que será executado pelo REST com o endpoint [POST] api/pcp/v1/DTAConversation/feedback
+Registra um feedback de uma interação do usuário.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method postFeedback() as Logical Class DTAConversation
+	Local cErrorMessage    := ""                 as Character
+	Local jBody            := JsonObject():New() as Json
+	Local jResponseMessage := JsonObject():New() as Json
+	Local lRet             := .T.                as Logical
+	Local nCode            := 0                  as Numeric
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+
+	Try
+		jBody:FromJson(DTAUtils():decodeUTF8(oRest:getBodyRequest()))
+		Self:processFeedback(Self:getThreadId(oRest), jBody)
+
+	Catch oError
+		DTAUtils():logApplicationError(oError, @nCode, @cErrorMessage)
+		oRest:setStatusCode(nCode)
+		jResponseMessage["code"   ] := nCode
+		jResponseMessage["message"] := cErrorMessage
+	EndTry
+
+	lRet := oRest:setResponse(jResponseMessage:toJson())
+	FreeObj(jResponseMessage)
+	FreeObj(jBody)
+Return lRet
+
+/*/{Protheus.doc} processFeedback
+Método que faz o processamento de uma requisição de feedback
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cThreadId, Character, Código da thread, que é utilizado para identificar qual é a interação relacionada ao feedback
+@param 02 jBody    , Json     , Json com os dados do feedback
+@return Nil
+/*/
+Method processFeedback(cThreadId as Character, jBody as Json) Class DTAConversation
+	Local cComment := "" as Character
+
+	If jBody:hasProperty("data")
+		cComment := jBody["data"]["comment"]
+	EndIf
+
+	DTAMonitor():postMonitorFeedback(cThreadId, jBody["content"], cComment)
+Return Nil
+
+/*/{Protheus.doc} getWelcome
+Método que será executado pelo REST com o endpoint [GET] api/pcp/v1/DTAConversation/welcome
+Retorna a mensagem de boas vindas do chat
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method getWelcome() as Logical Class DTAConversation
+	Local cInitialMessage  := ""  as Character
+	Local cThreadId        := ""  as Character
+	Local cSessionId       := ""  as Character
+	Local cWarningMessage  := ""  as Character
+	Local jReturn          := Nil as Json
+	Local lRet             := .T. as Logical
+	Local lShowSuggestions := .F. as Logical
+
+	cThreadId  := Self:getThreadId(oRest)
+	cSessionId := Self:getSessionId(oRest)
+	jReturn    := JsonObject():New()
+
+	If DTAConversation():canUseConversation(@cInitialMessage)
+		cInitialMessage  := STR0004 //"Em que posso ajudá-lo hoje?"
+		lShowSuggestions := .T.
+		If !Empty(DTALoad():loadDefaultTools(cThreadId))
+			cWarningMessage := STR0005 //"Atenção! Ocorreram erros ao atualizar as ferramentas disponíveis para utilização do DTA. Entre em contato com o Administrador para correção das inconsistências."
+		EndIf
+	EndIf
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+	Self:setThreadHeaderResponse(@oRest, cThreadId, cSessionId)
+
+	//Monta a mensagem inicial que vai exibir no chat
+	jReturn["config"] := JsonObject():New()
+	jReturn["config"]["dta-user-greeting"  ] := STR0009 //"Olá,"
+	jReturn["config"]["dta-user-name"      ] := FwGetUserName(RetCodUsr())
+	jReturn["config"]["dta-initial-message"] := cInitialMessage
+	jReturn["config"]["dta-warning-message"] := cWarningMessage
+	jReturn["config"]["disclaimer"         ] := STR0006 //"A inteligência artificial pode cometer erros. Considere verificar informações importantes."
+	jReturn["config"]["dta-hidden-anchor"  ] := !DTAParameters():hasToken()
+	
+	//Sugestões que vão aparecer no chat
+	jReturn["data"] := JsonObject():New()
+	jReturn["data"]["dta-chat-suggestions"] := {}
+	If lShowSuggestions
+		aAdd(jReturn["data"]["dta-chat-suggestions"], {"label": STR0007}) //"Sobre quais assuntos podemos conversar?"
+	EndIf
+
+	lRet := oRest:setResponse(jReturn:ToJson())
+		
+	FreeObj(jReturn)
+Return lRet
+
+/*/{Protheus.doc} postCompletion
+Método que será executado pelo REST com o endpoint [POST] api/pcp/v1/DTAConversation/completion
+Faz o processamento de uma mensagem do usuário
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method postCompletion() as Logical Class DTAConversation
+	Local cResponse        := ""                       as Character
+	Local cThreadId        := Self:getThreadId(oRest)  as Character
+	Local cSessionId       := Self:getSessionId(oRest) as Character
+	Local jBody            := JsonObject():New()       as Json
+	Local jResponseMessage := JsonObject():New()       as Json
+	Local lRet             := .T.                      as Logical
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+	If DTAConversation():canUseConversation(@cResponse)
+		Self:setThreadHeaderResponse(@oRest, cThreadId, cSessionId)
+		jBody:FromJson(DTAUtils():decodeUTF8(oRest:getBodyRequest()))
+		jResponseMessage := Self:processCompletion(jBody, cThreadId, cSessionId)
+		If jResponseMessage:hasProperty("code")
+			oRest:setStatusCode(jResponseMessage["code"])
+		EndIf
+	Else
+		jResponseMessage := { "content": cResponse, "data": JsonObject():New() }
+	EndIf
+	
+	lRet := oRest:setResponse(jResponseMessage:toJson())
+
+	FwFreeObj(jBody)
+	FwFreeObj(jResponseMessage)
+Return lRet
+
+/*/{Protheus.doc} processCompletion
+Faz o processamento de uma mensagem do usuário
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 jBody     , Json     , Dados da mensagem do usuário e histórico de mensagens anteriores.
+@param 02 cThreadId , Character, Código da thread, que é utilizado para identificar a interação do usuário
+@param 03 cSessionId, Character, ID da sessão, que é utilizado para identificar o chat do usuário
+@return jResponse, Json, Resposta para o usuário
+/*/
+Method processCompletion(jBody as Json, cThreadId as Character, cSessionId as Character) as Json Class DTAConversation
+	Local cErrorMessage   := ""  as Character
+	Local cResponse       := ""  as Character
+	Local jResponse       := Nil as Json
+	Local lDestroyMonitor := .F. as Logical
+	Local nCalls          := 0   as Numeric
+	Local nCode           := 0   as Numeric
+	Local oDTAProxy       := Nil as Object
+	Local oMonitor        := Nil as Object
+
+	Try
+		oDTAProxy := DTAProxy():new(cThreadId, jBody, .T., cSessionId)
+		oMonitor  := oDTAProxy:oMonitor
+		cResponse := oDTAProxy:runProxyRequest()
+		/*
+			Se tiver que executar ferramentas, entra no loop executando a ferramenta e gerando nova requisição ao DTA Proxy. 
+			O loop se encerra quando receber o finish_reason de "stop", ou quando atingir o limite de loop definido por DTAUtils():getLoopLimit()
+		*/
+		While !Empty(oDTAProxy:aToolCalls) .And. nCalls < DTAUtils():getLoopLimit()
+			oDTAProxy:runToolFunction()
+
+			//Chama API novamente com os dados das funções
+			cResponse := oDTAProxy:runProxyRequest()
+			nCalls++
+		End
+
+		jResponse := { "content": "", "data": JsonObject():New() }
+		//Mensagem padrão caso não consiga responder a pergunta dentro do limite de loop definido.
+		jResponse["content"] := STR0008 //"Não foi possível processar a sua pergunta. Por favor, seja mais específico."
+		If !Empty(cResponse)
+			//se conseguir uma resposta, retorna ao usuario
+			jResponse["content"] := cResponse
+		EndIf
+		jResponse["data"]["dta-chat-suggestions"] := Self:setSuggestionsResponse(oDTAProxy:jSuggestions)
+		If Len(oDTAProxy:aToolsHistory) > 0
+			jResponse["data"]["dta-tools-history"] := oDTAProxy:aToolsHistory
+			jResponse["data"]["dta-chat-steps"   ] := DTAUtils():setChatToolsSteps(oDTAProxy:aToolsHistory)
+		EndIf
+		If Len(oDTAProxy:aToolsScore) > 0
+			jResponse["data"]["dta-tools-score"] := oDTAProxy:aToolsScore
+		EndIf
+
+		oMonitor:createTraceEvent(jBody["content"], jResponse["content"])
+		oMonitor:postMonitorEvents()
+
+	Catch oError
+		DTAUtils():logApplicationError(oError, @nCode, @cErrorMessage)
+		jResponse := {"code": nCode, "message": cErrorMessage}
+		
+		If oMonitor == Nil
+			oMonitor := DTAMonitor():new(cThreadId, cSessionId)
+			lDestroyMonitor := .T.
+		EndIf
+		oMonitor:createErrorEvent(jBody["content"], oError)
+		If lDestroyMonitor
+			oMonitor:destroy()
+			FreeObj(oMonitor)
+		EndIf
+	EndTry
+
+	oMonitor := Nil
+	If oDTAProxy != Nil
+		oDTAProxy:destroy()
+		FreeObj(oDTAProxy)
+	EndIf
+
+Return jResponse
+
+/*/{Protheus.doc} getThreadId
+Recupera o threadid que identifica uma interação do usuário
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 oRestInstance, Object, Instância do objeto oRest com os dados da requisição
+@return cThreadId, Character, ID da thread
+/*/
+Method getThreadId(oRestInstance as Object) as Character Class DTAConversation
+	Local cThreadId      := ""  as Character
+	Local jHeaderRequest := Nil as Json
+
+	jHeaderRequest := oRestInstance:getHeaderRequest()
+	If jHeaderRequest:hasProperty("x-dta-thread")
+		cThreadId := jHeaderRequest["x-dta-thread"]
+	EndIf
+	jHeaderRequest := Nil
+Return cThreadId
+
+/*/{Protheus.doc} getSessionId
+Recupera o sessionId que identifica um chat do usuário
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 oRestInstance, Object, Instância do objeto oRest com os dados da requisição
+@return cSessionId, Character, ID da sessão
+/*/
+Method getSessionId(oRestInstance as Object) as Character Class DTAConversation
+	Local cSessionId     := ""  as Character
+	Local jHeaderRequest := Nil as Json
+
+	jHeaderRequest := oRestInstance:getHeaderRequest()
+	If jHeaderRequest:hasProperty("x-dta-session")
+		cSessionId := jHeaderRequest["x-dta-session"]
+	EndIf
+	jHeaderRequest := Nil
+Return cSessionId
+
+/*/{Protheus.doc} setSuggestionsResponse
+Busca as sugestões definidas pelas ferramentas executadas para retornar ao usuário
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 jSuggestions, Json, JSON com as sugestões definidas pelas ferramentas
+@return aSuggestions, Array, Array com os textos de sugestões para o usuário
+/*/
+Method setSuggestionsResponse(jSuggestions as Json) as Array Class DTAConversation
+	Local aNames                := {} as Array
+	Local aSuggestions          := {} as Array
+	Local nIndexNames           := 0  as Numeric
+	Local nIndexToolSuggestions := 0  as Numeric
+	Local nLenSuggestions       := 0  as Numeric
+
+	aNames := jSuggestions:getNames()
+	For nIndexNames := 1 To Len(aNames)
+		For nIndexToolSuggestions := 1 To Len(jSuggestions[aNames[nIndexNames]])
+			aAdd(aSuggestions, jSuggestions[aNames[nIndexNames]][nIndexToolSuggestions])
+		Next nIndexToolSuggestions
+	Next nIndexNames
+	//Escolher uma sugestão aleatória para mostrar
+	nLenSuggestions := Len(aSuggestions)
+	If nLenSuggestions > 1
+		aSuggestions[1] := aSuggestions[Random(1, nLenSuggestions)]
+		aSize(aSuggestions, 1)
+	EndIf
+	aSize(aNames, 0)
+Return aSuggestions
+
+/*/{Protheus.doc} setThreadHeaderResponse
+Define os headers de resposta para o DTA CHAT
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 oRestInstance, Object   , Instância do objeto oRest com os dados da requisição
+@param 02 cThreadId    , Character, Código da thread, que é utilizado para identificar a interação do usuário
+@param 03 cSessionId   , Character, Código da sessão do usuário
+@return Nil
+/*/
+Method setThreadHeaderResponse(oRestInstance as Object, cThreadId as Character, cSessionId as Character) Class DTAConversation
+	Local aExposeHeaders := {} as Array
+	Local cExposeHeaders := "" as Character
+
+	If !Empty(cSessionId)
+		aAdd(aExposeHeaders, "x-dta-session")
+		oRestInstance:setKeyHeaderResponse("x-dta-session", cSessionId)
+	EndIf
+	If _lCanUseConversation .And. DTAMonitor():isMonitorEnabled()
+		aAdd(aExposeHeaders, "x-dta-thread")
+		oRestInstance:setKeyHeaderResponse("x-dta-thread", cThreadId)
+	EndIf
+
+	cExposeHeaders := ArrTokStr(aExposeHeaders, ",")
+	If !Empty(cExposeHeaders)
+		oRestInstance:setKeyHeaderResponse("Access-Control-Expose-Headers", cExposeHeaders)
+	EndIf
+	aSize(aExposeHeaders, 0)
+Return
+
+/*/{Protheus.doc} getExamples
+Método que será executado pelo REST com o endpoint [GET] api/pcp/v1/DTAConversation/examples
+Retorna os exemplos das ferramentas que são similares a expressão utilizada pelo usuário
+
+@author lucas.franca/renan.roeder
+@since 18/06/2025
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method getExamples() as Logical Class DTAConversation
+	Local aEmbedding   := {}  as Array
+	Local aExamples    := {}  as Array
+	Local aItems       := {}  as Array
+	Local jData        := Nil as Json
+	Local jEmbedding   := Nil as Json
+	Local jQueryParams := Nil as Json
+	Local nIndex       := 0   as Numeric
+	Local lRet         := .T. as Logical
+	
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+
+	jData := JsonObject():New()
+	jQueryParams := oRest:getQueryRequest()
+	aEmbedding := DTAUtils():getEmbeddingVector(DTAUtils():getEmbedding({DTAUtils():cleanTextEmbedd(jQueryParams["content"])}))
+	HZZ->(dbSetOrder(1))
+	HZZ->(dbSeek(xFilial("HZZ")))
+	While HZZ->(!Eof()) .And. HZZ->HZZ_FILIAL == xFilial("HZZ")
+		jEmbedding := JsonObject():New()
+		jEmbedding:FromJson(HZZ->HZZ_EMBEDD)
+		aAdd(aExamples, {"description": RTrim(HZZ->HZZ_DESCRI), "score": DTAUtils():calculateVectorSimilarity(jEmbedding["embedding"], aEmbedding)})
+		jEmbedding := Nil
+		HZZ->(dbSkip())
+	End
+	aSort(aExamples,,,{|x,y| x["score"] > y["score"]})	
+	//top score mínimo deve ser maior ou igual a 25% para garantir a similaridade com a expressão do usuário
+	For nIndex := 1 To Len(aExamples)
+		If nIndex > 5 .Or. aExamples[nIndex]["score"] < MIN_SCORE_SIMILARITY
+			Exit
+		EndIf
+		aAdd(aItems, aExamples[nIndex]["description"])
+	Next nIndex
+	If Len(aItems) > 0
+		jData["items"]   := aItems
+		jData["hasNext"] := .F.
+	Else
+		oRest:setStatusCode(404)
+	EndIf
+	lRet := oRest:setResponse(jData:ToJson())
+	aSize(aEmbedding, 0)
+	aSize(aExamples, 0)
+	aSize(aItems, 0)
+	jData := Nil
+	jQueryParams := Nil
+Return lRet

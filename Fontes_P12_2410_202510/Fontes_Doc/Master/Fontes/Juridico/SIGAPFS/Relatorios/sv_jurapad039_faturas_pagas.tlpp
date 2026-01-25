@@ -1,0 +1,390 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "totvs.ch"
+#INCLUDE "msobject.ch"
+#INCLUDE "totvs.framework.treports.integratedprovider.th"
+
+namespace totvs.protheus.legal.sigapfs.jurapad039_faturas_pagas.integratedprovider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T.,;
+	team='SIGAPFS',;
+	tables='OHI,NXA,NS7,SA1,SE1',;
+	name='Faturas Pendentes Pagas',;
+	country='ALL',;
+	initialRelease='12.1.2210')
+
+//------------------------------------------------------------------------------------
+class jurapad039_faturas_pagasTReportsBusinessObject from totvs.framework.treports.integratedprovider.IntegratedProvider
+	public    method new()         as object
+	public    method getData()     as object
+	public    method getSchema()   as object
+	private   method J039StruSV()  as array // Estrutura adicional para a tabela temporária
+
+	data lExistPergunte as logical
+	data lPDUserAc as logical
+
+endclass
+
+//------------------------------------------------------------------------------------
+method new() class jurapad039_faturas_pagasTReportsBusinessObject
+Local cPergunte := "JURPAD039B"
+
+	_Super:new()
+
+	//Define a área
+	self:appendArea("Pré-Faturamento Serviços")
+
+	//Define o nome do Objeto de Negócio
+	self:setDisplayName("Faturas Pagas")
+
+	//Define a descrição do Objeto de Negócio
+	self:setDescription("Faturas Pagas")
+
+	self:lPDUserAc := IIF(FindFunction("JPDUserAc"), JPDUserAc(), .T.) // Indica se o usuário possui acesso a dados sensíveis ou pessoais (LGPD)
+
+	If !self:lPDUserAc
+		self:setErrorStatus(400, "Acesso restrito.", "Usuário com restrição de acesso a dados pessoais/sensíveis.")
+	Else
+		//Indica o pergunte que será utilizado no relatório
+		self:lExistPergunte := self:setPergunte(cPergunte)
+		If !self:lExistPergunte // @12.1.2410
+			self:setErrorStatus(400, "Dicionário de dados desatualizado!", "Grupo de perguntas " + cPergunte + " nao encontrado.")
+		EndIf
+	EndIf
+
+Return self
+
+//------------------------------------------------------------------------------------
+method getData(nPage as numeric, oFilter as object) as object class jurapad039_faturas_pagasTReportsBusinessObject
+Local aArea      := GetArea()
+Local aAreaSE1   := SE1->(GetArea())
+Local aAreaOHD   := OHD->(GetArea())
+Local cTemp      := GetNextAlias()
+Local cTempOHD   := GetNextAlias()
+Local cMoeda     := " "
+Local cQuery     := " "
+Local cQueryOHD  := " "
+Local cDataIni   := " "
+Local cDataFin   := " "
+Local cHistCob   := " "
+Local cFilEscr   := " "
+Local cFatAtu    := " "
+Local nParamOHD  := 0
+Local nTamFil    := TamSX3("E1_FILIAL")[1]
+Local nTamPrefix := TamSX3("E1_PREFIXO")[1]
+Local nTamNum    := TamSX3("E1_NUM")[1]
+Local nTamParc   := TamSX3("E1_PARCELA")[1]
+Local nTamTipo   := TamSX3("E1_TIPO")[1]
+Local nPosIniPre := nTamFil + 1
+Local nPosIniNum := nTamFil + nTamPrefix + 1
+Local nPosIniPar := nTamFil + nTamPrefix + nTamNum + 1
+Local nPosIniTip := nTamFil + nTamPrefix + nTamNum +  nTamParc + 1
+Local jParams    as json
+Local oJsDados   as object
+Local nMV_PAR07  := 0
+Local lFatDif    := .T.
+Local aIndice    := {}
+Local aStruAdic  := self:J039StruSV() // Estrutura adicional da tabela temporária
+Local TmpOHI     := Nil // Tabela temporária com os dados do relatório
+Local aBind  	 := {}
+
+	//Define a quantidade máxima por página (Default 100)
+	self:setPageSize(20)
+
+	If !self:lPDUserAc
+		self:setErrorStatus(400, "Acesso restrito.", "Usuário com restrição de acesso a dados pessoais/sensíveis.")
+	Else
+		If !self:lExistPergunte // @12.1.2410
+			self:setErrorStatus(400, "Dicionário de dados desatualizado!", "Grupo de perguntas JURAPAD041 nao encontrado.")
+		Else
+			jParams := oFilter:getParameters()
+
+			cFilEscr := JurGetDados( "NS7", 1, xFilial("NS7") + jParams["MV_PAR04"][1], "NS7_CFILIA" )
+			cMoeda   := JurGetDados( "CTO", 1, xFilial("CTO") + jParams["MV_PAR01"][1], "CTO_SIMB")
+
+			nMV_PAR07 := JurTRepVar(jParams["MV_PAR07"][1]) // Função para tratamento do tipo de retorno dos parâmetros
+
+			cDataIni := SubStr(StrTran(jParams['MV_PAR02'][1],"-",""),1,8)
+			cDataFin := SubStr(StrTran(jParams['MV_PAR03'][1],"-",""),1,8)
+
+			cQuery := "SELECT OHI.OHI_CCLIEN CLIENTE, OHI.OHI_CLOJA LOJA, "
+			cQuery +=  "SA1.A1_NOME NOME, OHI.OHI_CESCR ESCRITORIO, "
+			cQuery +=  "NS7.NS7_COD CODESC, NS7.NS7_RAZAO RAZAOESC, "
+			cQuery +=  "OHI.OHI_CFATUR FATURA, NXA.NXA_SERIE SERIE, NXA.NXA_DOC NFISCAL, "
+			cQuery +=  "SE1.E1_VENCTO VENCTO, SE1.E1_PARCELA PARCELA, "
+			cQuery +=  "MAX(OHI.OHI_DTAREC) DATAPAG, "
+			cQuery +=  "SUM(OHI.OHI_VLDESH + OHI.OHI_VLDESD) DESCONTOS, "
+			cQuery +=  "SUM(OHI.OHI_VLACRH + OHI.OHI_VLACRD) ACRESCIMOS, "
+			cQuery +=  "SUM(OHI_VLHCAS - OHI_VLDESH + OHI_VLACRH + OHI_VLDCAS - OHI_VLDESD + OHI_VLACRD) TOTALRECEB, "
+			cQuery +=  "SE1.E1_PREFIXO PREFIXO, "
+			cQuery +=  "SE1.E1_NUM NUMERO, "
+			cQuery +=  "SE1.E1_FILIAL E1_FILIAL, "
+			cQuery +=  "SE1.E1_TIPO E1_TIPO, "
+			cQuery +=  "SE1.E1_SALDO E1_SALDO, "
+			cQuery +=  "SE1.E1_EMISSAO EMISSAO, "
+			cQuery +=  "SE1.R_E_C_N_O_ RECNOSE1 "
+			
+			// OHI
+			cQuery +=  "FROM " + RetSqlName("OHI") + " OHI "
+
+			// SA1
+			cQuery += "INNER JOIN " + RetSqlName("SA1") + " SA1 "
+			cQuery +=    "ON SA1.A1_FILIAL = ? " // A1_FILIAL
+			AAdd(aBind, {xFilial("SA1"), "S"})
+
+			cQuery +=   "AND SA1.A1_COD = OHI.OHI_CCLIEN "
+			cQuery +=   "AND SA1.A1_LOJA = OHI.OHI_CLOJA "
+			cQuery +=   "AND SA1.D_E_L_E_T_ = ? "
+			AAdd(aBind, {" ", "S"})
+
+			// NS7
+			cQuery += "INNER JOIN " + RetSqlName("NS7") + " NS7 "
+			cQuery +=    "ON NS7.NS7_FILIAL = ? " // NS7_FILIAL
+			AAdd(aBind, {xFilial("NS7"), "S"})
+
+			cQuery +=   "AND NS7.NS7_COD = OHI.OHI_CESCR "
+
+			cQuery +=   "AND NS7.D_E_L_E_T_ = ? "
+			AAdd(aBind, {" ", "S"})
+
+			// NXA
+			cQuery += "INNER JOIN " + RetSqlName("NXA") + " NXA "
+			cQuery +=    "ON NXA.NXA_FILIAL = ? " 
+			AAdd(aBind, {xFilial("NXA"), "S"})
+
+			cQuery +=   "AND NXA.NXA_CESCR = OHI.OHI_CESCR "
+			cQuery +=   "AND NXA.NXA_COD = OHI.OHI_CFATUR "
+
+			cQuery +=   " AND NXA.D_E_L_E_T_ = ? "
+			AAdd(aBind, {" ", "S"})
+
+			// SE1
+			cQuery += "INNER JOIN " + RetSqlName("SE1") + " SE1 "
+			cQuery +=    "ON SE1.E1_FILIAL  = ? "  
+			AAdd(aBind, {xFilial("SE1"), "S"})
+
+			cQuery +=   "AND SE1.E1_PREFIXO = SUBSTRING(OHI.OHI_CHVTIT, ?, ?)"
+			AAdd(aBind, {Str(nPosIniPre), "N"})
+			AAdd(aBind, {Str(nTamPrefix), "N"})
+
+			cQuery +=   "AND SE1.E1_NUM = SUBSTRING(OHI.OHI_CHVTIT, ?, ?)"
+			AAdd(aBind, {Str(nPosIniNum), "N"})
+			AAdd(aBind, {Str(nTamNum), "N"})
+
+			cQuery +=   "AND SE1.E1_PARCELA = SUBSTRING(OHI.OHI_CHVTIT, ?, ?)"
+			AAdd(aBind, {Str(nPosIniPar), "N"})
+			AAdd(aBind, {Str(nTamParc), "N"})
+
+			cQuery +=   "AND SE1.E1_TIPO = SUBSTRING(OHI.OHI_CHVTIT, ?, ?)"
+			AAdd(aBind, {Str(nPosIniTip), "N"})
+			AAdd(aBind, {Str(nTamTipo), "N"})
+
+			cQuery +=   "AND SE1.D_E_L_E_T_ = ? "
+			AAdd(aBind, {" ", "S"})
+
+			// WHERE
+			cQuery += "WHERE OHI.OHI_FILIAL = ? "
+			AAdd(aBind, {xFilial("OHI"), "S"})
+		
+			If AllTrim(jParams['MV_PAR04'][1]) <> ''
+				cQuery +=   "AND OHI.OHI_CESCR  = ? " 
+				Aadd(aBind, {jParams['MV_PAR04'][1], "S"})
+			EndIf
+			If AllTrim(jParams['MV_PAR05'][1]) <> ''
+				cQuery += "AND OHI.OHI_CCLIEN = ? " 
+				Aadd(aBind, {jParams['MV_PAR05'][1], "S"})
+
+				If AllTrim(jParams['MV_PAR06'][1]) <> ''
+					cQuery += "AND OHI.OHI_CLOJA  = ? " 
+					Aadd(aBind, {jParams['MV_PAR06'][1], "S"})
+				EndIf
+			EndIf
+			cQuery +=   "AND OHI.OHI_DTAREC >= ? " 
+			Aadd(aBind, {cDataIni, "S"})
+			
+			cQuery +=   "AND OHI.OHI_DTAREC <= ? " 
+			Aadd(aBind, {cDataFin, "S"})
+
+			cQuery +=   "AND OHI.OHI_CMOEDA = ? " 
+			Aadd(aBind, {jParams["MV_PAR01"][1], "S"})
+
+			cQuery +=   "AND OHI.D_E_L_E_T_ = ? "
+			AAdd(aBind, {" ", "S"})
+
+			cQuery +=   "GROUP BY OHI.OHI_CCLIEN, "
+			cQuery +=          "OHI.OHI_CLOJA, SA1.A1_NOME, OHI.OHI_CESCR, NS7.NS7_COD, "
+			cQuery +=          "NS7.NS7_RAZAO, OHI.OHI_CFATUR, "
+			cQuery +=          "NXA.NXA_VLFATH, NXA.NXA_DTEMI, NXA.NXA_SERIE, NXA.NXA_DOC, SE1.E1_VENCTO, "
+			cQuery +=          "SE1.E1_PARCELA, OHI.OHI_DTAREC, SE1.E1_PREFIXO, SE1.E1_NUM, SE1.E1_TIPO, "
+			cQuery +=          "SE1.E1_FILIAL, SE1.E1_SALDO, SE1.E1_EMISSAO, SE1.R_E_C_N_O_ "
+			cQuery += "ORDER BY OHI.OHI_CCLIEN, OHI.OHI_CLOJA, OHI.OHI_CESCR, OHI.OHI_CFATUR, SE1.E1_PARCELA "
+
+			cQuery := JurTRepBin(cQuery, aBind)
+			MPSysOpenQuery(cQuery, cTemp)
+
+			Aadd(aIndice, {"INDICE", "CLIENTE+LOJA", TAMSX3("OHI_CCLIEN")[1] + TAMSX3("OHI_CLOJA")[1]}) // Código + Loja do cliente
+
+			TmpOHI := JurCriaTmp(GetNextAlias(), cQuery,, aIndice, aStruAdic,,, .T.,,)[1]
+			cTemp := TmpOHI:GetAlias()
+
+			While !(cTemp)->(Eof())
+
+				If Empty(AllTrim((cTemp)->NFISCAL) + AllTrim((cTemp)->SERIE))
+					cNF := ""
+				Else
+					cNF := AllTrim((cTemp)->NFISCAL) + "/" + AllTrim((cTemp)->SERIE)
+				EndIf
+
+				If nMV_PAR07 == 2 // Histórico de Cobrança
+
+					aBind := {}
+
+					cQueryOHD := "SELECT OHD.R_E_C_N_O_ RECNO "
+					cQueryOHD +=   "FROM " + RetSqlName("OHD") + " OHD "
+
+					cQueryOHD +=  "WHERE OHD.OHD_FILIAL = ? " // 1
+					AAdd(aBind, {(cTemp)->E1_FILIAL, "S"})
+
+					cQueryOHD +=    "AND OHD.OHD_PREFIX = ? " // 2
+					AAdd(aBind, {(cTemp)->PREFIXO, "S"})
+
+					cQueryOHD +=    "AND OHD.OHD_NUM = ? " // 3
+					AAdd(aBind, {(cTemp)->NUMERO, "S"})
+
+					cQueryOHD +=    "AND OHD.OHD_TIPO = ? " // 4
+					AAdd(aBind, {(cTemp)->E1_TIPO, "S"})
+
+					cQueryOHD +=    "AND OHD.D_E_L_E_T_ = ? "
+					AAdd(aBind, {" ", "S"})
+
+					cQueryOHD +=  "ORDER BY OHD.OHD_DTACAO "
+
+					nParamOHD := 0 // Resetar parâmetro
+
+					cHistCob := ' '
+
+					cQueryOHD := JurTRepBin(cQueryOHD, aBind)
+					MPSysOpenQuery(cQueryOHD, cTempOHD)
+
+					While !(cTempOHD)->(Eof())
+						OHD->( DbGoTo( (cTempOHD)->RECNO ) )
+
+						cHistCob := Iif(AllTrim(cHistCob) <> '',cHistCob + ' ', '') + cValToChar(OHD->OHD_DTACAO) + ': ' + AllTrim(OHD->OHD_ACAO)
+						cHistCob := StrTran(cHistCob, Chr(13) + Chr(10), " ") // Troca os Retornos de shift + enter por espaço
+						cHistCob := StrTran(cHistCob, Chr(10), " ") // Troca as quebras de linha por espaço
+						cHistCob := StrTran(cHistCob, Chr(9), " ") // Troca as tabulações por espaço
+
+						(cTempOHD)->(DbSkip())
+					EndDo
+
+					(cTempOHD)->(DbCloseArea())
+
+				EndIf
+
+				nAbatimento := 0
+
+				If (cTemp)->E1_SALDO == 0
+					cFatAtu := (cTemp)->FATURA
+
+					(cTemp)->( DbSkip() )
+					lFatDif := (cTemp)->FATURA <> cFatAtu
+					(cTemp)->( DbSkip(-1) )
+
+					If lFatDif
+						SE1->(DbGoTo((cTemp)->RECNOSE1))
+						nAbatimento := SomaAbat(SE1->E1_PREFIXO, SE1->E1_NUM, SE1->E1_PARCELA, "R", 1,, SE1->E1_CLIENTE, SE1->E1_LOJA, SE1->E1_FILIAL, SE1->E1_EMISSAO)
+					EndIf
+				EndIf
+
+				oJsDados := JsonObject():new()
+				oJsDados["cEscrit"]     := (cTemp)->ESCRITORIO
+				oJSDados["cFatura"]     := (cTemp)->FATURA
+				oJsDados["cNF"]         := cNF
+				oJsDados["cMoeda"]      := cMoeda
+				oJsDados["dVenc"]       := totvs.framework.treports.date.dateToTimeStamp((cTemp)->VENCTO)
+				oJsDados["cParc"]       := (cTemp)->PARCELA
+				oJsDados["dDataPgt"]    := totvs.framework.treports.date.dateToTimeStamp((cTemp)->DATAPAG)
+				oJsDados["nDesc"]       := (cTemp)->DESCONTOS
+				oJsDados["nAcresc"]     := (cTemp)->ACRESCIMOS
+				oJsDados["nVlrReceb"]   := (cTemp)->TOTALRECEB - nAbatimento
+				oJsDados["cHistCob"]    := cHistCob
+				oJsDados["cRazSoc"]     := (cTemp)->RAZAOESC
+				oJsDados["cCliente"]    := (cTemp)->CLIENTE
+				oJsDados["cLoja"]       := (cTemp)->LOJA
+				oJsDados["A1_NOME"]     := (cTemp)->NOME
+				oJsDados["NS7_COD"]     := (cTemp)->CODESC
+
+				self:oData:appendData(oJsDados)
+
+				(cTemp)->(DBSkip())
+
+			EndDo
+				
+			(cTemp)->(DbCloseArea())
+
+		EndIf
+	Endif
+
+	RestArea(aArea)
+	RestArea(aAreaOHD)
+	RestArea(aAreaSE1)
+
+Return self:oData
+
+//------------------------------------------------------------------------------------
+method getSchema() as object Class jurapad039_faturas_pagasTReportsBusinessObject
+
+	self:oSchema:addProperty("cEscrit"    , "cEscrit"    , "string", "Escritório"    , "cEscrit"    )
+	self:oSchema:addProperty("cFatura"    , "cFatura"    , "string", "Fatura"        , "cFatura"    )
+	self:oSchema:addProperty("cNF"        , "cNF"        , "string", "Nota Fiscal"   , "cNF"        )
+	self:oSchema:addProperty("dVenc"      , "dVenc"      , "date"  , "Data Venc."    , "dVenc"      )
+	self:oSchema:addProperty("cParc"      , "cParc"      , "string", "Parcela"       , "cParc"      )
+	self:oSchema:addProperty("dDataPgt"   , "dDataPgt"   , "date"  , "Data Pagto."   , "dDataPgt"   )
+	self:oSchema:addProperty("nDesc"      , "nDesc"      , "number", "Descontos"     , "nDesc"      )
+	self:oSchema:addProperty("nAcresc"    , "nAcresc"    , "number", "Acréscimos"    , "nAcresc"    )
+	self:oSchema:addProperty("nVlrReceb"  , "nVlrReceb"  , "number", "Vl. Recebido"  , "nVlrReceb"  )
+	self:oSchema:addProperty("cHistCob"   , "cHistCob"   , "string", "Hist. Cobrança", "cHistCob"   )
+	self:oSchema:addProperty("cMoeda"     , "cMoeda"     , "string", "Moeda"         , "cMoeda"     )
+	self:oSchema:addProperty("cRazSoc"    , "cRazSoc"    , "string", "Razão Social"  , "cRazSoc"    )
+	self:oSchema:addProperty("cCliente"   , "cCliente"   , "string", "Cód. Cliente"  , "cCliente"   )
+	self:oSchema:addProperty("cLoja"      , "cLoja"      , "string", "Cód. Loja"     , "cLoja"      )
+	self:oSchema:addProperty("A1_NOME"    , "A1_NOME"    , "string", "Nome"          , "A1_NOME"    )
+	self:oSchema:addProperty("NS7_COD"    , "NS7_COD"    , "string", "Cód. Escrit."  , "NS7_COD"    )
+	
+Return self:oSchema
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} J039StruAdc
+Estrutura adicional para a tabela temporária
+
+@return aStruAdic, Estrutura adicional do Browse
+
+@author João Pedro 
+@since  30/04/2024
+/*/
+//-------------------------------------------------------------------
+
+method J039StruSV() as array Class jurapad039_faturas_pagasTReportsBusinessObject
+
+Local aStruAdic  := {} // Estrutura adicional
+
+	Aadd(aStruAdic, { "CLIENTE"   , "", GetSx3Cache("OHI_CCLIEN", 'X3_TIPO'), TamSX3("OHI_CCLIEN")[1], TamSX3("OHI_CCLIEN")[2], GetSx3Cache("OHI_CCLIEN", 'X3_PICTURE'), "OHI_CCLIEN" } )
+	Aadd(aStruAdic, { "LOJA"      , "", GetSx3Cache("OHI_CLOJA" , 'X3_TIPO'), TamSX3("OHI_CLOJA" )[1], TamSX3("OHI_CLOJA" )[2], GetSx3Cache("OHI_CLOJA" , 'X3_PICTURE'), "OHI_CLOJA"  } )
+	Aadd(aStruAdic, { "NOME"      , "", GetSx3Cache("A1_NOME"   , 'X3_TIPO'), TamSX3("A1_NOME"   )[1], TamSX3("A1_NOME"   )[2], GetSx3Cache("A1_NOME"   , 'X3_PICTURE'), "A1_NOME"    } )
+	Aadd(aStruAdic, { "ESCRITORIO", "", GetSx3Cache("OHI_CESCR" , 'X3_TIPO'), TamSX3("OHI_CESCR" )[1], TamSX3("OHI_CESCR" )[2], GetSx3Cache("OHI_CESCR" , 'X3_PICTURE'), "OHI_CESCR"  } )
+	Aadd(aStruAdic, { "CODESC"    , "", GetSx3Cache("NS7_COD"   , 'X3_TIPO'), TamSX3("NS7_COD"   )[1], TamSX3("NS7_COD"   )[2], GetSx3Cache("NS7_COD"   , 'X3_PICTURE'), "NS7_COD"    } )
+	Aadd(aStruAdic, { "RAZAOESC"  , "", GetSx3Cache("NS7_RAZAO" , 'X3_TIPO'), TamSX3("NS7_RAZAO" )[1], TamSX3("NS7_RAZAO" )[2], GetSx3Cache("NS7_RAZAO" , 'X3_PICTURE'), "NS7_RAZAO"  } )
+	Aadd(aStruAdic, { "FATURA"    , "", GetSx3Cache("OHI_CFATUR", 'X3_TIPO'), TamSX3("OHI_CFATUR")[1], TamSX3("OHI_CFATUR")[2], GetSx3Cache("OHI_CFATUR", 'X3_PICTURE'), "OHI_CFATUR" } )
+	Aadd(aStruAdic, { "SERIE"     , "", GetSx3Cache("NXA_SERIE" , 'X3_TIPO'), TamSX3("NXA_SERIE" )[1], TamSX3("NXA_SERIE" )[2], GetSx3Cache("NXA_SERIE" , 'X3_PICTURE'), "NXA_SERIE"  } )
+	Aadd(aStruAdic, { "NFISCAL"   , "", GetSx3Cache("NXA_DOC"   , 'X3_TIPO'), TamSX3("NXA_DOC"   )[1], TamSX3("NXA_DOC"   )[2], GetSx3Cache("NXA_DOC"   , 'X3_PICTURE'), "NXA_DOC"    } )
+	Aadd(aStruAdic, { "VENCTO"    , "", GetSx3Cache("E1_VENCTO" , 'X3_TIPO'), TamSX3("E1_VENCTO" )[1], TamSX3("E1_VENCTO" )[2], GetSx3Cache("E1_VENCTO" , 'X3_PICTURE'), "E1_VENCTO"  } )
+	Aadd(aStruAdic, { "PARCELA"   , "", GetSx3Cache("E1_PARCELA", 'X3_TIPO'), TamSX3("E1_PARCELA")[1], TamSX3("E1_PARCELA")[2], GetSx3Cache("E1_PARCELA", 'X3_PICTURE'), "E1_PARCELA" } )
+	Aadd(aStruAdic, { "DATAPAG"   , "", GetSx3Cache("OHI_DTAREC", 'X3_TIPO'), TamSX3("OHI_DTAREC")[1], TamSX3("OHI_DTAREC")[2], GetSx3Cache("OHI_DTAREC", 'X3_PICTURE'), "OHI_DTAREC" } )
+	Aadd(aStruAdic, { "DESCONTOS" , "", GetSx3Cache("OHI_VLDESH", 'X3_TIPO'), TamSX3("OHI_VLDESH")[1], TamSX3("OHI_VLDESH")[2], GetSx3Cache("OHI_VLDESH", 'X3_PICTURE'), "OHI_VLDESH" } )
+	Aadd(aStruAdic, { "ACRESCIMOS", "", GetSx3Cache("OHI_VLACRH", 'X3_TIPO'), TamSX3("OHI_VLACRH")[1], TamSX3("OHI_VLACRH")[2], GetSx3Cache("OHI_VLACRH", 'X3_PICTURE'), "OHI_VLACRH" } )
+	Aadd(aStruAdic, { "TOTALRECEB", "", GetSx3Cache("OHI_VLHCAS", 'X3_TIPO'), TamSX3("OHI_VLHCAS")[1], TamSX3("OHI_VLHCAS")[2], GetSx3Cache("OHI_VLHCAS", 'X3_PICTURE'), "OHI_VLHCAS" } )
+	Aadd(aStruAdic, { "PREFIXO"   , "", GetSx3Cache("E1_PREFIXO", 'X3_TIPO'), TamSX3("E1_PREFIXO")[1], TamSX3("E1_PREFIXO")[2], GetSx3Cache("E1_PREFIXO", 'X3_PICTURE'), "E1_PREFIXO" } )
+	Aadd(aStruAdic, { "NUMERO"    , "", GetSx3Cache("E1_NUM"    , 'X3_TIPO'), TamSX3("E1_NUM"    )[1], TamSX3("E1_NUM"    )[2], GetSx3Cache("E1_NUM"    , 'X3_PICTURE'), "E1_NUM"     } )
+	Aadd(aStruAdic, { "EMISSAO"   , "", GetSx3Cache("E1_EMISSAO", 'X3_TIPO'), TamSX3("E1_EMISSAO")[1], TamSX3("E1_EMISSAO")[2], GetSx3Cache("E1_EMISSAO", 'X3_PICTURE'), "E1_EMISSAO" } )
+	Aadd(aStruAdic, { "RECNOSE1"  , "", "N", 16                   ,  0, "", "" } ) // "Recno"
+
+Return aStruAdic

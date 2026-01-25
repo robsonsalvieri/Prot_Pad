@@ -1,0 +1,192 @@
+
+	/*
+	- Validação para campos
+	- que só aceitam númericos.
+	*/
+	
+	function justNumber(e){
+	
+    var tecla=(window.event)?event.keyCode:e.which;   
+    	if((tecla>47 && tecla<58)) 
+			return true;
+    	else {
+    		if (tecla==8 || tecla==0) return true;
+		else  
+			return false;
+   		}
+	}
+
+	/*
+	- Validação do e-mail
+	- Para conter @ e .
+	*/
+	function valida_email(){
+		var filter = /^([\w-]+(?:\.[\w-]+)*)@((?:[\w-]+\.)*\w[\w-]{0,66})\.([a-z]{2,6}(?:\.[a-z]{2})?)$/i;
+			if(!filter.test(document.getElementById("emailAlt").value)){
+				alert('Por favor, digite o email corretamente. \nOs caracteres ( @ ) ou ( . ) podem estar faltando.');
+				document.getElementById("emailAlt").focus();
+				return false
+			}
+	}
+
+
+	/*
+	
+	- Cópia do DataComp
+	- Por Questões de Compatibilidade.
+
+	*/
+	function copDataComp(dt1,dt2,regra,foco) { 
+	if (dt1 == '' || dt2 == '' || regra == '') {
+	            return;
+	  }
+            
+			var data1 = parseInt(dt1.split("/")[2].toString() + dt1.split("/")[1].toString() + dt1.split("/")[0].toString());
+			var data2 = parseInt(dt2.split("/")[2].toString() + dt2.split("/")[1].toString() + dt2.split("/")[0].toString());
+ 
+            if (regra == 'A<B') {
+				if (data1 > data2) {
+		            alert('Data final deve ser maior ou igual que a data inicial!'); 
+					document.formAlt.getElementById(foco).focus();
+			        return;
+				}            
+            }
+            if (regra == 'A>B') {
+				if (data1 < data2) {
+		            alert('Data final deve ser menor ou igual que a data inicial!'); 
+					document.formAlt.getElementById(foco).focus();
+			        return;
+				}            
+            }
+            if (regra == 'A=B') {
+				if (data1 != data2) {
+		            alert('As datas devem ser iguais!'); 
+					document.formAlt.getElementById(foco).focus();
+			        return;
+				}            
+            }
+            return;
+	    }
+
+	function AdicionaSelect(){ 
+ 		 var i = document.formAlt.selectTpLogr.selectedIndex; 
+ 		 var j = document.formAlt.descLgr.value;
+     		 j = document.formAlt.selectTpLogr[i].value; 
+	 
+	 if(document.formAlt.selectTpLogr[i].value == 'AER') {
+		j = 'AEROPORTO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'AL'){
+		j = 'ALAMEDA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'A'){
+		j = 'AREA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'AV'){
+		j = 'AVENIDA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'CPO'){
+		j = 'CAMPO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'CH'){
+		j = 'CHACARA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'COL'){
+		j = 'COLONIA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'COND'){
+		j = 'CONDOMINIO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'CJ'){
+		j = 'CONJUNTO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'DT'){
+		j = 'DISTRITO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'ESP'){
+		j = 'ESPLANADA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'ETC'){
+		j = 'ESTACAO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'EST'){
+		j = 'ESTRADA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'FAV'){
+		j = 'FAVELA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'FAZ'){
+		j = 'FAZENDA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'FRA'){
+		j = 'FEIRA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'JD'){
+		j = 'JARDIM';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'LD'){
+		j = 'LADEIRA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'LGO'){
+		j = 'LAGO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'LGA'){
+		j = 'LAGOA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'LRG'){
+		j = 'LARGO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'LOT'){
+		j = 'LOTEAMENTO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'MRO'){
+		j = 'MORRO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'NUC'){
+		j = 'NUCLEO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'O'){
+		j = 'OUTROS';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'PRQ'){
+		j = 'PARQUE';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'PSA'){
+		j = 'PASSARELA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'PAT'){
+		j = 'PATIO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'PC'){
+		j = 'PRACA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'Q'){
+		j = 'QUADRA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'REC'){
+		j = 'RECANTO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'RES'){
+		j = 'RESIDENCIAL';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'ROD'){
+		j = 'RODOVIA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'R'){
+		j = 'RUA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'ST'){
+		j = 'SETOR';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'SIT'){
+		j = 'SITIO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'TV'){
+		j = 'TRAVESSA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'TR'){
+		j = 'TRECHO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'TRV'){
+		j = 'TREVO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'VLE'){
+		j = 'VALE';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'VER'){
+		j = 'VEREDA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'V'){
+		j = 'VIA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'VD'){
+		j = 'VIADUTO';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'VLA'){
+		j = 'VIELA';
+	 }else if(document.formAlt.selectTpLogr[i].value == 'VL'){
+		j = 'VILA';
+	 }
+
+		 document.formAlt.descLgr.value = j
+} 
+
+	function formatar(mascara, documento){
+  		var i = documento.value.length;
+  		var saida = mascara.substring(0,1);
+  		var texto = mascara.substring(i)
+ 	   	if (texto.substring(0,1) != saida){
+           documento.value += texto.substring(0,1);
+  		}
+	}
+
+function vldTel() {
+    		var str = document.formAlt.tel.value; 
+   			var res = str.replace("-", "");
+    		document.formAlt.tel.value = res;
+
+		}
+
+		function vldCel() {
+    		var str = document.formAlt.cel.value; 
+   			var res = str.replace("-", "");
+    		document.formAlt.cel.value = res;
+
+		}

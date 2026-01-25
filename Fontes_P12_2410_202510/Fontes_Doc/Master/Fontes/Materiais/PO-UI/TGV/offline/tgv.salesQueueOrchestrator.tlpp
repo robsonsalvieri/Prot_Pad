@@ -1,0 +1,286 @@
+#include "PROTHEUS.CH"
+#include 'tlpp-core.th'
+#include 'tgv.salesQueueOrchestrator.ch'
+
+namespace totvs.protheus.backoffice.salesQueueProcess
+using namespace totvs.protheus.backoffice.queueProcess
+using namespace tgv.util
+
+#DEFINE AGUARDANDO   "0"
+#DEFINE PROCESSANDO  "1"
+#DEFINE SUCESSO      "2"
+#DEFINE ERROR        "3"
+#DEFINE QUEUEPROCESS "0"
+
+static __aPrepared := {}
+
+//------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator
+	Centraliza o processamento e controle da fila de registros envidados pelo
+    PGV off-line
+	@type class
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		08/09/2022
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------
+class salesQueueOrchestrator
+    private data oQueueProcess                  as object
+	private data nTimeoutThreads                as numeric
+	private data nQtChecksTimeout               as numeric
+	private data nQtCurrentChecksTimout         as numeric
+
+    public  method new()                       constructor
+    public  method execute() 
+    public  method destroy()
+	private method checkTimeout()              as logical
+    private method downProcessQueue() 
+    private method executeItemQueue()
+	private method movingToErrorStoppedItems() 
+endClass
+
+//----------------------------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator::new() as Object
+	Obtem uma nova instancia da classe salesQueueOrchestrator
+	@type		method
+	@version	12.1.33
+	@sample		salesQueueOrchestrator:new()
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@param		ntimeoutThreads , character	, Tempo em segundos de timeout das threads ociosas
+	@param      oQueueProcess   , object     , Objeto da classe queueProcess para interagir com as 
+											  threads criadas pelo ManualJob 
+	@since		08/09/2022
+	@return		object	, Nova instancia da classe salesQueueOrchestrator
+/*/
+//----------------------------------------------------------------------------------------------------
+method new(nTimeoutThreads as numeric, oQueueProcess as object) class salesQueueOrchestrator
+	::oQueueProcess := oQueueProcess
+	::nQtChecksTimeout       := 6
+	::nTimeoutThreads        := noRound(nTimeoutThreads / ::nQtChecksTimeout)
+	::nQtCurrentChecksTimout := 0
+return Self
+
+//----------------------------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator::checkTimeout() as logical
+	Verifica se ha threads executando e se o timeout foi excedido
+	@type		method
+	@version	12.1.33
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		09/09/2022
+	@return		lTimeout, logical , Indica se o timeout foi atingido para todas as threads como ociosas
+/*/
+//----------------------------------------------------------------------------------------------------
+method checkTimeout() as logical class salesQueueOrchestrator
+	Local lTimeout := .F. as logical
+
+	if ::oQueueProcess:hasThreadsWorking() 
+		::nQtCurrentChecksTimout := 0
+	else
+		::nQtCurrentChecksTimout++
+		if ::nQtCurrentChecksTimout >= ::nQtChecksTimeout
+			lTimeout := .T.
+		endIf
+	endIf
+	sleep(::nTimeoutThreads * 1000)
+return lTimeout
+
+//----------------------------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator::downProcessQueue() as logical
+	Executa a finalizacao das threads e execucao do ManualJob
+	@type		method
+	@version	12.1.33
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		09/09/2022
+	@return		nil
+/*/
+//----------------------------------------------------------------------------------------------------
+method downProcessQueue() class salesQueueOrchestrator
+	::oQueueProcess:finalizeManualJob()
+return
+
+//----------------------------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator::executeItemQueue() as logical
+	Realiza a tentativa do acionamento de uma thread para executar o item da fila selecionado
+	@type		method
+	@version	12.1.33
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		09/09/2022
+	@param      idItemQueue , character , id do registro na tabela da fila de processamento 
+	@return		lExecuting   , logical   , Indica se a thread esta processando ou nao
+/*/
+//----------------------------------------------------------------------------------------------------
+method executeItemQueue(idItemQueue as character) class salesQueueOrchestrator
+	Local lExecuting := ::oQueueProcess:executeExecutorThread(idItemQueue) as logical
+return lExecuting
+
+//----------------------------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator::execute()
+	Inicia o processamento e controle da fila
+	@type		method
+	@version	12.1.33
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		09/09/2022
+	@return		nil
+/*/
+//----------------------------------------------------------------------------------------------------
+method execute() class salesQueueOrchestrator
+
+	Local aArea			:= FWGetArea()        as array
+	Local aAreaA1T		:= A1T->(FWGetArea()) as array
+	Local cFilialA1T 	:= FwXFilial("A1T")   as character
+	Local lIsTimeIn      := .T.               as logical
+
+	//"2" ====>>> Indica que é a thread orchestradora. Ela não conta no loop do fechamento das threads
+	queueProcess():setThreadStatus(::oQueueProcess:getGlobalVarPrefix(), "2")
+
+	DbSelectArea("A1T")
+	A1T->(DbSetOrder(2)) // A1T_FILIAL, A1T_STATUS, A1T_DTREC, A1T_HRREC
+
+	If A1T->(DbSeek(cFilialA1T + AGUARDANDO))	//0
+		While lIsTimeIn
+			queueProcess():setLastHello(::oQueueProcess:getGlobalVarPrefix())
+			While A1T->(!Eof()) .And. A1T->A1T_FILIAL == cFilialA1T .And. A1T->A1T_STATUS == AGUARDANDO	//0
+				// Trava de seguranca
+				if !LockByName(A1T->(A1T_FILIAL + A1T_NUM), .F., .F.)
+					A1T->(DbSkip())
+					Loop
+				endIf
+
+				While !::executeItemQueue(A1T->(A1T_FILIAL + A1T_NUM))
+					Sleep(1500)
+				EndDo
+
+				A1T->(DbSkip())
+
+				// Reiniciar o timeout
+				::nQtCurrentChecksTimout := 0
+			Enddo
+
+			lIsTimeIn := !(::checkTimeout())
+			::movingToErrorStoppedItems()
+
+			DbSelectArea("A1T")
+			A1T->(DbSetOrder(2)) // A1T_FILIAL, A1T_STATUS, A1T_DTREC, A1T_HRREC
+
+			lIsTimeIn := (A1T->(DbSeek(cFilialA1T + AGUARDANDO)) .Or. lIsTimeIn)	 //0
+		EndDo
+		// Encerrar threads do manual job
+		::downProcessQueue()
+	EndIf
+
+	A1T->(DbCloseArea())
+
+	FwRestArea(aAreaA1T)
+	FwRestArea(aArea)
+	aSize(aAreaA1T, 0)
+	aSize(aArea, 0)
+
+	// Finalizar Thread
+	queueProcess():delThreadStatus(::oQueueProcess:getGlobalVarPrefix())
+	queueProcess():delLastHello(::oQueueProcess:getGlobalVarPrefix())
+	QUIT
+
+return nil
+
+//----------------------------------------------------------------------------------------------------
+/*/ {Protheus.doc} salesQueueOrchestrator::movingToErrorStoppedItems()
+	Atualiza o status para erro de itens que iniciaram o processamento a cerca de 10 minutos, porem nao 
+	terminaram o processamento, provavelmente por conta de alguma falha ou erro no processamento.
+	@type		method
+	@version	12.1.33
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		09/09/2022
+	@return		nil
+/*/
+//----------------------------------------------------------------------------------------------------
+method movingToErrorStoppedItems() class salesQueueOrchestrator
+
+	Local aArea			:= GetArea()        as array
+	Local cError		                    as character
+	Local cErrorParse	                    as character
+	Local cFilialA1T	:= FwXFilial("A1T") as character
+	Local jBody			                    as json
+	Local nOperation	                    as numeric
+	Local cSource		                    as character
+	Local cQueryStoppedItens                as character
+	Local nPosPrepared                      as numeric
+	Local cAliasQueryStoppedItens           as character
+
+	// Identificar os itens que estao processando e podem ter ficado travados
+	cQueryStoppedItens += "SELECT " + CRLF
+	cQueryStoppedItens += "	A1T.A1T_NUM " + CRLF
+	cQueryStoppedItens += "FROM " + CRLF
+	cQueryStoppedItens += "	" + RetSQLName("A1T") + " A1T " + CRLF
+	cQueryStoppedItens += "WHERE " + CRLF
+	cQueryStoppedItens += "	A1T.A1T_FILIAL = '" + xFilial("A1T") + "' " + CRLF
+	cQueryStoppedItens += "		AND " + CRLF
+	cQueryStoppedItens += "	A1T.A1T_STATUS = '" + PROCESSANDO + "' " + CRLF
+	cQueryStoppedItens += "		AND " + CRLF
+	cQueryStoppedItens += "	A1T.D_E_L_E_T_ = ' '	  " + CRLF
+
+	cMD5 := MD5(cQueryStoppedItens) 
+	If (nPosPrepared := Ascan(__aPrepared,{|x| x[2] == cMD5})) == 0 
+		cQueryStoppedItens := ChangeQuery(cQueryStoppedItens)
+		Aadd(__aPrepared, {FwExecStatement():New(cQueryStoppedItens) ,cMD5})
+		nPosPrepared := Len(__aPrepared)
+	Endif 
+
+	cAliasQueryStoppedItens := getNextAlias()
+	__aPrepared[nPosPrepared][1]:OpenAlias(cAliasQueryStoppedItens)
+	dbselectarea(cAliasQueryStoppedItens)
+
+	DbSelectArea("A1T")
+	A1T->(DbSetOrder(1)) // A1T_FILIAL, A1T_NUM
+
+	While (cAliasQueryStoppedItens)->(!Eof())
+		
+		if A1T->(DbSeek(cFilialA1T + (cAliasQueryStoppedItens)->A1T_NUM)) .And. A1T->A1T_STATUS == PROCESSANDO
+			cSource := Alltrim(A1T->A1T_ROTINA)
+			// Verificar se o item da fila é considerado como travado
+			if (A1T->A1T_DTREC == Date() .And. ElapTime(A1T->A1T_HRREC + ":00", Time()) > "00:10:00") .Or. A1T->A1T_DTREC < Date()
+
+				nOperation := Val(A1T->A1T_TPOPER)
+				cError := STR0001 + ' ' + A1T->A1T_NUM		// "Ocorreu um erro no processamento do registro:"
+
+				if TGV002UpdateStatus(ERROR, cError, CValToChar(nOperation))
+					jBody := JsonObject():New()
+					cErrorParse := jBody:FromJson(A1T->A1T_JRECEB)
+
+					if Empty(cErrorParse)
+						jBody := jBody:GetJsonObject("json")
+						cSeller := getSellerFromJson(jBody, nOperation == 5)
+						if !Empty(cSeller)
+							NotifySeller("", cSeller, nOperation, cError, A1T->A1T_NUM, .T., cSource)
+						endif
+					endif
+				endif
+				UnLockByName(A1T->(A1T_FILIAL + A1T_NUM), .F., .F.)
+				FreeObj(jBody)
+			endif
+		endIf
+
+		(cAliasQueryStoppedItens)->(DbSkip())
+
+	Enddo
+
+	(cAliasQueryStoppedItens)->(DbCloseArea())
+	A1T->(DbCloseArea())
+	RestArea(aArea)
+	aSize(aArea, 0)
+
+return nil
+
+//----------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} salesQueueOrchestrator::destroy()
+	Realiza a finalização da existência da instância do objeto
+	@type		method
+	@version	12.1.33
+	@author		Rafael Mota Previdi / Squad CRM & Faturamento
+	@since		14/09/2022
+	@return		Nil
+/*/
+//----------------------------------------------------------------------------------------------------
+method destroy() class salesQueueOrchestrator
+	freeObj(::oQueueProcess)
+return nil
+

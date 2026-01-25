@@ -1,0 +1,273 @@
+#INCLUDE "tlpp-core.th"
+#include "backoffice.ngf.budgets.data.ch"
+
+NAMESPACE totvs.protheus.backoffice.ngf.budgets
+USING NAMESPACE gfin.util
+USING NAMESPACE gfin.api.orders
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+//-------------------------------------------------------------------
+/*/{Protheus.doc} apiBudgetsFields
+  campos defaults para retorno da API.
+
+  @param aApiFields   , array, campos informados
+  @param cFieldMonth  , character, campo referente ao mês solicitado
+
+  @return array, lista dos campos
+
+  @author Vinicius do Prado
+  @since mar|2022
+/*/
+//-------------------------------------------------------------------
+Function apiBudgetsFields(aApiFields as Array, cFieldMonth as Character) as Array
+  Local nField    := 1  as Numeric
+  Local cfields   := '' as Character
+  Local cFilTable := '' as Character
+
+  cFilTable := "E7_FILIAL"
+  cfields   := "E7_FILIAL, E7_NATUREZ, ED_DESCRIC, E7_MOEDA, " + cFieldMonth
+
+  For nField := 1 to Len(aApiFields)
+    If !(aApiFields[nField] $ cfields)
+      cfields += ',' + aApiFields[nField]
+    Endif
+  Next
+
+  // retira o campo de filial se for compartilhado
+  If FWModeAccess("SE7", 1) == 'C'
+    StrTran(cfields, cFilTable, '')
+  Endif
+
+Return STRtoArray(cfields, ',')
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} apiBudgetsQuery
+  query para retorno da API.
+
+  @param cTable , character, tabela de busca dos movimentos (SE1/SE2)
+  @param cYear  , character, ano referênte ao periodo desejado
+
+  @return cQry  , character, query utilizada na api
+
+  @author Vinicius do Prado
+  @since mar|2022
+/*/
+//-------------------------------------------------------------------
+Function apiBudgetsQuery(cTable as Character, cYear as Character) as Character
+  Local nBudgetSize   := 0  as Numeric
+  Local nNatureSize   := 0  as Numeric
+  Local cFilJoinSED   := "" as Character
+  Local cQry		      := "" as Character
+  Local cType         := "" as Character
+
+  nBudgetSize   := Len(AllTrim(FWxFilial('SE7')))
+  nNatureSize   := Len(AllTrim(FWxFilial('SED')))
+  cType         := IIF(cTable $ 'SE1','R','D')
+
+  cFilJoinSED := totvs.protheus.backoffice.ngf.util.BranchRelation( {"SE7","E7_FILIAL","SE7"}, {"SED","ED_FILIAL","SED"} )  + " AND "
+
+  cQry := " SELECT #QueryFields# " 
+  cQry += " FROM " + RetSqlName("SE7") + " SE7 "
+  cQry += " INNER JOIN " + RetSqlName("SED") + " SED "
+  cQry +=   " ON " + cFilJoinSED
+  cQry +=   " SE7.E7_NATUREZ = SED.ED_CODIGO "
+  cQry +=     " AND SED.D_E_L_E_T_ = ' ' "
+  cQry += " WHERE SE7.D_E_L_E_T_ = ' ' "
+  cQry += " AND SED.ED_COND = '" + cType + "'"
+  cQry += " AND SE7.E7_ANO =  '" + cYear + "'"
+  cQry += " #QueryWhere#"
+
+Return cQry
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} apiBudgetsOrder
+  ordem da consulta para retorno da API
+
+  @return cQueryOrder, character, string de order para query
+
+  @author Vinicius do Prado
+  @since mar|2022
+/*/
+//-------------------------------------------------------------------
+Function apiBudgetsOrder() as Character
+  Local cQueryOrder as Character
+
+  cQueryOrder := "E7_FILIAL,E7_NATUREZ,ED_DESCRIC"
+
+Return cQueryOrder
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getMovementsByNature
+  obtém os movimentos de cada natureza no período.
+
+  @param cBudgetedNatures , character, naturezas orçadas no período
+  @param cMonth           , character, mês referênte ao período
+  @param cYear            , character, ano referênte ao período
+  @param cTable           , character, tabela de busca dos movimentos (SE1/SE2)
+
+  @return jResponse       , json, json com orçamentos e movimentos por periodo
+
+  @author Vinicius do Prado
+  @since mar|2022
+/*/
+//-------------------------------------------------------------------
+Function getMovementsByNature(cBudgetedNatures as Character, cMonth as Character, cYear as Character, cTable as Character, cQryFilterSE as Character) as Json
+  Local jResponse     as Json
+  Local dDateFrom     as Date
+  Local dDateTo       as Date
+  Local hashCache     as Object
+  Local nCount        := 0  as Numeric
+  Local nValue        := 0  as Numeric
+  Local nQuote        := 0  as Numeric
+  Local nDecs	        := 0  as Numeric
+  Local cQry		      := "" as Character
+  Local cFieldSE      := "" as Character
+  Local cCliFor       := "" as Character
+  Local cAlias        := "" as Character
+  Local aQryBinds     := {} as Array
+
+  hashCache   := FwHashMap():New()
+  jResponse   := JsonObject():new()
+  jResponse:FromJson(cBudgetedNatures)
+
+  dDateFrom   := stringIsoToDate(cYear + "-" + cMonth + "-" + "01")
+  dDateTo     := LastDay(dDateFrom)
+  cAlias      := GetNextAlias()
+  nDecs		    := MsDecimais(1)
+
+  If cTable $ 'SE1'
+    cFieldSE := cTable + '.E1_'
+    cCliFor  := 'CLIENTE'
+  Else
+    cFieldSE := cTable + '.E2_'
+    cCliFor  := 'FORNECE'
+  EndIf
+  
+  cQry := " SELECT "+ cFieldSE +"MOEDA MOEDA, "+ cFieldSE +"TXMOEDA TXMOEDA, "
+  cQry += cFieldSE +"TXMDCOR TXMDCOR, ISNULL(SUM("+ cFieldSE +"VALOR),0) TOTAL "
+  cQry += " FROM " + RetSqlName(cTable) + " " + cTable
+  cQry += " INNER JOIN " + RetSqlName("SE7") + " SE7 "
+  cQry += " ON "+ cFieldSE +"FILIAL = SE7.E7_FILIAL AND "
+  cQry += cFieldSE +"NATUREZ = SE7.E7_NATUREZ AND "
+  cQry += " SE7.E7_ANO =  '" + cYear + "' AND "
+  cQry += " SE7.D_E_L_E_T_ = ' ' "
+  cQry += " WHERE "
+  cQry += cFieldSE +"NATUREZ  = ? "
+  cQry += " AND "+ cFieldSE +"VENCREA BETWEEN '" + DTOS(dDateFrom) + "' AND '" + DTOS(dDateTo) + "' "
+  cQry += " AND "+ cFieldSE +"TIPO NOT IN "+ FormatIn(MVABATIM+"|"+MVCOFINS+"|"+MVPIS+"|"+MVCS,"|")
+  cQry += cQryFilterSE // Filtros personalizados
+  cQry += " AND "+ cTable +".D_E_L_E_T_ = ' ' "
+  cQry += " GROUP BY "+ cFieldSE +"MOEDA, "+ cFieldSE +"TXMOEDA, "+ cFieldSE +"TXMDCOR "
+  
+  cQry := ChangeQuery(cQry)
+  
+  For nCount := 1 to Len(jResponse['items'])
+    nTotal    := 0
+    aQryBinds := {}
+    AAdd(aQryBinds, jResponse['items'][nCount]['e7_naturez'])
+
+    MPSysOpenQuery(cQry,cAlias,,,aQryBinds)
+
+    While (cAlias)->(!Eof())
+      nValue := (cAlias)->TOTAL
+
+      If (cAlias)->MOEDA > 1
+        If (cAlias)->TXMOEDA > 0 // taxa contratada
+          If (cAlias)->TXMDCOR > 0  // se existir variação menetaria
+            nQuote := (cAlias)->TXMDCOR
+          Else
+            nQuote := (cAlias)->TXMOEDA
+          EndIf
+        Else  // taxa do dia
+          If hashCache:containsKey((cAlias)->MOEDA)
+            nQuote := hashCache:get((cAlias)->MOEDA)
+          Else
+            nQuote := gfin.util.currencyLastQuote(cValToChar((cAlias)->MOEDA), Dtos(dDataBase))
+            hashCache:put((cAlias)->MOEDA, nQuote)
+          EndIf
+        EndIf
+        nValue := nValue * nQuote
+      EndIf
+
+      nTotal += nValue
+      (cAlias)->(DbSkip())
+    EndDo
+
+    (cAlias)->(DbCloseArea())
+
+    jResponse['items'][nCount]['total'] := Round(nTotal, nDecs+1)
+  Next nCount
+
+  FreeObj(hashCache)
+
+Return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} formatResponse
+  formata o response da api.
+
+  @param jBudgetedNatures , json, naturezas orçadas no período
+  @param cFieldMonth      , character, campo referênte ao mês solicitado
+
+  @return cQry            , character, query utilizada na api
+
+  @author Vinicius do Prado
+  @since mar|2022
+/*/
+//-------------------------------------------------------------------
+Function formatResponse(jBudgetedNatures as Json, cFieldMonth as Character) as Json
+  Local cField    := "" as Character
+  Local nCount    := 0  as Numeric
+  Local nDecs	    := 0  as Numeric
+  Local nQuote    := 0  as Numeric
+  Local nCurrency := 0  as Numeric
+  
+  cFieldMonth := LOWER(cFieldMonth)
+  nDecs		    := MsDecimais(1)
+
+  For nCount := 1 to Len(jBudgetedNatures['items'])
+    cField    := jBudgetedNatures['items'][nCount][cFieldMonth]
+    nCurrency := jBudgetedNatures['items'][nCount]['e7_moeda']
+    nQuote    := gfin.util.currencyLastQuote(cValToChar(nCurrency), Dtos(dDataBase))
+
+    jBudgetedNatures['items'][nCount][cFieldMonth] := Round(NoRound(xMoeda(cField, nCurrency, 1, dDatabase, nDecs+1, nQuote, 1), nDecs+1), nDecs+1)
+  
+  Next nCount
+
+Return jBudgetedNatures
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} formatResponseStruct
+  formata a estrutura do response retornado pela api.
+
+  @param aBudgetedNatures  , array, naturezas orçadas no período
+  @param cFieldMonth       , character, campo referênte ao mês solicitado
+
+  @return aBudgetedNatures , array, array contendo a estrutura formatada
+
+  @author Vinicius do Prado
+  @since mar|2022
+/*/
+//-------------------------------------------------------------------
+Function formatResponseStruct(aBudgetedNatures as Array, cFieldMonth as Character) as Array
+  Local aPredicted  := {} as Array
+  Local nArraySize  := 0 as Numeric
+
+  cFieldMonth := Lower(cFieldMonth)
+  nArraySize  := Len(aBudgetedNatures)
+  
+  aEval(aBudgetedNatures, { | x | Iif( x[1][2] == "ed_descric", x[3][2] := STR0001, ) }) // Descrição
+  
+  aEval(aBudgetedNatures, { | x | Iif( x[1][2] == cFieldMonth, x[3][2] := STR0002, ) }) // Valor Orçado
+  aEval(aBudgetedNatures, { | x | Iif( x[1][2] == cFieldMonth, x[4][2] := STR0002, ) }) // Valor Orçado
+
+
+  AAdd(aPredicted, { "field"       , "total" })
+  AAdd(aPredicted, { "type"        , "N" })
+  AAdd(aPredicted, { "title"       , STR0003 }) // Valor Previsto
+  AAdd(aPredicted, { "xBox"        , .F. })
+  AAdd(aPredicted, { "picture"     , "@E 999,999,999.99" })
+  AAdd(aPredicted, { "description" , STR0003 }) // Valor Previsto
+
+  AAdd(aBudgetedNatures, aPredicted)
+
+Return aBudgetedNatures

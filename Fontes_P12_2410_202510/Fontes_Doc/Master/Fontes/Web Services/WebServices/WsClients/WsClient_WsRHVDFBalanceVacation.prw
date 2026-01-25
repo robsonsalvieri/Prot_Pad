@@ -1,0 +1,847 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "apwebsrv.ch"
+
+/* ===============================================================================
+WSDL Location    http://localhost:8083/ws/RHVDFBALANCEVACATION.apw?WSDL
+Gerado em        12/03/18 13:49:39
+Observações      Código-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Alterações neste arquivo podem causar funcionamento incorreto
+                 e serão perdidas caso o código-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _REHSCLQ ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSRHVDFBALANCEVACATION
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSRHVDFBALANCEVACATION
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD ADDVDFBALANCEVACREQUEST
+	WSMETHOD CHECKALLOW
+	WSMETHOD GETPERPLANNED
+	WSMETHOD GETSOLICPLANNED
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   oWSREQUEST                AS RHVDFBALANCEVACATION_TREQUEST
+	WSDATA   oWSVDFBALANCEVACREQUEST   AS RHVDFBALANCEVACATION_TVDFBALANCEVAC
+	WSDATA   cADDVDFBALANCEVACREQUESTRESULT AS string
+	WSDATA   cEMPLOYEEFIL              AS string
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   cPD                       AS string
+	WSDATA   cDAYSALLOW                AS string
+	WSDATA   cINITIALDATE              AS string
+	WSDATA   cTYPESOLIC                AS string
+	WSDATA   cCHECKALLOWRESULT         AS string
+	WSDATA   oWSGETPERPLANNEDRESULT    AS RHVDFBALANCEVACATION_TPLANDATA
+	WSDATA   cFINALDATE                AS string
+	WSDATA   cSTATUSSOLIC              AS string
+	WSDATA   oWSGETSOLICPLANNEDRESULT  AS RHVDFBALANCEVACATION_TSOLICDATA
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	WSDATA   oWSTREQUEST               AS RHVDFBALANCEVACATION_TREQUEST
+	WSDATA   oWSTVDFBALANCEVAC         AS RHVDFBALANCEVACATION_TVDFBALANCEVAC
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSRHVDFBALANCEVACATION
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O Código-Fonte Client atual requer os executáveis do Protheus Build [7.00.131227A-20180425 NG] ou superior. Atualize o Protheus ou gere o Código-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSRHVDFBALANCEVACATION
+	::oWSREQUEST         := RHVDFBALANCEVACATION_TREQUEST():New()
+	::oWSVDFBALANCEVACREQUEST := RHVDFBALANCEVACATION_TVDFBALANCEVAC():New()
+	::oWSGETPERPLANNEDRESULT := RHVDFBALANCEVACATION_TPLANDATA():New()
+	::oWSGETSOLICPLANNEDRESULT := RHVDFBALANCEVACATION_TSOLICDATA():New()
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSTREQUEST        := ::oWSREQUEST
+	::oWSTVDFBALANCEVAC  := ::oWSVDFBALANCEVACREQUEST
+Return
+
+WSMETHOD RESET WSCLIENT WSRHVDFBALANCEVACATION
+	::oWSREQUEST         := NIL 
+	::oWSVDFBALANCEVACREQUEST := NIL 
+	::cADDVDFBALANCEVACREQUESTRESULT := NIL 
+	::cEMPLOYEEFIL       := NIL 
+	::cREGISTRATION      := NIL 
+	::cPD                := NIL 
+	::cDAYSALLOW         := NIL 
+	::cINITIALDATE       := NIL 
+	::cTYPESOLIC         := NIL 
+	::cCHECKALLOWRESULT  := NIL 
+	::oWSGETPERPLANNEDRESULT := NIL 
+	::cFINALDATE         := NIL 
+	::cSTATUSSOLIC       := NIL 
+	::oWSGETSOLICPLANNEDRESULT := NIL 
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSTREQUEST        := NIL
+	::oWSTVDFBALANCEVAC  := NIL
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSRHVDFBALANCEVACATION
+Local oClone := WSRHVDFBALANCEVACATION():New()
+	oClone:_URL          := ::_URL 
+	oClone:oWSREQUEST    :=  IIF(::oWSREQUEST = NIL , NIL ,::oWSREQUEST:Clone() )
+	oClone:oWSVDFBALANCEVACREQUEST :=  IIF(::oWSVDFBALANCEVACREQUEST = NIL , NIL ,::oWSVDFBALANCEVACREQUEST:Clone() )
+	oClone:cADDVDFBALANCEVACREQUESTRESULT := ::cADDVDFBALANCEVACREQUESTRESULT
+	oClone:cEMPLOYEEFIL  := ::cEMPLOYEEFIL
+	oClone:cREGISTRATION := ::cREGISTRATION
+	oClone:cPD           := ::cPD
+	oClone:cDAYSALLOW    := ::cDAYSALLOW
+	oClone:cINITIALDATE  := ::cINITIALDATE
+	oClone:cTYPESOLIC    := ::cTYPESOLIC
+	oClone:cCHECKALLOWRESULT := ::cCHECKALLOWRESULT
+	oClone:oWSGETPERPLANNEDRESULT :=  IIF(::oWSGETPERPLANNEDRESULT = NIL , NIL ,::oWSGETPERPLANNEDRESULT:Clone() )
+	oClone:cFINALDATE    := ::cFINALDATE
+	oClone:cSTATUSSOLIC  := ::cSTATUSSOLIC
+	oClone:oWSGETSOLICPLANNEDRESULT :=  IIF(::oWSGETSOLICPLANNEDRESULT = NIL , NIL ,::oWSGETSOLICPLANNEDRESULT:Clone() )
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	oClone:oWSTREQUEST   := oClone:oWSREQUEST
+	oClone:oWSTVDFBALANCEVAC := oClone:oWSVDFBALANCEVACREQUEST
+Return oClone
+
+// WSDL Method ADDVDFBALANCEVACREQUEST of Service WSRHVDFBALANCEVACATION
+
+WSMETHOD ADDVDFBALANCEVACREQUEST WSSEND oWSREQUEST,oWSVDFBALANCEVACREQUEST WSRECEIVE cADDVDFBALANCEVACREQUESTRESULT WSCLIENT WSRHVDFBALANCEVACATION
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<ADDVDFBALANCEVACREQUEST xmlns="http://localhost:8083/">'
+cSoap += WSSoapValue("REQUEST", ::oWSREQUEST, oWSREQUEST , "TREQUEST", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VDFBALANCEVACREQUEST", ::oWSVDFBALANCEVACREQUEST, oWSVDFBALANCEVACREQUEST , "TVDFBALANCEVAC", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</ADDVDFBALANCEVACREQUEST>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://localhost:8083/ADDVDFBALANCEVACREQUEST",; 
+	"DOCUMENT","http://localhost:8083/",,"1.031217",; 
+	"http://localhost:8083/ws/RHVDFBALANCEVACATION.apw")
+
+::Init()
+::cADDVDFBALANCEVACREQUESTRESULT :=  WSAdvValue( oXmlRet,"_ADDVDFBALANCEVACREQUESTRESPONSE:_ADDVDFBALANCEVACREQUESTRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CHECKALLOW of Service WSRHVDFBALANCEVACATION
+
+WSMETHOD CHECKALLOW WSSEND cEMPLOYEEFIL,cREGISTRATION,cPD,cDAYSALLOW,cINITIALDATE,cTYPESOLIC WSRECEIVE cCHECKALLOWRESULT WSCLIENT WSRHVDFBALANCEVACATION
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CHECKALLOW xmlns="http://localhost:8083/">'
+cSoap += WSSoapValue("EMPLOYEEFIL", ::cEMPLOYEEFIL, cEMPLOYEEFIL , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PD", ::cPD, cPD , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("DAYSALLOW", ::cDAYSALLOW, cDAYSALLOW , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("INITIALDATE", ::cINITIALDATE, cINITIALDATE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("TYPESOLIC", ::cTYPESOLIC, cTYPESOLIC , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CHECKALLOW>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://localhost:8083/CHECKALLOW",; 
+	"DOCUMENT","http://localhost:8083/",,"1.031217",; 
+	"http://localhost:8083/ws/RHVDFBALANCEVACATION.apw")
+
+::Init()
+::cCHECKALLOWRESULT  :=  WSAdvValue( oXmlRet,"_CHECKALLOWRESPONSE:_CHECKALLOWRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETPERPLANNED of Service WSRHVDFBALANCEVACATION
+
+WSMETHOD GETPERPLANNED WSSEND cEMPLOYEEFIL,cREGISTRATION,cPD,cINITIALDATE,cTYPESOLIC WSRECEIVE oWSGETPERPLANNEDRESULT WSCLIENT WSRHVDFBALANCEVACATION
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETPERPLANNED xmlns="http://localhost:8083/">'
+cSoap += WSSoapValue("EMPLOYEEFIL", ::cEMPLOYEEFIL, cEMPLOYEEFIL , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PD", ::cPD, cPD , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("INITIALDATE", ::cINITIALDATE, cINITIALDATE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("TYPESOLIC", ::cTYPESOLIC, cTYPESOLIC , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETPERPLANNED>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://localhost:8083/GETPERPLANNED",; 
+	"DOCUMENT","http://localhost:8083/",,"1.031217",; 
+	"http://localhost:8083/ws/RHVDFBALANCEVACATION.apw")
+
+::Init()
+::oWSGETPERPLANNEDRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETPERPLANNEDRESPONSE:_GETPERPLANNEDRESULT","TPLANDATA",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETSOLICPLANNED of Service WSRHVDFBALANCEVACATION
+
+WSMETHOD GETSOLICPLANNED WSSEND cEMPLOYEEFIL,cREGISTRATION,cPD,cINITIALDATE,cFINALDATE,cTYPESOLIC,cSTATUSSOLIC WSRECEIVE oWSGETSOLICPLANNEDRESULT WSCLIENT WSRHVDFBALANCEVACATION
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETSOLICPLANNED xmlns="http://localhost:8083/">'
+cSoap += WSSoapValue("EMPLOYEEFIL", ::cEMPLOYEEFIL, cEMPLOYEEFIL , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PD", ::cPD, cPD , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("INITIALDATE", ::cINITIALDATE, cINITIALDATE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FINALDATE", ::cFINALDATE, cFINALDATE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("TYPESOLIC", ::cTYPESOLIC, cTYPESOLIC , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("STATUSSOLIC", ::cSTATUSSOLIC, cSTATUSSOLIC , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETSOLICPLANNED>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://localhost:8083/GETSOLICPLANNED",; 
+	"DOCUMENT","http://localhost:8083/",,"1.031217",; 
+	"http://localhost:8083/ws/RHVDFBALANCEVACATION.apw")
+
+::Init()
+::oWSGETSOLICPLANNEDRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETSOLICPLANNEDRESPONSE:_GETSOLICPLANNEDRESULT","TSOLICDATA",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure TREQUEST
+
+WSSTRUCT RHVDFBALANCEVACATION_TREQUEST
+	WSDATA   cAPPROVERBRANCH           AS string OPTIONAL
+	WSDATA   nAPPROVERLEVEL            AS integer OPTIONAL
+	WSDATA   cAPPROVERNAME             AS string OPTIONAL
+	WSDATA   cAPPROVERREGISTRATION     AS string OPTIONAL
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDEPARTAPR                AS string OPTIONAL
+	WSDATA   cEMPRESA                  AS string OPTIONAL
+	WSDATA   cEMPRESAAPR               AS string OPTIONAL
+	WSDATA   cEMPRESAINI               AS string OPTIONAL
+	WSDATA   oWSITEMS                  AS RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM OPTIONAL
+	WSDATA   nNROFLUIG                 AS integer OPTIONAL
+	WSDATA   cOBSERVATION              AS string
+	WSDATA   cORIGEM                   AS string OPTIONAL
+	WSDATA   cPARTICIPANTRH            AS string OPTIONAL
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   dREQUESTDATE              AS date OPTIONAL
+	WSDATA   oWSREQUESTTYPE            AS RHVDFBALANCEVACATION_TREQUESTTYPE OPTIONAL
+	WSDATA   dRESPONSEDATE             AS date OPTIONAL
+	WSDATA   cSOURCE                   AS string OPTIONAL
+	WSDATA   cSTARTERBRANCH            AS string OPTIONAL
+	WSDATA   cSTARTERKEY               AS string OPTIONAL
+	WSDATA   nSTARTERLEVEL             AS integer OPTIONAL
+	WSDATA   cSTARTERREGISTRATION      AS string OPTIONAL
+	WSDATA   oWSSTATUS                 AS RHVDFBALANCEVACATION_TREQUESTSTATUS OPTIONAL
+	WSDATA   cVISION                   AS string OPTIONAL
+	WSDATA   cWFAPROV                  AS string OPTIONAL
+	WSDATA   cWFID                     AS string OPTIONAL
+	WSDATA   cWFSTAGE                  AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TREQUEST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TREQUEST
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TREQUEST
+	Local oClone := RHVDFBALANCEVACATION_TREQUEST():NEW()
+	oClone:cAPPROVERBRANCH      := ::cAPPROVERBRANCH
+	oClone:nAPPROVERLEVEL       := ::nAPPROVERLEVEL
+	oClone:cAPPROVERNAME        := ::cAPPROVERNAME
+	oClone:cAPPROVERREGISTRATION := ::cAPPROVERREGISTRATION
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cCODE                := ::cCODE
+	oClone:cDEPARTAPR           := ::cDEPARTAPR
+	oClone:cEMPRESA             := ::cEMPRESA
+	oClone:cEMPRESAAPR          := ::cEMPRESAAPR
+	oClone:cEMPRESAINI          := ::cEMPRESAINI
+	oClone:oWSITEMS             := IIF(::oWSITEMS = NIL , NIL , ::oWSITEMS:Clone() )
+	oClone:nNROFLUIG            := ::nNROFLUIG
+	oClone:cOBSERVATION         := ::cOBSERVATION
+	oClone:cORIGEM              := ::cORIGEM
+	oClone:cPARTICIPANTRH       := ::cPARTICIPANTRH
+	oClone:cREGISTRATION        := ::cREGISTRATION
+	oClone:dREQUESTDATE         := ::dREQUESTDATE
+	oClone:oWSREQUESTTYPE       := IIF(::oWSREQUESTTYPE = NIL , NIL , ::oWSREQUESTTYPE:Clone() )
+	oClone:dRESPONSEDATE        := ::dRESPONSEDATE
+	oClone:cSOURCE              := ::cSOURCE
+	oClone:cSTARTERBRANCH       := ::cSTARTERBRANCH
+	oClone:cSTARTERKEY          := ::cSTARTERKEY
+	oClone:nSTARTERLEVEL        := ::nSTARTERLEVEL
+	oClone:cSTARTERREGISTRATION := ::cSTARTERREGISTRATION
+	oClone:oWSSTATUS            := IIF(::oWSSTATUS = NIL , NIL , ::oWSSTATUS:Clone() )
+	oClone:cVISION              := ::cVISION
+	oClone:cWFAPROV             := ::cWFAPROV
+	oClone:cWFID                := ::cWFID
+	oClone:cWFSTAGE             := ::cWFSTAGE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFBALANCEVACATION_TREQUEST
+	Local cSoap := ""
+	cSoap += WSSoapValue("APPROVERBRANCH", ::cAPPROVERBRANCH, ::cAPPROVERBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("APPROVERLEVEL", ::nAPPROVERLEVEL, ::nAPPROVERLEVEL , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("APPROVERNAME", ::cAPPROVERNAME, ::cAPPROVERNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("APPROVERREGISTRATION", ::cAPPROVERREGISTRATION, ::cAPPROVERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DEPARTAPR", ::cDEPARTAPR, ::cDEPARTAPR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPRESA", ::cEMPRESA, ::cEMPRESA , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPRESAAPR", ::cEMPRESAAPR, ::cEMPRESAAPR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPRESAINI", ::cEMPRESAINI, ::cEMPRESAINI , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ITEMS", ::oWSITEMS, ::oWSITEMS , "ARRAYOFTREQUESTITEM", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NROFLUIG", ::nNROFLUIG, ::nNROFLUIG , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("OBSERVATION", ::cOBSERVATION, ::cOBSERVATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ORIGEM", ::cORIGEM, ::cORIGEM , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PARTICIPANTRH", ::cPARTICIPANTRH, ::cPARTICIPANTRH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, ::cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REQUESTDATE", ::dREQUESTDATE, ::dREQUESTDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REQUESTTYPE", ::oWSREQUESTTYPE, ::oWSREQUESTTYPE , "TREQUESTTYPE", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("RESPONSEDATE", ::dRESPONSEDATE, ::dRESPONSEDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SOURCE", ::cSOURCE, ::cSOURCE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STARTERBRANCH", ::cSTARTERBRANCH, ::cSTARTERBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STARTERKEY", ::cSTARTERKEY, ::cSTARTERKEY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STARTERLEVEL", ::nSTARTERLEVEL, ::nSTARTERLEVEL , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STARTERREGISTRATION", ::cSTARTERREGISTRATION, ::cSTARTERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STATUS", ::oWSSTATUS, ::oWSSTATUS , "TREQUESTSTATUS", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VISION", ::cVISION, ::cVISION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("WFAPROV", ::cWFAPROV, ::cWFAPROV , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("WFID", ::cWFID, ::cWFID , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("WFSTAGE", ::cWFSTAGE, ::cWFSTAGE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure TVDFBALANCEVAC
+
+WSSTRUCT RHVDFBALANCEVACATION_TVDFBALANCEVAC
+	WSDATA   nALLOWDAYS                AS integer OPTIONAL
+	WSDATA   cEMPLOYEEFIL              AS string
+	WSDATA   cIDPUBLICATION            AS string OPTIONAL
+	WSDATA   cINITIALBASEDATE          AS string OPTIONAL
+	WSDATA   cPAYROLLCODE              AS string OPTIONAL
+	WSDATA   nPROGDAYS                 AS integer OPTIONAL
+	WSDATA   cPROGFINALDATE            AS string OPTIONAL
+	WSDATA   cPROGINITIALDATE          AS string OPTIONAL
+	WSDATA   nREGID                    AS integer OPTIONAL
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   cRI6KEY                   AS string OPTIONAL
+	WSDATA   cSEQUENCE                 AS string
+	WSDATA   cSUBSTBRANCH              AS string OPTIONAL
+	WSDATA   cSUBSTNAME                AS string OPTIONAL
+	WSDATA   cSUBSTREGISTRATION        AS string OPTIONAL
+	WSDATA   cTYPEDESCSOLIC            AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TVDFBALANCEVAC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TVDFBALANCEVAC
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TVDFBALANCEVAC
+	Local oClone := RHVDFBALANCEVACATION_TVDFBALANCEVAC():NEW()
+	oClone:nALLOWDAYS           := ::nALLOWDAYS
+	oClone:cEMPLOYEEFIL         := ::cEMPLOYEEFIL
+	oClone:cIDPUBLICATION       := ::cIDPUBLICATION
+	oClone:cINITIALBASEDATE     := ::cINITIALBASEDATE
+	oClone:cPAYROLLCODE         := ::cPAYROLLCODE
+	oClone:nPROGDAYS            := ::nPROGDAYS
+	oClone:cPROGFINALDATE       := ::cPROGFINALDATE
+	oClone:cPROGINITIALDATE     := ::cPROGINITIALDATE
+	oClone:nREGID               := ::nREGID
+	oClone:cREGISTRATION        := ::cREGISTRATION
+	oClone:cRI6KEY              := ::cRI6KEY
+	oClone:cSEQUENCE            := ::cSEQUENCE
+	oClone:cSUBSTBRANCH         := ::cSUBSTBRANCH
+	oClone:cSUBSTNAME           := ::cSUBSTNAME
+	oClone:cSUBSTREGISTRATION   := ::cSUBSTREGISTRATION
+	oClone:cTYPEDESCSOLIC       := ::cTYPEDESCSOLIC
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFBALANCEVACATION_TVDFBALANCEVAC
+	Local cSoap := ""
+	cSoap += WSSoapValue("ALLOWDAYS", ::nALLOWDAYS, ::nALLOWDAYS , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYEEFIL", ::cEMPLOYEEFIL, ::cEMPLOYEEFIL , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("IDPUBLICATION", ::cIDPUBLICATION, ::cIDPUBLICATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("INITIALBASEDATE", ::cINITIALBASEDATE, ::cINITIALBASEDATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PAYROLLCODE", ::cPAYROLLCODE, ::cPAYROLLCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PROGDAYS", ::nPROGDAYS, ::nPROGDAYS , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PROGFINALDATE", ::cPROGFINALDATE, ::cPROGFINALDATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PROGINITIALDATE", ::cPROGINITIALDATE, ::cPROGINITIALDATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REGID", ::nREGID, ::nREGID , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, ::cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("RI6KEY", ::cRI6KEY, ::cRI6KEY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SEQUENCE", ::cSEQUENCE, ::cSEQUENCE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SUBSTBRANCH", ::cSUBSTBRANCH, ::cSUBSTBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SUBSTNAME", ::cSUBSTNAME, ::cSUBSTNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SUBSTREGISTRATION", ::cSUBSTREGISTRATION, ::cSUBSTREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPEDESCSOLIC", ::cTYPEDESCSOLIC, ::cTYPEDESCSOLIC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure TPLANDATA
+
+WSSTRUCT RHVDFBALANCEVACATION_TPLANDATA
+	WSDATA   oWSITEMSOFPLAN            AS RHVDFBALANCEVACATION_ARRAYOFDATAPLAN OPTIONAL
+	WSDATA   nITEMSTOTAL               AS integer OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TPLANDATA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TPLANDATA
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TPLANDATA
+	Local oClone := RHVDFBALANCEVACATION_TPLANDATA():NEW()
+	oClone:oWSITEMSOFPLAN       := IIF(::oWSITEMSOFPLAN = NIL , NIL , ::oWSITEMSOFPLAN:Clone() )
+	oClone:nITEMSTOTAL          := ::nITEMSTOTAL
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFBALANCEVACATION_TPLANDATA
+	Local oNode1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_ITEMSOFPLAN","ARRAYOFDATAPLAN",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSITEMSOFPLAN := RHVDFBALANCEVACATION_ARRAYOFDATAPLAN():New()
+		::oWSITEMSOFPLAN:SoapRecv(oNode1)
+	EndIf
+	::nITEMSTOTAL        :=  WSAdvValue( oResponse,"_ITEMSTOTAL","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+Return
+
+// WSDL Data Structure TSOLICDATA
+
+WSSTRUCT RHVDFBALANCEVACATION_TSOLICDATA
+	WSDATA   oWSITEMSOFSOLIC           AS RHVDFBALANCEVACATION_ARRAYOFDATASOLIC OPTIONAL
+	WSDATA   nITEMSSOLICTOTAL          AS integer OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TSOLICDATA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TSOLICDATA
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TSOLICDATA
+	Local oClone := RHVDFBALANCEVACATION_TSOLICDATA():NEW()
+	oClone:oWSITEMSOFSOLIC      := IIF(::oWSITEMSOFSOLIC = NIL , NIL , ::oWSITEMSOFSOLIC:Clone() )
+	oClone:nITEMSSOLICTOTAL     := ::nITEMSSOLICTOTAL
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFBALANCEVACATION_TSOLICDATA
+	Local oNode1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_ITEMSOFSOLIC","ARRAYOFDATASOLIC",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSITEMSOFSOLIC := RHVDFBALANCEVACATION_ARRAYOFDATASOLIC():New()
+		::oWSITEMSOFSOLIC:SoapRecv(oNode1)
+	EndIf
+	::nITEMSSOLICTOTAL   :=  WSAdvValue( oResponse,"_ITEMSSOLICTOTAL","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFTREQUESTITEM
+
+WSSTRUCT RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM
+	WSDATA   oWSTREQUESTITEM           AS RHVDFBALANCEVACATION_TREQUESTITEM OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM
+	::oWSTREQUESTITEM      := {} // Array Of  RHVDFBALANCEVACATION_TREQUESTITEM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM
+	Local oClone := RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM():NEW()
+	oClone:oWSTREQUESTITEM := NIL
+	If ::oWSTREQUESTITEM <> NIL 
+		oClone:oWSTREQUESTITEM := {}
+		aEval( ::oWSTREQUESTITEM , { |x| aadd( oClone:oWSTREQUESTITEM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFBALANCEVACATION_ARRAYOFTREQUESTITEM
+	Local cSoap := ""
+	aEval( ::oWSTREQUESTITEM , {|x| cSoap := cSoap  +  WSSoapValue("TREQUESTITEM", x , x , "TREQUESTITEM", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTTYPE
+
+WSSTRUCT RHVDFBALANCEVACATION_TREQUESTTYPE
+	WSDATA   cCODE                     AS string
+	WSDATA   cDESCRIPTION              AS string
+	WSDATA   cLINK                     AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TREQUESTTYPE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TREQUESTTYPE
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TREQUESTTYPE
+	Local oClone := RHVDFBALANCEVACATION_TREQUESTTYPE():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cLINK                := ::cLINK
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFBALANCEVACATION_TREQUESTTYPE
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCRIPTION", ::cDESCRIPTION, ::cDESCRIPTION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LINK", ::cLINK, ::cLINK , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTSTATUS
+
+WSSTRUCT RHVDFBALANCEVACATION_TREQUESTSTATUS
+	WSDATA   cCODE                     AS string
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TREQUESTSTATUS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TREQUESTSTATUS
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TREQUESTSTATUS
+	Local oClone := RHVDFBALANCEVACATION_TREQUESTSTATUS():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFBALANCEVACATION_TREQUESTSTATUS
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCRIPTION", ::cDESCRIPTION, ::cDESCRIPTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFDATAPLAN
+
+WSSTRUCT RHVDFBALANCEVACATION_ARRAYOFDATAPLAN
+	WSDATA   oWSDATAPLAN               AS RHVDFBALANCEVACATION_DATAPLAN OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATAPLAN
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATAPLAN
+	::oWSDATAPLAN          := {} // Array Of  RHVDFBALANCEVACATION_DATAPLAN():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATAPLAN
+	Local oClone := RHVDFBALANCEVACATION_ARRAYOFDATAPLAN():NEW()
+	oClone:oWSDATAPLAN := NIL
+	If ::oWSDATAPLAN <> NIL 
+		oClone:oWSDATAPLAN := {}
+		aEval( ::oWSDATAPLAN , { |x| aadd( oClone:oWSDATAPLAN , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATAPLAN
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_DATAPLAN","DATAPLAN",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSDATAPLAN , RHVDFBALANCEVACATION_DATAPLAN():New() )
+			::oWSDATAPLAN[len(::oWSDATAPLAN)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFDATASOLIC
+
+WSSTRUCT RHVDFBALANCEVACATION_ARRAYOFDATASOLIC
+	WSDATA   oWSDATASOLIC              AS RHVDFBALANCEVACATION_DATASOLIC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATASOLIC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATASOLIC
+	::oWSDATASOLIC         := {} // Array Of  RHVDFBALANCEVACATION_DATASOLIC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATASOLIC
+	Local oClone := RHVDFBALANCEVACATION_ARRAYOFDATASOLIC():NEW()
+	oClone:oWSDATASOLIC := NIL
+	If ::oWSDATASOLIC <> NIL 
+		oClone:oWSDATASOLIC := {}
+		aEval( ::oWSDATASOLIC , { |x| aadd( oClone:oWSDATASOLIC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFBALANCEVACATION_ARRAYOFDATASOLIC
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_DATASOLIC","DATASOLIC",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSDATASOLIC , RHVDFBALANCEVACATION_DATASOLIC():New() )
+			::oWSDATASOLIC[len(::oWSDATASOLIC)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TREQUESTITEM
+
+WSSTRUCT RHVDFBALANCEVACATION_TREQUESTITEM
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cFIELDDESCRIPTION         AS string OPTIONAL
+	WSDATA   cFIELDNAME                AS string
+	WSDATA   cNEWVALUE                 AS string
+	WSDATA   cPREVIOUSVALUE            AS string OPTIONAL
+	WSDATA   cREQUESTCODE              AS string
+	WSDATA   nSEQUENCE                 AS integer
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_TREQUESTITEM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_TREQUESTITEM
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_TREQUESTITEM
+	Local oClone := RHVDFBALANCEVACATION_TREQUESTITEM():NEW()
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cFIELDDESCRIPTION    := ::cFIELDDESCRIPTION
+	oClone:cFIELDNAME           := ::cFIELDNAME
+	oClone:cNEWVALUE            := ::cNEWVALUE
+	oClone:cPREVIOUSVALUE       := ::cPREVIOUSVALUE
+	oClone:cREQUESTCODE         := ::cREQUESTCODE
+	oClone:nSEQUENCE            := ::nSEQUENCE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFBALANCEVACATION_TREQUESTITEM
+	Local cSoap := ""
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FIELDDESCRIPTION", ::cFIELDDESCRIPTION, ::cFIELDDESCRIPTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FIELDNAME", ::cFIELDNAME, ::cFIELDNAME , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NEWVALUE", ::cNEWVALUE, ::cNEWVALUE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PREVIOUSVALUE", ::cPREVIOUSVALUE, ::cPREVIOUSVALUE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REQUESTCODE", ::cREQUESTCODE, ::cREQUESTCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SEQUENCE", ::nSEQUENCE, ::nSEQUENCE , "integer", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DATAPLAN
+
+WSSTRUCT RHVDFBALANCEVACATION_DATAPLAN
+	WSDATA   nALLOWDAYS                AS integer OPTIONAL
+	WSDATA   cBASEDATE                 AS string OPTIONAL
+	WSDATA   cFINALDATEPROG            AS string OPTIONAL
+	WSDATA   cIDBASE                   AS string OPTIONAL
+	WSDATA   cIDPUBLICATION            AS string OPTIONAL
+	WSDATA   cINITIALDATEPROG          AS string OPTIONAL
+	WSDATA   nPROGDAYS                 AS integer OPTIONAL
+	WSDATA   nREGID                    AS integer OPTIONAL
+	WSDATA   cRI6KEY                   AS string OPTIONAL
+	WSDATA   cSEQUENCE                 AS string OPTIONAL
+	WSDATA   cSTATUSCODE               AS string OPTIONAL
+	WSDATA   cSTATUSDESCRIP            AS string OPTIONAL
+	WSDATA   cSUBSTBRANCH              AS string OPTIONAL
+	WSDATA   cSUBSTNAME                AS string OPTIONAL
+	WSDATA   cSUBSTREGISTRATION        AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_DATAPLAN
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_DATAPLAN
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_DATAPLAN
+	Local oClone := RHVDFBALANCEVACATION_DATAPLAN():NEW()
+	oClone:nALLOWDAYS           := ::nALLOWDAYS
+	oClone:cBASEDATE            := ::cBASEDATE
+	oClone:cFINALDATEPROG       := ::cFINALDATEPROG
+	oClone:cIDBASE              := ::cIDBASE
+	oClone:cIDPUBLICATION       := ::cIDPUBLICATION
+	oClone:cINITIALDATEPROG     := ::cINITIALDATEPROG
+	oClone:nPROGDAYS            := ::nPROGDAYS
+	oClone:nREGID               := ::nREGID
+	oClone:cRI6KEY              := ::cRI6KEY
+	oClone:cSEQUENCE            := ::cSEQUENCE
+	oClone:cSTATUSCODE          := ::cSTATUSCODE
+	oClone:cSTATUSDESCRIP       := ::cSTATUSDESCRIP
+	oClone:cSUBSTBRANCH         := ::cSUBSTBRANCH
+	oClone:cSUBSTNAME           := ::cSUBSTNAME
+	oClone:cSUBSTREGISTRATION   := ::cSUBSTREGISTRATION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFBALANCEVACATION_DATAPLAN
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::nALLOWDAYS         :=  WSAdvValue( oResponse,"_ALLOWDAYS","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cBASEDATE          :=  WSAdvValue( oResponse,"_BASEDATE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFINALDATEPROG     :=  WSAdvValue( oResponse,"_FINALDATEPROG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cIDBASE            :=  WSAdvValue( oResponse,"_IDBASE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cIDPUBLICATION     :=  WSAdvValue( oResponse,"_IDPUBLICATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cINITIALDATEPROG   :=  WSAdvValue( oResponse,"_INITIALDATEPROG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nPROGDAYS          :=  WSAdvValue( oResponse,"_PROGDAYS","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::nREGID             :=  WSAdvValue( oResponse,"_REGID","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cRI6KEY            :=  WSAdvValue( oResponse,"_RI6KEY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSEQUENCE          :=  WSAdvValue( oResponse,"_SEQUENCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATUSCODE        :=  WSAdvValue( oResponse,"_STATUSCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATUSDESCRIP     :=  WSAdvValue( oResponse,"_STATUSDESCRIP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBSTBRANCH       :=  WSAdvValue( oResponse,"_SUBSTBRANCH","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBSTNAME         :=  WSAdvValue( oResponse,"_SUBSTNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBSTREGISTRATION :=  WSAdvValue( oResponse,"_SUBSTREGISTRATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure DATASOLIC
+
+WSSTRUCT RHVDFBALANCEVACATION_DATASOLIC
+	WSDATA   cATENDSOLIC               AS string OPTIONAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDATESOLIC                AS string OPTIONAL
+	WSDATA   cFINALDATEBASE            AS string OPTIONAL
+	WSDATA   cFINALDATEPROG            AS string OPTIONAL
+	WSDATA   cIDBASE                   AS string OPTIONAL
+	WSDATA   cINITIALDATEBASE          AS string OPTIONAL
+	WSDATA   cINITIALDATEPROG          AS string OPTIONAL
+	WSDATA   nREGID                    AS integer OPTIONAL
+	WSDATA   nSOLICDAYS                AS integer OPTIONAL
+	WSDATA   cSTATUSDESCRIP            AS string OPTIONAL
+	WSDATA   cSTATUSSOLIC              AS string OPTIONAL
+	WSDATA   cSUBSTBRANCH              AS string OPTIONAL
+	WSDATA   cSUBSTNAME                AS string OPTIONAL
+	WSDATA   cSUBSTREGISTRATION        AS string OPTIONAL
+	WSDATA   cTYPESOLIC                AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFBALANCEVACATION_DATASOLIC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFBALANCEVACATION_DATASOLIC
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFBALANCEVACATION_DATASOLIC
+	Local oClone := RHVDFBALANCEVACATION_DATASOLIC():NEW()
+	oClone:cATENDSOLIC          := ::cATENDSOLIC
+	oClone:cCODE                := ::cCODE
+	oClone:cDATESOLIC           := ::cDATESOLIC
+	oClone:cFINALDATEBASE       := ::cFINALDATEBASE
+	oClone:cFINALDATEPROG       := ::cFINALDATEPROG
+	oClone:cIDBASE              := ::cIDBASE
+	oClone:cINITIALDATEBASE     := ::cINITIALDATEBASE
+	oClone:cINITIALDATEPROG     := ::cINITIALDATEPROG
+	oClone:nREGID               := ::nREGID
+	oClone:nSOLICDAYS           := ::nSOLICDAYS
+	oClone:cSTATUSDESCRIP       := ::cSTATUSDESCRIP
+	oClone:cSTATUSSOLIC         := ::cSTATUSSOLIC
+	oClone:cSUBSTBRANCH         := ::cSUBSTBRANCH
+	oClone:cSUBSTNAME           := ::cSUBSTNAME
+	oClone:cSUBSTREGISTRATION   := ::cSUBSTREGISTRATION
+	oClone:cTYPESOLIC           := ::cTYPESOLIC
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFBALANCEVACATION_DATASOLIC
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cATENDSOLIC        :=  WSAdvValue( oResponse,"_ATENDSOLIC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDATESOLIC         :=  WSAdvValue( oResponse,"_DATESOLIC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFINALDATEBASE     :=  WSAdvValue( oResponse,"_FINALDATEBASE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFINALDATEPROG     :=  WSAdvValue( oResponse,"_FINALDATEPROG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cIDBASE            :=  WSAdvValue( oResponse,"_IDBASE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cINITIALDATEBASE   :=  WSAdvValue( oResponse,"_INITIALDATEBASE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cINITIALDATEPROG   :=  WSAdvValue( oResponse,"_INITIALDATEPROG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nREGID             :=  WSAdvValue( oResponse,"_REGID","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::nSOLICDAYS         :=  WSAdvValue( oResponse,"_SOLICDAYS","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cSTATUSDESCRIP     :=  WSAdvValue( oResponse,"_STATUSDESCRIP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATUSSOLIC       :=  WSAdvValue( oResponse,"_STATUSSOLIC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBSTBRANCH       :=  WSAdvValue( oResponse,"_SUBSTBRANCH","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBSTNAME         :=  WSAdvValue( oResponse,"_SUBSTNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBSTREGISTRATION :=  WSAdvValue( oResponse,"_SUBSTREGISTRATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cTYPESOLIC         :=  WSAdvValue( oResponse,"_TYPESOLIC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return

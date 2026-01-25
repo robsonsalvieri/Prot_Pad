@@ -1,0 +1,561 @@
+#include 'tlpp-core.th'
+
+namespace portal.cliente.invoices
+using namespace gfin.util
+using namespace portal.cliente.util
+using namespace totvs.protheus.backoffice.ngf.util
+
+Static __oHashPrepareCache := FwHashMap():New()
+Static __oTypeInv  As Object
+STATIC __PCINVQRY := ExistBlock("PCINVQRY")
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } InvoicesDataProtheus
+Classe para acesso aos dados do Protheus
+
+@Method getDataInvoices Retorna as notas fiscais.
+
+@author Renato Ito
+@since 19/08/2020
+/*/
+//-------------------------------------------------------------------
+Class InvoicesDataProtheus
+
+	Public Method New()
+	Public Method getDataInvoices() As Json
+	Public Method getDataInvoiceProducts() As Json
+
+EndClass
+
+
+Method new() Class InvoicesDataProtheus
+
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDataInvoices
+Retorna as notas fiscais.
+
+@param	customerId, character, código do cliente
+		storeId, character, loja do cliente
+		branches, array, filiais do sistema
+		filter, array, [atributo, operador, valor]
+
+@filter "invoiceCurrency": character,
+		"issueDate": string no formato YYYY-MM-DD
+
+@return json com os atributos
+		{
+			"result" : true
+			"response" : {
+				"items:{
+					"invoiceBranch": character,
+					"invoiceNumber": character,
+					"invoiceSerie": character,
+					"invoiceValue": numeric,
+					"invoiceCurrency": character,
+					"issueDate": character
+				}
+			}
+		}
+@author Renato Ito
+@since 19/08/2020
+/*/
+//-------------------------------------------------------------------
+Method getDataInvoices(customers As Array, filter As Array, order As Character, limit As Numeric, page As Numeric) As Json Class InvoicesDataProtheus
+	Local statement 		As Object
+	Local aliasInvoices		As Character
+	Local retValues 		As Array
+	Local response			As Json
+	Local queryParam		As Numeric
+	Local queryFilter		As Character
+	Local hasNext			As Logical
+	Local cQuery := ""		As Character
+	Local jCustomerPE 		As Json
+	Local aCustomerPE := {}	As Array
+	local cOrderFilter := "" As character
+	Local nCount := 0 As Numeric
+	Local lSkip := .F. As Logical
+	Local cTableTemporary := "" As Character
+	Local cTypeInvoice := "" As Character
+
+	queryParam	:= 1
+	retValues	:= {}
+	response	:= JsonObject():New()
+	hasNext		:= .F.
+
+	If (!empty(filter))
+		queryFilter := tranformQueryFilter(@filter)
+	EndIf
+
+	if (order != NIL)
+		cOrderFilter := transformOrder(order)
+	endif
+
+	cTableTemporary := CreateTemporaryCustomers(customers, "SF2")
+
+	If (!empty(queryFilter))
+		statement := createPrepareInvoicesFiltered(customers, queryFilter, cOrderFilter, cTableTemporary)
+	Else
+		statement := createPrepareInvoices(customers, cOrderFilter, cTableTemporary)
+	EndIf
+
+	If (!empty(filter))
+		For  queryParam := 1 to len(filter)
+			If valtype(filter[queryParam]) != 'A'
+				statement:SetString(0 + queryParam, filter[queryParam])
+			Else
+				statement:SetIn(0 + queryParam, filter[queryParam])
+			EndIf
+		Next
+	EndIf
+
+	cQuery := statement:GetFixQuery()
+
+	// Ponto de entrada para alteração da query de notas fiscais
+	If __PCINVQRY
+		For nCount := 1 to Len(customers)
+			jCustomerPE := {;
+				"filial": customers[nCount]['branchId'],;
+				"codigo": customers[nCount]['customerId'],;
+				"loja": customers[nCount]['storeId'];
+			}
+			AAdd(aCustomerPE, jCustomerPE)
+		Next nCount
+		
+		cQuery := ExecBlock("PCINVQRY", .F., .F., { cQuery, aCustomerPE })
+		nCount := 0
+	EndIf
+
+	aliasInvoices := MpSysOpenQuery(cQuery)
+
+	While ((aliasInvoices)->(!EOf()))
+
+		If nCount == limit
+			hasNext := (aliasInvoices)->(!EOF())
+			Exit
+		Endif
+
+		If page > 1 .and. !lSkip
+			lSkip := .T.
+			If ((page-1) * limit) > 0
+				(aliasInvoices)->( DbSkip( (page-1) * limit ) )
+			EndIf
+		Endif
+
+		cTypeInvoice := getTypeInvoice((aliasInvoices)->F2_FILIAL, (aliasInvoices)->F2_DOC, (aliasInvoices)->F2_SERIE, (aliasInvoices)->F2_CLIENTE, (aliasInvoices)->F2_LOJA)
+
+		AAdd(retValues, {;
+			{"customerBranch" , FWxFilial( 'SA1' , (aliasInvoices)->F2_FILIAL)},;
+			{"customerId"     , (aliasInvoices)->F2_CLIENTE},;
+			{"customerStore"  , (aliasInvoices)->F2_LOJA},;
+			{"branchName"     , FWFilialName(cEmpAnt, (aliasInvoices)->F2_FILIAL, 2)},;
+			{"invoiceBranch"  , (aliasInvoices)->F2_FILIAL},;
+			{"invoiceNumber"  , (aliasInvoices)->F2_DOC},;
+			{"invoiceSerie"   , (aliasInvoices)->F2_SERIE},;
+			{"invoiceValue"   , (aliasInvoices)->F2_VALBRUT},;
+			{"invoiceCurrency", currencySymbolAndDecimal((aliasInvoices)->F2_MOEDA)},;
+			{"invoiceKey"     , AllTrim((aliasInvoices)->F2_CHVNFE)},;
+			{"invoiceKeyEletr", AllTrim((aliasInvoices)->F2_NFELETR)},;
+			{"invoiceType" 	  , cTypeInvoice},;
+			{"issueDate"      , StoD((aliasInvoices)->F2_EMISSAO)},;
+			{"issueDateTime"  , DToC(StoD((aliasInvoices)->F2_EMISSAO)) + " - " + (aliasInvoices)->F2_HORA},;
+			{"f2_codnfe"      , (aliasInvoices)->F2_CODNFE},;
+			{"invoicePrinted" , (aliasInvoices)->F2_FIMP}};
+		)
+
+		nCount ++
+		(aliasInvoices)->(DbSkip())
+	EndDo
+
+	(aliasInvoices)->(DBCloseArea())
+
+	If __oTypeInv != Nil
+        __oTypeInv:Destroy()
+        FwFreeObj(__oTypeInv)
+        __oTypeInv := Nil
+    EndIf
+
+	response["result"]	 := .T.
+	response["response"] := arrayToAPI(retValues, hasNext)
+
+	If (!Empty(filter))
+		FreeObj(statement)
+	EndIf
+
+	DestroyTemporaryCustomers()
+
+Return response
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPrepareInvoices
+Cria o cache da query de invoices.
+
+@author Renato Ito
+@since 19/08/2020
+/*/
+//-------------------------------------------------------------------
+Static function createPrepareInvoices(customers As Array, cOrder as character, cTableTemporary As Character) As Object
+	Local statement As Object
+	Local query 	As Character
+	Local fields	As Character
+
+	fields := queryFieldsSF2()
+
+	query := "SELECT " + fields + " FROM " + RetSqlName('SF2') + " SF2, " + cTableTemporary + " TMP "
+	query += " WHERE "
+	query += " SF2.F2_FILIAL " + BranchesToCustomerForTable("SF2")
+	query += " AND " + totvs.protheus.backoffice.ngf.util.BranchRelation( {"SA1","FILIAL","TMP"}, {"SF2","F2_FILIAL","SF2"} )
+	query += " AND SF2.F2_CLIENTE = TMP.CLIENTE "
+	query += " AND SF2.F2_LOJA = TMP.LOJA "
+	query += " AND SF2.F2_TIPO NOT IN ('D','B') "
+	query += " AND TMP.D_E_L_E_T_ = ' '"
+	query += " AND SF2.D_E_L_E_T_ = ' '"
+
+	If(EMPTY(cOrder))
+		query += " ORDER BY SF2.F2_FILIAL, SF2.F2_CLIENTE, SF2.F2_LOJA, SF2.F2_DOC, SF2.F2_SERIE "
+	Else
+		query += cOrder
+	EndIf
+
+	query := ChangeQuery(query)
+
+	statement := FwPreparedStatement():New(query)
+	__oHashPrepareCache:put("invoices", statement)
+Return statement
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPrepareInvoicesFiltered
+Cria o statment da query com filtro
+
+@author Renato Ito
+@since 19/08/2020
+/*/
+//-------------------------------------------------------------------
+Static Function createPrepareInvoicesFiltered(customers As Array, filter As Character, cOrder as character, cTableTemporary As Character) As Object
+	Local statement As Object
+	Local query 	As Character
+	Local fields	As Character
+
+	fields := queryFieldsSF2()
+
+	query := "SELECT " + fields + " FROM " + RetSqlName('SF2') + " SF2, " + cTableTemporary + " TMP "
+	query += " WHERE "
+	query += " SF2.F2_FILIAL " + BranchesToCustomerForTable("SF2")
+	query += " AND " + totvs.protheus.backoffice.ngf.util.BranchRelation( {"SA1","FILIAL","TMP"}, {"SF2","F2_FILIAL","SF2"} )
+	query += " AND SF2.F2_CLIENTE = TMP.CLIENTE "
+	query += " AND SF2.F2_LOJA = TMP.LOJA "
+	query += " AND SF2.F2_TIPO NOT IN ('D','B') "
+	query += filter
+	query += " AND TMP.D_E_L_E_T_ = ' '"
+	query += " AND SF2.D_E_L_E_T_ = ' '"
+
+	If(EMPTY(cOrder))
+		query += " ORDER BY SF2.F2_FILIAL, SF2.F2_CLIENTE, SF2.F2_LOJA, SF2.F2_DOC, SF2.F2_SERIE "
+	Else
+		query += cOrder
+	EndIf
+
+	query := ChangeQuery(query)
+
+	statement := FwPreparedStatement():New(query)
+
+Return statement
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } tranformQueryFilter
+Avalia o filtro enviado e retorna no formato de query
+
+@author Renato Ito
+@since 19/08/2020
+/*/
+//-------------------------------------------------------------------
+Static Function tranformQueryFilter(filter As Array) As Character
+	Local nX			As Numeric
+	Local queryAux		As Character
+	Local query			As Character
+	Local filterContent	As Array
+
+	query := ""
+	filterContent := {}
+
+	For nX := 1 To Len(filter)
+		filter[nX][1] := Lower(filter[nX][1])
+		filter[nX][2] := Lower(filter[nX][2])
+		queryAux := ""
+		Do Case
+			Case filter[nX][1] == 'invoicenumber'
+				queryAux := "F2_DOC "
+				if (filter[nX][2] == 'ge')
+					AADD(filterContent, filter[nX][3])
+				elseIf (filter[nX][2] == 'le')
+					AADD(filterContent, filter[nX][3])
+				elseif (filter[nX][2] == 'contains')
+					AADD(filterContent, '%' + filter[nX][3] + '%')
+				else
+					AADD(filterContent, filter[nX][3])
+				endif
+			Case filter[nX][1] == 'issuedate'
+				queryAux := "F2_EMISSAO "
+				AADD(filterContent, StrTran(filter[nX][3], '-'))
+			Case filter[nX][1] == 'invoiceserie'
+				queryAux := "F2_SERIE "
+				AADD(filterContent, filter[nX][3])
+		EndCase
+
+		If (!empty(queryAux))
+			query += " AND " + queryAux
+
+			Do Case
+				Case filter[nX][2] == 'ge'
+					query += ">= ?"
+				Case filter[nX][2] == 'le'
+					query += "<= ?"
+				Case filter[nX][2] == 'gt'
+					query += "> ?"
+				Case filter[nX][2] == 'lt'
+					query += "< ?"
+				Case filter[nX][2] == 'eq'
+					query += "= ?"
+				Case filter[nX][2] == 'in'
+					query += "in (?)"
+				Case filter[nX][2] == 'contains'
+					query += "like ?"
+				Otherwise
+					query += "= ?"
+			EndCase
+		EndIf
+	Next
+	filter := filterContent
+Return query
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } transformOrder
+Avalia a ordem enviada e retorna no formato de query
+
+@author Luiz Nai
+@since 25/03/2022
+/*/
+//-------------------------------------------------------------------
+static function transformOrder(order as character) as character
+	local query	as character
+	query := ""
+
+	If(!EMPTY(order))
+		do case
+			case Lower(order) == 'branchname asc'
+				query := " ORDER BY F2_FILIAL ASC "
+			case Lower(order) == 'branchname desc'
+				query := " ORDER BY F2_FILIAL DESC "
+			case Lower(order) == 'invoicenumber asc'
+				query := " ORDER BY F2_DOC ASC "
+			case Lower(order) == 'invoicenumber desc'
+				query := " ORDER BY F2_DOC DESC "
+			case Lower(order) == 'invoiceserie asc'
+				query := " ORDER BY F2_SERIE ASC "
+			case Lower(order) == 'invoiceserie desc'
+				query := " ORDER BY F2_SERIE DESC "
+			case Lower(order) == 'invoicebranch asc'
+				query := " ORDER BY F2_FILIAL ASC "
+			case Lower(order) == 'invoicebranch desc'
+				query := " ORDER BY F2_FILIAL DESC "
+			case Lower(order) == 'invoicevalue asc'
+				query := " ORDER BY F2_VALBRUT ASC "
+			case Lower(order) == 'invoicevalue desc'
+				query := " ORDER BY F2_VALBRUT DESC "
+			case Lower(order) == 'issuedate asc'
+				query := " ORDER BY F2_EMISSAO ASC "
+			case Lower(order) == 'issuedate desc'
+				query := " ORDER BY F2_EMISSAO DESC "
+		endcase
+	EndIf
+return query
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPrepareInvoicesProducts
+Cria o statment da query de produtos da nota
+
+@author richard.lopes
+@since 24/08/2020
+/*/
+//-------------------------------------------------------------------
+Static Function createPrepareInvoicesProducts() As Object
+	Local statement		  		As Object
+	Local query 	  := 	''  As Character
+	Local productSize := 	0 	As Numeric
+	Local salesSize   := 	0	As Numeric
+
+	productSize := Len(AllTrim(FWxFilial('SB1')))
+	salesSize  	:= Len(AllTrim(FWxFilial('SD2')))
+
+	query := "SELECT SD2.D2_ITEM, SD2.D2_QUANT, SD2.D2_TOTAL, SD2.D2_PRCVEN, SD2.D2_CF, SB1.B1_DESC, SB1.B1_COD "
+	query += " FROM " + RetSqlName("SD2") + " SD2 "
+	query += " INNER JOIN " + RetSqlName("SB1") + " SB1 ON "
+
+	If FindFunction( "totvs.protheus.backoffice.ngf.util.BranchRelation" )
+		query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SD2","D2_FILIAL","SD2"}, {"SB1","B1_FILIAL","SB1"} )
+	Else
+		If (productSize == salesSize) // filiais com mesmo compartilhamento
+			query += " SB1.B1_FILIAL = SD2.D2_FILIAL "
+		ElseIf (salesSize > productSize) // produto compartilhado
+			query += " SB1.B1_FILIAL = LEFT(SD2.D2_FILIAL, " + cValToChar(productSize) + ") "
+		Else // Nota compartilhada (Cenário com erro de compartilhamento)
+			query += " SB1.B1_FILIAL LIKE RTRIM(SD2.D2_FILIAL) || '%' "
+		EndIf
+	Endif
+
+	query += " AND SB1.B1_COD = SD2.D2_COD "
+	query += " WHERE SD2.D2_FILIAL = ? "
+	query += " AND SD2.D2_DOC = ? "
+	query += " AND SD2.D2_SERIE = ? "
+	query += " AND SD2.D2_CLIENTE = ? "
+	query += " AND SD2.D2_LOJA = ? "
+	query += " AND SD2.D_E_L_E_T_ = ' '"
+	query += " AND SB1.D_E_L_E_T_ = ' '"
+	query := ChangeQuery(query)
+
+	statement := FwPreparedStatement():New(query)
+	__oHashPrepareCache:Put("invoicesProducts", statement)
+Return statement
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } getDataInvoiceProducts
+
+@params	branchId: Character - filial da nota
+		invoiceNumber: Character - número da nota
+		serie: Character - série da nota
+		customerId: Character - código do cliente
+		storeId: Character - loja do cliente
+
+@return
+	{
+		"response": {
+			"items": Array - [
+				{
+					"productAmount": Numeric - Quantidade do produto,
+					"productTotal": Numeric - Valor total,
+					"productItem": Character - Item da Nota Fiscal,
+					"productDescription": Character - Descrição do produto,
+					"productUnit": Numeric - Preco de tabela
+				}
+			],
+			"hasNext": Logical - false
+		}
+	}
+
+@author richard.lopes
+@since 24/08/2020
+/*/
+//-------------------------------------------------------------------
+Method getDataInvoiceProducts(branchId As Character, invoiceNumber As Character, serie As Character, customerId As Character, storeId As Character) As Json Class InvoicesDataProtheus
+	Local statement 	  As Object
+	Local aliasInvoices	  As Character
+	Local retValues 	  As Array
+	Local response		  As Json
+	Local fiscalCode      As Character
+
+	retValues := {}
+	response  := JsonObject():New()
+
+	If (!__oHashPrepareCache:containsKey('invoicesProducts'))
+		statement := createPrepareInvoicesProducts()
+	Else
+		statement := __oHashPrepareCache:Get('invoicesProducts')
+	EndIf
+
+	statement:SetString(1, branchId)
+	statement:SetString(2, invoiceNumber)
+	statement:SetString(3, serie)
+	statement:SetString(4, customerId)
+	statement:SetString(5, storeId)
+
+	aliasInvoices := MpSysOpenQuery(statement:GetFixQuery())
+
+	While ((aliasInvoices)->(!Eof()))
+		AAdd(retValues, {;
+			{ "productOperation"  , (aliasInvoices)->D2_CF},;
+			{ "productItem"       , (aliasInvoices)->D2_ITEM},;
+			{ "productAmount"     , (aliasInvoices)->D2_QUANT},;
+			{ "productTotal"      , (aliasInvoices)->D2_TOTAL},;
+			{ "productUnit"       , (aliasInvoices)->D2_PRCVEN},;
+			{ "productDescription", AllTrim((aliasInvoices)->B1_COD) + " - " + AllTrim((aliasInvoices)->B1_DESC)};
+		})
+
+		fiscalCode := (aliasInvoices)->D2_CF
+
+		(aliasInvoices)->(DbSkip())
+	EndDo
+
+	(aliasInvoices)->(DbCloseArea())
+
+	fiscalCode := AllTrim(fiscalCode) + ' - ' + AllTrim(FwGetSX5('13', fiscalCode)[1][4])
+
+	response["result"]   := .T.
+	response["response"] := JsonObject():New()
+	response["response"] := arrayToAPI(retValues, .F.)
+	response["response"]["fiscalCode"] := fiscalCode
+Return response
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } queryFieldsSF2
+Retorna os campos da SF2
+
+@author richard.lopes
+@since 24/08/2020
+/*/
+//-------------------------------------------------------------------
+Static Function queryFieldsSF2() As Character
+	Local fields As Character
+	fields := " F2_FILIAL, F2_DOC, F2_SERIE, F2_EMISSAO, F2_VALBRUT, F2_CHVNFE, F2_MOEDA, F2_COND, F2_EST, F2_CLIENTE, F2_LOJA, F2_HORA, F2_NFELETR , F2_CODNFE, F2_FIMP "
+Return fields
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } verifyIsInvoiceService
+Retorna o tipo da nota confome a tabela SFT.
+
+@author Vinicius do Prado
+@since 20/09/2023
+@return Caracter - tipo da nota.
+/*/
+//-------------------------------------------------------------------
+Static function getTypeInvoice(cFilPed As Character, cNumDoc As Character, nSerie As character, cCliente As Character, cLoja As Character) As Character
+	Local cQuery := "" As Character
+	Local cTypeService := "" As Character
+
+	If __oTypeInv == NIL
+		cQuery := " SELECT DISTINCT SFT.FT_TIPO TIPO"
+		cQuery += " FROM " + RetSqlName('SF2') + " SF2"
+		cQuery += " INNER JOIN " + RetSqlName('SF3') + " SF3 ON "
+		cQuery += 	totvs.protheus.backoffice.ngf.util.BranchRelation( {"SF3","F3_FILIAL","SF3"}, {"SF2","F2_FILIAL","SF2"} )
+		cQuery += 	" AND SF2.F2_DOC = SF3.F3_NFISCAL "
+		cQuery += 	" AND SF2.F2_SERIE = SF3.F3_SERIE "
+		cQuery += 	" AND SF3.D_E_L_E_T_ = ' '"
+		cQuery += " INNER JOIN " + RetSqlName('SFT') + " SFT ON "
+		cQuery += 	totvs.protheus.backoffice.ngf.util.BranchRelation( {"SFT","FT_FILIAL","SFT"}, {"SF3","F3_FILIAL","SF3"} )
+		cQuery += 	" AND SF3.F3_NFISCAL = SFT.FT_NFISCAL "
+		cQuery += 	" AND SF3.F3_SERIE = SFT.FT_SERIE "
+		cQuery += 	" AND SFT.D_E_L_E_T_ = ' '"
+		cQuery += " WHERE "
+		cQuery += 	" SF2.F2_FILIAL 	 = ? "
+		cQuery += 	" AND SF2.F2_DOC     = ? "
+		cQuery += 	" AND SF2.F2_SERIE   = ? "
+		cQuery += 	" AND SF2.F2_CLIENTE = ? "
+		cQuery += 	" AND SF2.F2_LOJA    = ? "
+		cQuery += 	" AND SF2.D_E_L_E_T_ = ' ' "
+		cQuery := ChangeQuery(cQuery)
+
+    	__oTypeInv := FwExecStatement():New(cQuery)
+	EndIf
+
+	__oTypeInv:SetString(1, cFilPed)
+	__oTypeInv:SetString(2, cNumDoc)
+	__oTypeInv:SetString(3, nSerie)
+	__oTypeInv:SetString(4, cCliente)
+	__oTypeInv:SetString(5, cLoja)
+
+    cTypeService := __oTypeInv:ExecScalar("TIPO")
+Return cTypeService

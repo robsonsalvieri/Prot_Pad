@@ -1,0 +1,295 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+
+#include 'mntcalibragem.ch'
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} mntCalibra
+Responsável por receber as requisições POST do end point mntCalibragem.
+Realize o cadastro de Medição de Sulco ou Calibragem.
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since	14/02/2025
+
+@return T  
+/*/ 
+//------------------------------------------------------------------------------
+@POST ( endpoint = 'mntCalibragem' )
+function mntCalibra()
+
+    Local oError
+	Local bLastError
+    Local cMsg := ''
+
+	bLastError := ErrorBlock( { | oError | MntWSError( oError ), .F., Break( oError ) } )
+
+    Begin Sequence
+
+        If !oRest:ExistKeyHeaderRequest( 'placa' ) .Or. Empty( oRest:getHeaderRequest()[ 'placa' ] )
+
+            cMsg := STR0001 // "É necessário enviar a placa do veículo."
+
+        ElseIf Empty(oRest:GetBodyRequest())
+
+            cMsg := STR0009 // "As informações relacionadas a calibragem/medição dos pneus devem ser enviadas no body da requisição."
+
+        EndIf
+            
+        If Empty( cMsg )
+            
+            fCalibra( oRest )
+
+        Else
+
+            oRest:setFault( '{"error": "' + cMsg + '"}' ) // "É necessário enviar a placa do veículo."
+            oRest:setStatusCode( 400 )
+        
+        EndIf
+
+	End Sequence
+    
+    ErrorBlock( bLastError )
+
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fCalibra
+Responsável por montar a estrutura da Calibragem / Medição com as informações
+enviadas via requisição e chamar o execAuto MNTA995 para fazer a gravação
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since	14/02/2025
+@param oRest, objeto, Informações referentes a requisição recebida
+
+@return
+/*/ 
+//------------------------------------------------------------------------------
+Static Function fCalibra( oRest )
+
+    Local nI            := 1
+    Local aRegs         := { {}, {}, {} }
+    Local oJson         := JsonObject():New()
+    Local dData         := dDataBase
+    Local cHora         := SUBSTR( Time(), 1, 5 )
+    Local aMsg          := { ' ', ' ', { '', '', '' }, { '', '' } }
+    
+    Private lMsErroAuto := .F.
+
+    aMsg[ 1 ] := oJson:FromJson( oRest:getBodyRequest() )
+
+    If Empty( aMsg[ 1 ] )
+        
+        oJson := oJson[ 'Tires' ]
+
+        If ValType( oJson ) == 'U'
+
+            aMsg[ 1 ] := STR0009 // "As informações relacionadas a calibragem/medição dos pneus devem ser enviadas no body da requisição."
+
+        Else
+        
+            DbSelectArea( 'ST9' )
+            DbSetOrder( 14 ) // T9_PLACA + T9_SITBEM
+            If MsSeek( PADR( oRest:getHeaderRequest()[ 'placa' ], FWTamSX3( 'T9_PLACA' )[ 1 ] ) + 'A' )
+
+                aAdd( aRegs[1], { 'TTO_BEMPAI', ST9->T9_CODBEM, Nil } )
+                aAdd( aRegs[1], { 'TTO_DTCALI', dData,          Nil } )
+                aAdd( aRegs[1], { 'TTO_HRCALI', cHora,          Nil } )
+
+                If oRest:ExistKeyHeaderRequest( 'executante' ) .And. !Empty( oRest:getHeaderRequest()[ 'executante' ] )
+
+                    aAdd( aRegs[1], { 'TTO_EXECUT', oRest:getHeaderRequest()[ 'executante' ], Nil } )
+
+                EndIf
+
+                For nI := 1 To Len( oJson )
+
+                    aMsg[ 2 ] := ' '
+                    aMsg[ 3 ] := { '', '', '' }
+                    aMsg[ 4 ] := { '', '' }
+
+                     If ValType( ( oJson[ nI, 'measurement' ] ) ) != 'U'
+                        
+                        If ValType( ( oJson[ nI, 'measurement', 'first' ] ) ) != 'U'
+                            
+                            aMsg[ 3, 1 ] :=  cValToChar( oJson[ nI, 'measurement', 'first' ] ) 
+                        
+                        EndIf
+                        
+                        If ValType( ( oJson[ nI, 'measurement', 'second' ] ) ) != 'U'
+                            
+                            aMsg[ 3, 2 ] := cValToChar( oJson[ nI, 'measurement', 'second' ] ) 
+                        
+                        EndIf
+                        
+                        If ValType( ( oJson[ nI, 'measurement', 'third' ] ) ) != 'U'
+
+                            aMsg[ 3, 3 ] := cValToChar( oJson[ nI, 'measurement', 'third' ] ) 
+
+                        EndIf
+
+                    EndIf 
+
+                    If ValType( ( oJson[ nI, 'calibration' ] ) ) != 'U' 
+                        
+                        If ValType( ( oJson[ nI, 'calibration', 'gauged' ] ) ) != 'U'
+                        
+                            aMsg[ 4, 1 ] := cValToChar( oJson[ nI, 'calibration', 'gauged' ] ) 
+                        
+                        EndIf
+
+                        If ValType( ( oJson[ nI, 'calibration', 'carried_out' ] ) ) != 'U'
+
+                            aMsg[ 4, 2 ] := cValToChar( oJson[ nI, 'calibration', 'carried_out' ] ) 
+
+                        EndIf
+
+                    EndIf
+
+                    If ValType( ( oJson[ nI, 'Code' ] ) ) == 'U'
+
+                        aMsg[ 1 ] := STR0002 // "É necessário enviar o código do pneu."
+                        Exit
+
+                    EndIf
+
+                    aMsg[ 2 ] := oJson[ nI, 'Code' ]
+
+                    If ValType( ( oJson[ nI, 'Location' ] ) ) == 'U'
+
+                        aMsg[ 1 ] := STR0003 // "É necessário enviar a localização dos pneus na estrutura do veículo."
+                        Exit
+
+                    EndIf
+
+                    DbSelectArea( 'STC' )
+                    DbSetOrder( 1 ) // TC_FILIAL + TC_CODBEM + TC_COMPONE + TC_TIPOEST + TC_LOCALIZ + TC_SEQRELA 
+                    If MsSeek( FWxFilial( 'STC', cFilAnt ) + ST9->T9_CODBEM + PadR( oJson[ nI, 'Code' ], TAMSX3( 'TTP_PNEU' )[ 1 ] );
+                     + 'B' + PadR( oJson[ nI, 'Location' ], TAMSX3( 'TTP_CODLOC' )[ 1 ] ) )
+
+                        aAdd( aRegs[3], { 'TTP_PNEU',   PadR( oJson[ nI, 'Code' ],     TAMSX3( 'TTP_PNEU' )[ 1 ] ), Nil } )
+                        aAdd( aRegs[3], { 'TTP_CODLOC', PadR( oJson[ nI, 'Location' ], TAMSX3( 'TTP_CODLOC' )[ 1 ] ), Nil } )
+
+                        If ValType( ( oJson[ nI, 'calibration' ] ) ) != 'U' 
+                        
+                            If ValType( ( oJson[ nI, 'calibration', 'gauged' ] ) ) != 'U'
+                            
+                                aAdd( aRegs[ 3 ], { 'TTP_CALATU', oJson[ nI, 'calibration', 'gauged' ] , Nil } )
+                            
+                            EndIf
+
+                            If ValType( ( oJson[ nI, 'calibration', 'carried_out' ] ) ) != 'U'
+
+                                aAdd( aRegs[ 3 ], { 'TTP_CALREA', oJson[ nI, 'calibration', 'carried_out' ] , Nil } )
+
+                            EndIf
+
+                        EndIf
+
+                        If ValType( ( oJson[ nI, 'measurement' ] ) ) != 'U'
+
+                            If !Positivo( oJson[ nI, 'measurement', 'first' ] ) .Or.;
+                            !Positivo( oJson[ nI, 'measurement', 'second' ] ) .Or.;
+                            !Positivo( oJson[ nI, 'measurement', 'third' ] )
+
+                                aMsg[ 1 ] := STR0011 + AllTrim( oJson[ nI, 'Code' ] ) // "Nenhumas das medições de sulco podem ser negativas. Pneu: "
+                                Exit
+
+                            EndIf
+                        
+                            If ValType( ( oJson[ nI, 'measurement', 'first' ] ) ) != 'U'
+                                
+                                aAdd( aRegs[ 3 ], { 'TTP_SULCO1', oJson[ nI, 'measurement', 'first' ], Nil  } )
+                            
+                            EndIf
+                            
+                            If ValType( ( oJson[ nI, 'measurement', 'second' ] ) ) != 'U'
+                                
+                                aAdd( aRegs[ 3 ], { 'TTP_SULCO2', oJson[ nI, 'measurement', 'second' ], Nil } )
+                            
+                            EndIf
+                            
+                            If ValType( ( oJson[ nI, 'measurement', 'third' ] ) ) != 'U'
+
+                                aAdd( aRegs[ 3 ], { 'TTP_SULCO3', oJson[ nI, 'measurement', 'third' ], Nil  } )
+
+                            EndIf
+
+                        EndIf 
+
+                        If Len( aRegs[ 3 ] ) < 3
+
+                            aMsg[ 1 ] := STR0004 // "É necessário informar no mínimo uma calibragem ou medição."
+                            Exit
+
+                        Else
+
+                            aAdd( aRegs[ 2 ], aRegs[ 3 ] )
+                            aRegs[ 3 ] := {}
+
+                        EndIf
+
+                    Else
+
+                        aMsg[ 1 ] := STR0005 + AllTrim( oJson[ nI, 'Code' ] ) + STR0006 + AllTrim( oJson[ nI, 'Location' ] ) + STR0010 // "O pneu "###" não foi encontrado na localização "###" do veículo"
+                        Exit
+
+                    EndIf
+
+                Next nI
+
+                If Empty( aMsg[ 1 ] )
+
+                    MSExecAuto( { | x, y, z | MNTA995( x, y, z ) }, aRegs[ 1 ], aRegs[ 2 ], 3 )
+
+                    
+                    If lMsErroAuto .And. IsBlind()
+                    
+                        aMsg[ 1 ] := MostraErro( GetSrvProfString( 'Startpath', '' ), 'MNTA995AUT_' + DTOS( DATE() ) + '_' +;
+                                Left( Time(), 2 ) + SubStr( Time(), 4, 2 ) + '.LOG' )
+                        
+                    EndIf
+
+                EndIf
+
+            Else
+
+                aMsg[ 1 ] := STR0007 // A placa informada não está relacionada a nenhum veículo cadastrado.
+
+            EndIf
+
+        Endif
+
+    EndIf
+    
+    If !Empty( aMsg[ 1 ] )
+
+        oRest:setFault(;
+            '{"error": "' + aMsg[ 1 ] +'", '+;
+            '"pneu": "' + aMsg[ 2 ] + '", '+;
+            '"measurement": { ' + ; 
+            '"first": "' + cValToChar( aMsg[ 3, 1 ] ) + '",'+;
+            '"second": "' + cValToChar( aMsg[ 3, 2 ] ) + '",'+;        
+            '"third": "' + cValToChar( aMsg[ 3, 3 ] ) + '"'+;        
+            '}, '+;
+            '"calibration": { ' +;
+                '"gauged": "' + cValToChar( aMsg[ 4, 1 ] ) + '", ' +; 
+                '"carried_out": "' + cValToChar( aMsg[ 4, 2 ] ) + '"' +; 
+            '}' +;
+            '}';
+            )
+        oRest:setStatusCode( 400 )
+    
+    Else
+
+        oRest:setFault( '{"reponse": "' + STR0008 + '"}' ) // "Processo realizado com sucesso!"
+        oRest:setStatusCode( 200 )
+
+    EndIf
+
+    FWFreeArray( aMsg )
+    
+Return

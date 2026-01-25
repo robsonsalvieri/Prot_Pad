@@ -1,0 +1,234 @@
+#Include "TLPP-CORE.TH"
+#Include "PRODUCTIONORDERUTILS.CH"
+
+Static _oQueryAppointmentSH6 := Nil
+Static _oQueryMovementSD3    := Nil
+Static _lPerdInf             := Nil
+
+/*/{Protheus.doc} ProductionOrderUtils
+Classe com métodos úteis relacionadas à ordem de produção
+
+@type Class
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return Nil
+/*/
+Class ProductionOrderUtils
+	Static Method getStatus(cProductionOrder as Character) as Character
+	Static Method getStatusDescription(cProductionOrder as Character) as Character
+	Static Method hasSD3Movements(cProductionOrder as Character, dEmissionDate as Date) as Logical
+	Static Method hasSH6Appointments(cProductionOrder as Character, dEmissionDate as Date) as Logical
+	Static Method getOrderBalance(nOrderQuantity as Numeric, nOrderProducedQuantity as Numeric, nOrderLossQuantity as Numeric, dOrderFinishDate as Date) as Numeric
+EndClass
+
+/*/{Protheus.doc} getStatus
+Busca o status atual da ordem de produção.
+1 - Prevista
+2 - Em aberto
+3 - Iniciada
+4 - Ociosa
+5 - Encerrada parcialmente
+6 - Encerrada totalmente
+
+@type  Method
+@author lucas.franca / renan.roeder
+@since 02/04/2025
+@version P12
+@param 01 cProductionOrder, Character, Código da ordem de produção
+@return cStatus, Character, Status da ordem de produção
+/*/
+Method getStatus(cProductionOrder as Character) as Character Class ProductionOrderUtils
+	Local aAreaSC2      := Nil      as Array
+	Local cStatus       := ""       as Character
+	Local dEmissionSD3  := StoD('') as Date
+	Local dEmissionSH6  := StoD('') as Date
+	Local dEmission     := StoD('') as Date
+	Local nMovementDays := 0        as Numeric
+	Local nIdleDays     := 1        as Numeric
+	Local lHasSD3       := .F.      as Logical
+	Local lHasSH6       := .F.      as Logical
+
+	aAreaSC2 := SC2->(GetArea())
+	SC2->(dbSetOrder(1))
+	If SC2->(dbSeek(xFilial("SC2") + cProductionOrder))
+		Do Case
+			Case SC2->C2_TPOP == "P"
+				cStatus := "1" //Prevista
+			Case SC2->C2_TPOP == "F" .And. !Empty(SC2->C2_DATRF) .And. SC2->C2_QUJE < SC2->C2_QUANT
+				cStatus := "5" //Encerrada Parcialmente
+			Case SC2->C2_TPOP == "F" .And. !Empty(SC2->C2_DATRF) .And. SC2->C2_QUJE >= SC2->C2_QUANT
+				cStatus := "6" //Encerrada Totalmente
+		EndCase
+
+		If Empty(cStatus)
+			lHasSD3   := ProductionOrderUtils():hasSD3Movements(cProductionOrder, @dEmissionSD3)
+			lHasSH6   := ProductionOrderUtils():hasSH6Appointments(cProductionOrder, @dEmissionSH6)
+			nIdleDays := Max(SC2->C2_DIASOCI, nIdleDays)
+			dEmission := Max(dEmissionSD3, dEmissionSH6)
+			If lHasSD3 .Or. lHasSH6
+				nMovementDays := Max((dDatabase - dEmission), 0)
+			Else
+				nMovementDays := Max((dDatabase - SC2->C2_DATPRI), 0)
+			EndIf
+			
+			Do Case
+				Case nMovementDays > nIdleDays
+					cStatus := "4" //Ociosa
+				Case lHasSD3 .Or. lHasSH6
+					cStatus := "3" //Iniciada
+				Otherwise
+					cStatus := "2" //Em aberto
+			EndCase
+		EndIf
+	EndIf
+
+	SC2->(RestArea(aAreaSC2))
+Return cStatus
+
+/*/{Protheus.doc} getStatusDescription
+Retorna a descrição dos status da ordem de produção
+
+@type  Method
+@author lucas.franca / renan.roeder
+@since 02/04/2025
+@version P12
+@param 01 cStatus, Character, Status da ordem
+@return cDescription, Character, Descrição do status da ordem
+/*/
+Method getStatusDescription(cStatus as Character) as Character Class ProductionOrderUtils
+	Local cDescription := "" as Character
+
+	Do Case
+		Case cStatus == "1"
+			cDescription := STR0001 //"Prevista"
+		Case cStatus == "2"
+			cDescription := STR0002 //"Em aberto"
+		Case cStatus == "3"
+			cDescription := STR0003 //"Iniciada"
+		Case cStatus == "4"
+			cDescription := STR0004 //"Ociosa"
+		Case cStatus == "5"
+			cDescription := STR0005 //"Encerrada parcialmente"
+		Case cStatus == "6"
+			cDescription := STR0006 //"Encerrada totalmente"
+	EndCase
+Return cDescription
+
+/*/{Protheus.doc} hasSD3Movements
+Verifica se existe movimentações na SD3 para a ordem de produção.
+
+@type  Method
+@author lucas.franca / renan.roeder
+@since 02/04/2025
+@version P12
+@param 01 cProductionOrder, Character, Código da ordem de produção
+@param 02 dEmissionDate   , Date     , Retorna por referência data de emissão da SD3
+@return lHasMovement, Logical, Indica se existe algum apontamento na SD3.
+/*/
+Method hasSD3Movements(cProductionOrder as Character, dEmissionDate as Date) as Logical Class ProductionOrderUtils
+	Local cAlias       := ""  as Character
+	Local cQuery       := ""  as Character
+	Local lHasMovement := .F. as Logical
+
+	If _oQueryMovementSD3 == Nil
+		cQuery := "SELECT MAX(SD3.D3_EMISSAO) AS D3_EMISSAO"
+		cQuery +=  " FROM " + RetSqlName("SD3") + " SD3"
+		cQuery += " WHERE SD3.D3_FILIAL   = ?"
+		cQuery +=   " AND SD3.D3_OP 	  = ?"
+		cQuery +=   " AND SD3.D3_ESTORNO  = ?"
+		cQuery +=   " AND SD3.D_E_L_E_T_  = ?"
+		
+		_oQueryMovementSD3 := FwExecStatement():New()
+		_oQueryMovementSD3:setQuery(cQuery)
+		_oQueryMovementSD3:setString(3, " ")
+		_oQueryMovementSD3:setString(4, " ")
+	EndIf
+	_oQueryMovementSD3:setString(1, xFilial("SD3"))
+	_oQueryMovementSD3:setString(2, cProductionOrder)
+	cAlias := _oQueryMovementSD3:openAlias()
+
+	If !Empty((cAlias)->(D3_EMISSAO))
+		lHasMovement  := .T.
+		dEmissionDate := StoD((cAlias)->(D3_EMISSAO))
+	EndIf
+	(cAlias)->(dbCloseArea())
+Return lHasMovement
+
+/*/{Protheus.doc} hasSH6Appointments
+Verifica se existe apontamentos na SH6 para a ordem de produção.
+
+@type  Method
+@author lucas.franca / renan.roeder
+@since 02/04/2025
+@version P12
+@param 01 cProductionOrder, Character, Código da ordem de produção
+@param 02 dEmissionDate   , Date     , Retorna por referência data de emissão da SH6
+@return lHasAppointment, Logical, Indica se existe algum apontamento na SH6.
+/*/
+Method hasSH6Appointments(cProductionOrder as Character, dEmissionDate as Date) as Logical Class ProductionOrderUtils
+	Local cAlias          := ""  as Character
+	Local cQuery          := ""  as Character
+	Local lHasAppointment := .F. as Logical
+
+	If _oQueryAppointmentSH6 == Nil
+		cQuery := "SELECT MAX(SH6.H6_DTAPONT) AS H6_DTAPONT"
+		cQuery +=  " FROM " + RetSqlName("SH6") + " SH6"
+		cQuery += " WHERE SH6.H6_FILIAL  = ?"
+		cQuery +=   " AND SH6.H6_OP      = ?"
+		cQuery +=   " AND SH6.D_E_L_E_T_ = ?"
+		
+		_oQueryAppointmentSH6 := FwExecStatement():New()
+		_oQueryAppointmentSH6:setQuery(cQuery)
+		_oQueryAppointmentSH6:setString(3, " ")
+	EndIf
+	_oQueryAppointmentSH6:setString(1, xFilial("SH6"))
+	_oQueryAppointmentSH6:setString(2, cProductionOrder)
+	cAlias := _oQueryAppointmentSH6:openAlias()
+	
+	If !Empty((cAlias)->(H6_DTAPONT))
+		lHasAppointment := .T.
+		dEmissionDate   := StoD((cAlias)->(H6_DTAPONT))
+	EndIf
+	(cAlias)->(dbCloseArea())
+Return lHasAppointment
+
+/*/{Protheus.doc} getOrderBalance
+Retorna o saldo de uma ordem de produção, aplicando as regras de perda informativa (MV_PERDINF), e verificando se a OP ainda está aberta.
+
+@type  Method
+@author lucas.franca / renan.roeder
+@since 05/09/2025
+@version P12
+@param 01 nOrderQuantity        , Numeric, Quantidade da ordem de produção (C2_QUANT)
+@param 02 nOrderProducedQuantity, Numeric, Quantidade produzida da OP (C2_QUJE)
+@param 03 nOrderLossQuantity    , Numeric, Quantidade perdida da OP (C2_PERDA)
+@param 04 dOrderFinishDate      , Date   , Data de encerramento da OP (C2_DATRF)
+@return nBalance, Numeric, Saldo da ordem de produção
+/*/
+Method getOrderBalance(nOrderQuantity as Numeric, nOrderProducedQuantity as Numeric, nOrderLossQuantity as Numeric, dOrderFinishDate as Date) as Numeric Class ProductionOrderUtils
+	Local nBalance := 0 as Numeric
+	
+	If Empty(dOrderFinishDate)
+		nBalance := nOrderQuantity - nOrderProducedQuantity
+		If isPerdInf()
+			nBalance -= nOrderLossQuantity
+		EndIf
+		nBalance := Max(0, nBalance)
+	EndIf
+Return nBalance
+
+/*/{Protheus.doc} isPerdInf
+Verifica se o parâmetro MV_PERDINF está habilitado (mantém cache do parâmetro)
+
+@type  Static Function
+@author lucas.franca / renan.roeder
+@since 05/09/2025
+@version P12
+@return _lPerdInf, Logical, Valor do parâmetro MV_PERDINF
+/*/
+Static Function isPerdInf() as Logical
+	If _lPerdInf == Nil
+		_lPerdInf := SuperGetMV("MV_PERDINF",.F.,.F.)
+	EndIf
+Return _lPerdInf

@@ -1,0 +1,572 @@
+#include "tlpp-core.th"
+#include "tgv.customer.data.protheus.ch"
+#INCLUDE "FWLIBVERSION.CH"
+namespace tgv.customer
+using namespace tgv.util
+
+#DEFINE LABEL 1
+#DEFINE VALUE 2
+#DEFINE INCLUI 3
+#DEFINE ALTERA 4
+#DEFINE EXCLUI 5
+#DEFINE SOURCE "MATA030"
+Static lExistFindMethod := FindFunction("tgv.util.findMethod")
+Static lExistCommitData
+Static lExistPEGVCLIVEN := ExistBlock("GVCUSVEN")
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} CustomerProtheusData
+	Efetua a consulta dos Clientes no Protheus.
+
+	@sample		CustomerProtheusData:New()
+	@type		Class
+	@author		Danilo Salve
+	@since		21/07/2021
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------
+CLASS CustomerProtheusData FROM FWAdapterBaseV2
+	Public Data cFilialDA0	as Character
+	Public Data cFilialSE4	as Character
+	Public Data cFilialSA4	as Character
+	Public Data cFilialSYA	as Character
+	Public Data oHashStates	as Object
+
+	Public Method new() as Object
+	Public Method get()
+	Public Method getCreditLimit() as Json
+	Public Method RowToJson()
+	Public Method saveCustomer() as logical
+	Public Method getNextStore() as Json
+EndClass
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} New
+	Cria uma nova instancia do Objeto CustomerProtheusData
+
+	@sample		oData():New()
+	@type		method
+	@author		Squad CRM/Faturamento
+	@since		21/07/2021
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------
+Method new() as Object CLASS CustomerProtheusData
+	_Super:New( "GET", .T. )
+
+	::cFilialDA0 := FwXFilial("DA0")
+	::cFilialSE4 := FwXFilial("SE4")
+	::cFilialSA4 := FwXFilial("SA4")
+	::cFilialSYA := FwXFilial("SYA")
+Return Self
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} Get
+	Obtem uma Lista de Clientes retornando um JSON respeitando a Quantidade de
+	registro por pagina, especificado no paramentro PageSize.
+
+	@sample		oData:Get( 1, 10, {}, Nil, '-id' )
+	@type		method
+	@param		nPage		   , Numeric	, Número da página que será retornada
+	@param		nPageSize	   , Numeric	, Quantidade de registros por pagina
+	@param		aURLFilter	   , Array		, Lista de Filtros no padrão do FWAdapterBaseV2
+	@param		cFields		   , Character	, Lista de campos que devem ser retornados
+	@param		cSort		   , Character	, Ordernação do Response
+	@param		cCustomerId	   , Character	, Código e Loja do Cliente
+	@param		cCustomerStore , Character	, Loja do Cliente
+	@author		Danilo Salve
+	@since		21/07/2021
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------
+Method get(nPage as Numeric, nPageSize as Numeric, aURLFilter as Array, cFields as Character, cSort as Character,;
+cCustomerId as Character, cCustomerStore as Character, lAdmin as logical) CLASS CustomerProtheusData
+	Local aArea	    as Array
+	Local cWhere    as Character
+	Local cSeller   as Character
+	Local isAdmin   as logical
+
+	Default lAdmin := .F.
+
+	isAdmin   := IIF( lAdmin, lAdmin, FWIsAdmin() )
+
+	aArea := GetArea()
+	AddMapFieldsSA1( self, .T. )
+
+	::setPage( nPage )
+	::setPageSize( nPageSize )
+	::SetQuery( getQueryTGV("SA1") )
+
+    If Empty( cCustomerId ) .And. Len( aURLFilter ) > 0
+		::SetUrlFilter( aURLFilter )
+	Endif
+
+	If !Empty( cSort )
+		::SetOrderQuery( cSort )
+	EndIf
+
+	If !Empty( cFields )
+		::SetFields( cFields )
+	Endif
+
+	cWhere := " SA1.A1_FILIAL = '" + FwXFilial("SA1") + "'"
+
+    If !Empty( cCustomerId ) .And. !Empty( cCustomerStore )
+		cWhere += getCustomerFilter(cCustomerId, cCustomerStore)
+    Endif
+
+	If !Empty(cSeller := getSellerFromFilter(isAdmin, .T.)) .And. canFilterCustomerBySeller(cCustomerId, cCustomerStore)
+		cWhere += " AND ( A1_VEND = '" + cSeller + "' "
+		If lExistPEGVCLIVEN
+			cWhere += ExecBlock("GVCUSVEN", .F., .F.)
+		EndIf
+		cWhere += " )"
+	EndIf
+
+    cWhere += " AND SA1.D_E_L_E_T_ = ' '"
+
+	::SetWhere( cWhere )
+	::SetOrder( "A1_FILIAL, A1_COD, A1_LOJA" )
+
+	If ::oHashStates == Nil
+		SetStates( @::oHashStates )
+	Endif
+
+	DbSelectArea("SYA")
+	SYA->(DbSetOrder(1)) // YA_FILIAL, YA_CODGI
+
+	If canExecutewithUser(isAdmin, cSeller) .and. ::Execute()
+		::FillGetResponse()
+	EndIf
+
+	SYA->(DbCloseArea())
+	RestArea( aArea )
+	aSize( aArea, 0 )
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} CustomerProtheusData::getCreditLimit(cCustomerId as Character) as Json
+	Obtem o Limite de Crédito de um Cliente especificado
+	@type method
+	@version 12.1.33
+	@author Danilo Salve / Squad CRM & Faturamento
+	@since 09/06/2021
+	@param cCustomerId, character, Código do Cliente (A1_COD)
+	@param cCustomerStore, character, loja do Cliente (A1_LOJA)
+	@return JSON, Objeto JSON contendo a propriedade creditLimitBalance
+/*/
+//------------------------------------------------------------------------------
+Method getCreditLimit(cCustomerId as character, cCustomerStore as character) as Json CLASS CustomerProtheusData
+	Local aArea     := GetArea()
+	Local cAliasSA1 := GetNextAlias()
+	Local cCredCli	:= GetMv("MV_CREDCLI",,"L")
+	Local cFields   as character
+	Local cFilter   as character
+	Local cGroup    as character
+	Local jResponse	:= JsonObject():New() as json
+
+	DbSelectArea("SA1")
+	SA1->(DbSetOrder(1))
+	SA1->(DbSeek( FWxFilial('SA1') + PadR(cCustomerId, getSX3Cache("A1_COD","X3_TAMANHO")) + PadR(cCustomerStore, getSX3Cache("A1_LOJA","X3_TAMANHO")) ))
+
+	cFilter := "% A1_FILIAL = '" + SA1->A1_FILIAL + "' AND "
+	cFilter += " A1_COD = '" + SA1->A1_COD + "'"
+
+	If cCredCli == 'L'
+		cFields := "% A1_FILIAL, A1_COD, A1_LOJA "
+		cFilter += " AND A1_LOJA = '" + IIF(Empty(SA1->A1_LOJA), Space(TamSx3('A1_LOJA')[1]), SA1->A1_LOJA) + "'"
+	Else
+		cFields := "% A1_FILIAL, A1_COD "
+	Endif
+
+	cGroup  := cFields + "%"
+	cFilter += "%"
+	cFields += ", SUM(A1_LC - A1_SALDUPM - A1_SALPEDL ) SALDO %"
+
+	BeginSql alias cAliasSA1
+    SELECT
+		%exp:cFields%
+    FROM
+		%table:SA1% SA1
+    WHERE
+    	%exp:cFilter% AND
+		SA1.%notDel%
+   	GROUP BY %exp:cGroup%
+	EndSql
+
+	If (cAliasSA1)->(!Eof())
+		jResponse['creditLimitBalance'] := (cAliasSA1)->SALDO
+	Else
+		jResponse['creditLimitBalance'] := 0
+	Endif
+
+	(cAliasSA1)->( DbCloseArea() )
+	SA1->( DbCloseArea() )
+	aSize(aArea, 0)
+Return jResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} RowToJson
+	Converte o retorno da consulta SQL em JSON
+
+	@sample		oData:RowToJson( cAlias, aFields, .F.)
+	@type		method
+	@param		cAlias	, Character	, Alias da Consulta
+	@param		aFields	, Array		, Campos (MapFields)
+	@param		lEmpty	, Logical	, Vazio.
+	@author		Danilo Salve
+	@since		22/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//------------------------------------------------------------------------------
+METHOD RowToJson( cAlias as Character, aFields as Array , lEmpty as Logical) CLASS CustomerProtheusData
+	Local nLoop		as Integer
+	Local cContent	as Character
+
+	For nLoop := 1 to len( aFields )
+		If lEmpty
+			cContent := ''
+		Else
+			If aFields[nLoop, LABEL] == "paymentconditioninternalid"
+				cContent := IIF( canConvertField(cAlias, 'A1_COND'), ::ValueToJson(aFields[nLoop, LABEL], ::cFilialSE4 + (cAlias)->A1_COND ), '')
+			Elseif aFields[nLoop, LABEL] == "pricelistinternalid"
+				cContent := IIF( canConvertField(cAlias, 'A1_TABELA'), ::ValueToJson(aFields[nLoop, LABEL], ::cFilialDA0 + (cAlias)->A1_TABELA ), '')
+			Elseif aFields[nLoop, LABEL] == "carrierinternalid"
+				cContent := IIF( canConvertField(cAlias, 'A1_TRANSP'), ::ValueToJson(aFields[nLoop, LABEL], ::cFilialDA0 + (cAlias)->A1_TRANSP ), '')
+			Elseif aFields[nLoop, LABEL] == "countrydescription"
+				cContent := IIF( canConvertField(cAlias, 'A1_PAIS'), Rtrim( GetCountry(::cFilialSYA, (cAlias)->A1_PAIS)), '')
+			Elseif aFields[nLoop, LABEL] == "ufdescription"
+				cContent := IIF( canConvertField(cAlias, 'A1_EST'), GetState((cAlias)->A1_EST, ::oHashStates), '')
+			Else
+				cContent := ::ValueToJson( aFields[nLoop, LABEL], (cAlias)->( &(aFields[nLoop, VALUE]) )  )
+			Endif
+		EndIf
+		Self:oJsonObj:setProp( aFields[nLoop, LABEL], cContent, lEmpty  )
+	Next
+return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} addMapFieldsSA1
+	Cria o Mapa de campos Protheus x API - SA1 - Clientes
+
+	@sample		addMapFieldsSA1( self, .T. )
+	@type		function
+	@param		oSelf	, Object	, Objeto com herança da classe FWAdapterBaseV2
+    @param		isOnline, Logical	, Adicionar campos no padrão OnLine ou Sync
+	@author		Danilo Salve
+	@since		21/07/2021
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------
+Function addMapFieldsSA1( oSelf as Object, isOnLine as Logical )
+	Local aInternalId			:= GetInternalId( { "A1_FILIAL", "A1_COD", "A1_LOJA" } )
+	Local nTamPaymentCondition	:= GetFieldLength("A1_FILIAL")  + GetFieldLength("A1_COND")
+	Local nTamPriceList			:= GetFieldLength("DA0_FILIAL") + GetFieldLength("A1_TABELA")
+	Local nTamCarrier 			:= GetFieldLength("A4_FILIAL")  + GetFieldLength("A1_TRANSP")
+	Local lFixedId				:= !oSelf:oJsonObj:lList
+
+    If isOnLine
+	    oSelf:AddMapFields( "id"				, "id"				, .T., lFixedId, { "id"		, 'C', aInternalId[1] , 0 }, aInternalId[2])
+    Else
+	    oSelf:AddMapFields( "id"				, "id"				, .T., lFixedId, { "id"		, 'C', aInternalId[1] , 0 }, "' '")
+        oSelf:AddMapFields( "deleted"			, "deleted"			, .T., .F., { "deleted"		, 'C', 1, 0 }, "SA1.D_E_L_E_T_" )
+    EndIf
+
+	oSelf:AddMapFields( "branch"                , "A1_FILIAL"		, .T., .F., { "A1_FILIAL" 	, 'C', GetFieldLength("A1_FILIAL")	, 0 }, "SA1.A1_FILIAL" )
+	oSelf:AddMapFields( "code"                  , "A1_COD" 	    	, .T., .F., { "A1_COD"		, 'C', GetFieldLength("A1_COD")		, 0 }, "SA1.A1_COD" )
+	oSelf:AddMapFields( "store"                 , "A1_LOJA"			, .T., .F., { "A1_LOJA"		, 'C', GetFieldLength("A1_LOJA")	, 0 }, "SA1.A1_LOJA" )
+	oSelf:AddMapFields( "name"                  , "A1_NOME"   		, .T., .F., { "A1_NOME"   	, 'C', GetFieldLength("A1_NOME")	, 0 } )
+	oSelf:AddMapFields( "fantasy"               , "A1_NREDUZ"		, .T., .F., { "A1_NREDUZ"	, 'C', GetFieldLength("A1_NREDUZ")	, 0 } )
+	oSelf:AddMapFields( "municipalregistration" , "A1_INSCRM"		, .T., .F., { "A1_INSCRM"	, 'C', GetFieldLength("A1_INSCRM")	, 0 } )
+	oSelf:AddMapFields( "estadualregistration"  , "A1_INSCR"		, .T., .F., { "A1_INSCR"	, 'C', GetFieldLength("A1_INSCR")	, 0 } )
+	oSelf:AddMapFields( "customertype"			, "A1_TIPO"			, .T., .F., { "A1_TIPO"		, 'C', GetFieldLength("A1_TIPO")	, 0 } )
+	oSelf:AddMapFields( "persontype"			, "A1_PESSOA"		, .T., .F., { "A1_PESSOA"	, 'C', GetFieldLength("A1_PESSOA")	, 0 } )
+	oSelf:AddMapFields( "cgc"					, "A1_CGC"			, .T., .F., { "A1_CGC"		, 'C', GetFieldLength("A1_CGC")		, 0 } )
+	oSelf:AddMapFields( "paymentconditioninternalid"  , "paymentconditioninternalid", .T., .F., { "paymentconditioninternalid"	,;
+		'C', nTamPaymentCondition , 0 }, "' '")
+	oSelf:AddMapFields( "paymentconditions"		, "A1_COND"			, .T., .F., { "A1_COND"		, 'C', GetFieldLength("A1_COND")	, 0 } )
+	oSelf:AddMapFields( "pricelistinternalid"   , "pricelistinternalid" , .T., .F., { "pricelistinternalid"	, 'C', nTamPriceList 		, 0 }, "' '")
+	oSelf:AddMapFields( "pricelist"				, "A1_TABELA"		, .T., .F., { "A1_TABELA"	, 'C', GetFieldLength("A1_TABELA")	, 0 } )
+	if cPaisLoc == "BRA"
+		oSelf:AddMapFields( "cnae"					, "A1_CNAE"			, .T., .F., { "A1_CNAE"		, 'C', GetFieldLength("A1_CNAE")	, 0 } )
+	endIf
+	oSelf:AddMapFields( "vendor"				, "A1_VEND"			, .T., .F., { "A1_VEND"		, 'C', GetFieldLength("A1_VEND")	, 0 } )
+	oSelf:AddMapFields( "citycode"				, "A1_COD_MUN"		, .T., .F., { "A1_COD_MUN"	, 'C', GetFieldLength("A1_COD_MUN")	, 0 } )
+	oSelf:AddMapFields( "city"					, "A1_MUN"			, .T., .F., { "A1_MUN"		, 'C', GetFieldLength("A1_MUN")		, 0 } )
+	oSelf:AddMapFields( "neighborhood"			, "A1_BAIRRO"		, .T., .F., { "A1_BAIRRO"	, 'C', GetFieldLength("A1_BAIRRO")	, 0 } )
+	oSelf:AddMapFields( "address"				, "A1_END"			, .T., .F., { "A1_END"		, 'C', GetFieldLength("A1_END")		, 0 } )
+	oSelf:AddMapFields( "addresscomplement"		, "A1_COMPLEM"		, .T., .F., { "A1_COMPLEM"	, 'C', GetFieldLength("A1_COMPLEM")	, 0 } )
+	oSelf:AddMapFields( "zipcode"				, "A1_CEP"			, .T., .F., { "A1_CEP"		, 'C', GetFieldLength("A1_CEP")		, 0 } )
+	oSelf:AddMapFields( "uf"					, "A1_EST"			, .T., .F., { "A1_EST"		, 'C', GetFieldLength("A1_EST")		, 0 } )
+	oSelf:AddMapFields( "ufdescription"			, "ufdescription"	, .T., .F., { "ufdescription", 'C', GetFieldLength("A1_ESTADO")	, 0 }, "' '" )
+	oSelf:AddMapFields( "ddi"					, "A1_DDI"			, .T., .F., { "A1_DDI"		, 'C', GetFieldLength("A1_DDI")		, 0 } )
+	oSelf:AddMapFields( "ddd"					, "A1_DDD"			, .T., .F., { "A1_DDD"		, 'C', GetFieldLength("A1_DDD")		, 0 } )
+	oSelf:AddMapFields( "phone"					, "A1_TEL"			, .T., .F., { "A1_TEL"		, 'C', GetFieldLength("A1_TEL")		, 0 } )
+	oSelf:AddMapFields( "email"					, "A1_EMAIL"		, .T., .F., { "A1_EMAIL"	, 'C', GetFieldLength("A1_EMAIL")	, 0 } )
+	oSelf:AddMapFields( "country"				, "A1_PAIS"			, .T., .F., { "A1_PAIS"		, 'C', GetFieldLength("A1_PAIS")	, 0 } )
+	oSelf:AddMapFields( "countrydescription"	, "countrydescription", .T., .F., { "YA_DESCR", 'C', GetFieldLength("YA_DESCR")	, 0 }, "' '" )
+	oSelf:AddMapFields( "contact"				, "A1_CONTATO"		, .T., .F., { "A1_CONTATO"	, 'C', GetFieldLength("A1_CONTATO")	, 0 } )
+	oSelf:AddMapFields( "risk"					, "A1_RISCO"		, .T., .F., { "A1_RISCO"	, 'C', GetFieldLength("A1_RISCO")	, 0 } )
+	oSelf:AddMapFields( "creditlimit"			, "A1_LC"		 	, .T., .F., { "A1_LC"		, 'N', GetFieldLength("A1_LC")		, GetFieldDecimal("A1_LC") } )
+	oSelf:AddMapFields( "lastpurchase"			, "A1_ULTCOM"		, .T., .F., { "A1_ULTCOM"	, 'D', GetFieldLength("A1_ULTCOM")	, 0 } )
+	oSelf:AddMapFields( "inclusiondate"			, "A1_DTCAD"		, .T., .F., { "A1_DTCAD"	, 'D', GetFieldLength("A1_DTCAD")	, 0 } )
+	oSelf:AddMapFields( "status"				, "A1_MSBLQL"		, .T., .F., { "A1_MSBLQL"	, 'C', GetFieldLength("A1_MSBLQL")	, 0 } )
+	oSelf:AddMapFields( "freighttype"			, "A1_TPFRET"		, .T., .F., { "A1_TPFRET"	, 'C', GetFieldLength("A1_TPFRET")	, 0 } )
+	oSelf:AddMapFields( "carrier"				, "A1_TRANSP"		, .T., .F., { "A1_TRANSP"	, 'C', GetFieldLength("A1_TRANSP")	, 0 } )
+    oSelf:AddMapFields( "carrierinternalid"     , "carrierinternalid"   , .T., .F., { "carrierinternalid"	, 'C', nTamCarrier 			, 0 }, "' '")
+
+	aSize(aInternalId, 0)
+Return Nil
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} GetCountry
+	Obtem um Expressão SQL para filtrar um Cliente por Código e Loja
+
+	@type		function
+	@sample		getCustomerFilter('FAT00101')
+	@param		cCustomerId	   , Character	, Código do Cliente
+	@param		cCustomerStore , Character	, Loja do Cliente
+	@return		Character	   , Filtro/Expressão SQL do Cliente
+	@author		Danilo Salve
+	@since		22/07/2021
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------
+Static Function getCustomerFilter(cCustomerId as Character, cCustomerStore as Character) as Character
+	Local cWhere		as Character
+
+	cWhere := " AND SA1.A1_COD = '" + cCustomerId
+    cWhere += "' AND SA1.A1_LOJA = '" + cCustomerStore + "'"
+
+Return cWhere
+//-------------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} canFilterCustomerBySeller
+	Verifica se deve realizar o filtro do cliente para o vendedor encontrado para o usuário logado
+
+	@type		function
+	@sample		canFilterCustomerBySeller('000001', '01')
+	@param		cCustomerOfRequest	, Character	, Código do Cliente enviado na requisição
+	@param		cStoreOfRequest		, Character	, Loja do Cliente enviado na requisição
+	@return		needFilter, logical	   , indica se o filtro vai ser necessário ou não
+	@author		Rafael Mota Previdi - Squad CRM/Faturamento
+	@since		02/05/2022
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------------------------------
+Static Function canFilterCustomerBySeller(cCustomerOfRequest, cStoreOfRequest)
+
+	Local needFilter as logical
+	local cCustomerId as character
+	local cStore as character
+	local aCustomer as array
+
+	needFilter := .T.
+	
+	aCustomer   := getDefaultBudgetClient()
+	cCustomerId := aCustomer[1]
+	cStore      := aCustomer[2]
+
+	if (cCustomerId == cCustomerOfRequest .And. cStore == cStoreOfRequest)
+		needFilter := .F.
+	endif
+
+Return needFilter
+//-------------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} getDefaultBudgetClient
+	Obtem o código do cliente/loja padrão para os orçamentos
+
+	@type		function
+	@sample		getDefaultBudgetClient()
+	@return		array , array contendo o código e a loja do cliente padrão para os orçamentos
+	@author		Rafael Mota Previdi - Squad CRM/Faturamento
+	@since		02/05/2022
+	@version	12.1.33
+/*/
+//------------------------------------------------------------------------------------------------------
+Static Function getDefaultBudgetClient()
+	local  cOrCliPD := SuperGetMV("MV_ORCLIPD", .F., "00000101") as character
+	local  nTamCli  := GetFieldLength("A1_COD")                  as numeric
+	static cCustomerId                                           as character
+	static cStore                                                as character
+
+	if !Empty(cOrCliPD) .And. (Empty(cCustomerId) .Or. Empty(cStore))
+		cCustomerId := SubStr(cOrCliPD, 1          , nTamCli)
+		cStore      := SubStr(cOrCliPD, nTamCli + 1, GetFieldLength("A1_LOJA"))
+	endif
+return {cCustomerId, cStore}
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} CustomerProtheusData::saveCustomer(jCustomer as Json, nOperation as Numeric,cCustomerId as Character, cCustomerStore as Character) as Logical
+	Efetua a inclusão, altera ou exclusão de um Cliente
+	@type		method
+	@version	12.1.33
+	@author		Eduardo Paro / Squad CRM & Faturamento
+	@since		26/04/2023
+	@param		jCustomer		, json		, json do Cliente
+	@param		nOperation		, Numeric	, Operação (3 - Inclusão, 4 - Alteração ou 5 - Exclusão)
+	@param		cCustomerId		, character	, A1_COD
+	@param		cCustomerStore	, character	, A1_LOJA	
+	@return		logical, Se obteve sucesso na transação retorna verdadeiro.
+/*/
+//------------------------------------------------------------------------------
+Method saveCustomer(jCustomer as Json, nOperation as Numeric, cCustomerId as Character, cCustomerStore as Character) as Logical Class CustomerProtheusData
+	Local aArea			:= FwGetArea() as Array
+	Local oCustomer		:= pgvCustomersBase():new() as Object
+	Local lContinue		:= .T. as Logical
+	Local nStatusCode	:= 201 as Numeric
+
+	If ( Empty( lExistCommitData) )
+		lExistCommitData := IIF(lExistFindMethod, findMethod(oCustomer, "commitData"), .F.)
+	EndIf	
+
+	If lExistCommitData
+		oCustomer:cCustomerId 	 := PadR(cCustomerId, getSX3Cache("A1_COD","X3_TAMANHO"))
+		oCustomer:cCustomerStore := PadR(cCustomerStore, getSX3Cache("A1_LOJA","X3_TAMANHO"))
+		oCustomer:cSellerId 	 := getSellerFromFilter(FWIsAdmin(), .F.)
+
+		If oCustomer:setOperation( nOperation )
+			If nOperation <> INCLUI
+				DbSelectArea("SA1")
+				SA1->(DbSetOrder(1)) 
+				If !SA1->( DbSeek( FwXFilial('SA1') + oCustomer:cCustomerId + oCustomer:cCustomerStore ))
+					oCustomer:setErrorMessage( STR0004, .T. ) // Cliente não encontrado
+					nStatusCode := 404
+					lContinue := .F.			
+				Endif
+			EndIf
+
+    	    If lContinue .And. oCustomer:fromExecAuto(jCustomer)
+				nStatusCode := 200
+    	        If oCustomer:commitData()
+					oRest:setStatusCode( nStatusCode )
+					oRest:setResponse( getResponseCustomers( nOperation, oCustomer:cCustomerId, oCustomer:cCustomerStore) )
+					NotifySeller(oCustomer:cCustomerId+"/"+oCustomer:cCustomerStore, oCustomer:cSellerId, nOperation, /*cError*/, /*cExternalId*/, .F., SOURCE)
+				Else
+					nStatusCode := 400
+					NotifySeller(oCustomer:cCustomerId+"/"+oCustomer:cCustomerStore, oCustomer:cSellerId, nOperation, oCustomer:getErrorMessage(), /*cExternalId*/, .F., SOURCE)
+					SetRestFault(nStatusCode, FWHttpEncode(oCustomer:getErrorMessage()) )
+					lContinue := .F.
+    	        Endif
+    	    Else
+				nStatusCode := IIF(nStatusCode == 404, 404, 400)
+				NotifySeller(oCustomer:cCustomerId+"/"+oCustomer:cCustomerStore, oCustomer:cSellerId, nOperation, oCustomer:getErrorMessage(), /*cExternalId*/, .F., SOURCE)
+    	        SetRestFault(nStatusCode, FWHttpEncode(oCustomer:getErrorMessage()) )
+				lContinue := .F.
+    	    Endif
+    	Endif
+	Else
+		nStatusCode := 501
+		SetRestFault(nStatusCode, FWHttpEncode(STR0004) ) //Falha ao registrar o cliente, atualize o ambiente com a última expedição continua do Faturamento
+	EndIf
+
+    oCustomer:Destroy()
+    FreeObj(oCustomer)
+	FwRestArea( aArea )
+	aSize( aArea, 0)
+Return lContinue
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} getResponseCustomers
+	Obtem uma resposta de sucesso de acordo com a operação informada.
+	@type		function
+	@version	12.1.2210 ou superior 
+	@author		Eduardo Paro / Squad CRM & Faturamento
+	@since		26/04/2023
+	@param		nOperation	, numeric, Operação (3, 4 ou 5)
+	@return 	json, resposta de sucesso da requisição
+/*/
+//------------------------------------------------------------------------------
+static function getResponseCustomers(nOperation as Numeric, cCustomerId as Character, cCustomerStore as Character) as json
+	Local jResponse		:= JsonObject():New() as json
+	Local jCustomer		:= JsonObject():New() as json
+	Local aCustomer		:= {} as Array
+
+	If nOperation == INCLUI
+		jResponse['messageSuccess'] := FwHttpEncode(STR0001) //"Cliente incluído com sucesso"
+	Elseif nOperation == ALTERA
+		jResponse['messageSuccess'] := FwHttpEncode(STR0002) //"Cliente alterado com sucesso"
+	Elseif nOperation == EXCLUI
+		jResponse['messageSuccess'] := FwHttpEncode(STR0003) //"Cliente excluído com sucesso" 
+	Endif
+
+	jResponse['status'] := "OK"
+
+	If nOperation <> EXCLUI
+		jCustomer['code'] := cCustomerId
+		jCustomer['store'] := cCustomerStore
+		aAdd(aCustomer, jCustomer)
+		jResponse['items'] := aClone(aCustomer)
+	Endif
+
+	FreeObj(jCustomer)
+	aSize(aCustomer, 0)
+Return jResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} CustomerProtheusData::getNextStore(cCustomerId as Character) as Json
+	Obtem o a proxima loja do cliente
+	@type method
+	@version 12.1.2210
+	@author Eduardo Paro / Squad CRM & Faturamento
+	@since 04/07/2023
+	@param cCustomerId, character, Código do Cliente (A1_COD)
+	@return JSON, Objeto JSON contendo a proxima loja do cliente
+/*/
+//------------------------------------------------------------------------------
+Method getNextStore(cCustomerId as character, cCustomerStore as character) as Json CLASS CustomerProtheusData
+	Local aArea     := GetArea()
+	Local cAliasSA1 := GetNextAlias()
+	Local cQuery	:= ""
+	Local jResponse	:= JsonObject():New() as json
+	
+    cQuery += " SELECT MAX( A1_LOJA ) A1_LOJA "
+    cQuery += " FROM "
+	cQuery += RetSqlName("SA1") + " SA1 "
+    cQuery += " WHERE "
+  	cQuery += " SA1.A1_FILIAL = ? AND "
+	cQuery += " SA1.A1_COD = ? AND "
+	cQuery += " SA1.D_E_L_E_T_ = ' ' "
+
+	cQuery := ChangeQuery(cQuery)
+
+	oStatement := IIF(checkFWExecStat(), FwExecStatement():New( cQuery ), FWPreparedStatement():New( cQuery ))
+
+	oStatement:SetString(1, FWxFilial("SA1"))
+	oStatement:SetString(2, PadR(cCustomerId, getSX3Cache("A1_COD","X3_TAMANHO")))
+
+	If checkFWExecStat()
+		cAliasSA1 := oStatement:OpenAlias(cAliasSA1)
+	Else
+		MPSysOpenQuery( oStatement:GetFixQuery(), cAliasSA1)
+	EndIf
+
+	If (cAliasSA1)->(!Eof()) .AND. !EMPTY((cAliasSA1)->A1_LOJA)
+		jResponse['nextStore'] := SOMA1((cAliasSA1)->A1_LOJA)
+	Else
+		jResponse['nextStore'] := PadR("00", getSX3Cache("A1_LOJA","X3_TAMANHO"))
+	Endif
+
+	(cAliasSA1)->(DbCloseArea())
+	oStatement:Destroy()
+	oStatement := Nil 
+	RestArea(aArea)
+	aSize(aArea, 0)
+Return jResponse
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} checkFWExecStat
+	Função utilizada para validar a data da LIB para utilização da classe FWExecStatement
+	@type       Function
+	@return     lShemasVerLib, lógico, se pode ser utilizado a classe FWExecStatement
+	@author     Squad CRM/Faturamento
+	@since      12/07/2023
+	@version    12.1.2210
+	
+/*/
+//-------------------------------------------------------------------------------------
+Static Function checkFWExecStat()
+	Static lShemasVerLib := Nil
+
+	If lShemasVerLib == Nil
+		lShemasVerLib := FWLibVersion() >= "20211116"
+	EndIf
+Return lShemasVerLib

@@ -1,0 +1,581 @@
+#include 'tlpp-core.th'
+#Include "PROTHEUS.Ch"
+#include "backoffice.ngf.applicationsLoans.service.CH"
+
+NAMESPACE totvs.protheus.backoffice.ngf.applicationsLoans
+USING NAMESPACE gfin.util
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+USING NAMESPACE gfin.api.tables
+USING NAMESPACE totvs.protheus.backoffice.ngf.template
+
+Class GfinApplicationLoanService FROM FWAdapterBaseV2
+	Public Method new()
+	Public Method getAll()
+	Public METHOD deleteByID()
+	Public METHOD postItem()
+	Public METHOD putItem()
+	Public METHOD getOperations()
+	Public METHOD getParam()
+	Public METHOD postAppropriation()
+	Public METHOD postSimulation()
+EndClass
+
+Method new() Class GfinApplicationLoanService
+	_Super:new('GET')
+	If MethIsMemberOf( self, "setUseSpaces", .T. )
+		::setUseSpaces(.T.)
+	Endif
+Return Self
+
+/*/{Protheus.doc} getAll
+  obtem todas as aplicações e emprestimos
+
+  @param headers As Json, cabeçalho recebido
+  @param queryRequestParams As Json, parâmetros recebidos
+
+  @Return jResponse As Json, retorno da lista aplicações/Emprestimos
+
+  @author vinicius.prado
+  @since 19/11/2021
+/*/
+Method getAll(queryRequestParams As Json, headers As Json) Class GfinApplicationLoanService
+	Local jResponse                          As Json
+	Local aFilter      := {}                 As Array
+	Local aFields      := {}                 As Array
+	Local aStruct      := {}                 As Array
+	Local aBranches    := {}                 As Array
+	Local cQueryWhere  := ''                 As Character
+	Local itemsFields  := {}                 As Array
+	Local itemsStruct  := {}                 As Array
+	Local aplLoanItens := JsonObject():New() As Json
+	Local operation    := 'APL'              As Character
+	Local hasBrowse    := .T.                As Logical
+	Local aMapFields   := {}                 As Array
+	Local nField       := 1                  As Numeric
+
+	// indica qual página devemos retornar
+	If !(Empty(queryRequestParams['page']))
+		::setPage(Val(queryRequestParams['page']))
+	EndIf
+
+	// indica o tamanho da página
+	If !(Empty(queryRequestParams['pagesize']))
+		::setPageSize(Val(queryRequestParams['pagesize']))
+	EndIf
+
+	// indica a ordem definida por querystring
+	::setOrderQuery(queryRequestParams['order'])
+
+	// indica o filtro querystring recebido (pode se utilizar um filtro oData)
+	If !(Empty(queryRequestParams['filter']))
+		AAdd(aFilter, {"FILTER", queryRequestParams['filter']})
+		::SetUrlFilter(aFilter)
+	EndIf
+
+	// indica o tipo de operação, aplicação ou emprestimo
+	If !(Empty(queryRequestParams['operation']))
+		operation := queryRequestParams['operation']
+	EndIf
+
+	// trata as filiais encaminhadas no header para o filtro
+	If !(Empty(headers['branches']))
+		aBranches := STRtokARR(headers['branches'], ',')
+	EndIf
+
+	hasBrowse := queryRequestParams:hasProperty('browser') .and. UPPER(queryRequestParams['browser']) == 'S'
+
+	if hasBrowse
+		mapTableFieldsBaseV2(Self, @aStruct, 'SEH', FWModeAccess('SEH', 1) <> 'C', hasBrowse)
+	Else
+		If queryRequestParams:hasProperty('allfields') .and. UPPER(queryRequestParams['allfields']) == 'S'
+			apiTablesMapFields(Self, @aFields, "SEH", @aStruct)
+		EndIf
+	Endif
+
+	// adiciona campos utilizados no filtro que não serão retornados no resultado
+	If queryRequestParams:hasProperty('filterFields')
+		aFilterFields := STRtoArray(UPPER(queryRequestParams['filterFields']), ',')
+		totvs.protheus.backoffice.ngf.util.mapFields(Self, aFilterFields)
+	Endif
+
+	// Informa a Query a ser utilizada pela API
+	::SetQuery(apiApplicationLoanQuery())
+
+	// configura o filtro de query padrão
+	If !Empty(aBranches)
+		cQueryWhere += "AND EH_FILIAL IN (" + gfin.util.branchesFormatToIn(aBranches, 'SEH') + ") "
+	EndIf
+
+	cQueryWhere += "AND EH_APLEMP = '"+ operation + "' "
+
+	::SetWhere(cQueryWhere)
+
+	// Informa a ordenação a ser Utilizada pela Query
+	::SetOrder(apiApplicationLoanOrder())
+
+	//Executa a consulta, se retornar .T. tudo ocorreu conforme esperado
+	If ::Execute()
+		aMapFields := SELF:oJsonObj:aMapFields
+		For nField := 1 to Len(aMapFields)
+			If aMapFields[nField][5][2] == "N"
+				If aMapFields[nField][5][3] < 19
+					TCSetField(SELF:oJsonObj:cAlias, aMapFields[nField][5][1], aMapFields[nField][5][2], aMapFields[nField][5][3], aMapFields[nField][5][4])
+				Else
+					FwLogMsg('WARN ',, "FINA716", "FINA716", "", 'TCSEFIELD', "[NGFLOG][FINA716][API]:" + aMapFields[nField][5][1] + ": TCSetField - Invalid field len: nSize. "+ STR0014 )   //"Tamanho máximo para campos numéricos foi ultrapassado."
+				EndIf
+			EndIf
+		Next nField
+
+		// Gera o arquivo Json com o retorno da Query
+		::FillGetResponse()
+	EndIf
+
+	jResponse := JsonObject():New()
+
+	If ::lOk
+		aplLoanItens := getItemsMoviments(::getJSONResponse(), operation)
+
+		jResponse["result"] := .T.
+		jResponse["response"] := JsonObject():New()
+		jResponse["response"] := aplLoanItens
+		jResponse["response"]["struct"] := gfin.util.arrayToJson(aStruct)
+
+		itemsFields  := apiItemsFields(operation)
+		mapFieldsBaseV2(Self, @itemsStruct, itemsFields)
+
+		//Tratamento utilizados nos resgates (SEI)
+		If operation == 'APL'
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "ei_seq", x[3][2] := STR0001, ) })
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "ei_data", x[3][2] := STR0002, ) })
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "ei_valor", x[3][2] := STR0003, ) })
+		Else
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "e2_parcela", x[3][2] := STR0004, ) })
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "e2_vencto", x[3][2] := STR0005, ) })
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "e2_vencrea", x[3][2] := STR0018, ) })
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "e2_baixa", x[3][2] := STR0006, ) })
+			aEval(itemsStruct, { | x | Iif( x[1][2] == "e2_vlcruz", x[3][2] := STR0007, ) })
+		Endif
+
+		jResponse["response"]["itemsStruct"] := gfin.util.arrayToJson(itemsStruct)
+	Else
+		jResponse := answerErrorFormat(::GetCode(), ::GetMessage(), ::GetMessage())
+	EndIf
+
+	//faz a desalocação de objetos e arrays utilizados
+	::DeActivate()
+
+Return jResponse
+
+/*/{Protheus.doc} deleteByID
+  Deleta o registro de acordo com o ID
+
+  @param internalID, Character, Chave de pesquisa do registro na tabela SEH - EH_FILIAL|EH_NUMERO|EH_REVISAO
+  @param oBodyRequest, Json, Corpo da requisição que deve conter os campos referente a contabilização
+  @Return Response As Json, retorno Json que indica se a operação foi concluida com sucesso
+
+  @author Vitor Duca
+  @since 24/11/2021
+/*/
+Method deleteByID(cInternalID As Character, oBodyRequest As Json) Class GfinApplicationLoanService
+	Local oResponse As Json
+	Local aApplicationsLoansID := {} As Array
+	Local aParams := {} As Array
+
+	oResponse := JsonObject():new()
+	aApplicationsLoansID := STRtokARR2(cInternalID, '|', .T.)
+
+	aParams := oBodyRequest["param"]
+	oResponse := ApplicationsLoansDelete(aApplicationsLoansID, aParams)
+
+Return oResponse
+
+/*/{Protheus.doc} postItem
+  Realiza a inserção do registro na tabela SEH de acordo com o body da requisição
+  @author Vitor Duca
+  @since 01/12/2021
+  @version 1.0
+  @param obodyRequest, Json, Corpo da requisição que deve conter os campos e seus respectivos valores
+  @return return_var, return_type, return_description
+/*/
+Method postItem(jBodyRequest As Json) Class GfinApplicationLoanService
+	Local jResponse As Json
+	Local nX As Numeric
+	Local aExecAuto := {} As Array
+	Local cField := "" As Character
+	Local aParams := {} As Array
+	Local aSE2Detail := {} As Array
+	Local aFieldsCalculate := {} As Array
+
+	For nX := 1 to len(jBodyRequest["dados"])
+		cField := UPPER(jBodyRequest["dados"][nX]["field"])
+
+		Do case
+			Case cField $ 'dataPrimeiroVencimento|AUTFIXEDDUE|AUTNEXTDUE'
+				If cField == "AUTNEXTDUE"
+					If Empty(jBodyRequest["dados"][nX]["value"])
+						jBodyRequest["dados"][nX]["value"] := "S"
+					EndIf
+				Endif
+				If cField == "AUTFIXEDDUE"
+					If Empty(jBodyRequest["dados"][nX]["value"])
+						jBodyRequest["dados"][nX]["value"] := 0
+					EndIf
+				Endif
+				Aadd(aFieldsCalculate, { cField, jBodyRequest["dados"][nX]["value"], NIL } )
+			Case cField == "EH_MOEDA"
+				Aadd(aExecAuto, { cField, Val(PadR(jBodyRequest["dados"][nX]["value"],TamSx3(cField)[1])), NIL } )
+			Case cField == "PARCELAS"
+				AaddparcelsLoan(jBodyRequest["dados"][nX]["value"], @aSE2Detail)
+			Case cField $ 'AUTCODFOR|AUTFORLOJA'
+				Aadd(aExecAuto, { cField, jBodyRequest["dados"][nX]["value"], NIL } )
+			Case cField == "EH_TEMPLT"
+				Aadd(aExecAuto, { cField, Iif( ValType( jBodyRequest["dados"][nX]["value"] ) == 'J', jBodyRequest["dados"][nX]["value"]:toJson(), jBodyRequest["dados"][nX]["value"] ), NIL } )
+			OtherWise
+				if !Empty(jBodyRequest["dados"][nX]["value"])
+					If GetSx3Cache(cField, "X3_TIPO") == "D"
+						Aadd(aExecAuto, { cField, STOD(StrTran(jBodyRequest["dados"][nX]["value"],"-","")), NIL } )
+					Else
+						If ValType(jBodyRequest["dados"][nX]["value"]) == "N"
+							Aadd(aExecAuto, { cField, jBodyRequest["dados"][nX]["value"], NIL } )
+						Else
+							Aadd(aExecAuto, { cField, Padr(jBodyRequest["dados"][nX]["value"],TamSx3(cField)[1]), NIL } )
+						Endif
+					Endif
+				Endif
+		EndCase
+	Next
+
+	aParams := jBodyRequest["param"]
+
+	jResponse := ApplicationsLoansInclude(aExecAuto, aParams, aSE2Detail, aFieldsCalculate)
+
+Return jResponse
+
+/*/{Protheus.doc} putItem
+  Realiza a edição do registro na tabela SEH de acordo com o body da requisição
+
+  @author vinicius.prado
+  @since 20/12/2021
+  @version 1.0
+  @param obodyRequest, Json, deve conter os campos que serão alterados e seus respectivos valores
+  @return return_var, return_type, return_description
+/*/
+Method putItem(oBodyRequest As Json, cInternalID As Character) Class GfinApplicationLoanService
+	Local jResponse As Json
+	Local nX As Numeric
+	Local aExecAuto := {} As Array
+	Local cField := "" As Character
+	Local aApplicationsLoansID := {} As Array
+
+	aApplicationsLoansID := STRtokARR2(cInternalID, '|', .T.)
+
+	// Trata os campos enviados
+	For nX := 1 to len(oBodyRequest["dados"])
+		cField := UPPER(oBodyRequest["dados"][nX]["field"])
+
+		If cField == "EH_MOEDA"
+			Aadd(aExecAuto, { cField, Val(PadR(oBodyRequest["dados"][nX]["value"],TamSx3(cField)[1])), NIL } )
+		Else
+			If GetSx3Cache(cField, "X3_TIPO") == "D"
+				Aadd(aExecAuto, { cField, STOD(StrTran(oBodyRequest["dados"][nX]["value"],"-","")), NIL } )
+			Else
+				Aadd(aExecAuto, { cField, oBodyRequest["dados"][nX]["value"], NIL } )
+			Endif
+		EndIf
+	Next
+
+	jResponse := ApplicationsLoansEdit(aExecAuto,aApplicationsLoansID)
+
+Return jResponse
+
+/*/{Protheus.doc} getOperations
+  Realiza o GET das operações que estão cadastrada na tabela 11 (SX5) e dividi de acordo com os
+  parametros MV_APLCAL e MV_EMPCAL
+  @author Vitor Duca
+  @since 08/12/2021
+  @version 1.0
+  @param obodyRequest, Json, Corpo da requisição que deve conter os campos e seus respectivos valores
+  @return return_var, return_type, return_description
+/*/
+Method getOperations(cType As Character) Class GfinApplicationLoanService
+	Local aContent := {} as array
+	Local aItems := {} as array
+	Local nItem := 0 as numeric
+	Local jResponse as json
+	Local cContentSX6 := '' As Character
+
+	aContent := FWGetSX5('11')
+
+	cContentSX6 := SuperGetMV("MV_EMPCAL1",.F.,"") + "|"
+	cContentSX6 += SuperGetMV("MV_EMPCAL2",.F.,"") + "|"
+	cContentSX6 += SuperGetMV("MV_EMPCAL3",.F.,"") + "|"
+	cContentSX6 += SuperGetMV("MV_EMPCAL4",.F.,"")
+
+	If cType == 'APL'
+		cContentSX6 := SuperGetMV("MV_APLCAL1",.F.,"") + "|"
+		cContentSX6 += SuperGetMV("MV_APLCAL2",.F.,"") + "|"
+		cContentSX6 += SuperGetMV("MV_APLCAL3",.F.,"") + "|"
+		cContentSX6 += SuperGetMV("MV_APLCAL4",.F.,"") + "|"
+		cContentSX6 += SuperGetMV("MV_APLCAL5",.F.,"")
+	Endif
+
+	for nItem := 1 to len(aContent)
+		If Alltrim(aContent[nItem][3]) $ cContentSX6 .or. Alltrim(aContent[nItem][3]) == "TEM"
+			Aadd(aItems, {"label": alltrim(aContent[nItem][3]), "description": alltrim(aContent[nItem][4])})
+		Endif
+	next nItem
+
+	jResponse := JsonObject():new()
+	jResponse['items'] := aItems
+
+Return jResponse
+
+/*/{Protheus.doc} getParam
+  Realiza o GET das naturezas que devem ser inicializadas nos formularios de
+  inclusão, resgate e pagamento
+
+  @author Vitor Duca
+  @since 12/01/2022
+  @version 1.0
+  @param cType, Character, Tipo de contrato APL ou EMP
+  @return jResponse, Json, Response
+/*/
+Method getParam(oQueryRequest As Json) Class GfinApplicationLoanService
+	Local cNature := "" As Character
+	Local cParameter := "" As Character
+	Local cDescription := "" As Character
+	Local cOperation := "" As Character
+	Local cType := "" As Character
+
+	cType := UPPER(oQueryRequest["type"])
+	cOperation := oQueryRequest["operation"]
+
+	If cType == "APL"
+		cParameter := Iif(cOperation == "include", "MV_NATAPLI", "MV_NATRAPL")
+		cDescription := Iif(cOperation == "include", "NATUREZA APLICACOES", "NATUREZA RESG.APLICACOES")
+		cNature := PadR(&(GetMv(cParameter)),TamSX3("EH_NATUREZ")[1])
+	Else
+		cParameter := Iif(cOperation == "include", "MV_NATEMP", "MV_NATREMP")
+		cDescription := Iif(cOperation == "include", "NATUREZA EMPRESTIMOS", "NATUREZA PGT.EMPRESTIMOS")
+		cNature := PadR(&(GetMv(cParameter)),TamSX3("EH_NATUREZ")[1])
+	EndIf
+
+	SED->(dbSetOrder(1))
+	If SED->(!DbSeek(xFilial("SED")+cNature) .And. !Empty(cNature))
+		RecLock("SED",.T.)
+		Replace ED_FILIAL    With xFilial("SED")
+		Replace ED_CODIGO    With cNature
+		Replace ED_DESCRIC   With cDescription
+		Replace ED_CALCIRF   With "N"
+		Replace ED_CALCISS   With "N"
+		Replace ED_PERCIRF   With 0
+		Replace ED_TIPO		   With "2"
+		MsUnlock()
+	EndIf
+
+	jResponse :=  {;
+		"result": .T. , ;
+		"statusCode": 200,;
+		"response": {;
+		"code": '200',;
+		"message": 'Natureza encontrada',;
+		"item": {;
+		"code_nature": cNature,;
+		"nature_description": cDescription;
+		};
+		};
+		}
+
+Return jResponse
+
+/*/{Protheus.doc} AaddparcelsLoan
+  Adiciona no array da execauto as parcelas que serão gravada na SE2
+  @type  Static Function
+  @author Vitor Duca
+  @since 21/12/2021
+  @version 1.0
+  @param aParcels, Array, Array da requisição
+  @param aParcels, Array, Array da execauto passado por referencia
+  @return NIL
+/*/
+Static Function AaddparcelsLoan(aParcels As Array, aSE2Detail As Array)
+	Local nX := 0 As Numeric
+	Local aAutoParcel := {} As Array
+	Local aAux := {} As Array
+
+	For nX := 1 to len(aParcels)
+
+		aAux := {}
+		Aadd(aAux,{ "AMORTIZA"   , aParcels[nX]["AMORTIZA"] } )
+		Aadd(aAux,{ "VALOR"      , aParcels[nX]["VALOR"] } )
+		Aadd(aAux,{ "JUROS"      , aParcels[nX]["JUROS"] } )
+		Aadd(aAux,{ "VENCTO"      , Stod(aParcels[nX]["DATAX"]) } )
+		Aadd(aAux,{ "VCORRIGIDO" , aParcels[nX]["VCORRIGIDO"] } )
+		Aadd(aAux,{ "PARCELA"    , cValToChar(aParcels[nX]["PARCELA"]) } )
+		Aadd(aAux,{ "PRESTACAO"  , aParcels[nX]["PRESTACAO"] } )
+
+		Aadd(aAutoParcel, AClone(aAux))
+	Next nX
+
+	aSE2Detail := AClone(aAutoParcel)
+
+Return
+
+/*/{Protheus.doc} postAppropriation
+  Realiza a apropriação dos contratos de aplicações e emprestimos.
+  @type  Function
+  @author Vitor Duca
+  @since 17/02/2022
+  @version 1.0
+  @param jBodyRequest, Json, Body request da requisição
+  @return jResponse, Json, Json de resposta da API
+/*/
+Method postAppropriation(jBodyRequest As Json) Class GfinApplicationLoanService
+	Local aParam := {} As Array
+	Local aBranches := {} As Array
+	Local nX := 0 As Numeric
+	Local nErro := 0 As Numeric
+	Local jResponse As Json
+	Local lOk := .T. As Logical
+	Local aError := {} As Array
+	Local aAux := {} As Array
+	Local jDetailErro As Json
+	Local cIdContabil := "" As Character
+	Local cMsgError := "" As Character
+	Local aBlqCtbCalendar := {} As Array
+
+	Private lMsErroAuto := .F.
+
+	aParam := jBodyRequest["param"]
+	jResponse := JsonObject():new()
+
+	If !(Empty(jBodyRequest['branches']))
+		aBranches := jBodyRequest['branches']
+	EndIf
+
+	aParam[1][2] := Stod(StrTran(aParam[1][2],'-',''))
+
+	For nX := 1 to Len(aBranches)
+		cMsgError := ""
+		aBlqCtbCalendar := {}
+		cFilAnt := aBranches[nX]
+
+		If !CtbValiDt(1,aParam[1][2])
+			cMsgError := STR0015 + CRLF // Calendário Contábil Bloqueado. Verfique o processo.
+			cMsgError += STR0016 + cFilAnt + STR0017 + DTOC(aParam[1][2]) // Filial: / Data:
+			aBlqCtbCalendar := { cFilAnt, "APR", '', cMsgError }
+		Else
+			cIdContabil := FWUUIDV4()
+			MsExecAuto({|a,b,c| FinA182(a,b,c)},.T., aParam, cIdContabil)
+		EndIf
+
+		If lMsErroAuto .Or. !Empty(cMsgError)
+			lOk := .F.
+			nErro := 0
+			jDetailErro := JsonObject():new()
+			aAux := F182ErrAut()
+
+			If Len(aBlqCtbCalendar) > 0
+				AAdd(aAux, aBlqCtbCalendar)
+			EndIf
+
+			// Monta o objeto de resposta
+			For nErro := 1 To len(aAux)
+				jDetailErro["error"] := aAux[nErro][4]
+				jDetailErro["key"] := aAux[nErro][3]
+				jDetailErro["operation"] := aAux[nErro][2]
+				jDetailErro["branch"] := aAux[nErro][1]
+				Aadd(aError, jDetailErro)
+			Next nErro
+		Endif
+	Next nX
+
+	If lOk
+		jResponse := answerFormat(lOk, 200, STR0008, "") //"Processamento da apropriação finalizado com sucesso"
+		jResponse["response"]["idcontabil"] := cIdContabil
+	Else
+		jResponse :=  {;
+			"result": .F.,;
+			"statusCode": 500,;
+			"response": {;
+			"code": '500',;
+			"message": STR0009,; //"Falha no processamento da apropriação, verifique as notificações"
+		"items": aError;
+			};
+			}
+	Endif
+
+Return jResponse
+
+/*/{Protheus.doc} postSimulation
+  Realiza a simulação da formulas dos contratos de aplicações e emprestimos.
+  @type Function
+  @author Vinicius do Prado
+  @since 21/03/2023
+  @version 1.0
+  @param jBodyRequest, Json, Body request da requisição
+  @return jResponse, Json, Json de resposta da API
+/*/
+Method postSimulation(jBodyRequest as Json) Class GfinApplicationLoanService
+	Local oTemplate as Object
+	Local jResponse as Json
+	Local lCalculate  := .T. as Logical
+	Local cTemplate   := "" as Character
+	Local cMessage    := STR0010 as Character
+	Local nStatusCode := 400 as Numeric
+
+	jResponse := JsonObject():new()
+	jResponse["response"] := JsonObject():New()
+
+	If !jBodyRequest:hasProperty('template')
+		cMessage += " template"
+		lCalculate := .F.
+	EndIf
+
+	If lCalculate .And. !jBodyRequest:hasProperty('database')
+		cMessage += STR0011 //" Data Contrato"
+		lCalculate := .F.
+	EndIf
+
+	If lCalculate .And. !jBodyRequest:hasProperty('datacalc')
+		cMessage += STR0012 //" Data Pagamento/Resgate"
+		lCalculate := .F.
+	EndIf
+
+	If lCalculate .And. !jBodyRequest:hasProperty('basevalue')
+		cMessage += STR0013 //" Valor"
+		lCalculate := .F.
+	EndIf
+
+	If lCalculate // Instancia a classe do template
+		oTemplate := totvs.protheus.backoffice.ngf.template.Template():new()
+		cTemplate := jBodyRequest["template"]
+		If ValType(jBodyRequest["template"]) $ 'J|O'
+			cTemplate := jBodyRequest["template"]:ToJson()
+		EndIf
+		lCalculate  := oTemplate:setTemplate(cTemplate)
+		If !lCalculate
+			nStatusCode := 500
+			cMessage := oTemplate:getError()
+		EndIf
+	EndIf
+
+	If lCalculate
+		oTemplate:setPagReg(.T.)
+		oTemplate:setDateBase(STOD(jBodyRequest["database"]))
+		oTemplate:setDateVenc(STOD(jBodyRequest["datacalc"]))
+		oTemplate:setValorBase(jBodyRequest["basevalue"])
+		oTemplate:calcTemplate()
+
+		jResponse["result"] := .T.
+		jResponse["response"]["template_values"] := oTemplate:getResults()
+		jResponse["response"]["database"]  := gfin.util.stringDatetoIso(jBodyRequest["database"])
+		jResponse["response"]["datacalc"]  := gfin.util.stringDatetoIso(jBodyRequest["datacalc"])
+		jResponse["response"]["basevalue"] := jBodyRequest["basevalue"]
+	Else
+		jResponse["result"] := .F.
+		jResponse["statusCode"] := nStatusCode
+		jResponse["response"]["code"] := cValToChar(nStatusCode)
+		jResponse["response"]["message"] := cMessage
+	Endif
+Return jResponse

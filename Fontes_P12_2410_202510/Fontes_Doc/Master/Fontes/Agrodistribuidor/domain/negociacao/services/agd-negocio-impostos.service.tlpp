@@ -1,0 +1,411 @@
+#include 'tlpp-core.th'
+#include 'totvs.ch'
+#include 'agd.negocio.impostos.service.ch'
+
+namespace agd.negocioImpostosService
+using namespace agd.utilsService
+using namespace totvs.protheus.backoffice.fiscal.tciclass
+using namespace agd.negocioRepository
+
+/*/{Protheus.doc} agdNegocioImpostosService
+Classe responsável por consultar os impostos retidos/recohidos da negociação
+@type class
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+/*/
+class agdNegocioImpostosService FROM agdUtilsService
+	private data nMoeda                       as integer
+	private data nTXMoeda                     as numeric
+	private data nFrete                       as numeric
+	private data nDespesa                     as numeric
+	private data nSeguro                      as numeric
+	private data nDesconto                    as numeric
+	private data cTipoDocumento               as character
+	private data cErrorMsg                    as character
+	private data oJsonTaxes                   as json
+	private data cCodigoProduto               as character
+	private data cCodigoFornecedor            as character
+	private data cLojaFornecedor              as character
+	private data nQuantidade                  as numeric	
+	private data nValorRT                     as numeric
+	private data cNatureza                    as character
+	private data cTes                         as character
+
+	public method new()
+	public method fetchTaxes()                as logical
+	public method getTaxes()                  as character
+	public method getCodigoDescricaoTributo() as array
+	public method destroy()
+	public method consultarImpostos()         as logical
+
+	private method validParams()              as logical
+	private method initMaFis()                as logical
+	private method getTaxesFromTCI()          as logical
+endclass
+
+/*/{Protheus.doc} agdNegocioImpostosService::new
+Construtor
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+@param cCGC, character, cpf/cnpj cliente/fornecedor
+@param nMoedaRelacaoTroca, character, moeda de relacao de troca
+@param nTaxaMoeda, numeric, taxa de câmbio
+@param cCodigoProd, character, codigo do produto
+@param nQuantidade, numeric, quantidade
+@param nValorRelacaoTroca, numeric, valor de relacao de troca
+@param cNatureza, character, natureza
+@param cTes, character, tes
+/*/
+method new(cCodForn,cLojaForn, nMoedaRelacaoTroca, nTaxaMoeda, cCodigoProd, nQuantidade, nValorRelacaoTroca, cNaturezaInfo, cTes) class agdNegocioImpostosService
+	Local aArea := GetArea()
+
+	::cCodigoFornecedor  := cCodForn
+	::cLojaFornecedor    := cLojaForn
+
+	::nFrete         := 0
+	::nDespesa       := 0
+	::nSeguro        := 0
+	::nDesconto      := 0
+	::cTipoDocumento := 'N'
+
+	::cCodigoProduto := cCodigoProd         //NEA_CODPRO
+	::nValorRT       := nValorRelacaoTroca  //NEA_VLRRT
+	::nQuantidade    := nQuantidade			//Fixo 1
+	::cTes		     := cTes				
+
+	::cNatureza      := cNaturezaInfo
+
+	::nMoeda         := nMoedaRelacaoTroca //NEA_MOEDRT
+	::nTXMoeda       := nTaxaMoeda //NEA_TXMOED
+
+	::oJsonTaxes             := JsonObject():New()
+	::oJsonTaxes['impostos'] := {}
+
+	::cErrorMsg    := ''
+
+	RestArea(aArea)
+return Self
+
+/*/{Protheus.doc} agdNegocioImpostosService::fetchTaxes
+Obtem os impostos
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+@return logical, resultado da operacao
+/*/
+method fetchTaxes() as logical class agdNegocioImpostosService
+	local aArea := FWgetArea() as array
+	local aAreaSA2 as Array
+	local lRet     as logical
+
+	DbSelectArea("SA2")
+	aAreaSA2 := SA2->(FWgetArea())
+
+	if ! ::validParams()
+		FWrestArea(aArea)
+		FWrestArea(aAreaSA2)
+		return .f.
+	endIf
+
+	lRet := ::getTaxesFromTCI()
+
+	MaFisEnd()
+
+	FWrestArea(aArea)
+	FWrestArea(aAreaSA2)
+return lRet
+
+/*/{Protheus.doc} agdNegocioImpostosService::validParams
+Valida os parametros informados
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+@return logical, resultado da validacao
+/*/
+method validParams() as logical class agdNegocioImpostosService
+	SA2->(dbSetOrder(1)) //A2_FILIAL+A2_COD+A2_LOJA
+	If SA2->(dbSeek(FWxFilial('SA2') + ::cCodigoFornecedor + ::cLojaFornecedor))
+		If Empty(::cNatureza)
+			::cNatureza := SA2->A2_NATUREZ
+		EndIf
+	Else
+		Self:setError(STR0001, 400) //Fornecedor não encontrado.
+		return .f.		
+	Endif
+
+	if !AGDX010(::nMoeda, .F./*lHelp*/)
+		Self:setError(STR0002, 400) //Moeda inválida.
+		return .f.
+	elseif ::nMoeda != 1 
+		::nTXMoeda := RecMoeda(dDataBase,::nMoeda)
+	endIf
+
+	SB1->(dbSetOrder(1))
+	if !SB1->(dbSeek(FWxFilial('SB1') + ::cCodigoProduto ))
+		Self:setError(STR0003, 400) //Produto não encontrado.
+		return .f.
+	endif
+
+	SF4->(dbSetOrder(1))
+	if !SF4->(dbSeek(FWxFilial('SF4') + ::cTes))
+		Self:setError(STR0004, 400) //TES não encontrada.
+		return .f.
+	endif
+
+	if !Empty(::cNatureza)
+		SED->(dbSetOrder(1))
+		if !SED->(dbSeek(FWxFilial('SED') + ::cNatureza))
+			Self:setError(STR0006, 400) //"Natureza não encontrada."
+			return .f.
+		endif
+	endif
+
+return ::initMaFis()
+
+
+/*/{Protheus.doc} agdNegocioImpostosService::initMaFis
+Inicializa a Mafis
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+@return logical, resultado da inicialização
+/*/
+method initMaFis() as logical class agdNegocioImpostosService
+	local lTrbGen   := (FindFunction('ChkTrbGen') .AND. ChkTrbGen('SD2', 'D2_IDTRIB')) as logical //protecão do motor
+	local aItemLoad := {} as array
+	local nValmerc        as numeric
+	local lRet            as logical
+
+	MaFisSave()
+	MaFisEnd()
+	if !MaFisFound('NF')
+		MaFisIni(SA2->A2_COD, SA2->A2_LOJA, 'F', ::cTipoDocumento, SA2->A2_TIPO, MaFisRelImp('MT100',{'SF1','SD1'}), , .T.,,,,,,,,,,,,,,,,,, dDataBase,,,,,,, lTrbGen)
+		MaFisLoad('NF_UFORIGEM', SA2->A2_EST)
+		MaFisLoad('NF_ESPECIE', 'SPED')
+
+		MaFisLoad('NF_MOEDA', ::nMoeda)
+		If ::nMoeda > 1
+			MaFisLoad('NF_TXMOEDA', ::nTXMoeda)
+		EndIf
+
+		If !Empty(::cNatureza)
+			MaFisLoad('NF_NATUREZA'	, ::cNatureza)
+		ElseIf !Empty(SA2->A2_NATUREZ)
+			MaFisLoad('NF_NATUREZA'	, SA2->A2_NATUREZ)
+		EndIf
+
+		MaFisLoad('NF_FRETE'	, ::nFrete)
+		MaFisLoad('NF_DESPESA'	, ::nDespesa)
+		MaFisLoad('NF_SEGURO'	, ::nSeguro)
+		MaFisLoad('NF_DESCONTO'	, ::nDesconto)
+
+		Aadd(aItemLoad, SB1->B1_COD                   ) // IT_PRODUTO
+		Aadd(aItemLoad, SF4->F4_CODIGO                ) // IT_TES
+		Aadd(aItemLoad, ""							  ) // IT_CODISS
+		Aadd(aItemLoad, ::nQuantidade				  ) // IT_QUANT
+		Aadd(aItemLoad, Space(TamSx3("D1_NFORI")[1])  ) // IT_NFORI
+		Aadd(aItemLoad, Space(TamSx3("D1_SERIORI")[1])) // IT_SERIORI
+		Aadd(aItemLoad, SB1->(RecNo())                ) // IT_RECNOSB1
+		Aadd(aItemLoad, SF4->(RecNo()) 				  ) // IT_RECNOSF4
+		Aadd(aItemLoad,  0             				  ) // IT_RECORI
+		Aadd(aItemLoad, nil                  	      ) // IT_LOTECTL
+		Aadd(aItemLoad, nil							  ) // IT_NUMLOTE
+		Aadd(aItemLoad, nil		                      ) // Codigo do Produto Fiscal
+		Aadd(aItemLoad, 0 				 			  ) // Recno do Produto Fiscal
+
+		MaFisIniLoad(1,	aItemLoad)
+
+		MaFisLoad('IT_PRCUNI', ::nValorRT, 1)
+		nValmerc :=	A410ARRED(::nQuantidade * ::nValorRT, 'D1_TOTAL')
+		MaFisLoad('IT_VALMERC', nValmerc, 1)
+		MafisRecal('', 1)
+		MaFisEndLoad(1, 1, .T.)
+
+		lRet := .T.
+	endif
+return lRet
+
+/*/{Protheus.doc} agdNegocioImpostosService::getTaxesFromTCI
+Obtem os impostos a partir da classe TCI
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+@return logical, resultado
+/*/
+method getTaxesFromTCI() as logical class agdNegocioImpostosService
+	local oTCI               as object
+	local oJsonRetTCI        as json
+	local cFromJsonError     as character
+	local nX                 as numeric
+	local aNamesJson         as array
+	local cTaxRuleID         as character
+	local nItJson            as numeric
+	local aJsonTaxes         as array
+	local aCodDescTributo    as array
+	local cCodRegTrib        as character
+	local lRet               as logical
+	local jJsonTaxes         as json
+
+	oTCI := TCIProcessing():New()
+	oTCI:setDateTaxesToWithholding(DTOS(dDataBase))
+
+	oJsonRetTCI    := JsonObject():New()
+	cFromJsonError := oJsonRetTCI:FromJson(oTCI:GetAllData())
+
+	oTCI:destroy()
+	FWfreeObj(oTCI)
+
+	if Empty(cFromJsonError);
+			.and. oJsonRetTCI:hasProperty('dados_itens');
+			.and. oJsonRetTCI['dados_itens']:hasProperty('1');
+			.and. ValType(oJsonRetTCI['dados_itens']['1']) == 'J'
+
+		if (oJsonRetTCI['dados_itens']['1']:hasProperty('Aviso'))
+			Self:setError(oJsonRetTCI['dados_itens']['1']['Aviso'], 400)
+			return .f.
+		endif
+
+		aJsonTaxes := {}
+
+		for nX := 1 to len(aNamesJson := oJsonRetTCI['dados_itens']['1']:GetNames())
+			cCodRegTrib := aNamesJson[nX]
+
+			if !empty(cTaxRuleID := oJsonRetTCI['dados_itens']['1'][cCodRegTrib]:GetJsonObject('id_cadastro'));
+					.and. oJsonRetTCI['tributos_passiveis_retencao']:hasProperty(cCodRegTrib);
+					.or. oJsonRetTCI['tributos_passiveis_recolhimento']:hasProperty(cCodRegTrib)
+
+				nItJson++
+				aCodDescTributo := ::getCodigoDescricaoTributo(cCodRegTrib, cTaxRuleID)
+
+				aAdd(aJsonTaxes, JsonObject():New())
+				aJsonTaxes[nItJson]['codigoRegra']      := cCodRegTrib
+				aJsonTaxes[nItJson]['descricaoRegra']   := oJsonRetTCI['dados_itens']['1'][cCodRegTrib]:GetJsonObject('desc_regra')
+				aJsonTaxes[nItJson]['codigoTributo']    := aCodDescTributo[1 /*cCodigo*/]
+				aJsonTaxes[nItJson]['descricaoTributo'] := aCodDescTributo[2 /*cDescricao*/]
+				aJsonTaxes[nItJson]['baseTributo']      := oJsonRetTCI['dados_itens']['1'][cCodRegTrib]:GetJsonObject('base_trib')
+				aJsonTaxes[nItJson]['aliquotaTributo']  := oJsonRetTCI['dados_itens']['1'][cCodRegTrib]:GetJsonObject('aliq_trib')
+				aJsonTaxes[nItJson]['valorTributo']     := oJsonRetTCI['dados_itens']['1'][cCodRegTrib]:GetJsonObject('val_trib')
+			endIf
+		next nX
+
+		if !empty(aJsonTaxes)
+			jJsonTaxes := JsonObject():new()
+			jJsonTaxes['hasNext'] := .F.
+			jJsonTaxes['items'] := aJsonTaxes
+			Self:setSuccess(jJsonTaxes)
+			::oJsonTaxes['impostos'] := aJsonTaxes
+		endif
+
+		lRet := .T.
+	endIf
+
+	FWfreeObj(oJsonRetTCI)
+return lRet
+
+/*/{Protheus.doc} agdNegocioImpostosService::getCodigoDescricaoTributo
+Retorna Codigo e Descricão do Tributo
+@type method
+@version 12
+@author jc.maldonado
+@since 5/14/2025
+@param cRegraTrib, character, codigo Regra
+@param cIdRegTrib, character, id Tributo
+@return array, {codigo, descricao}
+/*/
+method getCodigoDescricaoTributo(cRegraTrib, cIdRegTrib) class agdNegocioImpostosService
+	Local cQuery                     as character
+	Local aBindQry := {}             as array
+	Local cAlias   := GetNextAlias() as character
+	Local aTributo := {"", ""}       as array
+
+	cQuery += " SELECT"
+	cQuery += " 	F2E.F2E_TRIB,"
+	cQuery += " 	F2E.F2E_DESC"
+	cQuery += " FROM"
+	cQuery += "  " + RetSqlName("F2E") + " F2E"
+	cQuery += " JOIN " + RetSqlName("F2B") + " F2B ON"
+	cQuery += " 	F2B.F2B_TRIB = F2E.F2E_TRIB"
+	cQuery += " 	AND F2B_FILIAL = ?"                 ; aAdd(aBindQry, FWxFilial("F2B"))
+	cQuery += " 	AND F2B_REGRA = ?"                  ; aAdd(aBindQry, cRegraTrib)
+	cQuery += " 	AND F2B_ID = ?"                     ; aAdd(aBindQry, cIdRegTrib)
+	cQuery += " JOIN " + RetSqlName("F2C") + " F2C ON"
+	cQuery += " 	F2C.F2C_CODIGO = F2E.F2E_IDTRIB"
+	cQuery += " 	AND F2C.F2C_FILIAL = F2E.F2E_FILIAL"
+	cQuery += " WHERE"
+	cQuery += " 	F2E.F2E_FILIAL = ?"                 ; aAdd(aBindQry, FWxFilial("F2E"))
+	cQuery += " 	AND F2E.F2E_IDTRIB != ' '"
+	cQuery += " 	AND F2E.D_E_L_E_T_ = ''"
+	cQuery += " 	AND F2B.D_E_L_E_T_ = ''"
+	cQuery += " 	AND F2C.D_E_L_E_T_ = ''"
+	cQuery := ChangeQuery(cQuery)
+
+	cAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+	If (cAlias)->(!Eof())
+		aTributo := {(cAlias)->F2E_TRIB, alltrim((cAlias)->F2E_DESC)}
+	endIf
+
+	(cAlias)->(DbCloseArea())
+return aTributo
+
+/*/{Protheus.doc} agdNegocioImpostosService::getTaxes
+Retorna as taxas em json
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+@return character, json
+/*/
+method getTaxes() as character class agdNegocioImpostosService
+return ::oJsonTaxes:ToJson()
+
+/*/{Protheus.doc} agdNegocioImpostosService::destroy
+Metodo destrutor da classe
+@type method
+@version 12
+@author jc.maldonado
+@since 14/05/2025
+/*/
+method destroy() class agdNegocioImpostosService
+	FWFreeObj(::oJsonTaxes)
+return
+
+
+/*/{Protheus.doc} consultarImpostos
+Consultar os impostos retidos/recolhidos da negociação
+@type method
+@version 12
+@author carlos.augusto
+@since 23/06/2025
+/*/
+method consultarImpostos(cCodigoNegocio) class agdNegocioImpostosService
+	Local aImpostos   as array
+	Local jJsonTaxes  as json
+	Local lRet        := .F.
+	Local oRepository as object
+
+	oRepository := agdNegocioRepository():New() 
+	If oRepository:existsByCode(cCodigoNegocio)
+		aImpostos := AGDA10TIMP(,,.T.,cCodigoNegocio)
+
+		if !Empty(aImpostos)
+			jJsonTaxes := JsonObject():new()
+			jJsonTaxes['hasNext'] := .F.
+			jJsonTaxes['items']   := aImpostos
+			Self:setSuccess(jJsonTaxes)
+			lRet := .T.
+		Else
+			Self:setError(STR0005 + cCodigoNegocio, 400) // Nenhum imposto encontrado para a negociação
+		EndIf
+	Else
+		Self:setError(oRepository:getMessageError(), 400)
+	EndIf
+	FWfreeObj(oRepository)
+
+Return lRet

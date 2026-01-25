@@ -1,0 +1,190 @@
+#include "tlpp-core.th"
+#include "health.plan.integration.grr.process.ch"
+
+#define INTEGRATE_YES "1"
+#define INTEGRATE_NO "2"
+
+#define STATUS_ACTIVE "1"
+#define STATUS_FAILED "2"
+#define STATUS_CANCELED "3"
+
+namespace totvs.protheus.health.plan.integration.grr
+
+/*/{Protheus.doc} createSubscription
+Cria uma nova subscrição na plataforma GRR com base no identificador da família informado.
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 01/06/2025
+@return json, Objeto JSON com o resultado da criação da subscrição
+/*/
+function createSubscription() as json
+
+    local jStatus as json
+    local oSubscription as object
+    local cIntegrationId as character
+    local jCustomer as json
+    local jFamilyId as json
+
+    jStatus := {"success": .F., "status": "", "message": "", "response": "", "alertType": ""}
+
+    if BA3->BA3_INTGRR == INTEGRATE_YES
+        jCustomer := getBillingCustomer(BA3->BA3_CODINT, BA3->BA3_CODEMP, BA3->BA3_MATRIC)
+
+        if !empty(jCustomer["code"])
+            cIntegrationId := BA3->BA3_CODINT + '|' + BA3->BA3_CODEMP + '|' + BA3->BA3_MATRIC + '|' + jCustomer["code"] + '|' + jCustomer["branch"]
+            oSubscription := Subscriptions():new()
+            
+            if oSubscription:getSubscriptionId(cIntegrationId)
+                jStatus["success"] := .T.
+                jStatus["status"] := STATUS_ACTIVE
+                jStatus["message"] := STR0002 // "Subscrição já cadastrada anteriormente no GRR."
+                jStatus["alertType"] := "warning"
+            else
+                jFamilyId := {"healthInsurerCode": BA3->BA3_CODINT, "companyCode": BA3->BA3_CODEMP, "registration": BA3->BA3_MATRIC}
+
+                If oSubscription:addSubscription(jFamilyId, jCustomer)
+                    jStatus["success"] := .T.
+                    jStatus["status"] := STATUS_ACTIVE
+                    jStatus["message"] := STR0003 // "Subscrição cadastrada com sucesso na plataforma GRR."
+                    jStatus["alertType"] := "success"
+                else
+                    jStatus["message"] := STR0004 // "Erro ao cadastrar a subscrição na plataforma GRR. Verifique o campo de mensagem de erro para mais detalhes."
+                    jStatus["status"] := STATUS_FAILED
+                    jStatus["response"] := oSubscription:getResponse()
+                    jStatus["alertType"] := "error"
+                endif
+            endif
+
+            oSubscription:commitSubscriptionStatus(jStatus["status"], jStatus["response"])
+
+            oSubscription:destroy()
+        endif
+    else
+        jStatus["message"] := STR0001 // "Família configurada para não integrar com o GRR (BA3_INTGRR)."
+        jStatus["alertType"] := "warning"
+    endif
+
+    freeObj(oSubscription)
+    freeObj(jCustomer)
+    freeObj(jFamilyId)
+
+return jStatus
+
+/*/{Protheus.doc} getBillingCustomer
+Obtém os dados do cliente de cobrança com base nos códigos da operadora, empresa e matricula.
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 01/06/2025
+@param cHealthInsurerCode, character, Código da operadora de saúde
+@param cCompanyCode, character, Código da empresa
+@param cRegistrationId, character, Código da matricula
+@return json, Objeto JSON com os dados do cliente de cobrança
+/*/
+function getBillingCustomer(cHealthInsurerCode as character, cCompanyCode as character, cRegistrationId as character) as json
+
+    local jCustomerData := {"code": "", "branch": ""} as json
+    local aBillingCustomer as array
+    
+    aBillingCustomer := PLSRetNCB(cHealthInsurerCode, cCompanyCode, cRegistrationId)
+
+    if aBillingCustomer[1]
+        jCustomerData["code"] := aBillingCustomer[2]
+        jCustomerData["branch"] := aBillingCustomer[3]
+    endif
+
+    fwFreeArray(aBillingCustomer)
+
+return jCustomerData
+
+/*/{Protheus.doc} createSubscriptionJob
+Executa a criação de uma nova subscrição na plataforma GRR em segundo plano (job), com base nos dados informados.
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 02/06/2025
+@param cCompany, character, Código da empresa
+@param cBranch, character, Código da filial
+@param cFamilyId, character, Identificador da família
+/*/
+function createSubscriptionJob(cCompany as character, cBranch as character, cFamilyId as character)	
+ 
+	rpcSetType(3)
+    rpcSetEnv(cCompany, cBranch, nil, nil, "PLS")
+
+    BA3->(dbSetOrder(1))
+    if BA3->(dbSeek(xFilial("BA3") + cFamilyId))
+        createSubscription()
+    endif
+	
+return
+
+/*/{Protheus.doc} executeSubscriptionCreation
+Inicia o processo de criação manual de uma nova subscrição na plataforma GRR, a partir de um componente de tela.
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 02/06/2025
+/*/
+function executeSubscriptionCreation()
+
+    local jStatus as json
+
+    if FWAlertNoYes(STR0007, "") // "Confirma o envio da subscrição para a plataforma de Gestão de Receita Recorrente?"
+        BA3->(dbSetOrder(1))
+        if BA3->(dbSeek(xFilial("BA3") + BA1->(BA1_CODINT + BA1_CODEMP + BA1_MATRIC)))
+            fwMsgRun(nil, {|| jStatus := createSubscription()}, '', STR0006) // "Enviando subscrição para o GRR, por favor, aguarde..."
+
+            do case
+                case jStatus["alertType"] == "warning"
+                    fwAlertWarning(jStatus["message"], "")
+
+                case jStatus["alertType"] == "success"
+                    fwAlertSuccess(jStatus["message"], "")
+                
+                case jStatus["alertType"] == "error"
+                    fwAlertError(jStatus["message"], "")
+            endcase
+        endif
+    endif
+    
+    freeObj(jStatus)
+
+return
+
+/*/{Protheus.doc} executeSubscriptionError
+Executa o processamento das subscrições que apresentaram erro na tentativa de cadastro na plataforma de Gestão de Receita Recorrente (GRR)
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 04/06/2025
+/*/
+function executeSubscriptionError()
+
+    if FWAlertNoYes(STR0008, "") // "Confirma o reprocessamento de todos os beneficiários que apresentaram erro na integração com o GRR?"
+        startJob("totvs.protheus.health.plan.integration.grr.subscriptionErrorJob", getEnvServer(), .F., cEmpAnt, cFilAnt)
+
+        // "Reprocessamento iniciado com sucesso. Você pode acompanhar os resultados exportando os erros ou consultando o log."
+        fwAlertSuccess(STR0009, "")
+    endif
+
+return
+
+/*/{Protheus.doc} subscriptionErrorJob
+Executa o job responsável por reprocessar as subscrições que apresentaram erro na integração com a plataforma de Gestão de Receita Recorrente (GRR)
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 04/06/2025
+@param cCompany, character, código da empresa
+@param cBranch, character, código da filial
+/*/
+function subscriptionErrorJob(cCompany as character, cBranch as character)	
+ 
+	rpcSetType(3)
+    rpcSetEnv(cCompany, cBranch, nil, nil, "PLS")
+
+    totvs.protheus.health.plan.schedule.subscriptionErrorGRR()
+	
+return

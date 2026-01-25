@@ -1,0 +1,202 @@
+#INCLUDE "TOTVS.CH"
+#INCLUDE "TLPP-CORE.TH"
+#INCLUDE "TLPP-REST.TH"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "CARGALOJAOBJ.CH"
+
+Static lStFilCmp := existFunc("rmixFilCmp")     //Verifica se existe a função que vai retornar o nome do campo que tem as filiais
+
+namespace totvs.protheus.retail.rmi.api.cargaLojaObj
+
+/*/{Protheus.doc} cargaLojaObj
+    Classe para tratamento de API para controle de Carga do PDV
+    @author Samuel de Vincenzo
+    @since 14/05/2024
+    @version 12.1.2410
+    /*/
+Class cargaLojaObj FROM LojRestObj20
+    
+    Public Method New()                       as Object
+    Public Method execAuto()                  as Variant 
+    Public Method gravaLojaCompartilhamento() as Variant
+    
+    Protected Method Validation()   as Variant
+    
+    Private  Data Inquilino         as Character
+    Private  Data RetaguardaLoja    as Character
+    Private  Data cIdLoja           as Character 
+
+EndClass
+
+
+/*/{Protheus.doc} new
+    Construtor da Classe
+    @author Samuel de Vincenzo
+    @since 14/05/2024
+    @version 12.1.2410
+    @param oWsRestObj - Objeto WSRESTFUL da API
+/*/
+Method New(oWsRestObj As Object, jParans as Json, cBody as Character) as Object Class cargaLojaObj
+    _Super:New(oWsRestObj, jParans, cBody)
+Return self
+
+
+/*/{Protheus.doc} Validation
+    Metodo para validações executado no momento do post
+    @author Samuel de Vincenzo
+    @since 14/05/2024
+    @version 1.0
+    @param cOrigem, Character, Methodo enviado para validação
+    /*/
+Method Validation(cOrigem as Character) as Variant Class cargaLojaObj
+    
+    _Super:Validation()
+
+    if self:lSuccess
+        if cOrigem == "POST"
+            
+            //Tags obrigatórias
+            Do Case
+            Case !self:jParans:hasProperty("idInquilino") .Or. ValType(self:jParans["idInquilino"]) <> "C" .Or. Empty(self:jParans["idInquilino"])
+                self:lSuccess   := .F.
+                self:cError     := I18n(STR0001, {"idInquilino"} )  //"Ops! #1 não enviado(s) ou inválido(s)."
+                LjGrvLog("CargaLojaObj", "Validação: Foi encontrado um erro na requisição : "+ self:cError)
+            
+            Case !self:jParans:hasProperty("idRetaguardaLoja") .Or. ValType(self:jParans["idRetaguardaLoja"]) <> "C" .Or. Empty(self:jParans["idRetaguardaLoja"])    
+                self:lSuccess   := .F.
+                self:cError     := I18n(STR0001, {"idRetaguardaLoja"} )  //"Ops! #1 não enviado(s) ou inválido(s)."
+                LjGrvLog("CargaLojaObj", "Validação:  Foi encontrado um erro na requisição : "+ self:cError)
+            EndCase
+                    
+            If self:lSuccess 
+            
+                if !(LjAuxValid("CADASTRO DE LOJA", "IDFilialProtheus", self:jParans['idRetaguardaLoja']))
+                    self:Inquilino      := self:jParans["idInquilino"]
+                    self:RetaguardaLoja := self:jParans['idRetaguardaLoja']
+                else
+                    self:lSuccess   := .F.
+                    self:cError     := I18n(STR0002)  //"Ops! Loja Retaguarda não encontrado."
+                EndIf
+
+                LjGrvLog("CargaLojaObj", "Validação: Dados recebidos : Inquilino: "+self:jParans["idInquilino"]+" RetaguardaLoja: "+self:jParans['idRetaguardaLoja'] )        
+            EndIf
+        endif
+    endif
+
+Return Nil
+
+/*/{Protheus.doc} execAuto
+    Atualiza o cadastro da Loja e deixa disponível para iniciar a carga automática
+    @author Samuel de Vincenzo
+    @since 14/05/2024
+    @version 1.0
+/*/
+Method execAuto() as Variant Class cargaLojaObj
+    Local aArea             := GetArea()    as Array
+    Local oModel            := Nil          as Object
+    Local oMaster           := Nil          as Object
+
+    Private ALTERA := .T.
+
+    PshSetTCad("CADASTRO DE LOJA")
+    
+    oModel := FwLoadModel("LjCadAux")
+
+    if self:lSuccess .And. !(LjAuxValid("CADASTRO DE LOJA", "IDFilialProtheus", self:RetaguardaLoja))
+        
+        oModel:SetOperation(MODEL_OPERATION_UPDATE)
+        oMaster := oModel:getModel("MIHMASTER")
+        oMaster:getStruct():setProperty("MIH_ATIVO", MODEL_FIELD_VALID  , fwBuildFeature(STRUCT_FEATURE_VALID, "Pertence('123')") )
+        oMaster:getStruct():setProperty("MIH_ATIVO", MODEL_FIELD_VALUES , {"1=Sim", "2=Não", "3=Pendente carga"})
+        oModel:Activate()
+
+        // Seto o campo e informo o valor para ser alterado
+        oModel:SetValue( 'MIHMASTER', "MIH_ATIVO"    , "3" )
+        oModel:SetValue( 'MIHDETAIL', "PedenteCarga" , "1                             "   )
+        oModel:SetValue( 'MIHDETAIL', "DataSolCarga" , FWTIMESTAMP(3)     )
+        
+        self:cIdLoja  := oModel:GetValue("MIHMASTER", "MIH_ID")
+
+        self:lSuccess := oModel:vldData() .And. oModel:commitData()
+        self:cError   := oModel:GetErrorMessage()[6]
+
+        oModel:DeActivate()
+
+    endif
+
+    oModel:Destroy()
+
+    If self:lSuccess        
+        self:gravaLojaCompartilhamento() //Chamo a gravação do compartilhamento
+        LjGrvLog("CargaLojaObj", self:cError)
+    EndIf
+
+    RestArea(aArea)
+
+    fwFreeObj(oModel)
+    fwFreeObj(oMaster)
+
+Return Nil
+
+
+/*/{Protheus.doc} gravalojacompartilhamento
+    Método responsável em gravar o compartilhamento da Loja enviada na API
+    @author Samuel de Vincenzo
+    @since 16/05/2024
+    @version 1.0
+/*/
+Method gravaLojaCompartilhamento() as Variant Class cargaLojaObj
+    Local aArea     := GetArea()    as Array
+    Local oModel    := Nil          as Object
+    Local cCmpFil   := ""           as Character    //Campo com as filiais utilizadas para processamento
+    
+    Private INCLUI := .T.       //Necessária dentro do modelo LjCadAux
+
+    PshSetTCad("COMPARTILHAMENTOS")
+
+    oModel := FwLoadModel("LjCadAux")
+
+    If self:lSuccess .And. LjAuxValid("COMPARTILHAMENTOS", "CodigoLoja",LjAuxPosic("CADASTRO DE LOJA    ","IDFilialProtheus",self:RetaguardaLoja,"MIH_ID"))
+
+        oModel:SetOperation(MODEL_OPERATION_INSERT)
+        oModel:Activate()              
+
+        oModel:SetValue( 'MIHMASTER', "MIH_DESC"        , "COMP. NIVEL 2 LOJA " + self:RetaguardaLoja                     )
+        oModel:SetValue( 'MIHDETAIL', "NomeCompartilha" , "COMP. NIVEL 2 LOJA " + self:RetaguardaLoja                      )
+        oModel:SetValue( 'MIHDETAIL', "nivel"           , "2"                                                               )
+        oModel:SetValue( 'MIHDETAIL', "IdRetaguardaPai" , LjAuxPosic("COMPARTILHAMENTOS", "nivel", "1", "IdProprietario")   )
+        oModel:SetValue( 'MIHDETAIL', "CodigoLoja"      , self:cIdLoja                                              )
+
+        self:lSuccess := oModel:vldData() .And. oModel:commitData()
+        self:cError   := oModel:GetErrorMessage()[6]
+
+        oModel:DeActivate()
+    EndIf
+
+    oModel:Destroy()
+    
+    If self:lSuccess
+        MHP->( DbSetOrder(1) )   //MHP_FILIAL, MHP_CASSIN, MHP_CPROCE, MHP_TIPO, R_E_C_N_O_, D_E_L_E_T_
+        If MHP->( DbSeek(xFilial("MHP") + PadR("PDVSYNC", TamSx3("MHP_CASSIN")[1]) ) )
+            While !MHP->( Eof() ) .And. MHP->MHP_FILIAL == xFilial("MHP") .And. AllTrim(MHP->MHP_CASSIN) == "PDVSYNC"
+
+                cCmpFil := iif(lStFilCmp, rmixFilCmp(MHP->MHP_CASSIN, MHP->MHP_CPROCE, MHP->MHP_TIPO), "MHP_FILPRO")
+
+                RecLock("MHP", .F.)
+                    MHP->MHP_ATIVO  := "1"
+
+                    if !( allTrim(self:RetaguardaLoja) $ MHP->&(cCmpFil) )
+                        MHP->&(cCmpFil) := allTrim( strTran( MHP->&(cCmpFil), CRLF, "") ) + self:RetaguardaLoja + ";"
+                    endIf
+                MHP->( MsUnlock() )
+
+                MHP->( DbSkip() )
+            EndDo
+        EndIf
+    EndIf
+
+    RestArea(aArea)
+
+    fwFreeObj(oModel)
+    
+Return Nil

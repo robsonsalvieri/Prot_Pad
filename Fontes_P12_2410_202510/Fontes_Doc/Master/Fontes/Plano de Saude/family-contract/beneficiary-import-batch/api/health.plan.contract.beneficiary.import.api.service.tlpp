@@ -1,0 +1,545 @@
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+#include "fileio.ch"
+#include "health.plan.contract.beneficiary.import.api.service.ch"
+
+#define STATUS_CODE_OK 200
+#define STATUS_CODE_CREATED 201
+#define STATUS_CODE_ACCEPTED 202
+#define STATUS_CODE_BAD_REQUEST 400
+#define STATUS_CODE_NOT_FOUND 404
+
+#define STATUS_BATCH_RECEIVED "1"
+#define STATUS_BATCH_PROCESSING "2"
+#define STATUS_BATCH_IMPORTED_WITH_ERROR "3"
+#define STATUS_BATCH_IMPORTED_SUCCESSFULLY "4"
+#define STATUS_BATCH_CANCELED "5"
+
+#define STATUS_BENEF_RECEIVED "1"
+#define STATUS_BENEF_IMPORTED_WITH_ERROR "2"
+#define STATUS_BENEF_IMPORTED_SUCCESSFULLY "3"
+#define STATUS_BENEF_CANCELED "4"
+
+namespace totvs.protheus.health.plan.contract.beneficiary.import
+
+using namespace totvs.protheus.health.plans.api.util
+
+/*/{Protheus.doc} ImportBatchService
+Classe responsável por validar, processar e importar o lote de beneficiários
+@type class
+@version 12.1.2510
+@since 20/05/2025
+@author vinicius.queiros
+/*/
+class ImportBatchService from BaseService
+
+	private data jFileData as json
+	private data cBatchCode as character
+	private data cErrorMessage as character
+	private data lIsFormData as logical
+
+	public method new() constructor
+	public method destroy()
+
+	public method addImportBatch() as logical
+	public method startImportBatch() as logical
+	public method getBatchCode() as character
+	public method getImportBatches() as logical
+	public method getBatchBeneficiaries() as logical
+	public method getImportBatch() as logical
+	public method reprocessImportBatch() as logical
+
+	private method processFile() as logical
+	private method saveImportBatchModel() as logical
+	private method setResponseCurrentBatch()
+	private method validateFormFields(aFields as array) as logical
+	private method importBatchExists() as logical
+	private method addKnowledgeFileToBatch() as logical
+	private method getValue(cProperty as character) as variant
+
+endclass
+
+/*/{Protheus.doc} new
+Inicializa a classe ImportBatchService com a definição do tipo de dados enviados (form data ou não).
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 20/06/2025
+@param lIsFormData, logical, define se os dados serão enviados no formato form-data
+/*/
+method new(lIsFormData as logical) class ImportBatchService
+
+	_Super:new()
+
+	self:jFileData := JsonObject():new()
+	self:lIsFormData := lIsFormData
+
+return self
+
+/*/{Protheus.doc} Destroy
+Libera os recursos utilizados pela classe ImportBatchService, limpando as propriedades internas.
+@type method
+@version 12.1.2510
+@since 20/05/2025
+@author vinicius.queiros
+/*/
+method destroy() class ImportBatchService
+
+	_Super:destroy()
+
+	freeObj(self:jFileData)
+
+return
+
+/*/{Protheus.doc} AddImportBatch
+Valida o contrato e arquivo recebido para adicionar um novo lote de beneficiários
+@type method
+@version 12.1.2510
+@since 20/05/2025
+@author vinicius.queiros
+@return logical, indica se a operação foi realizada com sucesso
+/*/
+method addImportBatch() as logical class ImportBatchService
+
+	local lAdd := .F. as logical
+	local cContractKey as character
+
+	cContractKey := self:getValue("healthInsurerCode") +;
+					self:getValue("companyCode") +;
+					self:getValue("contractCode") +;
+					self:getValue("contractVersion") +;
+					self:getValue("subcontractCode") +;
+					self:getValue("subcontractVersion")
+
+	BQC->(dbSetOrder(1))
+	if BQC->(msSeek(xFilial("BQC") + cContractKey))
+		if self:processFile()
+			lAdd := self:saveImportBatchModel()
+		else		
+			if !empty(self:cErrorMessage)
+				self:setError("", self:cErrorMessage, self:cErrorMessage, STATUS_CODE_BAD_REQUEST)
+			else
+				// "Erro ao processar o arquivo CSV"
+				// "Não foi possível obter o arquivo CSV. Verifique se o arquivo está disponível e se está em um formato válido."
+				self:setError("", STR0003, STR0004, STATUS_CODE_BAD_REQUEST)
+			endif		
+		endif
+	else
+		// "Contrato informado não encontrado."
+		// "O contrato informado não foi encontrado na tabela BQC. Verifique se o número do contrato está correto e devidamente cadastrado no sistema."
+		self:setError("", STR0001, STR0002, STATUS_CODE_NOT_FOUND)
+	endif
+
+return lAdd
+
+/*/{Protheus.doc} startImportBatch
+Realiza o envio do lote de beneficiários para processamento, atualizando seu status e executando validações necessárias.
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 25/05/2025
+@return logical, indica se o envio para processamento foi realizado com sucesso
+/*/
+method startImportBatch() as logical class ImportBatchService
+
+	local lOk := .F. as logical
+	local oBatchFile as object
+
+	if self:importBatchExists(self:jBody["batchCode"])
+		self:cBatchCode := BJ5->BJ5_CODLOT
+
+		if BJ5->BJ5_STATUS == STATUS_BATCH_RECEIVED	.or. BJ5->BJ5_STATUS == STATUS_BATCH_IMPORTED_WITH_ERROR	
+			if processImportBatch()
+				self:nCodeStatus := STATUS_CODE_ACCEPTED
+				lOk := .T.
+			endif
+		else
+			// "O lote não está disponível para processamento. Verifique o status atual."
+			// "Não é permitido processar o lote. O status atual deve ser 'Recebido' ou 'Erro'."
+			self:setError("", STR0006, STR0007, STATUS_CODE_BAD_REQUEST)	
+		endif
+	endif
+
+	freeObj(oBatchFile)
+
+return lOk
+
+/*{Protheus.doc} getBatchCode
+Retorna o código identificador do lote de beneficiários.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@return caracter, Código identificador do lote.
+*/
+method getBatchCode() as character class ImportBatchService
+
+return self:cBatchCode
+
+/*/{Protheus.doc} getImportBatches
+Executa a lógica de obtenção dos lotes de importação
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 07/06/2025
+@return logical, indica se a operação foi realizada com sucesso
+/*/
+method getImportBatches() as logical class ImportBatchService
+
+	local lSuccess := .F. as logical
+	local oAdapter as object
+
+	oAdapter := ImportBatchAdapter():new()
+	oAdapter:setQueryParams(self:jParams)
+
+	lSuccess := oAdapter:getImportBatches()
+
+	if lSuccess
+		self:nCodeStatus := STATUS_CODE_OK
+		self:jResult := oAdapter:getJsonResult()
+	endIf
+
+	oAdapter:destroy()
+	freeObj(oAdapter)
+
+return lSuccess
+
+/*/{Protheus.doc} getBatchBeneficiaries
+Obtém os dados dos beneficiários importados do lote
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 07/06/2025
+@return logical, indica se os dados dos beneficiários foram obtidos com sucesso
+/*/
+method getBatchBeneficiaries() as logical class ImportBatchService
+
+	local lSuccess := .F. as logical
+	local oAdapter as object
+
+	if self:importBatchExists(self:jPath["batchCode"])
+		oAdapter := ImportBatchAdapter():new()
+		oAdapter:setQueryParams(self:jParams)
+		oAdapter:setPathParams(self:jPath)
+
+		lSuccess := oAdapter:getBatchBeneficiaries()
+
+		if lSuccess
+			self:nCodeStatus := STATUS_CODE_OK
+			self:jResult := oAdapter:getJsonResult()
+		endIf
+
+		oAdapter:destroy()
+	endif
+
+	freeObj(oAdapter)
+
+return lSuccess
+
+/*/{Protheus.doc} getImportBatch
+Retorna as informações do lote de importação de beneficiários com base no path param informado
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/06/2025
+@return logical, indica se o lote de importação foi obtido com sucesso
+/*/
+method getImportBatch() as logical class ImportBatchService
+
+	local lSuccess := .F. as logical
+
+	if self:importBatchExists(self:jPath["batchCode"])
+		self:setResponseCurrentBatch()
+
+		self:nCodeStatus := STATUS_CODE_OK
+		lSuccess := .T.
+	endif
+
+return lSuccess
+
+/*/{Protheus.doc} reprocessImportBatch
+Executa o reprocessamento de beneficiários com erro em um lote de importação já existente
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/06/2025
+@return logical, indica se o reprocessamento do lote foi concluído com sucesso
+/*/
+method reprocessImportBatch() as logical class ImportBatchService
+
+	local lOk := .F. as logical
+
+	if self:importBatchExists(self:getValue("importBatchCode"))
+		self:cBatchCode := BJ5->BJ5_CODLOT
+
+		if BJ5->BJ5_STATUS == STATUS_BATCH_IMPORTED_WITH_ERROR
+			if self:processFile()
+				self:addKnowledgeFileToBatch(self:cBatchCode)
+
+				if processImportBatch()
+					self:nCodeStatus := STATUS_CODE_ACCEPTED
+					lOk := .T.
+				endif		
+			else		
+				if !empty(self:cErrorMessage)
+					self:setError("", self:cErrorMessage, self:cErrorMessage, STATUS_CODE_BAD_REQUEST)
+				else
+					// "Erro ao processar o arquivo CSV"
+					// "Não foi possível obter o arquivo CSV. Verifique se o arquivo está disponível e se está em um formato válido."
+					self:setError("", STR0003, STR0004, STATUS_CODE_BAD_REQUEST)
+				endif		
+			endif
+		else
+			// "Este lote não pode ser ajustado, pois não está com erro de importação."
+			// "O reprocessamento foi recusado. O lote informado não possui status (BJ5_STATUS) de erro de importação."
+			self:setError("", STR0012, STR0013, STATUS_CODE_BAD_REQUEST)	
+		endif
+	endif
+
+return lOk
+
+/*/{Protheus.doc} ProcessFile
+Processa o arquivo recebido, validando os dados e preparando-os para importação.
+@type method
+@version 12.1.2510
+@since 20/05/2025
+@author vinicius.queiros
+@return logical, indica se o processamento do arquivo foi concluído com sucesso
+/*/
+method processFile() as logical class ImportBatchService
+
+	local lOk := .F. as logical
+	local cFileName as character
+	local cExtension as character
+	local cHttpUriRoot := "/http-root/httprest/httpuri/" as character
+	local cFile as character
+	local oFile as object
+	local nLineTotal as numeric
+	local aLines as array
+
+	if len(self:getValue("file")) == 1
+		splitPath(self:getValue("file")[1]["fileName"], nil, nil, @cFileName, @cExtension)
+
+		if lower(cExtension) == ".csv"
+			cFile := cHttpUriRoot + self:getValue("file")[1]["uploadName"]
+
+			if file(cFile)
+				oFile := FWFileReader():new(cFile)
+
+				if oFile:Open()
+					aLines := oFile:getAllLines()
+					nLineTotal := len(aLines)
+
+					if nLineTotal > 1
+						if self:validateFormFields(strTokArr2(aLines[1], ";", .T.))
+							self:jFileData["beneficiariesTotal"] := iif(nLineTotal > 1, nLineTotal - 1, nLineTotal)
+							self:jFileData["file"] := cFile
+							lOk := .T.
+						else
+							// "Os campos do cabeçalho do arquivo não correspondem ao modelo esperado para a importação de beneficiários."
+							self:cErrorMessage := STR0011	
+						endif
+					else
+						// "O arquivo CSV do lote está vazio e não contém dados de beneficiários para processar."
+						self:cErrorMessage := STR0010
+					endif
+				endif
+
+				oFile:close()
+			endif
+		endif
+	endif
+
+	freeObj(oFile)
+	fwFreeArray(aLines)
+
+return lOk
+
+/*/{Protheus.doc} SaveImportBatchModel
+Salva no modelo os dados processados na importação do lote.
+@type method
+@version 12.1.2510
+@since 20/05/2025
+@author vinicius.queiros
+@return logical, indica se os dados foram salvos com sucesso
+/*/
+method saveImportBatchModel() as logical class ImportBatchService
+
+	local oModel := fwLoadModel("PLCTO001") as object
+	local lSave := .F. as logical
+	local oModelBJ5 as object
+	local aErrorMessage as array
+
+	oModel:setOperation(MODEL_OPERATION_INSERT)
+	oModel:activate()
+
+	oModelBJ5 := oModel:getModel("BJ5MASTER")
+	oModelBJ5:setValue("BJ5_USRLOG", self:getValue("loginUser"))
+	oModelBJ5:setValue("BJ5_CODOPE", self:getValue("healthInsurerCode"))
+	oModelBJ5:setValue("BJ5_CODEMP", self:getValue("companyCode"))
+	oModelBJ5:setValue("BJ5_CONEMP", self:getValue("contractCode"))
+	oModelBJ5:setValue("BJ5_VERCON", self:getValue("contractVersion"))
+	oModelBJ5:setValue("BJ5_SUBCON", self:getValue("subcontractCode"))
+	oModelBJ5:setValue("BJ5_VERSUB", self:getValue("subcontractVersion"))
+	oModelBJ5:setValue("BJ5_QTDTOT", self:jFileData["beneficiariesTotal"])
+
+	if oModel:vldData()
+		oModel:commitData()
+		self:addKnowledgeFileToBatch(oModelBJ5:getValue("BJ5_CODLOT"))
+		self:setResponseCurrentBatch()
+		self:nCodeStatus := STATUS_CODE_CREATED
+		lSave := .T.
+	else
+		aErrorMessage := oModel:getErrorMessage()
+
+		if len(aErrorMessage) >= 6 .and. !empty(aErrorMessage[6])		
+			self:setError("", STR0005, aErrorMessage[6], STATUS_CODE_BAD_REQUEST) // "Falha na validação dos dados."
+		endif
+	endif
+
+	oModel:destroy()
+
+	freeObj(oModel)
+	freeObj(oModelBJ5)
+	fwFreeArray(aErrorMessage)
+
+return lSave
+
+/*/{Protheus.doc} SetResponseCurrentBatch
+Prepara a resposta da requisição com as informações do lote atualmente processado.
+@type method
+@version 12.1.2510
+@since 20/05/2025
+@author vinicius.queiros
+/*/
+method setResponseCurrentBatch() class ImportBatchService
+
+	local cSubcontractKey as character
+
+	cSubcontractKey := BJ5->(BJ5_CODOPE + BJ5_CODEMP + BJ5_CONEMP + BJ5_VERCON + BJ5_SUBCON + BJ5_VERSUB)
+
+	self:setAttributeJson({"attribute": "batchCode", "value": BJ5->BJ5_CODLOT, "type": "C"})
+	self:setAttributeJson({"attribute": "status", "value": BJ5->BJ5_STATUS, "type": "C"})
+	self:setAttributeJson({"attribute": "importDate", "value": BJ5->BJ5_DATIMP, "type": "D"})
+	self:setAttributeJson({"attribute": "importTime", "value": BJ5->BJ5_HORIMP, "type": "C"})
+	self:setAttributeJson({"attribute": "loginUser", "value": BJ5->BJ5_USRLOG, "type": "C"})
+	self:setAttributeJson({"attribute": "healthInsurerCode", "value": BJ5->BJ5_CODOPE, "type": "C"})
+	self:setAttributeJson({"attribute": "companyCode", "value": BJ5->BJ5_CODEMP, "type": "C"})
+	self:setAttributeJson({"attribute": "contractCode", "value": BJ5->BJ5_CONEMP, "type": "C"})
+	self:setAttributeJson({"attribute": "contractVersion", "value": BJ5->BJ5_VERCON, "type": "C"})
+	self:setAttributeJson({"attribute": "subcontractCode", "value": BJ5->BJ5_SUBCON, "type": "C"})
+	self:setAttributeJson({"attribute": "subcontractVersion", "value": BJ5->BJ5_VERSUB, "type": "C"})
+	self:setAttributeJson({"attribute": "subcontractDescription", "value": posicione("BQC", 1, xFilial("BQC") + cSubcontractKey, "BQC_DESCRI"), "type": "C"})
+	self:setAttributeJson({"attribute": "totalCount", "value": BJ5->BJ5_QTDTOT, "type": "N"})
+
+	if BJ5->BJ5_STATUS == STATUS_BATCH_PROCESSING
+		self:setAttributeJson({"attribute": "importedCount", "value": getBatchBeneficiaryStatusTotals(BJ5->BJ5_CODLOT, STATUS_BENEF_IMPORTED_SUCCESSFULLY), "type": "N"})
+		self:setAttributeJson({"attribute": "errorCount", "value": getBatchBeneficiaryStatusTotals(BJ5->BJ5_CODLOT, STATUS_BENEF_IMPORTED_WITH_ERROR), "type": "N"})
+	else
+		self:setAttributeJson({"attribute": "importedCount", "value": BJ5->BJ5_QTDIMP, "type": "N"})
+		self:setAttributeJson({"attribute": "errorCount", "value": BJ5->BJ5_QTDERR, "type": "N"})
+	endif
+	
+return
+
+/*/{Protheus.doc} validateFormFields
+Valida os campos recebidos do formulário com base no modelo de importação de beneficiários
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@param aFields, array, campos a serem validados conforme o modelo esperado
+@return logical, indica se os campos são válidos para a importação
+/*/
+method validateFormFields(aFields as array) as logical class ImportBatchService
+
+	local lValid := .T. as logical
+	local oStructBeneficiary as object
+	local nCount as numeric
+	local aStructFields as array
+	local nLenFields as numeric
+	local nFldPos as numeric
+
+	oStructBeneficiary := totvs.protheus.health.plan.api.portal.formstruct.BeneficiaryService():new()
+
+	oStructBeneficiary:setFormFields("1") // Inclusion
+	aStructFields := oStructBeneficiary:getFieldsBase("B2N")
+
+	nLenFields := len(aStructFields)
+
+	for nCount := 1 to nLenFields
+		nFldPos := aScan(aFields, aStructFields[nCount]["property"])
+
+		if nFldPos == 0 .or. (nFldPos - 1) <> aStructFields[nCount]["order"]
+			lValid := .F.
+			exit
+		endif
+	next nCount
+
+	oStructBeneficiary:destroy()
+
+	freeObj(oStructBeneficiary)
+	fwFreeArray(aStructFields)
+
+return lValid
+
+/*/{Protheus.doc} importBatchExists
+Verifica se existe um lote de importação com o código informado
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/06/2025
+@param cBatchCode, character, código do lote de importação a ser verificado
+@return logical, indica se o lote de importação existe
+/*/
+method importBatchExists(cBatchCode as character) as logical class ImportBatchService
+
+	local lExists := .F. as logical
+
+	BJ5->(dbSetOrder(1))
+	lExists := BJ5->(dbSeek(xFilial("BJ5") + cBatchCode))
+
+	if !lExists
+		// "O lote informado não foi encontrado. Verifique o código e tente novamente."
+		// "Lote de beneficiários com o código informado não localizado na tabela BJ5 (campo BJ5_CODLOT) durante o processo de importação."
+		self:setError("", STR0008, STR0009, STATUS_CODE_NOT_FOUND)
+	endif
+
+return lExists
+
+/*/{Protheus.doc} addKnowledgeFileToBatch
+Adiciona um arquivo ao banco de conhecimento relacionado ao lote de importação informado
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/06/2025
+@param cBatchCode, character, código do lote de importação ao qual o arquivo será vinculado
+@return logical, indica se o arquivo foi adicionado com sucesso ao banco de conhecimento
+/*/
+method addKnowledgeFileToBatch(cBatchCode as character) as logical class ImportBatchService
+
+	PlsInConh(self:jFileData["file"], "BJ5", xFilial("BJ5") + cBatchCode, .T.)
+	fErase(self:jFileData["file"])
+
+return .T.
+
+/*/{Protheus.doc} getValue
+Retorna o valor de uma propriedade armazenada no form-data ou no body da classe com base no nome informado.
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 20/06/2025
+@param cProperty, character, nome da propriedade cujo valor será retornado
+@return variant, valor da propriedade informada
+/*/
+method getValue(cProperty as character) as variant class ImportBatchService
+
+	local xValue as variant
+
+	if self:lIsFormData
+		xValue := self:jFormData[cProperty]["value"]
+	else
+		xValue := self:jBody[cProperty]
+	endif
+
+return xValue

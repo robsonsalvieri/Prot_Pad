@@ -1,0 +1,393 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "GPEA1050.CH"
+#INCLUDE "PONCALEN.CH"
+
+#DEFINE Confirma 1
+#DEFINE Redigita 2
+#DEFINE Abandona 3
+
+Static lInitDesc
+Static lRefTrab := FindFunction("fRefTrab") .And. fRefTrab("F")
+
+/*
+{Protheus.doc} GPEA050RUS()
+    Russian localization of GPEA050 - Vacation schedule
+
+    @type Function
+    @author dtereshenko
+    @since 2020/08/06
+    @version 12.1.23
+*/
+Function GPEA050RUS()
+Return GPEA050()
+
+/*
+{Protheus.doc} MenuDef()
+    Menu definition
+
+    @type Function
+    @author dtereshenko
+    @since 2020/08/06
+    @version 12.1.23
+*/
+Static Function MenuDef()
+    Local aMenuDef := {} As Array
+
+    AAdd(aMenuDef, {STR0004, "PesqBrw", 0, 1}) // "Print schedule"
+    AAdd(aMenuDef, {STR0005, "VIEWDEF.GPEA050", 0, 2}) // "Print schedule"
+    AAdd(aMenuDef, {STR0032, "VIEWDEF.GPEA050", 0, 3}) // "Print schedule"
+    AAdd(aMenuDef, {STR0060, "GPEA053RUS", 0, 4}) // "Print schedule"
+    AAdd(aMenuDef, {STR0011, "GPER400", 0, 8}) // "Print schedule"
+    AAdd(aMenuDef, {STR0094, "RU07R09RUS", 0, 11}) // "Print schedule"
+    AAdd(aMenuDef, {STR0095, "RU07R25RUS", 0, 11}) // Report on the T-6 and T-6A forms
+
+Return aMenuDef
+
+/*
+{Protheus.doc} ModelDef()
+    Model definition
+
+    @type Function
+    @author dtereshenko
+    @since 2020/08/06
+    @version 12.1.23
+*/
+Static Function ModelDef()
+    Local oStructSRA
+    Local oStructSRF
+    Local oStructRHI
+    Local oModel
+    Local bPreRHI := { |oModelGrid, nLine, cAction, cField| gp050DelRHI(oModelGrid, nLine, cAction, cField) }
+    Local bPreSRF := { |oModelGrid, nLine, cAction, cField| gp050ChkDel(oModelGrid, nLine, cAction, cField) }
+    Local bPost	:= {|oMdl| Gp050PVal(oMdl)}
+    Local aAux As Array
+
+    oModel:= MpFormModel():New("GPEA050", /*Pre-Validacao*/, /*Pos-Validacao*/, { |oModel| Gp050Commit( oModel ) }/*Commit*/, /*Cancel*/)
+    oModel:InstallEvent("GPEA050RUS_Event",, RUGPEA050Event():New()) // Subscribe on events.
+
+    oStructSRA := FWFormStruct(1,"SRA",{|cCampo| AllTrim(cCampo)+"|" $ "RA_FILIAL|RA_MAT|RA_NOMECMP|RA_ADMISSA|"})
+    oModel:AddFields("GPEA050_SRA", /*cOwner*/, oStructSRA , /*Pre-Validacao*/,/*Pos-Validacao*/,/*Carga*/)
+    oModel:GetModel("GPEA050_SRA"):SetOnlyView( .T. )
+    oModel:GetModel("GPEA050_SRA"):SetOnlyQuery( .T. )
+
+    oStructSRA:SetProperty( 'RA_MAT' 	, MODEL_FIELD_WHEN , {||.F.})
+    oStructSRA:SetProperty( 'RA_NOMECMP' 	, MODEL_FIELD_WHEN , {||.F.})
+    oStructSRA:SetProperty( 'RA_ADMISSA', MODEL_FIELD_WHEN , {||.F.})
+
+
+    oStructSRF := FWFormStruct(1,"SRF")
+    oStructSRF :SetProperty('RF_DFERANT', MODEL_FIELD_VALID, {|| fValidSRF('RF_DFERANT')	} )
+
+    oModel:AddGrid("GPEA050_SRF", "GPEA050_SRA"/*cOwner*/, oStructSRF , bPreSRF , { |oGrid| gp050LinOk(oGrid) } /* bLinePost*/, { || !(lInitDesc := .F.) }, bPost,/*bLoad*/)
+    oModel:GetModel("GPEA050_SRF"):SetOptional(.T.)
+    oModel:GetModel("GPEA050_SRF"):SetUniqueLine( { "RF_DATABAS" , "RF_DATAFIM" , "RF_PD" } )
+
+    oModel:SetRelation("GPEA050_SRF",{{"RF_FILIAL",'xFilial("SRF",SRA->RA_FILIAL)'},{"RF_MAT","RA_MAT"}},SRF->(IndexKey()))
+
+    If HabilitaAba()
+        oStructRHI := FWFormStruct(1,"RHI")
+        oModel:AddGrid("GPEA050_RHI", "GPEA050_SRA"/*cOwner*/, oStructRHI , bPreRHI/*bLinePre*/, /* bLinePost*/, /*bPre*/, /*bPost*/,/*bLoad*/)
+        oModel:GetModel('GPEA050_RHI'):SetOptional(.T.)
+        
+        oModel:SetRelation("GPEA050_RHI",{{"RHI_FILIAL",'xFilial("RHI")'},{"RHI_MAT","RA_MAT"}},RHI->(IndexKey()))
+    EndIf
+
+    aAux := FwStruTrigger('RF_DATABAS','RF_DFERVAT','RU07XVAC16()', ,'SRF')
+    oStructSRF:AddTrigger(aAux[1], aAux[2], aAux[3], aAux[4])
+    aAux := FwStruTrigger('RF_DATAFIM','RF_DFERVAT','RU07XVAC16()', ,'SRF')
+    oStructSRF:AddTrigger(aAux[1], aAux[2], aAux[3], aAux[4])
+    aAux := FwStruTrigger('RF_DFERVAT','RF_DVENPEN','RU07XVAC16("2")', ,'SRF')
+    oStructSRF:AddTrigger(aAux[1], aAux[2], aAux[3], aAux[4])
+    aAux := FwStruTrigger('RF_DIASDIR','RF_DFERVAT','RU07XVAC16()', ,'SRF')
+    oStructSRF:AddTrigger(aAux[1], aAux[2], aAux[3], aAux[4])
+
+    oModel:SetVldActivate( { |oModel| Gp050IniMod( oModel,oModel:GetOperation() ) } )
+
+Return oModel
+
+/*
+{Protheus.doc} ViewDef()
+    View definition
+
+    @type Function
+    @author dtereshenko
+    @since 2020/08/06
+    @version 12.1.23
+*/
+Static Function ViewDef()
+    Local oModel
+    Local oView
+    Local oStructSRA
+    Local oStructSRF
+    Local oStructRHI
+
+    oModel := FwLoadModel("GPEA050")
+
+    oView := FWFormView():New()
+
+    oView:SetModel(oModel)
+
+    oStructSRA := FWFormStruct(2,"SRA",{|cCampo| AllTrim(cCampo)+"|" $ "RA_MAT|RA_NOMECMP|RA_ADMISSA|"})
+    oStructSRA:SetNoFolder()
+
+    oView:AddField( "GPEA050_SRA" , oStructSRA )
+
+    oStructSRF := FWFormStruct(2,"SRF")
+    oView:AddGrid(  "GPEA050_SRF" , oStructSRF )
+
+    oStructSRF:RemoveField( "RF_FILIAL" )
+    oStructSRF:RemoveField( "RF_MAT" )
+    oStructSRF:RemoveField( "RF_NOME" )
+    oStructSRF:RemoveField( "RF_ADMISSA" )
+    
+    oStructSRF:RemoveField("RF_DIASANT")
+
+    oView:SetViewProperty("GPEA050_SRA","OnlyView") //Somente visualizacao. Nao permite edicao dos campos do cabecalho (SRA)
+
+    oView:CreateHorizontalBox("FORMFIELD",10)
+    oView:CreateHorizontalBox("GRID"     ,90)
+
+    If HabilitaAba() //Cria abas somente se variavel for TRUE, do contrario monta a tela sem utilizacao de abas
+        oStructRHI := FWFormStruct(2,"RHI")
+        oView:AddGrid(  "GPEA050_RHI" , oStructRHI )
+        oStructRHI:RemoveField( "RHI_FILIAL" )
+        oStructRHI:RemoveField( "RHI_MAT" )
+        oStructRHI:RemoveField( "RHI_NOME" )
+        oStructRHI:RemoveField( "RHI_NUMPAG" )
+        oStructRHI:RemoveField( "RHI_PROCES" )
+        oStructRHI:RemoveField( "RHI_ROTEIR" )
+        oStructRHI:RemoveField( "RHI_PERIOD" )
+        oStructRHI:RemoveField( "RHI_DTPAGO" )
+        oStructRHI:RemoveField( "RHI_DTRECI" )
+        oStructRHI:RemoveField( "RHI_SALMES" )
+        oStructRHI:RemoveField( "RHI_MARK" )
+        oStructRHI:RemoveField( "RHI_TPCALC" )
+        oStructRHI:RemoveField( "RHI_ADMISS" )
+        
+        oView:CreateFolder( 'PASTAS','GRID')
+        oView:AddSheet( 'PASTAS', 'ABA01', STR0024 ) //"Contr. Dias Direito"
+        oView:AddSheet( 'PASTAS', 'ABA02', STR0025 ) //"Programação de Férias"
+        oView:CreateHorizontalBox( 'BOXABA01', 100,,, "PASTAS", "ABA01" )
+        oView:CreateHorizontalBox( 'BOXABA02', 100,,, "PASTAS", "ABA02" )
+        oView:SetOwnerView( "GPEA050_SRA","FORMFIELD")
+        oView:SetOwnerView( "GPEA050_SRF", "BOXABA01" )
+        oView:SetOwnerView( "GPEA050_RHI", "BOXABA02" )
+    Else
+        oView:SetOwnerView( "GPEA050_SRA","FORMFIELD")
+        oView:SetOwnerView( "GPEA050_SRF","GRID")
+    EndIf
+
+    oView:SetCloseOnOk( { |oView| Gp050ClsOk( oView ) } )
+
+Return oView
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³Gp050ClsOkºAutor  ³Leandro Drumond     º Data ³  03/10/12   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Tratamento para o metodo SetCloseOnOk (fechar tela Ok)      º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³SIGAGPE                                                     º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß*/
+Static Function Gp050ClsOk( oView )
+    Local nOperation := oView:oModel:GetOperation()
+    Local oGrid   	 := oView:oModel:GetModel("GPEA050_SRF")
+    Local nLinGrdPos := oGrid:GetLine() //Linha posicionada atualmente no Grid
+    Local lRet     	 :=  .F.
+    Local aArea    	 := GetArea()
+    Local nX  		 := 0
+
+    If nOperation == MODEL_OPERATION_UPDATE
+        lRet := .T.
+        For nX:=1 to oGrid:GetQtdLine()
+            oGrid:GoLine( nX )
+            if !oGrid:IsDeleted()	
+                lRet := .F.
+                Exit
+            EndIf
+        Next nX
+        oGrid:GoLine( nLinGrdPos )
+    EndIf
+
+    RestArea( aArea )
+
+Return lRet
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³gp050DAnt		  ³ Autor ³ Leandro Drumond       ³ Data ³04.02.2013³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Verificar se o campo Antecipos poderá ser Editado na Argentina.   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Sintaxe   ³ gp050DAnt(oModel)                                                ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ gp050VerEdit                                                     ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß */
+Static Function gp050DAnt(oModel)
+
+    Local lEdit := .F.
+
+    If	oModel:GetValue("GPEA050_SRF","RF_STATUS") == "1" .and. oModel:GetValue("GPEA050_SRF","RF_DFERVAT") == 0 
+        lEdit := .T.
+    EndIf
+
+Return (lEdit)
+
+/*/
+ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿
+³Fun‡…o    ³gp050ChkDel   ³Autor³Tatiane Matias       ³ Data ³27/04/2004³
+ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´
+³Descri‡…o ³Verifica se o registro pode ser excluido.                   ³
+³          ³O registro so podera ser excluido se o Dias Pagos for zero. ³
+ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+³Uso       ³No bDelOk da oGet     .				                        ³
+ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ/*/
+Static Function gp050ChkDel(oModelGrid, nLine, cAction, cField)
+    Local lRet := .T.
+
+    If cAction == 'DELETE'
+        lRet := !oModelGrid:GetValue("RF_DFERANT") > 0
+        If !lRet
+            Help( ,,,OemToAnsi(STR0016), OemToAnsi(STR0033), 1, 0 ) //"Atenção"##"Períodos com dias de férias pagos não pode ser excluídos." 
+        EndIf
+    EndIf
+
+Return lRet
+
+/*/
+ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿
+³Fun‡…o    ³gp050DelRHI   ³Autor³Mohanad Odeh         ³ Data ³09/09/2011³
+ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´
+³Descri‡…o ³Verifica se o registro pode ser excluido.                   ³
+³          ³O registro so podera ser excluido se o Status for 1 ou 2    ³
+ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´
+³Uso       ³Na pre-validacao de linha.				                    ³
+ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ/*/
+Static Function gp050DelRHI(oModelGrid, nLine, cAction, cField)
+    Local lRet := .T.
+
+    If cAction == 'DELETE'
+        lRet := oModelGrid:GetValue("RHI_STATUS") $ "1"
+    EndIf
+
+Return lRet
+
+/*/
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³Gp050PVal ³ Autor ³ Mohanad Odeh            ³ Data ³ 03/04/14 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descricao ³                                                              ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Sintaxe   ³Gp050PVal()                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß/*/
+Static Function Gp050PVal(oModel)
+    Local lRet := .T.
+
+    lGp050Auto := If (Type("lGp050Auto") == "U",.F.,lGp050Auto)
+
+    If(!lGp050Auto)
+        If !MsgYesNo(STR0037 + chr(13) + chr(10) + STR0038,STR0016) // "Toda e qualquer alteracao feita neste cadastro interferira diretamente no calculo de ferias." ### "Deseja confirmar?" ### Atencao
+            If cPaisLoc <> "RUS"
+                Help(" ",1,".GPEA050ALT.") // P: As alterações realizadas não foram consideradas para gravação. S: Para finalizar, selecione o botão 'Fechar' 
+            Else
+                Help(NIL, NIL, "GPEA050ALT", NIL, STR0087, 1, 0, NIL, NIL, NIL, NIL, NIL, {STR0088})
+            EndIf
+            lRet := .F.
+        EndIf
+    EndIf
+
+Return lRet
+
+/*/{Protheus.doc} IntegDef
+	Rotina responsável pela Mensagem Única da Rotina GPEA050
+@author PHILIPE.POMPEU
+@since 14/04/2015
+@version P12
+@param cXML, character, o XML em forma de string
+@param nTypeTrans, numérico, Tipo de Transmissão
+@param cTypeMessage, character, Tipo da Mensagem
+@param cVerMsg, character, Versão da Mensagem
+@return aRet, Vetor
+/*/
+Static Function IntegDef( cXML, nTypeTrans, cTypeMessage,cVerMsg)
+	Local aRet := {}
+	Default cVerMsg := "1.000"
+	aRet:= GPEI050( cXML, nTypeTrans, cTypeMessage, cVerMsg)
+Return aRet
+
+/*/{Protheus.doc} HabilitaAba
+Verifica se Habilita a Aba, função que substitui a variável Private lHabAba,
+Variavel para habilitar a aba de Programação de férias
+@author philipe.pompeu
+@since 17/04/2015
+@version P12
+@return lResult, Verdadeiro caso deva ser habilitada.
+/*/
+Static Function HabilitaAba()
+	Local lResult := (cPaisLoc == "DOM") 
+Return lResult
+
+Static Function fValidSRF(cCampo)
+    Local lRet	:= .T.
+    Local oModel:= FWModelActive()
+
+    If !lGp050Auto
+        If !MsgYesNo(STR0073 + chr(13) + chr(10) + STR0038,STR0016) //"Verifique se o valor está correto antes de finalizar a alteração, pois o mesmo ficará bloqueado imediatamente após o campo ser atualizado e o valor for superior a 0. ### "Deseja confirmar?" ### Atencao
+            lRet := .F.
+        EndIf
+    Endif
+
+Return lRet
+
+/* 
+{Protheus.doc} GP50RUDtInit(dDataIni, dDataFim, cPd)
+    This function set RF_DIASDIR = 28 days for RUS (analog X3_RELACAO).
+    Using on X3_VALID of RF_DATABAS. 
+
+    @type Function
+    @params dDataIni,   Date, Date Period Start.
+            dDataFim,   Date, End Period Date.
+            cPd,   Character, Line Item Code.
+            cMode, Character, Mode of call.
+    @return xRes, Result of validation dDataIni (at the moment always .T.). (in mode - 02 - default value)
+    @author vselyakov
+    @since 2021/02/21
+    @version 12.1.23
+    @example GP50RUDtInit(M->RF_DATABAS)
+*/
+Function GP50RUDtInit(dDataIni, dDataFim, cPd, cMode)
+    Local oModel   := FWModelActive()
+    Local nDiasDir As Numeric
+    Local xRes
+
+    DEFAULT cMode    := "01"
+    DEFAULT dDataFim := CtoD('')
+    DEFAULT cPd      := Iif(cMode <> "02", oModel:GetValue("GPEA050_SRF","RF_PD"), "")
+
+    xRes := .T.
+    nDiasDir := 28 // Number of vacation days per year for RUS.
+
+    If cMode == "02"
+        xRes := nDiasDir
+    Else
+        If !Empty(dDataIni)
+            If !IsInCallStack("InitPad") .And. oModel:GetModel("GPEA050_SRF"):Length() > 0
+                oModel:LoadValue("GPEA050_SRF", "RF_DIASDIR", nDiasDir)
+            EndIf
+        EndIf
+    EndIf
+
+Return xRes

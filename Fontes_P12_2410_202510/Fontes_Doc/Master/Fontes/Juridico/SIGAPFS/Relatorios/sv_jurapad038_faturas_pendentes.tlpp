@@ -1,0 +1,421 @@
+#INCLUDE "msobject.ch"
+#INCLUDE "totvs.framework.treports.integratedprovider.th"
+#INCLUDE "JURAPAD038.CH"
+
+namespace totvs.protheus.legal.sigapfs.jurapad038_faturas_pendentes.integratedprovider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T.,;
+	team='SIGAPFS',;
+	tables='OHH,NXA,NS7,SA1,RD0',;
+	name='Faturas Pendentes Pagas',;
+	country='ALL',;
+	initialRelease='12.1.2210')
+
+//------------------------------------------------------------------------------------
+class jurapad038_faturas_pendentesTReportsBusinessObject from totvs.framework.treports.integratedprovider.IntegratedProvider
+	public    method new()         as object
+	public    method getData()     as object
+	public    method getSchema()   as object
+	private   method getHistJ42() as character
+
+	data lExistPergunte as logical
+	data lPDUserAc as logical
+
+	// Metodos próprios SIGAPFS
+	Protected Method LoadFields() As Array
+
+endclass
+
+//------------------------------------------------------------------------------------
+method new() class jurapad038_faturas_pendentesTReportsBusinessObject
+
+	_Super:new()
+
+	//Define a área
+	self:appendArea("Pré-Faturamento Serviços")
+
+	//Define o nome do Objeto de Negócio
+	self:setDisplayName("Faturas Pendentes")
+
+	//Define a descrição do Objeto de Negócio
+	self:setDescription("Faturas Pendentes")
+
+	self:lPDUserAc := IIF(FindFunction("JPDUserAc"), JPDUserAc(), .T.) // Indica se o usuário possui acesso a dados sensíveis ou pessoais (LGPD)
+
+	If !self:lPDUserAc
+		self:setErrorStatus(400, "Acesso restrito.", "Usuário com restrição de acesso a dados pessoais/sensíveis.")
+	EndIf
+
+Return self
+
+//------------------------------------------------------------------------------------
+method getData(nPage as numeric, oFilter as object) as object class jurapad038_faturas_pendentesTReportsBusinessObject
+Local aArea       := GetArea()
+Local aAreaOHD    := OHD->(GetArea())
+Local cTemp       := GetNextAlias()
+Local cTempOHD    := GetNextAlias()
+Local cMoeda      := " "
+Local cQuery      := " "
+Local cQueryOHD   := " "
+Local cHistCob    := " "
+Local cFilEscr    := " "
+Local jParams     as json
+Local oJsDados    as object
+Local nMV_PAR01   := 0
+Local nMV_PAR06   := 0
+Local lAbat       := OHH->(ColumnPos( "OHH_ABATIM" )) > 0 // @12.1.2410
+Local aBind  	  := {}
+Local lExistOIB   := FWAliasInDic("OIB")
+Local lX2UnicoOIB := .F.
+	
+	If lExistOIB
+		// Verifica se a OIB está com X2_UNICO mais atual, ajustado para que OIB possa ser utilizada como filha da OHH
+		lX2UnicoOIB := AllTrim(FwSX2Util():GetSX2data('OIB', {"X2_UNICO"})[1][2]) == "OIB_FILIAL+OIB_PREFIX+OIB_NUM+OIB_PARCEL+OIB_TIPO+OIB_ANOMES+OIB_CODIMP+OIB_CESCR+OIB_CFATUR"
+	EndIf
+
+	//Define a quantidade máxima por página (Default 100)
+	self:setPageSize(20)
+
+	If !self:lPDUserAc
+		self:setErrorStatus(400, "Acesso restrito.", "Usuário com restrição de acesso a dados pessoais/sensíveis.")
+	Else
+
+		jParams := oFilter:getParameters()
+
+		cFilEscr := JurGetDados( "NS7", 1, xFilial("NS7") + jParams["MV_PAR03"][1], "NS7_CFILIA" )
+		cMoeda   := JurGetDados( "CTO", 1, xFilial("CTO") + jParams["MV_PAR01"][1], "CTO_SIMB")
+
+		nMV_PAR01 := JurTRepVar(Alltrim(jParams["MV_PAR01"][1])) // Função para tratamento do tipo de retorno dos parâmetros
+		nMV_PAR06 := jParams["MV_PAR06"][1] // Função para tratamento do tipo de retorno dos parâmetros
+
+		cQuery := " SELECT RD0.RD0_SIGLA, RD0.RD0_NOME, SA1.A1_NOME, OHH.OHH_CESCR, OHH.OHH_CCLIEN, OHH.OHH_CLOJA, NS7.NS7_COD, NS7.NS7_RAZAO,"
+		cQuery +=   " OHH.OHH_FILIAL, OHH.OHH_PREFIX, OHH.OHH_NUM, OHH.OHH_TIPO, OHH.OHH_NFELET, NXA.NXA_DTEMI, NXA.NXA_DTVENC, NXA.NXA_DOC, NXA.NXA_SERIE, NXA_VLFATH,"
+		cQuery +=   " NXA.NXA_VLACRE, (NXA.NXA_VLDSCP + NXA.NXA_VLDSCE + NXA.NXA_VLDSCL) DESCONTOS,"
+		cQuery +=   " SUM(OHH.OHH_SALDOH) HONORARIOS,"
+		cQuery +=   " SUM(OHH.OHH_SALDOD) DESP,"
+		
+		If (lExistOIB .and. lX2UnicoOIB)
+			cQuery += " COALESCE((SELECT SUM(OIBPIS.OIB_VLRIMP)"
+			cQuery +=  " FROM " + RetSqlName("OIB") + " OIBPIS"
+			cQuery += " WHERE OIBPIS.OIB_FILIAL = OHH.OHH_FILIAL"
+			cQuery +=   " AND OIBPIS.OIB_PREFIX = OHH.OHH_PREFIX"
+			cQuery +=   " AND OIBPIS.OIB_NUM = OHH.OHH_NUM"
+			cQuery +=   " AND OIBPIS.OIB_TIPO = OHH.OHH_TIPO"
+			cQuery +=   " AND OIBPIS.OIB_ANOMES = OHH.OHH_ANOMES"
+			cQuery +=   " AND OIBPIS.OIB_CODIMP = ?"
+			AAdd(aBind, {"PIS", "S"})
+
+			cQuery +=   " AND OIBPIS.D_E_L_E_T_ = ?), NXA_PIS) PIS,"
+			AAdd(aBind, {" ", "S"})
+
+			cQuery += " COALESCE((SELECT SUM(OIBCOF.OIB_VLRIMP)"
+			cQuery +=  " FROM " + RetSqlName("OIB") + " OIBCOF"
+			cQuery += " WHERE OIBCOF.OIB_FILIAL = OHH.OHH_FILIAL"
+			cQuery +=   " AND OIBCOF.OIB_PREFIX = OHH.OHH_PREFIX"
+			cQuery +=   " AND OIBCOF.OIB_NUM = OHH.OHH_NUM"
+			cQuery +=   " AND OIBCOF.OIB_TIPO = OHH.OHH_TIPO"
+			cQuery +=   " AND OIBCOF.OIB_ANOMES = OHH.OHH_ANOMES"
+			cQuery +=   " AND OIBCOF.OIB_CODIMP = ?"
+			AAdd(aBind, {"COF", "S"})
+
+			cQuery +=   " AND OIBCOF.D_E_L_E_T_ = ?), NXA_COFINS) COFINS,"
+			AAdd(aBind, {" ", "S"})
+
+			cQuery += " COALESCE((SELECT SUM(OIBCSL.OIB_VLRIMP)"
+			cQuery +=  " FROM " + RetSqlName("OIB") + " OIBCSL"
+			cQuery += " WHERE OIBCSL.OIB_FILIAL = OHH.OHH_FILIAL"
+			cQuery +=   " AND OIBCSL.OIB_PREFIX = OHH.OHH_PREFIX"
+			cQuery +=   " AND OIBCSL.OIB_NUM = OHH.OHH_NUM"
+			cQuery +=   " AND OIBCSL.OIB_TIPO = OHH.OHH_TIPO"
+			cQuery +=   " AND OIBCSL.OIB_ANOMES = OHH.OHH_ANOMES"
+			cQuery +=   " AND OIBCSL.OIB_CODIMP = ?"
+			AAdd(aBind, {"CSL", "S"})
+
+			cQuery +=   " AND OIBCSL.D_E_L_E_T_ = ?), NXA_CSLL) CSLL,"
+			AAdd(aBind, {" ", "S"})
+
+			cQuery += " COALESCE((SELECT SUM(OIBIRF.OIB_VLRIMP)"
+			cQuery +=  " FROM " + RetSqlName("OIB") + " OIBIRF"
+			cQuery += " WHERE OIBIRF.OIB_FILIAL = OHH.OHH_FILIAL"
+			cQuery +=   " AND OIBIRF.OIB_PREFIX = OHH.OHH_PREFIX"
+			cQuery +=   " AND OIBIRF.OIB_NUM = OHH.OHH_NUM"
+			cQuery +=   " AND OIBIRF.OIB_TIPO = OHH.OHH_TIPO"
+			cQuery +=   " AND OIBIRF.OIB_ANOMES = OHH.OHH_ANOMES"
+			cQuery +=   " AND OIBIRF.OIB_CODIMP = ?"
+			AAdd(aBind, {"IRF", "S"})
+
+			cQuery +=   " AND OIBIRF.D_E_L_E_T_ = ?), NXA_IRRF) IRRF,"
+			AAdd(aBind, {" ", "S"})
+
+			cQuery += " COALESCE((SELECT SUM(OIBISS.OIB_VLRIMP)"
+			cQuery +=  " FROM " + RetSqlName("OIB") + " OIBISS"
+			cQuery += " WHERE OIBISS.OIB_FILIAL = OHH.OHH_FILIAL"
+			cQuery +=   " AND OIBISS.OIB_PREFIX = OHH.OHH_PREFIX"
+			cQuery +=   " AND OIBISS.OIB_NUM = OHH.OHH_NUM"
+			cQuery +=   " AND OIBISS.OIB_TIPO = OHH.OHH_TIPO"
+			cQuery +=   " AND OIBISS.OIB_ANOMES = OHH.OHH_ANOMES"
+			cQuery +=   " AND OIBISS.OIB_CODIMP = ?"
+			AAdd(aBind, {"ISS", "S"})
+
+			cQuery +=   " AND OIBISS.D_E_L_E_T_ = ?), NXA_ISS) ISS,"
+			AAdd(aBind, {" ", "S"})
+
+			cQuery += " SUM(OHH.OHH_SALDOH) -"
+			cQuery += " COALESCE((SELECT SUM(OIBTOT.OIB_VLRIMP)"
+			cQuery +=  " FROM " + RetSqlName("OIB") + " OIBTOT"
+			cQuery += " WHERE OIBTOT.OIB_FILIAL = OHH.OHH_FILIAL"
+			cQuery +=   " AND OIBTOT.OIB_PREFIX = OHH.OHH_PREFIX"
+			cQuery +=   " AND OIBTOT.OIB_NUM = OHH.OHH_NUM"
+			cQuery +=   " AND OIBTOT.OIB_TIPO = OHH.OHH_TIPO"
+			cQuery +=   " AND OIBTOT.OIB_ANOMES = OHH.OHH_ANOMES"
+			cQuery +=   " AND OIBTOT.D_E_L_E_T_ = ?), 0)"
+			AAdd(aBind, {" ", "S"})
+
+			cQuery += " + SUM(OHH.OHH_SALDOD) TOTLIQUIDO"
+
+		Else
+
+			cQuery +=   " SUM(OHH.OHH_VLIRRF) IRRF,"
+			cQuery +=   " SUM(OHH.OHH_VLPIS)  PIS,"
+			cQuery +=   " SUM(OHH.OHH_VLCOFI) COFINS,"
+			cQuery +=   " SUM(OHH.OHH_VLCSLL) CSLL,"
+			cQuery +=   " SUM(OHH.OHH_VLISS)  ISS,"
+
+			IIF( lAbat,;
+				cQuery +=  " SUM(OHH.OHH_SALDOH - OHH.OHH_ABATIM + OHH.OHH_SALDOD) TOTLIQUIDO",;
+				cQuery +=  " SUM(OHH.OHH_SALDOH - OHH.OHH_VLIRRF - OHH.OHH_VLPIS - OHH.OHH_VLCOFI - OHH.OHH_VLCSLL - OHH.OHH_VLISS + OHH.OHH_SALDOD) TOTLIQUIDO";
+				)
+		EndIf
+		// OHH
+		cQuery +=  " FROM " + RetSqlName("OHH") + " OHH"
+
+		// SA1
+		cQuery += " INNER JOIN " + RetSqlName("SA1") + " SA1"
+		cQuery +=    " ON SA1.A1_FILIAL = ?" // A1_FILIAL
+		AAdd(aBind, {xFilial("SA1"), "S"})
+
+		cQuery +=   " AND SA1.A1_COD = OHH.OHH_CCLIEN" // OHH.OHH_CCLIEN
+		cQuery +=   " AND SA1.A1_LOJA = OHH.OHH_CLOJA" // OHH.OHH_CLOJA
+			
+		cQuery +=   " AND SA1.D_E_L_E_T_ = ?"
+		AAdd(aBind, {" ", "S"})
+
+		// NS7
+		cQuery += " INNER JOIN " + RetSqlName("NS7") + " NS7"
+		cQuery +=    " ON NS7.NS7_FILIAL = ?" // NS7_FILIAL
+		AAdd(aBind, {xFilial("NS7"), "S"})
+
+		cQuery +=   " AND NS7.NS7_CFILIA = OHH.OHH_FILIAL"
+		cQuery +=   " AND NS7.D_E_L_E_T_ = ?"
+		AAdd(aBind, {" ", "S"})
+
+		// NXA
+		cQuery += " INNER JOIN " + RetSqlName("NXA") + " NXA"
+		cQuery +=    " ON NXA.NXA_FILIAL = ?"
+		AAdd(aBind, {xFilial("NXA"), "S"})
+
+		cQuery +=   " AND NXA.NXA_CESCR = NS7.NS7_COD"
+		cQuery +=   " AND NXA.NXA_COD = OHH.OHH_NUM"
+		cQuery +=   " AND NXA.NXA_TIPO = OHH.OHH_TIPO"
+			
+		cQuery +=   " AND NXA.D_E_L_E_T_ = ?"
+		AAdd(aBind, {" ", "S"})
+
+		// RD0
+		cQuery += " INNER JOIN " + RetSqlName("RD0") + " RD0 "
+		cQuery +=    " ON RD0.RD0_FILIAL = ?"
+		AAdd(aBind, {xFilial("RD0"), "S"})
+
+		cQuery +=   " AND RD0.RD0_CODIGO = NXA.NXA_CPART"
+		cQuery +=   " AND RD0.D_E_L_E_T_ = ?"
+		AAdd(aBind, {" ", "S"})
+
+		// WHERE
+		cQuery += " WHERE OHH.OHH_FILIAL = NS7.NS7_CFILIA"
+		If AllTrim(jParams['MV_PAR03'][1]) <> ''
+			cQuery += " AND NS7.NS7_COD = ?"
+			Aadd(aBind, {Alltrim(jParams['MV_PAR03'][1]), "S"})
+		EndIf
+		If AllTrim(jParams['MV_PAR04'][1]) <> ''
+			cQuery += " AND OHH.OHH_CCLIEN = ?" 
+			Aadd(aBind, {Alltrim(jParams['MV_PAR04'][1]), "S"})
+
+			If AllTrim(jParams['MV_PAR05'][1]) <> ''
+				cQuery += " AND OHH.OHH_CLOJA  = ?"
+				Aadd(aBind, {Alltrim(jParams['MV_PAR05'][1]), "S"})
+			EndIf
+		EndIf
+
+		cQuery +=   " AND OHH.OHH_ANOMES  = ?"
+		Aadd(aBind, {Alltrim(jParams['MV_PAR02'][1]), "S"})
+
+		cQuery +=   " AND OHH.OHH_CMOEDA  = ?"
+		Aadd(aBind, {nMV_PAR01, "N"})
+
+		cQuery +=   " AND OHH.D_E_L_E_T_ = ?"
+		AAdd(aBind, {" ", "S"})
+
+		cQuery += " GROUP BY RD0.RD0_SIGLA, RD0.RD0_NOME, SA1.A1_NOME, OHH.OHH_FILIAL, OHH.OHH_CCLIEN, OHH.OHH_CLOJA, NS7.NS7_COD, NS7.NS7_RAZAO,"
+		cQuery +=          " OHH.OHH_PREFIX, OHH.OHH_CESCR, OHH.OHH_NUM, OHH.OHH_TIPO, OHH.OHH_NFELET, OHH_ANOMES, NXA.NXA_DTEMI, NXA.NXA_DTVENC, NXA.NXA_DOC, NXA.NXA_SERIE,"
+		cQuery +=          " NXA.NXA_VLDSCP, NXA.NXA_VLDSCE, NXA.NXA_VLDSCL, NXA.NXA_VLFATH, NXA.NXA_VLACRE, NXA.NXA_PIS, NXA.NXA_COFINS, NXA.NXA_CSLL, NXA.NXA_ISS, NXA.NXA_IRRF"
+		cQuery += " ORDER BY RD0.RD0_SIGLA, OHH.OHH_CCLIEN, OHH.OHH_CLOJA, OHH.OHH_NUM"
+
+		cQuery := JurTRepBin(cQuery, aBind)
+		MPSysOpenQuery(cQuery, cTemp)
+			
+		While !(cTemp)->(Eof())
+
+			If Empty(AllTrim((cTemp)->NXA_DOC) + AllTrim((cTemp)->NXA_SERIE))
+				cNF := ""
+			Else
+				cNF := AllTrim((cTemp)->NXA_DOC) + "/" + AllTrim((cTemp)->NXA_SERIE)
+			EndIf
+
+			cHistCob := ' '
+
+			If nMV_PAR06 == 2 // Histórico de Cobrança
+		
+				aBind := {}
+					
+				cQueryOHD := " SELECT OHD.R_E_C_N_O_ RECNO"
+				cQueryOHD +=   " FROM " + RetSqlName("OHD") + " OHD"
+					
+				cQueryOHD +=  " WHERE OHD.OHD_FILIAL = ?" // 1
+				AAdd(aBind, {(cTemp)->OHH_FILIAL, "S"})
+
+				cQueryOHD +=    " AND OHD.OHD_PREFIX = ?" // 2
+				AAdd(aBind, {(cTemp)->OHH_PREFIX, "S"})
+
+				cQueryOHD +=    " AND OHD.OHD_NUM = ?" // 3 
+				AAdd(aBind, {(cTemp)->OHH_NUM, "S"})
+
+				cQueryOHD +=    " AND OHD.OHD_TIPO = ?" // 4 
+				AAdd(aBind, {(cTemp)->OHH_TIPO, "S"})
+
+				cQueryOHD +=    " AND OHD.D_E_L_E_T_ = ?"
+				AAdd(aBind, {" ", "S"})
+
+				cQueryOHD +=  " ORDER BY OHD.OHD_DTACAO"
+
+				cQueryOHD := JurTRepBin(cQueryOHD, aBind)
+				MPSysOpenQuery(cQueryOHD, cTempOHD)	
+
+				While !(cTempOHD)->(Eof())
+					OHD->( DbGoTo( (cTempOHD)->RECNO ) )
+
+					cHistCob := Iif(AllTrim(cHistCob) <> '',cHistCob + ' ', '') + cValToChar(OHD->OHD_DTACAO) + ': ' + AllTrim(OHD->OHD_ACAO)
+					cHistCob := StrTran(cHistCob, Chr(13) + Chr(10), " ") // Troca os Retornos de shift + enter por espaço
+					cHistCob := StrTran(cHistCob, Chr(10), " ") // Troca as quebras de linha por espaço
+					cHistCob := StrTran(cHistCob, Chr(9), " ") // Troca as tabulações por espaço
+
+					(cTempOHD)->(DbSkip())
+				EndDo
+
+				(cTempOHD)->(DbCloseArea())
+
+			EndIf
+
+			oJsDados := JsonObject():new()
+			oJsDados["cEscrit"]     := (cTemp)->OHH_CESCR
+			oJSDados["cFatura"]     := (cTemp)->OHH_NUM
+			oJsDados["cNF"]         := cNF
+			oJsDados["cMoeda"]      := cMoeda
+			oJsDados["dEmiss"]      := totvs.framework.treports.date.dateToTimeStamp(STOD((cTemp)->NXA_DTEMI))
+			oJsDados["dVenc"]       := totvs.framework.treports.date.dateToTimeStamp(STOD((cTemp)->NXA_DTVENC))
+			oJsDados["nHonor"]      := (cTemp)->HONORARIOS
+			oJsDados["nDesc"]       := (cTemp)->DESCONTOS
+			oJsDados["cHistCob"]    := cHistCob
+			oJsDados["cRazSoc"]     := (cTemp)->NS7_RAZAO
+			oJsDados["nIRRF"]       := (cTemp)->IRRF
+			oJsDados["nPIS"]        := (cTemp)->PIS
+			oJsDados["nCOFINS"]     := (cTemp)->COFINS
+			oJsDados["nCSLL"]       := (cTemp)->CSLL
+			oJsDados["nISS"]        := (cTemp)->ISS
+			oJsDados["nDESP"]       := (cTemp)->DESP
+			oJsDados["nTOTLIQUIDO"] := (cTemp)->TOTLIQUIDO
+			oJsDados["cCliente"]    := (cTemp)->OHH_CCLIEN
+			oJsDados["cLoja"]       := (cTemp)->OHH_CLOJA
+			oJsDados["RD0_NOME"]    := (cTemp)->RD0_NOME
+			oJsDados["RD0_SIGLA"]   := (cTemp)->RD0_SIGLA
+			oJsDados["A1_NOME"]     := (cTemp)->A1_NOME
+			oJsDados["NS7_COD"]     := (cTemp)->NS7_COD
+
+			self:oData:appendData(oJsDados)
+
+			(cTemp)->(DBSkip())
+
+		EndDo
+				
+		(cTemp)->(DbCloseArea())
+
+	Endif
+
+	RestArea(aArea)
+	RestArea(aAreaOHD)
+
+Return self:oData
+
+//------------------------------------------------------------------------------------
+method getSchema() as object Class jurapad038_faturas_pendentesTReportsBusinessObject
+
+	self:oSchema:addProperty("cEscrit"    , "cEscrit"    , "string", "Escritório"    , "cEscrit"    )
+	self:oSchema:addProperty("cFatura"    , "cFatura"    , "string", "Fatura"        , "cFatura"    )
+	self:oSchema:addProperty("cNF"        , "cNF"        , "string", "Nota Fiscal"   , "cNF"        )
+	self:oSchema:addProperty("dEmiss"     , "dEmiss"     , "date"  , "Data Emissão"  , "dEmiss"     )
+	self:oSchema:addProperty("dVenc"      , "dVenc"      , "date"  , "Data Venc."    , "dVenc"      )
+	self:oSchema:addProperty("nHonor"     , "nHonor"     , "number", "Honorários"    , "nHonor"     )
+	self:oSchema:addProperty("nDesc"      , "nDesc"      , "number", "Descontos"     , "nDesc"      )
+	self:oSchema:addProperty("cHistCob"   , "cHistCob"   , "string", "Hist. Cobrança", "cHistCob"   )
+	self:oSchema:addProperty("cMoeda"     , "cMoeda"     , "string", "Moeda"         , "cMoeda"     )
+	self:oSchema:addProperty("cRazSoc"    , "cRazSoc"    , "string", "Razão Social"  , "cRazSoc"    )
+	self:oSchema:addProperty("cCliente"   , "cCliente"   , "string", "Cód. Cliente"  , "cCliente"   )
+	self:oSchema:addProperty("cLoja"      , "cLoja"      , "string", "Cód. Loja"     , "cLoja"      )
+	self:oSchema:addProperty("nIRRF"      , "nIRRF"      , "number", "IRRF"          , "nIRRF"      )
+	self:oSchema:addProperty("nPIS"       , "nPIS"       , "number", "PIS"           , "nPIS"       )
+	self:oSchema:addProperty("nCOFINS"    , "nCOFINS"    , "number", "COFINS"        , "nCOFINS"    )
+	self:oSchema:addProperty("nCSLL"      , "nCSLL"      , "number", "CSLL"          , "nCSLL"      )
+	self:oSchema:addProperty("nISS"       , "nISS"       , "number", "ISS"           , "nISS"       )
+	self:oSchema:addProperty("nDESP"      , "nDESP"      , "number", "DESP"          , "nDESP"      )
+	self:oSchema:addProperty("nTOTLIQUIDO", "nTOTLIQUIDO", "number", "Total Líq."    , "nTOTLIQUIDO")
+	self:oSchema:addProperty("RD0_NOME"   , "RD0_NOME"   , "string", "Nome Partic"   , "RD0_NOME"   )
+	self:oSchema:addProperty("RD0_SIGLA"  , "RD0_SIGLA"  , "string", "Sigla part"    , "RD0_SIGLA"  )
+	self:oSchema:addProperty("A1_NOME"    , "A1_NOME"    , "string", "Nome"          , "A1_NOME"    )
+	self:oSchema:addProperty("NS7_COD"    , "NS7_COD"    , "string", "Cód. Escrit."  , "NS7_COD"    )
+
+	self:oSchema:addParameter("MV_PAR01", STR0034, "string", .F.) //"Moeda ?"
+	self:oSchema:addParameter("MV_PAR02", STR0035, "string"  , .F.) //"Ano-Mês ?"
+	self:oSchema:addParameter("MV_PAR03", STR0036, "string", .F.) //"Escritório ?"
+	self:oSchema:addParameter("MV_PAR04", STR0037, "string", .F.) //"Cliente ?"
+	self:oSchema:addParameter("MV_PAR05", STR0038, "string", .F.) //"Loja ?"
+	self:oSchema:addParameter("MV_PAR06", STR0039, "string", .F.) //"Hist. Cobrança ?"
+
+		// Seta a consulta padrão nos parâmetros manuais
+	self:setCustomURL("MV_PAR01", "api/framework/v1/genericLookupService/smartview/CTO", 2)
+	self:setCustomURL("MV_PAR03", "api/framework/v1/genericLookupService/smartview/NS7NUH", 2)
+	self:setCustomURL("MV_PAR04", "api/framework/v1/genericQuery?tables=SA1,NUH&Format=smartview&KeyProperty=a1_cod&FromQry= " + RetSqlName("SA1") + " SA1 INNER JOIN " + RetSqlName("NUH") + " NUH ON NUH.NUH_COD = SA1.A1_COD AND NUH.NUH_LOJA = SA1.A1_LOJA AND NUH.NUH_FILIAL = SA1.A1_FILIAL&where=SA1.D_E_L_E_T_ ='" + Space(1) + "' AND NUH.D_E_L_E_T_ = '" + Space(1) + "'&fields=a1_cod,a1_loja,a1_nome", 2)
+
+	// Seta combobox do SX1 nos parâmetros manuais
+	self:setCustomURL("MV_PAR06", "/api/sigapfs/smartview/v1/options/pfs/jurapad038_faturas_pendentes/j038combo/1", 1)
+	
+Return self:oSchema
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} j038combo
+Retorna as opções disponíveis para parâmetros do tipo combo.
+
+@return array: Array com as opções.
+
+@author João Pedro dos Santos Neto
+@since 12/09/2025
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Function j038combo(cOpcao)
+
+	Local aRet := {} as array
+
+	If cOpcao == "1"
+		aRet := {STR0040, STR0041} //"Não", "Sim"
+	Endif
+
+Return aRet

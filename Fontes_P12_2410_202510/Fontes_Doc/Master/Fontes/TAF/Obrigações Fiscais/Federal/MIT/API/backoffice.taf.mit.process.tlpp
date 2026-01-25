@@ -1,0 +1,1315 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "protheus.ch"
+#INCLUDE "backoffice.taf.mit.process.ch"
+#DEFINE CONTENT_TYPE        "application/json"
+#DEFINE HEADER_CONTENT_TYPE "Content-Type"
+#DEFINE CODEBADREQUEST 400  //A solicitação foi mal formatada ou inválida
+#DEFINE CODECREATED 201     //Um novo recurso foi criado como resultado da solicitação
+#DEFINE INDESP      1
+#DEFINE LLASTDATE   2
+#DEFINE DAYSIT      3
+#DEFINE QUALIFPJ    4
+#DEFINE FMTTRIBUT   5
+#DEFINE RECREC      6
+#DEFINE PISCOF      7
+#DEFINE LBALANCOLR  8
+#DEFINE DTSIT       9
+#DEFINE CPF         1
+#DEFINE DDD         2
+#DEFINE FONE        3
+#DEFINE EMAIL       4
+#DEFINE UF          5
+#DEFINE CRC         6
+#DEFINE NLIMTMP     10 //Limite da temporaria
+
+/*/{Protheus.doc} ProcessMIT
+Função responsável por Processar o MIT (Módulo de Inclusão de Tributos)
+Leiaute 1.0 (RETIFICADO) - 20/01/2025
+
+@type function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@return Nil, Não há retorno
+/*/
+@POST(endpoint="/api/taf/fiscal/v1/processMIT", description="Processamento da Obrigação Fiscal MIT")
+Function ProcessMIT()
+
+Local JsBody      := Nil as json
+Local jResponse   := Nil as json
+Local oPrep1      := Nil as object
+Local oTmpIds     := Nil as object
+Local aCompany    := {}  as array
+Local aTabs       := {}  as array
+Local aC2J        := {}  as array
+Local aParam      := {}  as array
+Local aDePaIndSp  := {}  as array
+Local aDePaQuali  := {}  as array
+Local aDePaTbLuc  := {}  as array
+Local aListIds    := {}  as array
+Local cEmpRequest := ''  as character
+Local cFilRequest := ''  as character
+Local cAlias      := ''  as character
+Local cIdCHD      := ''  as character
+Local lIdC2J      := ''  as character
+Local cQualifPj   := ''  as character
+Local cIndeSp     := ''  as character
+Local cDaySit     := ''  as character
+Local cDtSit      := ''  as character
+Local cTribLucro  := ''  as character
+Local cIndRec     := ''  as character
+Local cRegPisCof  := ''  as character
+Local cSiglaUF    := ''  as character
+Local cCNPJRaiz   := ''  as character
+Local cIdsIn      := ''  as character
+Local cNameFile   := ''  as character
+Local lNewFields  := .F. as logical
+Local lAll        := .F. as logical
+Local lLastDay    := .F. as logical
+Local lBalancoLR  := .F. as logical
+Local lFilterSusp := .F. as logical
+Local lAutomato   := .F. as logical
+Local nMonth      := 0   as numeric
+Local nYear       := 0   as numeric
+Local nPos        := 0   as numeric
+Local nTmCodFil   := 0   as numeric
+Local nTmCompany  := 0   as numeric
+
+lAutomato := oRest:getHeaderRequest()["Content-Advpr"]  == 'true'
+
+JsBody := JSONObject():New()
+JsBody:fromJson( oRest:GetBodyRequest())
+
+jResponse := JSONObject():New()
+
+If Empty( oRest:GetBodyRequest() ) //necessario body com parâmetros
+    jResponse['code']    := CODEBADREQUEST
+    jResponse['message'] := STR0001 //"Corpo da requisição não enviado."
+    oRest:setStatusCode(CODEBADREQUEST)
+Else
+    If JsBody['companyId'] == Nil .Or. JsBody['idFormTaxation'] == Nil .Or. JsBody['idContalist'] == Nil .Or.;
+    JsBody['month'] == Nil .Or. JsBody['year'] == Nil
+        jResponse['code']    := CODEBADREQUEST
+        jResponse['message'] := STR0002 //"Body não recebido companyId, idFormTaxation, idContalist, month, year."
+        oRest:setStatusCode(CODEBADREQUEST)
+    else
+        aCompany := StrTokArr(JsBody['companyId'], "|")
+        If Len(aCompany) < 2
+            jResponse['code']    := CODEBADREQUEST
+            jResponse['message'] := STR0003 //"Tamanho Empresa|Filial informado no parâmetro 'companyId' menor que o esperado."
+            oRest:setStatusCode(CODEBADREQUEST)
+        Else
+            cEmpRequest := aCompany[1]
+            cFilRequest := PADR(alltrim(aCompany[2]),FWSizeFilial())
+
+            If PrepEnv(cEmpRequest, cFilRequest)
+                nTmCompany := len( cEmpAnt )
+                lNewFields := AliasInDic("T1A") .And. AliasInDic("T1B")
+
+                If lNewFields
+
+                    aadd(aTabs, {{'T1A',1},{'T1B',1},{'CHD',1},{'V3X',1},{'C3S',1},{'C2J',5},{'C1G',1},{'T5L',1},{'C1E',7},{'C09',3}} )
+                    OpenTabsMIT( aTabs[1] ) //necessário para abrir as tabelas e atualizar os novos campos apos a aplicacao do pacote
+
+                    cIdsIn := ''
+                    aListIds := {}
+                    //Importante se houver 10 ou mais selecoes sera implementado o controle por temporaria
+                    //Se não houver nada marcado, ira gerar todos, nao usa filtro no campo de ID, lAll == .T.
+                    lAll := JsBody["parameters"] == Nil .Or. len(JsBody["parameters"]) == 0 .Or. ( len(JsBody["parameters"]) == 1 .And. JsBody["parameters"][1]["id"] == Nil ) //Se existir ao menos 1, lAll == .F.                
+                    if !lAll //verifica o tamanho para definir se monta o IN com Bind ou sera fara filtro com in no select da temporaria
+                        MitRetIds(@oTmpIds, JsBody["parameters"], @aListIds, @cIdsIn )
+                    endif
+
+                    nMonth := JsBody["month"]
+                    nYear  := JsBody["year"]
+                    cIdCHD := JsBody["idFormTaxation"]
+
+                    //Dados Provenientes da CHD
+                    cQualifPj  := '' //Qualificação da pessoa jurídica
+                    cIndeSp    := '' //Indicador Situação Especial
+                    cDaySit    := '' //Dia Situcao Especial
+                    cDtSit     := '' //Data Situcao Especial
+                    cTribLucro := '' //Forma de tributação do lucro
+                    cIndRec    := '' //Indicativo de Recolhimento Receita
+                    lBalancoLR := .F.
+
+                    cCNPJRaiz := SubStr(AllTrim(FWSM0Util():GetSM0Data( cEmpAnt, cFilAnt, {'M0_CGC'})[1][2]),1,8) //raiz cnpj, ex: 53113791
+
+                    if CHD->(DbSeek( cFilRequest + cIdCHD ) )
+                        //Indicador Situação Especial
+                        aDePaIndSp := { {'1','1'},{'2','2'},{'3','5'},{'4','6'},{'5','3'},{'6','4'} }
+                        nPos := aScan(aDePaIndSp,{|x| Alltrim(x[1]) == alltrim(CHD->CHD_INDESP) })
+                        if nPos > 0
+                            cIndeSp := aDePaIndSp[nPos][2]
+                        endif
+
+                        //Data Situcao Especial
+                        if !Empty(CHD->CHD_DTSIT)
+                            cDtSit := CHD->CHD_DTSIT
+                            cDaySit := cValToChar(Day(cDtSit))
+                            lLastDay := cDtSit == LastDate(cDtSit)
+                        endif
+
+                        //Forma de tributação do lucro
+                        aDePaTbLuc := { {'5','3'},{'6','4'},{'7','3'},{'8','5'},{'9','6'} }
+                        nPos := aScan(aDePaTbLuc,{|x| Alltrim(x[1]) == alltrim(CHD->CHD_FORTRB) })
+                        if nPos > 0
+                            cTribLucro := aDePaTbLuc[nPos][2]
+                        elseif CHD->CHD_APIRCS == '2' .And. CHD->CHD_FORTRB $ ("1234") //Anual e (Luc Real ou 2=Luc Real/Arb ou 3=Luc Pres/Real ou 4=Luc Pres/Real)
+                            cTribLucro := '1' //1: Real Anual;
+                        elseif CHD->CHD_APIRCS == '1' .And. CHD->CHD_FORTRB $ ("1234") //Trimestral e (Luc Real ou 2=Luc Real/Arb ou 3=Luc Pres/Real ou 4=Luc Pres/Real)
+                            cTribLucro := '2' //2: Real Trimestral;
+                        else
+                            nTmCodFil := GetSx3Cache("C1E_CODFIL", "X3_TAMANHO")
+                            cEmpRequest := Padr(Alltrim(cEmpRequest),nTmCompany," ")
+                            //[7] C1E_FILIAL, C1E_CODFIL, C1E_ATIVO, R_E_C_N_O_, D_E_L_E_T_
+                            if C1E->(DbSeek( xFilial("C1E",cFilRequest) + padr( cEmpRequest + cFilRequest ,nTmCodFil," ") + "1" ) )
+                                if C1E->C1E_CRT == '1' .Or. C1E->C1E_CRT == '2'
+                                    cTribLucro := '7' //7: Optante pelo Simples Nacional;
+                                endif
+                            endif
+                        endif
+
+                        if !Empty(CHD->CHD_RECREC) //1=Regime de caixa;2=Regime de competencia;3=Regime de Caixa - Elevada Oscilação da Taxa de Câmbio.
+                            cIndRec := CHD->CHD_RECREC
+                        endif
+
+                        if !Empty(CHD->CHD_PISCOF) //1=Não-cumulativa;2=Cumulativa;3=Não-cumulativa e Cumulativa;4=Não se aplica
+                            cRegPisCof := CHD->CHD_PISCOF
+                        endif
+
+                        //Qualificação da pessoa jurídica
+                        aDePaQuali := { {'01','1'},{'02','2'},{'03','5'},{'04','4'},{'05','3'},{'06','6'},;
+                        {'07','7'},{'08','8'},{'09','9'},{'10','10'},{'11','11'},{'12','12'} }
+
+                        nPos := aScan(aDePaQuali,{|x| Alltrim(x[1]) == alltrim(CHD->CHD_CODQUA) })
+                        if nPos > 0
+                            cQualifPj := aDePaQuali[nPos][2]
+                        endif
+
+                        if !Empty(CHD->CHD_APUEST)
+                            if !Empty( SubStr(CHD->CHD_APUEST,nMonth, 1) ) .And. SubStr(CHD->CHD_APUEST,nMonth, 1) == 'B'
+                                lBalancoLR := .T.
+                            endif
+                        endif
+                    endif
+                    aadd( aParam, { cIndeSp, lLastDay, cDaySit, cQualifPj, cTribLucro, cIndRec, cRegPisCof, lBalancoLR, cDtSit } )
+
+                    //Dados Provenientes da C2J
+                    lIdC2J := JsBody["idContalist"]
+                    aC2J := {}
+                    cSiglaUF := ''
+                    if C2J->(DbSeek( xFilial("C2J",cFilRequest) + lIdC2J ) )
+                        if C09->(DbSeek( xFilial("C09",cFilRequest) + C2J->C2J_UF ) )
+                            cSiglaUF := C09->C09_UF
+                        endif
+                        aadd( aC2J, { Alltrim(C2J->C2J_CPF), Alltrim(C2J->C2J_DDD), Alltrim(C2J->C2J_FONE), Alltrim(C2J->C2J_EMAIL), cSiglaUF, Alltrim(C2J->C2J_CRC) } )
+                    endif
+                    cAlias := GetNextAlias()
+
+                    MitQry( cAlias, lAll, @oPrep1, aParam, aC2J, nMonth, nYear, lFilterSusp, aListIds, cIdsIn )
+
+                    MitGerJson( cAlias, lAll, @oPrep1, aParam, aC2J, nMonth, nYear, cCNPJRaiz, aListIds, cIdsIn, @cNameFile, lAutomato )
+
+                    aSize(aParam,0)
+                    aSize(aC2J,0)
+
+                    if oTmpIds != Nil
+                        oTmpIds:Delete()
+                        freeObj(oTmpIds)
+                        oTmpIds := Nil
+                    endif
+
+                    jResponse['code']    := CODECREATED
+                    jResponse['message'] := STR0004 //"Um novo recurso foi criado como resultado da solicitação."
+                    jResponse['file']    := cNameFile
+                else
+                    jResponse['code']    := CODEBADREQUEST
+                    jResponse['message'] := STR0005 //"Pacote desatualizado."
+                    oRest:setStatusCode(CODEBADREQUEST)
+                endif
+            else
+                jResponse['code']    := CODEBADREQUEST
+                jResponse['message'] := STR0006 //"Falha na preparação do ambiente para a Empresa."
+                oRest:setStatusCode(CODEBADREQUEST)
+            endif
+        endif
+    endif
+Endif
+
+oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+
+oRest:SetResponse(jResponse)
+
+FWFreeObj(jResponse)
+
+Return Nil
+
+/*/{Protheus.doc} OpenTabsMIT
+Funcao para abrir as tabelas e atualizar os novos campos apos a aplicacao do pacote,
+alem de deixar o indice posicionado para os dbseeks necessarios.
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param aList, lista com alias e indice
+@return Nil, Não há retorno
+/*/
+Static Function OpenTabsMIT( aList )
+    Local nI   := 0 as numeric
+    Local nAte := 0 as numeric
+    Default aList := {}
+    nAte := Len( aList )
+    For nI := 1 To nAte
+        DBSelectArea( aList[nI][1] )
+        (aList[nI][1])->(DBSetOrder(aList[nI][2]))
+        (aList[nI][1])->(DbGoTop())
+    Next nI
+Return Nil
+
+/*/{Protheus.doc} MitQry
+Executa a query de movimentacoes e se necessario dos processos e suspensoes
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param cAlias character Nome tabela
+@param lAll logical Controle de Filtro para os IDs da T1A
+@param oPrepare object ExecStatment
+@param aParam array Parametros de Abertura ECF Tabela CHD
+@param aC2J array Dados Contabilistas
+@param nMonth numeric Mes para filtrar o periodo de apuracao
+@param nYear numeric Ano para filtrar o periodo de apuracao
+@param lFilterSusp logical Indica se deve filtrar os movimentos ou suspensoes
+@param aListIds array lista com filtros da T1A_ID
+@param cIdsIn character temporaria com relacao dos Ids para filtrar
+@return Nil, Não há retorno
+/*/
+Static Function MitQry( cAlias as character, lAll as logical, oPrepare as object, aParam as array, aC2J as array,;
+nMonth as numeric, nYear as numeric, lFilterSusp as logical, aListIds as array, cIdsIn as character )
+
+Local cQry      := '' as character
+Local cCompC1G  := '' as character
+Local cCompT5L  := '' as character
+Local cCompV3X  := '' as character
+Local cPerApu   := '' as character
+Local aBind     := {} as array
+Local aInfEUF   := {} as array
+Local aIdTrib   := {} as array
+Local nX        := 0  as numeric
+Local nTmIdSusp := 0  as numeric
+
+aInfEUF := TAFTamEUF(Upper(AllTrim(SM0->M0_LEIAUTE)))
+cPerApu := padL(nMonth,2,"0") + cValToChar(nYear)
+
+cQry := "SELECT "
+
+if !lFilterSusp
+    cCompV3X := Upper(AllTrim(FWModeAccess("V3X",1)+FWModeAccess("V3X",2)+FWModeAccess("V3X",3)))
+
+    cQry += "T1A.T1A_IDDEBI, T1A.T1A_CODREC, T1A.T1A_DTDEBI, T1A.T1A_VALTRI, T1A.T1A_PERIOD, T1A.T1A_ANOPOS, "
+    cQry += "T1A.T1A_TRIPOS, T1A.T1A_CPNEST, T1A.T1A_CNPINC, "
+    cQry += "C3S.C3S_CODIGO, V3X.V3X_CNPJ, C09.C09_CODIGO, C07.C07_CODIGO, "
+
+    cQry += "CASE WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO IN (?) THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO IN (?) THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += "	   WHEN C3S.C3S_CODIGO = ? THEN ? "
+	cQry += " END SEQ_TRIBUTOS
+
+    aAdd(aBind, '19' )
+    aAdd(aBind, '01' )
+    aAdd(aBind, {'18','27'} )
+    aAdd(aBind, '02' )
+    aAdd(aBind, {'12','28'} )
+    aAdd(aBind, '03' )
+    aAdd(aBind, '05' )
+    aAdd(aBind, '04' )
+    aAdd(aBind, '34' )
+    aAdd(aBind, '05' )
+    aAdd(aBind, '06' )
+    aAdd(aBind, '06' )
+    aAdd(aBind, '07' )
+    aAdd(aBind, '07' )
+    aAdd(aBind, '37' )
+    aAdd(aBind, '08' )
+    aAdd(aBind, '36' )
+    aAdd(aBind, '09' )
+    aAdd(aBind, '35' )
+    aAdd(aBind, '10' )
+
+else
+    nTmIdSusp := GetSx3Cache("T1B_IDSUSP", "X3_TAMANHO")
+    cCompC1G  := Upper(AllTrim(FWModeAccess("C1G",1)+FWModeAccess("C1G",2)+FWModeAccess("C1G",3)))
+    cCompT5L  := Upper(AllTrim(FWModeAccess("T5L",1)+FWModeAccess("T5L",2)+FWModeAccess("T5L",3)))
+
+    cQry += "T1A.T1A_FILIAL, T1A.T1A_IDDEBI, T1B.T1B_TERCEI, T1B.T1B_VALSUS, "
+    cQry += "CASE WHEN C1G.C1G_TPPROC = ? THEN ? ELSE ? END C1G_TPPROC, " //1=Judicial --> TipoSuspensao 1: administrativa; 2: judicial.
+    aAdd(aBind, '1' )
+    aAdd(aBind, '2' )
+    aAdd(aBind, '1' )
+    cQry += "C1G.C1G_NUMPRO, C1G.C1G_VARA, C1G.C1G_UFVARA, "
+    cQry += "C8S.C8S_CODIGO, T5L.T5L_INDDEP, T5L.T5L_DTDEC, "
+    cQry += "C09.C09_CODIGO, C07.C07_CODIGO "
+endif
+
+cQry += "FROM " + RetSqlName("T1A") + " T1A "
+
+if lFilterSusp
+    cQry += "INNER JOIN " + RetSqlName("T1B") + " T1B ON "
+    cQry += "T1B.T1B_FILIAL = T1A.T1A_FILIAL AND T1B.T1B_ID = T1A.T1A_ID AND T1B.D_E_L_E_T_ = ? "
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C1G") + " C1G ON "
+    if cCompC1G == "CCC" .Or. (cCompC1G == "EEC" .And. aInfEUF[1] + aInfEUF[2] == 0)
+        cQry += " C1G.C1G_FILIAL = ? "
+        aAdd(aBind, xFilial("C1G") )
+    else
+        cQry += FwJoinFilial("C1G","T1B")
+    endif
+    cQry += " AND C1G.C1G_ID = T1B.T1B_IDPROC AND C1G.D_E_L_E_T_ = ? "
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("T5L") + " T5L ON "
+
+    if cCompT5L == "CCC" .Or. (cCompT5L == "EEC" .And. aInfEUF[1] + aInfEUF[2] == 0)
+        cQry += " T5L.T5L_FILIAL = ? "
+        aAdd(aBind, xFilial("T5L") )
+    else
+        cQry += FwJoinFilial("T5L","T1B")
+    endif
+    //Deve ser codificada na query chamando a função SUBSTRING,e a Changequery fará a troca para a função adequada de acordo com o Banco de Dados em uso.
+    //nTmIdSusp nao entra  no bind pq nao se trata de filtro e sim parametro de funcao
+    cQry += " AND SUBSTRING(T5L.T5L_ID || T5L.T5L_VERSAO || T5L.T5L_CODSUS,1," + cValToChar(nTmIdSusp) + ") = T1B.T1B_IDSUSP "
+    cQry += "AND T5L.D_E_L_E_T_ = ? "
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C8S") + " C8S ON " //auto contidas nao muda compartilhamento
+    cQry += "C8S.C8S_FILIAL = ? AND C8S.C8S_ID = T5L.T5L_INDDEC AND C8S.D_E_L_E_T_ = ? "
+    aAdd(aBind, xFilial("C8S"))
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C09") + " C09 ON " //auto contidas nao muda compartilhamento
+    cQry += "C09.C09_FILIAL = ? AND C09.C09_ID = C1G.C1G_UFVARA AND C09.D_E_L_E_T_ = ? "
+    aAdd(aBind, xFilial("C09"))
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C07") + " C07 ON " //auto contidas nao muda compartilhamento
+    cQry += "C07.C07_FILIAL = ? AND C07.C07_ID = C1G.C1G_CODMUN AND C07.D_E_L_E_T_ = ? "
+    aAdd(aBind, xFilial("C07"))
+    aAdd(aBind, Space(1))
+endif
+
+if !lFilterSusp
+    cQry += "LEFT JOIN " + RetSqlName("V3X") + " V3X ON "
+    if cCompV3X == "CCC" .Or. (cCompV3X == "EEC" .And. aInfEUF[1] + aInfEUF[2] == 0)
+        cQry += " V3X.V3X_FILIAL = ? "
+        aAdd(aBind, xFilial("V3X") )
+    else
+        cQry += FwJoinFilial("V3X","T1A")
+    endif
+    cQry += " AND V3X.V3X_ID = T1A.T1A_IDSCP AND V3X.D_E_L_E_T_ = ? "
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C3S") + " C3S ON " //auto contidas nao muda compartilhamento
+    cQry += "C3S.C3S_FILIAL = ? AND C3S.C3S_ID = T1A.T1A_IDTRIB AND C3S.D_E_L_E_T_ = ? "
+    aAdd(aBind, xFilial("C3S"))
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C09") + " C09 ON " //auto contidas nao muda compartilhamento
+    cQry += "C09.C09_FILIAL = ? AND C09.C09_ID = T1A.T1A_UF AND C09.D_E_L_E_T_ = ? "
+    aAdd(aBind, xFilial("C09"))
+    aAdd(aBind, Space(1))
+
+    cQry += "LEFT JOIN " + RetSqlName("C07") + " C07 ON " //auto contidas nao muda compartilhamento
+    cQry += "C07.C07_FILIAL = ? AND C07.C07_ID = T1A.T1A_CODMUN AND C07.D_E_L_E_T_ = ? "
+    aAdd(aBind, xFilial("C07"))
+    aAdd(aBind, Space(1))
+endif
+
+cQry += "WHERE " //T1A_FILIAL, T1A_PERAPU, T1A_IDDEBI, T1A_IDTRIB, T1A_CODREC, R_E_C_N_O_, D_E_L_E_T_
+cQry += "T1A.T1A_FILIAL = ? "
+aAdd(aBind, xFilial("T1A") ) //filial matriz
+
+cQry += "AND T1A.T1A_PERAPU = ? "
+aAdd(aBind, cPerApu )
+
+cQry += "AND T1A.T1A_IDTRIB IN (?) "
+aIdTrib := {'000005','000006','000007','000012','000018','000019','000027','000028','000035','000036','000037','000038'}
+aAdd(aBind, aIdTrib )
+
+if !lAll //Se lAll considera todos os Ids, ou seja nao utiliza filtro
+    //Se houver mais de 10 ids selecionados, cIdsIn armazena um select de temporaria, 
+    //nao se trata de um filtro para BIND, ex conteudo variavel: ( SELECT TMPID FROM ##TMPSC00_53)
+    if !Empty(cIdsIn)
+        cQry += "AND T1A.T1A_ID IN " + cIdsIn
+    elseif len(aListIds) > 0 //faz bind com aListIds
+        cQry += "AND T1A.T1A_ID IN (?) "
+        aadd(aBind, aListIds)
+    endif
+endif
+
+cQry += "AND T1A.D_E_L_E_T_ = ? "
+aAdd(aBind, Space(1))
+
+cQry += "ORDER BY "
+if !lFilterSusp //Percorre de forma ordenada por Filial Matriz, Tributo e Data Débito (controle utilizado no laço de repeticao)
+    cQry += "T1A.T1A_FILIAL, SEQ_TRIBUTOS, T1A.T1A_DTDEBI"
+else //Percorre de forma ordenada por Filial Matriz, tp, nr do processo para gerar ListaDebitosSuspensos corretamente
+    cQry += "T1A.T1A_FILIAL, C1G.C1G_TPPROC, C1G.C1G_NUMPRO, T1A.T1A_IDDEBI"
+endif
+
+cQry := ChangeQuery(cQry)
+oPrepare := FwExecStatement():New(cQry)
+
+For nX := 1 To Len(aBind)
+	If ValType(aBind[nX]) == 'C'
+		oPrepare:setString(nX, aBind[nX])
+    elseif Valtype(aBind[nX]) == 'A'
+        oPrepare:setIn( nX, aBind[nX] )
+	EndIf
+Next nX
+
+oPrepare:cbasequery := oPrepare:getfixquery()
+oPrepare:OpenAlias(cAlias)
+
+aSize(aBind,0)
+aBind := {}
+
+Return Nil
+
+/*/{Protheus.doc} MitGerJson
+Gera o JSON das movimentações do MIT
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param cAlias character Nome tabela
+@param lAll logical Controle de Filtro para os IDs da T1A
+@param oPrepare object ExecStatment
+@param aParam array Parametros de Abertura ECF Tabela CHD
+@param aC2J array Dados Contabilistas
+@param nMonth numeric Mes para filtrar o periodo de apuracao
+@param nYear numeric Ano para filtrar o periodo de apuracao
+@param cCNPJRaiz character raiz do cnpj utilizado na nomenclatura do arquivo
+@param aListIds array lista com filtros da T1A_ID
+@param cIdsIn character temporaria com relacao dos Ids para filtrar
+@param cNameFile character nome do arquivo gerado
+@return Nil, Não há retorno
+/*/
+Static Function MitGerJson( cAlias as character, lAll as logical, oPrepare as object, aParam as array, aC2J as array,;
+ nMonth as numeric, nYear as numeric, cCNPJRaiz as character, aListIds as array, cIdsIn as character, cNameFile as character, lAutomato as logical )
+
+    Local cJson        := ''  as character
+    Local cDDD         := ''  as character
+    Local cNumTel      := ''  as character
+    Local cEmail       := ''  as character
+    Local cUfResp      := ''  as character
+    Local cNumReg      := ''  as character
+    Local cCpf         := ''  as character
+    Local cNvl01       := ''  as character
+    Local cNvl02       := ''  as character
+    Local cNvl03       := ''  as character
+    Local cNvl04       := ''  as character
+    Local cNvl05       := ''  as character
+    Local cPeriod      := ''  as character
+    Local cPaDebito    := ''  as character
+    Local cTpSusp      := ''  as character
+    Local cMotSusp     := ''  as character
+    Local cNrProcess   := ''  as character
+    Local cDtDec       := ''  as character
+    Local cFalseTrue   := ''  as character
+    Local cLastTrib    := ''  as character
+    Local cLastLista   := ''  as character
+    Local cChvProc     := ''  as character
+    Local cDaySit      := ''  as character
+    Local cIndeSp      := ''  as character
+    Local cQualifPj    := ''  as character
+    Local cFmtTribut   := ''  as character
+    Local cRecRec      := ''  as character
+    Local cPisCof      := ''  as character
+    Local cDtSit       := ''  as character
+    Local cValor       := ''  as character
+    Local cVara        := ''  as character
+    Local lEvtEspec    := .F. as logical
+    Local lDebPosEvt   := .F. as logical
+    Local lSemMvto     := .F. as logical
+    Local lNewNvl02    := .F. as logical
+    Local lNewNvl03    := .F. as logical
+    Local lOtherTrib   := .F. as logical
+    Local newReg       := .F. as logical
+    Local lLastDate    := .F. as logical
+    Local lBalancoLR   := .F. as logical
+    Local nTMParam     := 0   as numeric
+    Local nTMC2J       := 0   as numeric
+    Local nCont        := 0   as numeric
+    Local nIdEvtDeb    := 0   as numeric
+    Local nDayDtDebi   := 0   as numeric
+    Local nPos         := 0   as numeric
+    Local aDePaTpSus   := {}  as array
+    Local nIdDebi      := 1   as numeric
+    Local cIdDebi      := ''  as character
+    Local aIdDebi      := {}  as array
+    Local nPosId       := 0   as numeric
+
+    //Tabela AscII codigo 9 (tabulacao horizontal)
+    cNvl01 := Replicate(Chr(9),1) // + 1TAB
+    cNvl02 := Replicate(Chr(9),2) // + 2TAB
+    cNvl03 := Replicate(Chr(9),3) // + 3TAB
+    cNvl04 := Replicate(Chr(9),4) // + 4TAB
+    cNvl05 := Replicate(Chr(9),5) // + 5TAB
+ 
+    nTMParam := len(aParam)
+    nTMC2J   := len(aC2J)
+
+    if nTMC2J >= 1
+        cCpf    := alltrim(aC2J[nTMC2J][CPF])          //1
+        cDDD    := alltrim(aC2J[nTMC2J][DDD])          //2
+        cNumTel := alltrim(aC2J[nTMC2J][FONE])         //3
+        cEmail  := lower(alltrim(aC2J[nTMC2J][EMAIL])) //4
+        cUfResp := alltrim(aC2J[nTMC2J][UF])           //5
+        cNumReg := alltrim(aC2J[nTMC2J][CRC])          //6
+    endif
+
+    if nTMParam >= 1
+        cIndeSp    := aParam[nTMParam][INDESP]     //1
+        lLastDate  := aParam[nTMParam][LLASTDATE]  //2
+        cDaySit    := aParam[nTMParam][DAYSIT]     //3
+        cQualifPj  := aParam[nTMParam][QUALIFPJ]   //4
+        cFmtTribut := aParam[nTMParam][FMTTRIBUT]  //5
+        cRecRec    := aParam[nTMParam][RECREC]     //6
+        cPisCof    := aParam[nTMParam][PISCOF]     //7
+        lBalancoLR := aParam[nTMParam][LBALANCOLR] //8
+        cDtSit     := aParam[nTMParam][DTSIT]      //9
+    endif
+
+    if !Empty(cDaySit)
+        lEvtEspec := .T.
+    endif
+
+    lSemMvto := (cAlias)->(EOF())
+
+    cJson := '{' + CRLF //Topo
+    cJson += cNvl01 + '"PeriodoApuracao": {' + CRLF
+    cJson += cNvl02 + '"MesApuracao": ' + cValToChar(nMonth) + ',' + CRLF   //Number Obg
+    cJson += cNvl02 + '"AnoApuracao": ' + cValToChar(nYear) + CRLF          //Number Obg
+    cJson += cNvl01 + '},' + CRLF //Fecha {PeriodoApuracao}
+
+    if lEvtEspec
+        //{ListaEventosEspeciais} 1 Array Lista dos eventos especiais da apuração, informados em ordem cronológica (quantidade máxima: 5).
+        //Embora {ListaEventosEspeciais} aceite até 5 ocorrencias, nesse momento o IdEvento sera fixo com 1, 
+        //pois somente haverá apenas opção da CHD que foi vinculado na lupa sem o Multi Select.
+        cJson += cNvl01 + '"ListaEventosEspeciais": [' + CRLF       //array Não Obg
+        cJson += cNvl02 + '{' + CRLF //(sem nome) 2 Object Agrupa os dados do evento especial (pode ocorrer mais de uma vez). Obg Sim, se houver o array ListaEventosEspeciais.
+        cJson += cNvl03 + '"IdEvento": 1,' + CRLF                   //Number Obg
+        cJson += cNvl03 + '"DiaEvento": ' + cDaySit + ',' + CRLF    //Number Obg DAYSIT 2
+        cJson += cNvl03 + '"TipoEvento": ' + cIndeSp + CRLF         //Number Obg INDESP 1
+        cJson += cNvl02 + '}' + CRLF //fecha (sem nome) 2 Object Agrupa os dados do evento especial (pode ocorrer mais de uma vez). Obg Sim, se houver o array ListaEventosEspeciais.
+        cJson += cNvl01 + '],' + CRLF //fecha Array {ListaEventosEspeciais} 
+    endif
+
+    cJson += cNvl01 + '"DadosIniciais": {' + CRLF //Object Obg
+
+    cFalseTrue := 'false,'
+    cJson += cNvl02 + '"SemMovimento": ' //Boolean Obg
+    if lSemMvto
+        cFalseTrue := 'true,'
+    endif
+    cJson += cFalseTrue + CRLF
+
+    //Number Obg (se vazio, nao pode ter conteudo 0 numerico, pois eh uma opcao invalida no manual, ou seja o cliente devera informar a qualificacao de acordo com as opcoes no sistema e manual)
+    if !Empty(cQualifPj)
+        cJson += cNvl02 + '"QualificacaoPj": ' + cQualifPj + ',' + CRLF
+    endif
+
+    if !lSemMvto //se possui movimento
+        if cQualifPj <> '11' .And. !Empty(cFmtTribut) //[11] Estado, Distrito Federal, Município ou Órgão Público da Administração Direta;
+            cJson += cNvl02 + '"TributacaoLucro": ' + cFmtTribut + ',' + CRLF //Number Obg OC se SemMovimento for “false” e se QualificacaoPj for diferente de [11]
+        endif
+
+        if !Empty(cRecRec)
+            cJson += cNvl02 + '"VariacoesMonetarias": ' + cRecRec + ',' + CRLF  //Number Obg
+        endif
+
+        if cQualifPj == '9' .Or. (( cQualifPj $ "4|8" .Or. cQualifPj == "10") .And. cFmtTribut $ "1|2|6" ) .Or.;
+            (( cQualifPj == "1" .Or. cQualifPj == "12") .And. cFmtTribut $ "1|2|5|6" ) .And. !Empty(cPisCof)
+            cJson += cNvl02 + '"RegimePisCofins": ' + cPisCof + ',' + CRLF     //Number Obg OC
+        endif
+    endif
+
+    cJson += cNvl02 + '"ResponsavelApuracao": {' + CRLF              //Object Obg
+
+    if !Empty(cCpf)
+        cJson += cNvl03 + '"CpfResponsavel": "' + cCpf + '",' + CRLF //String Obg
+    endif
+    if !Empty(cDDD) .And. !Empty(cNumTel)
+        cJson += cNvl03 + '"TelResponsavel": {' + CRLF               //Object Nao Obg
+        cJson += cNvl04 + '"Ddd": "' + cDDD + '",' + CRLF            //String Obg, se houver o objeto TelResponsavel
+        cJson += cNvl04 + '"NumTelefone": "' + cNumTel + '"' + CRLF  //String Obg, se houver o objeto TelResponsavel
+        cJson += cNvl03 + '},' + CRLF //Fecha TelResponsavel
+    endif
+    if !Empty(cEmail)
+        cJson += cNvl03 + '"EmailResponsavel": "' + cEmail + '",' + CRLF
+    endif
+    if !Empty(cUfResp) .And. !Empty(cNumReg)
+        cJson += cNvl03 + '"RegistroCrc": {' + CRLF                 //Object Nao Obg
+        cJson += cNvl04 + '"UfRegistro": "' + cUfResp + '",' + CRLF //String Obg, se houver o objeto RegistroCrc
+        cJson += cNvl04 + '"NumRegistro": "' + cNumReg + '"' + CRLF //String Obg, se houver o objeto RegistroCrc
+        cJson += cNvl03 + '}' + CRLF //fecha RegistroCrc
+    endif
+    /*
+        Se nao tem movimento, apenas monta o ResponsavelApuracao e fecha as chaves
+        ex 01ApuracaoSemMovimentoSemOcorrenciaEventoEspecial ou ex 02ApuracaoSemMovimentoComOcorrenciaEventoEspecial.json
+    */
+    if lSemMvto //se nao possui movimento
+        cJson += cNvl02 + '}' + CRLF //Fecha {ResponsavelApuracao}
+        cJson += cNvl01 + '}' + CRLF //Fecha {DadosIniciais}
+        cJson += '}' + CRLF          //{Topo}  Fim de geracao dos sem movimentos.
+
+    else //Se possuir movimento
+        cJson += cNvl02 + '}' + CRLF  //Fecha {ResponsavelApuracao}
+        cJson += cNvl01 + '},' + CRLF //Fecha {DadosIniciais} com virgula pois possui movimento
+
+        //Dados dos débitos da apuração
+        cJson += cNvl01 + '"Debitos": {' + CRLF
+
+        cFalseTrue := 'false,'
+
+        if cFmtTribut == '1' .or. lLastDate
+            cJson += cNvl02 + '"BalancoLucroReal": '
+            if lBalancoLR
+                cFalseTrue := 'true,'
+            endif
+            cJson += cFalseTrue + CRLF  //Boolean Obg OC
+        endif
+
+        nCont := 0
+        cLastTrib := Alltrim((cAlias)->C3S_CODIGO)
+        lOtherTrib := .F.
+
+        //Aqui percorre de forma ordenada por Filial Matriz, Tributo e Data Débito (order by T1A.T1A_FILIAL, T1A.T1A_IDTRIB, T1A.T1A_DTDEBI)
+        //dessa forma é possivel agrupar dentro de cada tributo os respectivos movimentos alem do grupo ListaDebitos ou ListaDebitosAposEvento.
+        While !(cAlias)->(EOF())
+            //Incrementa contador e verifica se mudou o tributo
+            lOtherTrib := ++nCont >= 2 .And. cLastTrib <> Alltrim((cAlias)->C3S_CODIGO)
+            //Se for igual nao monta novamente com o mesmo tributo
+            if nCont == 1 .Or. lOtherTrib
+                lNewNvl02 := .F.
+                //Reinicia variaveis de controle
+                cLastLista := '' //ao mudar de tributo inicia cLastLista vazia
+                cLastTrib  := Alltrim((cAlias)->C3S_CODIGO) //atualiza o novo tributo posicionado
+
+                //19 IRPJ (IMPOSTO SOBRE A RENDA DE PESSOA JURIDICA)
+                //Não Obg, mas pode existir somente se houver o objeto Debitos e se QualificacaoPj for diferente de [11].
+                if Alltrim((cAlias)->C3S_CODIGO) == "19" .And. cQualifPj <> '11'
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Irpj": {' + CRLF
+                //18 CSLL (CONTRIBUICAO SOCIAL SOBRE O LUCRO LIQUIDO) | 27 CSLL RETENCAO (CONTRIBUICAO SOCIAL SOBRE O LUCRO LIQUIDO - RETENCAO)
+                //Não Obg, mas pode existir somente se houver o objeto Debitos, se QualificacaoPj for diferente de [11] e se TributacaoLucro for diferente de [7].
+                elseif (Alltrim((cAlias)->C3S_CODIGO) == "18" .Or. Alltrim((cAlias)->C3S_CODIGO) == "27") .And. cQualifPj <> '11' .And. cFmtTribut <> '7'
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Csll": {' + CRLF
+                //12 IR (IMPOSTO DE RENDA EMISSÃO) | 28 IR (IMPOSTO DE RENDA PAGAMENTO)
+                //Não Obg, mas pode existir somente se houver o objeto Debitos, se QualificacaoPj for diferente de [9 e 11] e se TributacaoLucro for diferente de [7].
+                elseif (Alltrim((cAlias)->C3S_CODIGO) == "12" .Or. Alltrim((cAlias)->C3S_CODIGO) == "28") .And. !(cQualifPj == '9') .And.  !(cQualifPj == '11');
+                   .And. cFmtTribut <> '7'
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Irrf": {' + CRLF
+                //05 IPI (IMPOSTO SOBRE PRODUTOS INDUSTRIALIZADOS)
+                //Não Obg, mas pode existir somente se houver o objeto Debitos, se QualificacaoPj for diferente de [2, 3, 4, 5 e 6] e se TributacaoLucro for diferente de 7.
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "05" .And. !(cQualifPj $ '2|3|4|5|6') .And. cFmtTribut <> '7' //QUALIFPJ 4 FMTTRIBUT 5
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Ipi": {' + CRLF
+                //34 IOF (Imposto sobre operacoes financeiras)
+                //Não Obg, mas pode existir somente se houver o objeto Debitos.
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "34"
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Iof": {' + CRLF
+                //06 PIS/PASEP (PROGRAMA DE INTEGRACAO SOCIAL - PROGRAMA DE FORMACAO DO PATRIMONIO DO SERVIDOR PUBLICO)
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "06" //Não Obg, mas pode existir somente se houver o objeto Debitos.
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"PisPasep": {' + CRLF
+                //07 COFINS (CONTRIBUICAO PARA O FINANCIAMENTO DA SEGURIDADE SOCIAL)
+                //Não Obg, mas pode existir somente se houver o objeto Debitos.
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "07"
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Cofins": {' + CRLF
+                //37 CONTRIBUICOES DIVERSAS
+                //Não, mas pode existir somente se houver o objeto Debitos.
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "37"
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"ContribuicoesDiversas": {' + CRLF
+                //36 CPSS - CONTRIBUICAO DO PLANO DE SEGURIDADE SOCIAL
+                //Não Obg, mas pode existir somente se houver o objeto Debitos, se QualificacaoPj for [2, 9, 11 ou 12] e se TributacaoLucro for diferente de [7].
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "36" .And. ((cQualifPj $ '2|9') .Or. (cQualifPj == '11') .Or. (cQualifPj == '12')) .And. cFmtTribut <> '7'
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"Cpss": {' + CRLF
+                //35 RET RET-UNIFICADO
+                //Não Obg, mas pode existir somente se houver o objeto Debitos, se QualificacaoPj for [1, 7, 10 ou 12] e se TributacaoLucro for diferente de [7].
+                elseif Alltrim((cAlias)->C3S_CODIGO) == "35" .And. ((cQualifPj $ '1|7') .Or. (cQualifPj == '10')  .Or. (cQualifPj =='12')) .And. cFmtTribut <> '7'
+                    MitCloseAnt(nCont,@cJson,cNvl02,cNvl03,@lNewNvl02)
+                    cJson += cNvl02 +'"RetPagamentoUnificado": {' + CRLF
+                endif
+            endif
+
+            if lNewNvl02 //significa que nao houve mudanca de tributo e devido a ordenacao vai inserir mais um item no object
+                lDebPosEvt := .F. //Controle se existe debito apos evento especial
+                if !Empty((cAlias)->T1A_DTDEBI) .And. !Empty(aParam[nTMParam][DTSIT])
+                    lDebPosEvt := Stod((cAlias)->T1A_DTDEBI) > cDtSit//Fato Gerador > Data Especial //DTSIT 9
+                endif
+                //Controle para saber se foi gerado {ListaDebitos} ou {ListaDebitosAposEvento}
+                lNewNvl03 := .F.
+                if Alltrim((cAlias)->C3S_CODIGO) $ ("05|06|07|12|18|19|27|28|34|35|36|37") //05-IPI|06-PIS|07-COFINS|12-IR|18-CSLL|19-IRPJ|27-CSLL|28-IR|34-IOF|35-RET|36-CPSS|37-ContribuicoesDiversas
+                    //Se nao for outro tributos mas a ocorrencia de ListaDebitos mudou para ListaDebitosAposEvento encerra o nivel cNvl03 para abrir um novo
+                    if !lOtherTrib .And. ((cLastLista == 'ListaDebitos' .And. lDebPosEvt) .Or. (cLastLista == 'ListaDebitosAposEvento' .And. !lDebPosEvt) )
+                        cLastLista := ''
+                        cJson += cNvl03 + '],' + CRLF //Fecha Array de {ListaDebitos} ou {ListaDebitosAposEvento}
+                    //Se nao for outro tributo e o modo da ListaDebito nao mudar, inseri o novo elemento no objeto
+                    elseif !lOtherTrib .And. ((cLastLista == 'ListaDebitos' .And. !lDebPosEvt) .Or. (cLastLista == 'ListaDebitosAposEvento' .And. lDebPosEvt) )
+                        //Importante nao limpar cLastLista, pois o modo nao foi alterado, apenas entrara mais um item no objeto da chave nivel 04
+                        if nCont > 1
+                            cJson += ','
+                        endif
+                    endif
+                    //Exceto aqueles cujo fato gerador ocorreu após a data do último evento especial do mês.
+                    if !lDebPosEvt //Se a Data Debito for menor ou igual a data do ultimo dia do evento especial
+                        lNewNvl03 := .T.
+                        if Empty(cLastLista) //se for uma adição dentro do mesmo array de tributo nao sera necessario criar um novo colchetes [
+                            //{ListaDebitos} 3 Array
+                            //Array Obg OC Sim, para os objetos Irpj, Csll, Irrf, Ipi, Iof, PisPasep, Cofins, ContribuicoesDiversas, Cpss e RetPagamentoUnificado.
+                            //Exceção: opcional se houver o array ListaDebitosAposEvento
+                            cLastLista := 'ListaDebitos'
+                            cJson += cNvl03 + '"' + cLastLista + '": [' + CRLF
+                        endif
+                    else
+                        //lDebPosEvt (Cujo fato gerador ocorreu após a data do último evento especial do mês).
+                        if lEvtEspec .Or. !(cIndeSp $ '1|2|3|5') .Or. (!(cIndeSp $ '4|6') .And. lLastDate )
+                            lNewNvl03 := .T.
+                            if Empty(cLastLista) //se for uma adição dentro do mesmo array de tributo nao sera necessario criar um novo colchetes [                 
+                                //{ListaDebitosAposEvento} 3 Array
+                                //Não, mas pode existir para os objetos Irpj, Csll,Irrf, Ipi, Iof, PisPasep, Cofins,ContribuicoesDiversas, Cpss e RetPagamentoUnificado, 
+                                //se houver o array ListaEventosEspeciais, se não houver objeto na ListaEventosEspeciais com TipoEvento igual a [1, 2, 3 ou 5] 
+                                //e se não houver objeto na ListaEventosEspeciais com TipoEvento igual a [4 ou 6] e DiaEvento igual ao último dia do mês.
+                                cLastLista := 'ListaDebitosAposEvento'
+                                cJson += cNvl03 + '"' + cLastLista + '": [' + CRLF
+                            endif
+                        endif
+                    endif
+                    /*
+                    Se lNewNvl03 gerou ListaDebitos ou ListaDebitosAposEvento, 
+                    portanto no final encerrara o array no cNvl03 e posteriormente o objeto cNvl04
+                    */
+
+                    if lNewNvl03
+                        cJson += cNvl04 + '{' + CRLF //(sem nome) Object - Agrupa os dados do débito (pode ocorrer mais de uma vez)
+                        //Number Obg Sim, para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento.
+                        cIdDebi := cValToChar(nIdDebi++)
+                        aadd(aIdDebi,{cValToChar((cAlias)->T1A_IDDEBI), cIdDebi})
+                        cJson += cNvl05 + '"IdDebito": ' + cIdDebi + ',' + CRLF //Ao realizar os testes no validador, foi verificado que o IdDebito deve ser sequencial, não sendo necessário utilizar o T1A_IDDEBI.
+
+                        //Number Obg Sim, para cada ocorrência de objeto em ListaDebitos, se houver o array ListaEventosEspeciais.
+                        //!lDebPosEvt indica que nao houve ListaDebitosAposEvento e sim ListaDebitos, portanto incrementa o nIdEvtDeb
+                        if !lDebPosEvt .And. lEvtEspec
+                            cJson += cNvl05 + '"IdEventoDebito": 1,' + CRLF //valor definido como 1, seguindo a tag IdEvento que tera sempre o valor 1.
+                            nIdEvtDeb := 1
+                        endif
+
+                        //String(6) Obg Sim, para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento.
+                        //Código de receita do débito com 6 dígitos. Exemplo: "022012"
+                        cCodRec := Alltrim( (cAlias)->T1A_CODREC )
+                        if !Empty(cCodRec)
+                            cJson += cNvl05 + '"CodigoDebito": "' + cCodRec + '",' + CRLF
+                        endif
+
+                        //PaDebito {Number} Obg Sim, para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento,
+                        //se periodicidade do débito for diária, decendial ou quinzenal.
+                        cPeriod    := Alltrim((cAlias)->T1A_PERIOD)
+                        cPaDebito  := ''
+                        nDayDtDebi := 0
+                        if cPeriod $ "1|2|3" //1=Diária;2=Decendial;3=Quinzenal;4=Mensal
+                            if !Empty( (cAlias)->T1A_DTDEBI )
+                                nDayDtDebi := Day(StoD((cAlias)->T1A_DTDEBI ))
+                            endif
+                            if cPeriod == '1' //1=Diária
+                                cPaDebito := cValToChar(nDayDtDebi)
+                            elseif cPeriod == '2' //2=Decendial
+                                if nDayDtDebi <= 10
+                                    cPaDebito := '1'
+                                elseif nDayDtDebi > 10 .and. nDayDtDebi <= 20
+                                    cPaDebito := '2'
+                                else
+                                    cPaDebito := '3'
+                                endif
+                            else //3=Quinzenal
+                                if nDayDtDebi > 15
+                                    cPaDebito := '2'
+                                else
+                                    cPaDebito := '1'
+                                endif
+                            endif
+                            if !Empty(cPaDebito)
+                                cJson += cNvl05 + '"PaDebito": ' + cPaDebito + ',' + CRLF
+                            endif
+                        endif
+
+                        if Alltrim((cAlias)->C3S_CODIGO) $ ("18|19|27") //18-CSLL|19-IRPJ|27-CSLL
+                            if Right(cCodRec, 2 ) == '10'
+                                //{AnoPostergado} Number Obg Sim, para os objetos Irpj e Csll, para cada ocorrência de objeto em ListaDebitos 
+                                //e em ListaDebitosAposEvento, se código do débito tiver final “10”
+                                if !Empty((cAlias)->T1A_ANOPOS)
+                                    cJson += cNvl05 + '"AnoPostergado": ' + Alltrim( (cAlias)->T1A_ANOPOS ) + ',' + CRLF
+                                endif
+                                //{TrimPostergado} Number Obg Sim, para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento,
+                                //se houver o campo {AnoPostergado} e se periodicidade do débito for trimestral.
+                                if !Empty( (cAlias)->T1A_TRIPOS ) //1=Primeiro Trimestre; 2=Segundo Trimestre;3=Terceito Trimestre;4=Quarto Trimestre
+                                    cJson += cNvl05 + '"TrimPostergado": ' + Alltrim( (cAlias)->T1A_TRIPOS ) + ',' + CRLF
+                                endif
+                                //{AnoDebito} Number Obg Sim, para os objetos Irpj e Csll, para cada ocorrência de objeto em ListaDebitos,
+                                //se MesApuracao for [1, 2 ou 3],
+                                //se IdEventoDebito for [1],
+                                //se periodicidade do débito for anual
+                                //e se código do débito não tiver final “10”.
+                                if (nMonth == 1 .Or. nMonth == 2 .Or. nMonth == 3) .And. nIdEvtDeb == 1 .And. cFmtTribut == '1' //cFmtTribut 1: Real Anual;
+                                    cJson += cNvl05 + '"AnoDebito": ' + cValToChar(nYear) + ',' + CRLF
+                                endif
+                            endif
+                        endif
+
+                        //{CnpjEstabelecimento} String(6), para o objeto Ipi ou se código do débito for do grupo CIDE,
+                        //para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento.
+                        //Últimos 6 dígitos do CNPJ do estabelecimento do débito (incluindo o DV). Exemplo: "000100"
+                        if Alltrim((cAlias)->C3S_CODIGO) $ "05|37" .And. !Empty( (cAlias)->T1A_CPNEST )
+                            cJson += cNvl05 + '"CnpjEstabelecimento": "' + Right(Alltrim((cAlias)->T1A_CPNEST),6) + '",' + CRLF
+                        endif
+
+                        //String (14) Sim, para o objeto RetPagamentoUnificado, para cada ocorrência de objeto em ListaDebitos
+                        //e em ListaDebitosAposEvento, se código do débito for de incorporação (6 dígitos) ou de SCP (14 dígitos).
+                        if Alltrim((cAlias)->C3S_CODIGO) == "35" .And. !Empty( (cAlias)->T1A_CNPINC )
+                            cJson += cNvl05 + '"CnpjIncorporacao": "' + Alltrim((cAlias)->T1A_CNPINC) + '",' + CRLF
+                        endif
+
+                        //String (14) Sim, Sim, para os objetos Irpj, Csll, PisPasep e Cofins,para cada ocorrência de objeto em ListaDebitos
+                        //e em ListaDebitosAposEvento, se código do débito for de SCP.
+                        if Alltrim((cAlias)->C3S_CODIGO) $ ("06|07|18|19|27") .And. !Empty((cAlias)->V3X_CNPJ) //06-PIS|07-COFINS|18-CSLL|19-IRPJ|27-CSLL
+                            cJson += cNvl05 + '"CnpjScp": "' + Alltrim((cAlias)->V3X_CNPJ) + '",' + CRLF
+                        endif
+
+                        //{CodigoMunicipioOuro} String (7) Sim, para o objeto Iof, para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento,
+                        //se CodigoDebito for “402802”.
+                        //Código IBGE do município de origem do ouro com 7 dígitos. Exemplo: "3550308" "3568804"
+                        if Alltrim((cAlias)->C3S_CODIGO) == "34" .And. cCodRec == "402802" .And. !Empty((cAlias)->C09_CODIGO) .And. !Empty((cAlias)->C07_CODIGO) //34-IOF
+                            cJson += cNvl05 + '"CodigoMunicipioOuro": "' + Alltrim((cAlias)->C09_CODIGO) + Alltrim((cAlias)->C07_CODIGO) + '",' + CRLF
+                        endif
+
+                        cValor := "0.00"
+                        if !Empty( (cAlias)->T1A_VALTRI )
+                            cValor := StrTran(Alltrim(Transform((cAlias)->T1A_VALTRI, "@E 999999999999999.99")),",",".")
+                        endif
+                        //{ValorDebito} Number Obs Sim, Valor do débito apurado com 2 casas decimais,
+                        //para cada ocorrência de objeto em ListaDebitos e em ListaDebitosAposEvento Exemplo: 777.55
+                        cJson += cNvl05 + '"ValorDebito": ' + cValor + CRLF
+
+                        cJson += cNvl04 + '}' + CRLF //Fecha (sem nome) Agrupa os dados do débito (pode ocorrer mais de uma vez)
+                    endif
+                endif
+            endif
+            (cAlias)->(DBSkip()) //Avança para o próximo registro
+        EndDo
+        if lNewNvl03 //Significa que gerou pelo menos um nivel 03, mas devido o EOF nao fechou dentro do laco
+            cJson += cNvl03 + ']' + CRLF //Fecha Array de {ListaDebitos} ou {ListaDebitosAposEvento}
+            //Se encerrou o nlv 03, encerra o pai nlv02 (sem virgula, pois foi o ultimo processado)
+            cJson += cNvl02 + '}' + CRLF //Fecha algum dos tributos da lista acima (Irpj, Csll, Irrf, Ipi, Iof, PisPasep, Cofins,ContribuicoesDiversas, Cpss e RetPagamentoUnificado)
+        endif
+        //Sempre fechara o Debitos no final, ja que possui ao menos 1 movimento dentro dessa condicao
+        cJson += cNvl01 + '}' + CRLF //Fecha {Debitos}
+
+        MitCloseDestroy( cAlias, @oPrepare )
+        /* 
+        Importante: Se não houver o array ListaEventosEspeciais verifica se existe Suspensao, ou seja,
+        so gera ira gerar suspensao se nao houver evento especial e consequentemente nao houver ListaDebitosAposEventos
+        */
+        if !lEvtEspec
+
+            MitQrySusp( @cAlias, @oPrepare, lAll, aParam, nMonth, nYear, aListIds, cIdsIn )
+
+            if !(cAlias)->(EOF())
+
+                cJson += cNvl01
+                if "Debitos" $ cJson //verifica se gerou irmao anteriormente para adicionar a virgula
+                    cJson += ","
+                endif
+
+                //{ListaSuspensoes} 1 Array Lista das suspensões da apuração.
+                //Não, mas pode existir somente se SemMovimento for “false” e se não houver o array ListaEventosEspeciais.
+                cJson += '"ListaSuspensoes": [' + CRLF //array Não Obg
+
+                nCont    := 0
+                cChvProc := Alltrim((cAlias)->T1A_FILIAL) + '|' + Alltrim((cAlias)->C1G_TPPROC) + '|' + Alltrim((cAlias)->C1G_NUMPRO)
+                newReg   := .T. //primeiro
+
+                While !(cAlias)->(EOF())
+                    if ++nCont > 1
+                        if cChvProc <> (Alltrim((cAlias)->T1A_FILIAL) + '|' + Alltrim((cAlias)->C1G_TPPROC) + '|' + Alltrim((cAlias)->C1G_NUMPRO))
+                            cJson += cNvl03 + ']' + CRLF  //Fecha Array ListaDebitosSuspensos
+                            cJson += cNvl02 + '}' + CRLF  //Fecha (sem nome) - Agrupa os dados da suspensão (pode ocorrer mais de uma vez).
+
+                            cChvProc := Alltrim((cAlias)->T1A_FILIAL) + '|' + Alltrim((cAlias)->C1G_TPPROC) + '|' + Alltrim((cAlias)->C1G_NUMPRO)
+                            newReg := .T.
+                        else
+                            newReg := .F.
+                        endif
+                        cJson += ','
+                    endif
+
+                    if nCont == 1 .Or. newReg
+                        cJson += cNvl02 + '{' + CRLF //(sem nome) 2 Object - Agrupa os dados da suspensão (pode ocorrer mais de uma vez).
+
+                        //{TipoSuspensao} 3 Number Obg Sim, para cada ocorrência de objeto em ListaSuspensoes.
+                        //Tipo da suspensão, sendo: 1: administrativa; 2: judicial.
+                        cTpSusp := Alltrim((cAlias)->C1G_TPPROC)
+                        if !Empty( cTpSusp )
+                            cJson += cNvl03 + '"TipoSuspensao": ' + cTpSusp + ',' + CRLF
+                        endif
+
+                        //{MotivoSuspensao} 3 Number Obg Sim, para cada ocorrência de objeto em ListaSuspensoes, 
+                        //se TipoSuspensao for [2]
+                        cMotSusp := ''
+                        if cTpSusp == '2' //judicial
+                            //Qualificação da pessoa jurídica
+                            aDePaTpSus := { {'01','1'},{'02','2'},{'04','4'},{'05','5'},;
+                            {'08','8'},{'09','9'},{'10','10'},{'11','11'},{'12','12'},{'13','13'} }
+                            nPos := aScan(aDePaTpSus,{|x| Alltrim(x[1]) == alltrim((cAlias)->C8S_CODIGO) })
+                            if nPos > 0
+                                cMotSusp := aDePaTpSus[nPos][2]
+                            endif
+                            if !Empty(cMotSusp)
+                                cJson += cNvl03 + '"MotivoSuspensao": ' + cMotSusp + ',' + CRLF
+                            endif
+                        endif
+
+                        //{ComDeposito} 3 Boolean Obg Sim, para cada ocorrência de objeto em ListaSuspensoes, 
+                        //se MotivoSuspensao for diferente de [2].
+                        cFalseTrue := 'false,'
+                        if cMotSusp != '2' //judicial
+                            if alltrim((cAlias)->T5L_INDDEP) == '1' //Sim
+                                cFalseTrue := 'true,'
+                            endif
+                            cJson += cNvl03 + '"ComDeposito": ' + cFalseTrue + CRLF
+                        endif
+
+                        //{NumeroProcesso} 3 String (20) Obg Sim, para cada ocorrência de objeto em ListaSuspensoes
+                        //Número do processo judicial ou administrativo, com 20 ou 17 dígitos respectivamente.Exemplos: "98765431220251017777" e “12345987654202450”
+                        cNrProcess := (cAlias)->C1G_NUMPRO
+                        if !Empty(cNrProcess)
+                            if cTpSusp == '2' //judicial
+                                cNrProcess := SubStr(Alltrim(cNrProcess),1,20)
+                            else
+                                cNrProcess := SubStr(Alltrim(cNrProcess),1,17)
+                            endif
+                            cJson += cNvl03 + '"NumeroProcesso": "' + cNrProcess + '",' + CRLF
+                        endif
+
+                        //{ProcessoTerceiro} 3 Boolean Obg Sim, para cada ocorrência de objeto em ListaSuspensoes, se TipoSuspensao for [2]
+                        //Indicador de que o processo judicial é de terceiro, sendo: false: Não (contribuinte é o autor); true: Sim.
+                        cFalseTrue := 'false,'
+                        if cTpSusp == '2' //judicial
+                            if alltrim((cAlias)->T1B_TERCEI) == '1' //Sim
+                                cFalseTrue := 'true,'
+                            endif
+                            cJson += cNvl03 + '"ProcessoTerceiro": ' + cFalseTrue + CRLF
+                        endif
+
+                        //{DataDecisao} 3 Number Obg Sim, para cada ocorrência de objeto em ListaSuspensoes, se TipoSuspensao for [2].
+                        //Data da decisão judicial no formato AAAAMMDD. Exemplo: 20240920
+                        cDtDec := (cAlias)->T5L_DTDEC
+                        if !Empty( cDtDec )
+                            if cTpSusp == '2' //judicial                            
+                                cJson += cNvl03 + '"DataDecisao": ' + cDtDec + ',' + CRLF
+                            endif
+                        endif
+
+                        //{VaraJudiciaria} 3 Number Obg Sim, para cada ocorrência de objeto em ListaSuspensoes, se TipoSuspensao for [2]
+                        //Número da Vara Judiciaria onde tramita o processo. Exemplo: 1
+                        cVara := SubStr(cValToChar( Val( (cAlias)->C1G_VARA ) ),1,3)
+                        if !Empty(cVara)
+                            if cTpSusp == '2' //judicial
+                                cJson += cNvl03 + '"VaraJudiciaria": ' + cVara + ',' + CRLF
+                            endif
+                        endif
+
+                        //{CodigoMunicipioSj} 3 String (7) Obg Sim, para cada ocorrência de objeto em ListaSuspensoes, se TipoSuspensao for [2]
+                        //Código IBGE do município sede da subseção judiciária onde tramita o processo, com 7 dígitos. Exemplo: "5002704"
+                        if cTpSusp == '2' .And. !Empty((cAlias)->C09_CODIGO) .And. !Empty((cAlias)->C07_CODIGO) //judicial
+                            cJson += cNvl03 + '"CodigoMunicipioSj": "' + Alltrim((cAlias)->C09_CODIGO) + Alltrim((cAlias)->C07_CODIGO) + '",' + CRLF
+                        endif
+
+                        //{ListaDebitosSuspensos} 3 Array Obg Sim, para cada ocorrência de objeto em ListaSuspensoes.
+                        //Lista dos débitos objeto da suspensão
+
+                        cJson += cNvl03 + '"ListaDebitosSuspensos": [' + CRLF //array Não Obg
+                    endif
+
+                    //(sem nome) 4 Object Obg Sim, para cada ocorrência do array ListaDebitosSuspensos.
+                    //Agrupa os dados do débito suspenso (pode ocorrer mais de uma vez).
+                    cJson += cNvl04 + '{' + CRLF //(sem nome) 2 Object - Agrupa os dados do débito suspenso (pode ocorrer mais de uma vez)
+
+                    //{IdDebitoSuspenso} 5 Number Obg Sim, para cada ocorrência de objeto em ListaDebitosSuspensos.
+                    //Número de identificação do débito suspenso. Exemplo: 1
+                    nPosId := aScan(aIdDebi,{|x| Alltrim(x[1]) == cValToChar((cAlias)->T1A_IDDEBI)})
+                    If nPosId > 0
+                        cJson += cNvl05 + '"IdDebitoSuspenso": ' + aIdDebi[nPosId][2] + ',' + CRLF
+                    EndIf                    
+
+                    //{ValorSuspenso} 5 Number Obg Sim, para cada ocorrência de objeto em ListaDebitosSuspensos.
+                    //Valor suspenso do débito com 2 casas decimais. Exemplo: 1000.00
+                    cValor := "0.00"
+                    if !Empty((cAlias)->T1B_VALSUS)
+                        cValor := StrTran(Alltrim(Transform((cAlias)->T1B_VALSUS, "@E 999999999999999.99")),",",".")
+                    endif
+                    cJson += cNvl05 + '"ValorSuspenso": ' + cValor + CRLF
+
+                    cJson += cNvl04 + '}' + CRLF  //Fecha (sem nome) - Agrupa os dados do débito suspenso (pode ocorrer mais de uma vez)
+
+                    (cAlias)->(DBSkip()) //Avança para o próximo registro
+                EndDo
+
+                cJson += cNvl03 + ']' + CRLF //Fecha Array ListaDebitosSuspensos
+
+                //Encerra o ultimo tributo cNvl02, proveniente do EOF.
+                cJson += cNvl02 + '}' + CRLF //Fecha (sem nome) - Agrupa os dados da suspensão (pode ocorrer mais de uma vez).
+                cJson += cNvl01 + ']' + CRLF //Fecha {ListaSuspensoes}
+
+                MitCloseDestroy(cAlias,@oPrepare)
+            endif
+        endif
+        cJson += '}' + CRLF //{Topo}  Fim de geracao
+    endif
+
+    MitNewFile( lEvtEspec, cJson, cCNPJRaiz, nMonth, nYear, @cNameFile, lAutomato )
+
+Return Nil
+
+/*/{Protheus.doc} MitQrySusp
+Realiza a chamada da execucao da query do processo e suspensao com o novo alias.
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param cAlias character Nome tabela
+@param oPrepare object ExecStatment
+@param lAll logical Controle de Filtro para os IDs da T1A
+@param aParam array Parametros de Abertura ECF Tabela CHD
+@param nMonth numeric Mes para filtrar o periodo de apuracao
+@param nYear numeric Ano para filtrar o periodo de apuracao
+@param aListIds array lista com filtros da T1A_ID
+@param cIdsIn character temporaria com relacao dos Ids para filtrar
+@return Nil, Não há retorno
+/*/
+Static function MitQrySusp(cAlias as character, oPrepare as object, lAll as logical, aParam as array,;
+nMonth as numeric, nYear as numeric, aListIds as array, cIdsIn as character )
+
+    Local lFilterSusp := .T. as logical
+
+    cAlias := GetNextAlias() //gera um novo alias
+
+    MitQry( cAlias, lAll, @oPrepare, aParam, {}, nMonth, nYear, lFilterSusp, aListIds, cIdsIn )
+
+Return Nil
+
+/*/{Protheus.doc} MitCloseDestroy
+Realiza o encerramento do alias referente a query e destroi o objeto do 
+prepare statament
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param cAlias character Nome tabela
+@param oPrepare object ExecStatment
+@return Nil, Não há retorno
+/*/
+Static function MitCloseDestroy(cAlias as character, oPrepare as object)
+
+    (cAlias)->(DBCloseArea()) //Fecha a área de trabalho
+
+    // Libera os objetos da memória
+    if oPrepare != Nil
+        oPrepare:Destroy()
+        FWFreeObj(oPrepare)
+        oPrepare := Nil
+    endif
+
+Return Nil
+
+/*/{Protheus.doc} MitRetIds
+Retorna array ou string por referencia com a lista dos ids selecionados.
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param oTmpIds object objeto da query temporaria
+@param aSelecIds array lista com os Ids que foram selecionados no front
+@param aListIds array lista enviada por referencia caso seja inferior ao limite, sera carregada para utilizar no bind
+@param cIdsIn character string com select na temporaria dos IDs
+@return Nil, Não há retorno
+/*/
+Static Function MitRetIds(oTmpIds as object, aSelecIds as array, aListIds as array, cIdsIn as character )
+
+Local cIncValue  := '' as character
+Local cTmpId     := '' as character
+Local cTable     := '' as character
+Local cInsert    := '' as character
+Local nID        := 0  as numeric
+Local nTmIdsList := 0  as numeric
+Local nTamId	 := 0  as numeric
+Local aStruTmp   := {} as array
+
+nTmIdsList := Len(aSelecIds)
+
+If nTmIdsList <= NLIMTMP
+	For nID := 1 To nTmIdsList
+        aadd(aListIds, aSelecIds[nID]["id"] )
+	Next nID
+Else
+	cTmpId := GetNextAlias()
+	nTamId := Len(aSelecIds[1]["id"])
+
+    aAdd( aStruTmp, {'TMPID', 'C', nTamId ,0 } )
+
+    oTmpIds := FwTemporaryTable():New( cTmpId )
+    oTmpIds:SetFields( aStruTmp )
+    oTmpIds:AddIndex( '01', {'TMPID'} )
+    oTmpIds:Create()
+
+    cTable := oTmpIds:GetRealName()
+
+    cInsert := " INSERT INTO " + cTable + " (TMPID) "
+    For nID := 1 to nTmIdsList
+        cIncValue := " VALUES ('" + aSelecIds[nID]['id'] + "') "
+        TcSqlExec( cInsert + cIncValue )
+    Next nID
+    ( cTmpId )->(DbGoTop())
+
+    If Upper(TcGetDb()) $ "MSSQL7"
+        cTable := StrTran(cTable,'dbo.')
+    EndIf
+
+    cIdsIn := "( SELECT TMPID FROM " + cTable + ")"
+EndIf
+
+Return Nil
+
+/*/{Protheus.doc} MitNewFile
+Realiza a geracao do arquivo texto extensao json 
+para importacao da MIT no site da receita
+
+@type static function
+@author Denis Souza
+@since 28/01/2025
+@version 1.0
+@param lEvtEspec logical
+@param cJson character
+@param cCNPJRaiz character
+@param nMonth numeric
+@param nYear numeric
+@param cNameFile character
+@return Nil, nao ha retorno
+/*/
+Static Function MitNewFile( lEvtEspec as logical, cJson as character, cCNPJRaiz as character, nMonth as numeric, nYear as numeric, cNameFile as character, lAutomato as logical )
+
+    Local cBarra     := ''  as character
+    Local cTmpFolder := ''  as character
+    Local cNvl02     := ''  as character
+    Local cNvl04     := ''  as character
+    Local nHandle    := 0   as numeric
+    Local lSucess    := .F. as logical
+    Local cMit       := ''  as character
+
+	//Tratamento para Linux onde a barra é invertida
+    cBarra := '/' //fmt linux
+    cMit := 'mit'
+
+	If GetRemoteType() <> 2 //0 = QT Win 6e7; 1 = QT Win 8e10; 2 = QT linux 8e10 ; 3 = nao utilizado; 4 = telnet; 5 smartclient html; 6=nao utilizado; 6 smartclient windows C
+        cBarra := '\' //windows
+        cMit := Upper(cMit)
+	EndIf
+
+    //Caminho temporario dentro da protheus_data ex: \baseline\teste01.json
+    cTmpFolder := lower( cBarra + 'baseline' + cBarra )
+
+    if !lAutomato
+        //Cria pasta na mit dentro do protheus_data
+        cTmpFolder := lower(cBarra + "mit" + cBarra)
+    endIf
+    
+    FWMakeDir( cTmpFolder )
+
+    //Criar caminho local para copiar o arquivo gerado dentro da protheus_data\mit
+    cNameFile := cCNPJRaiz + '-' + cMit + '-' + cValToChar(nYear) + PadL(cValToChar(nMonth),2,"0") //CNPJ RAIZ CONTRIBUINTE + MIT + AAAAMM (periodo apuracao) + extensao
+
+    //Caminho temporario dentro da protheus_data ex: \mit\teste01.json   
+    cNameFile := cTmpFolder + cNameFile + ".json"
+
+    //Tratamenento para criar arquivo, exemplo vindo:
+    //Do Front: "\mit\53113791-mit-202001.json"
+    //Da Automacao: "\baseline\53113791-mit-202609.json"
+    nHandle := FCreate( cNameFile,,,.F.)
+    lSucess := .F.
+
+    cNvl02 := Replicate(Chr(9),2)
+    cNvl04 := Replicate(Chr(9),4)
+
+    cJson := StrTran( cJson, (',' + cNvl02 + '{'), (cNvl02 + ',{') )
+    cJson := StrTran( cJson, (',' + cNvl04 + '{'), (cNvl04 + ',{') )
+    cJson := StrTran( cJson, (cNvl04 + '}' + CRLF + cNvl04 + ',{'), (cNvl04 + '},' + CRLF + cNvl04 + '{') )
+
+    if FWrite(nHandle, cJson) == Len(cJson)
+        lSucess := .T.
+    endif
+    FClose(nHandle)
+
+Return Nil
+
+/*/{Protheus.doc} MitCloseAnt
+Fecha as tags do nivel 02 e 03 anteriores.
+Existem situacoes onde nao entra no tributo por causa de regras especificas, como:
+a qualificacaoPJ <> 11 e cFmtTribut <> 7, etc...
+Entao caso atenda a regra e gere os novos tributos especificos sera necessario encerrar as tags.
+
+@type static function
+@author Denis Souza
+@since 03/02/2025
+@version 1.0
+@param nCont numeric
+@param cJson character
+@param cNvl02 character
+@param cNvl03 character
+@param lNewNvl02 logical
+@return Nil, nao ha retorno
+/*/
+Static Function MitCloseAnt( nCont as numeric, cJson as character, cNvl02 as character, cNvl03 as character, lNewNvl02 as logical )
+
+    lNewNvl02 := .T.
+
+    //Fecha o nivel 3 com array (colchetes) e nivel 2 com objeto (chaves), antes de abrir o proximo
+    if nCont > 1 //nunca fara o primeiro registro
+        //Se mudou o tributo {lOtherTrib} Fecha Array de {ListaDebitos} ou {ListaDebitosAposEvento}
+        //sem virgula, ja que armazenou todo o conteudo e nao tem mais ListaDebito para esse tributo
+        cJson += cNvl03 + ']' + CRLF  //Fecha Array de {ListaDebitos} ou {ListaDebitosAposEvento}
+
+        //Se mudou o tributo Fecha a chave de tributo e inseri virgula para abrir um novo tributo logo apos esse trecho (ja que esta em um laco)
+        cJson += cNvl02 + '},' + CRLF //Fecha algum dos tributos da lista  (Irpj, Csll, Irrf, Ipi, Iof, PisPasep, Cofins,ContribuicoesDiversas, Cpss e RetPagamentoUnificado)
+    endif
+Return Nil

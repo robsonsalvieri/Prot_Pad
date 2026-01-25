@@ -1,0 +1,392 @@
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+#include "health.plan.contract.beneficiary.import.protocol.ch"
+
+#define STATUS_BATCH_RECEIVED "1"
+#define STATUS_BATCH_PROCESSING "2"
+#define STATUS_BATCH_IMPORTED_WITH_ERROR "3"
+#define STATUS_BATCH_IMPORTED_SUCCESSFULLY "4"
+#define STATUS_BATCH_CANCELED "5"
+
+#define STATUS_BENEF_RECEIVED "1"
+#define STATUS_BENEF_IMPORTED_WITH_ERROR "2"
+#define STATUS_BENEF_IMPORTED_SUCCESSFULLY "3"
+#define STATUS_BENEF_CANCELED "4"
+
+namespace totvs.protheus.health.plan.contract.beneficiary.import
+
+/*/{Protheus.doc} ImportBatchProtocol
+Classe responsável pela criação dos protocolos de inclusão (PLSA977AB) dos beneficiários provenientes de um lote de importação.
+@type class
+@version 12.1.2510
+@autor vinicius.queiros
+@since 27/05/2025
+/*/
+class ImportBatchProtocol from ImportBatchBase
+
+	private data oModelProtocol as object
+	private data oModelBBA as object
+	private data oModelB2N as object
+
+	public method new() constructor
+	public method destroy()
+	public method processBeneficiariesFromBatch() as logical
+
+	private method loadModel()
+	private method processBeneficiaries() as logical
+	private method createBeneficiariesProtocol(aBeneficiaries as array) as logical
+	private method getRequestHolder(jRequest as json) as json
+	private method getLastPlanVersion(cHealthInsurerCode as character, cPlanCode as character) as character
+
+	private method setBatchError()
+
+endclass
+
+/*/{Protheus.doc} new
+Inicializa a classe ImportBatchProtocol com o código do lote informado.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 27/05/2025
+@param cBatchCode, character, código do lote a ser utilizado para criação dos protocolos
+/*/
+method new() class ImportBatchProtocol
+
+	_Super:new()
+
+return self
+
+/*{Protheus.doc} destroy
+Libera os recursos utilizados pela instância da classe ImportBatchProtocol.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 27/05/2025
+*/
+method destroy() class ImportBatchProtocol
+
+	_Super:destroy()
+
+	if valType(self:oModelProtocol) != "U"
+		self:oModelProtocol:destroy()
+	endif
+
+	freeObj(self:oModelProtocol)
+	freeObj(self:oModelBBA)
+	freeObj(self:oModelB2N)
+
+return
+
+/*/{Protheus.doc} ProcessBeneficiariesFromBatch
+Processa os dados dos beneficiários a partir das informações contidas no lote de importação,
+realizando as validações e geração do protocolo na analise de beneficiários.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+@return logical, verdadeiro se o processamento for concluído com sucesso, falso caso ocorra alguma falha
+/*/
+method processBeneficiariesFromBatch() as logical class ImportBatchProtocol
+
+	local lSuccess := .F. as logical
+
+	if !empty(self:cBatchCode)
+		self:loadModel()
+
+		lSuccess := self:processBeneficiaries()
+	endif
+
+return lSuccess
+
+/*/{Protheus.doc} loadModel
+Carrega o modelo de dados utilizada para processar a geração do protocolo
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+/*/
+method loadModel() class ImportBatchProtocol
+
+	_Super:loadModel()
+
+	self:oModelProtocol := fwLoadModel("PLIncAutoBenModel")
+	self:oModelBBA := self:oModelProtocol:getModel("MASTERBBA")
+	self:oModelB2N := self:oModelProtocol:getModel("DETAILB2N")
+
+	self:oModelProtocol:setOperation(MODEL_OPERATION_INSERT)
+
+return
+
+/*/{Protheus.doc} ProcessBeneficiaries
+Executa o processamento dos beneficiários do lote atual.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+@return logical, verdadeiro se o processamento for realizado com sucesso, falso em caso de erro
+/*/
+method processBeneficiaries() as logical class ImportBatchProtocol
+
+	local lSuccess := .F. as logical
+	local cAlias := getNextAlias() as character
+	local cBatchCode := self:cBatchCode as character
+	local jRequest as json
+	local jBeneficiary as json
+	local lError := .F. as logical
+	local cStatusReceived := STATUS_BENEF_RECEIVED as character
+	local cStatusImportedWithError := STATUS_BENEF_IMPORTED_WITH_ERROR as character
+
+	beginSql alias cAlias
+		SELECT
+            BJ5.BJ5_CODOPE,
+            BJ5.BJ5_CODEMP,
+            BJ5.BJ5_CONEMP,
+            BJ5.BJ5_VERCON,
+            BJ5.BJ5_SUBCON,
+            BJ5.BJ5_VERSUB,
+			BJ6.BJ6_CODFAM,
+			BJ6.BJ6_CPFBEN,
+			BJ6.BJ6_JSNBEN
+		FROM
+			%table:BJ5% BJ5		
+        INNER JOIN
+			%table:BJ6% BJ6 ON
+			BJ6.BJ6_FILIAL = %xfilial:BJ6% AND
+			BJ6.BJ6_CODLOT = BJ5.BJ5_CODLOT AND
+            (BJ6.BJ6_STATUS = %exp:cStatusReceived% OR BJ6.BJ6_STATUS = %exp:cStatusImportedWithError%) AND
+			BJ6.%notDel%
+		WHERE
+			BJ5.BJ5_FILIAL = %xfilial:BJ5% AND
+			BJ5.BJ5_CODLOT = %exp:cBatchCode% AND	
+			BJ5.%notDel%
+	endSql
+
+	if !(cAlias)->(eof())
+		jRequest := JsonObject():new()
+
+		jRequest["healthInsurerCode"] := (cAlias)->BJ5_CODOPE
+		jRequest["companyCode"] := (cAlias)->BJ5_CODEMP
+		jRequest["contractCode"] := (cAlias)->BJ5_CONEMP
+		jRequest["contractVersion"] := (cAlias)->BJ5_VERCON
+		jRequest["subcontractCode"] := (cAlias)->BJ5_SUBCON
+		jRequest["subcontractVersion"] := (cAlias)->BJ5_VERSUB
+
+		while !(cAlias)->(eof())
+			jRequest["familyId"] := (cAlias)->BJ6_CODFAM
+			jRequest["beneficiaries"] := {}
+			jRequest["status"] := ""
+			jRequest["protocol"] := ""
+			jRequest["errorMessage"] := ""
+			jRequest["holderSubscriberId"] := ""
+
+			while !(cAlias)->(eof()) .and. (cAlias)->BJ6_CODFAM == jRequest["familyId"]
+				jBeneficiary := JsonObject():new()
+
+				jBeneficiary["familyId"] := (cAlias)->BJ6_CODFAM
+				jBeneficiary["cpf"] := (cAlias)->BJ6_CPFBEN
+				jBeneficiary["values"] := JsonObject():new()
+				jBeneficiary["values"]:fromJson((cAlias)->BJ6_JSNBEN)
+				jBeneficiary["errorMessage"] := ""
+
+				if jBeneficiary["values"]:hasProperty("BBA_MATRIC") .and. !empty(jBeneficiary["values"]["BBA_MATRIC"])
+					if empty(jRequest["holderSubscriberId"])
+						jRequest["holderSubscriberId"] := alltrim(jBeneficiary["values"]["BBA_MATRIC"])
+					endif
+				endif
+
+				aAdd(jRequest["beneficiaries"], jBeneficiary)
+
+				(cAlias)->(dbSkip())
+			endDo
+
+			if !self:createBeneficiariesProtocol(@jRequest)
+				lError := .T.
+			endif
+
+			self:setBeneficiariesStatus(jRequest)
+		endDo
+
+		if lError
+			// "Lote processado com pendências: um ou mais beneficiários apresentaram erros durante o processamento."
+			self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, STR0004, .T.)
+		else
+			// "Lote importado com sucesso: todos os beneficiários foram processados sem erros."
+			self:setImportBatchStatus(STATUS_BATCH_IMPORTED_SUCCESSFULLY, STR0003, .T.)
+			lSuccess := .T.
+		endif
+	else
+		// "Não foram encontrados beneficiários prontos para processamento no lote informado."
+		self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, STR0001)
+	endif
+
+	(cAlias)->(dbCloseArea())
+
+	freeObj(jRequest)
+	freeObj(jBeneficiary)
+
+return lSuccess
+
+/*/{Protheus.doc} CreateBeneficiariesProtocol
+Cria o protocolo de beneficiários com base nos dados fornecidos na rotina de Analise de Beneficiários
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+@param jRequest, json, dados da requisição contendo informações dos beneficiários para geração do protocolo
+@return logical, verdadeiro se o protocolo for criado com sucesso, falso caso ocorra algum erro
+/*/
+method createBeneficiariesProtocol(jRequest as json) as logical class ImportBatchProtocol
+
+	local lSuccess := .F. as logical
+	local jHolderData as json
+	local nBeneficiaryTotal as numeric
+	local nX, nY as numeric
+	local cField as character
+	local xValue as variant
+	local nLenFormFields as numeric
+	local lError := .F. as logical
+	local lIsDate as logical
+
+	self:oModelProtocol:activate()
+
+	jHolderData := self:getRequestHolder(jRequest)
+
+	if !empty(jRequest["holderSubscriberId"]) .or. valType(jHolderData) == "J"
+		self:loadFormFields(.F.)
+
+		if !empty(jRequest["holderSubscriberId"])
+			self:oModelBBA:setValue("BBA_MATRIC", jRequest["holderSubscriberId"])
+		else
+			self:oModelBBA:setValue("BBA_CODINT", jRequest["healthInsurerCode"])
+			self:oModelBBA:setValue("BBA_CODEMP", jRequest["companyCode"])
+			self:oModelBBA:setValue("BBA_CONEMP", jRequest["contractCode"])
+			self:oModelBBA:setValue("BBA_VERCON", jRequest["contractVersion"])
+			self:oModelBBA:setValue("BBA_SUBCON", jRequest["subcontractCode"])
+			self:oModelBBA:setValue("BBA_VERSUB", jRequest["subcontractVersion"])
+
+			self:oModelBBA:setValue("BBA_EMPBEN", jHolderData["name"])
+			self:oModelBBA:setValue("BBA_CODPRO", jHolderData["planCode"])
+			self:oModelBBA:setValue("BBA_VERSAO", jHolderData["planVersion"])
+			self:oModelBBA:setValue("BBA_CPFTIT", jHolderData["beneficiaryCpf"])
+		endif
+
+		nBeneficiaryTotal := len(jRequest["beneficiaries"])
+		nLenFormFields := len(self:aFormFields)
+
+		aSort(jRequest["beneficiaries"], nil, nil, {|x, y| x["values"]["B2N_GRAUPA"] < y["values"]["B2N_GRAUPA"]})
+
+		for nX := 1 to nBeneficiaryTotal
+			if !self:oModelB2N:isEmpty()
+				self:oModelB2N:addLine()
+			endif
+
+			for nY := 1 to nLenFormFields
+				cField := self:aFormFields[nY]["property"]
+				xValue := jRequest["beneficiaries"][nX]["values"][cField]
+				lIsDate := self:aFormFields[nY]:hasProperty("type") .and. self:aFormFields[nY]["type"] == "date"
+				xValue := iif(lIsDate, stod(xValue), xValue)
+
+				self:oModelB2N:setValue(cField, xValue)
+			next nY
+
+			if !self:oModelB2N:vldData()
+				lError := .T.
+				jRequest["beneficiaries"][nX]["errorMessage"] := alltrim(self:oModelProtocol:getErrorMessage()[6])
+			endif
+		next nX
+
+		if !lError .and. self:oModelProtocol:vldData()
+			self:oModelProtocol:commitData()
+			lSuccess := .T.
+			jRequest["protocol"] := BBA->BBA_NROPRO
+			jRequest["status"] := STATUS_BENEF_IMPORTED_SUCCESSFULLY
+		else
+			jRequest["errorMessage"] := alltrim(self:oModelProtocol:getErrorMessage()[6])
+			jRequest["status"] := STATUS_BENEF_IMPORTED_WITH_ERROR
+		endif
+	else
+		jRequest["errorMessage"] := STR0002 // "Nenhum titular informado na estrutura da família."
+		jRequest["status"] := STATUS_BENEF_IMPORTED_WITH_ERROR
+	endif
+
+	self:oModelProtocol:deActivate()
+
+return lSuccess
+
+/*/{Protheus.doc} GetRequestHolder
+Retorna os dados do titular da requisição a partir do JSON fornecido.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/05/2025
+@param jRequest, json, dados da requisição contendo as informações do lote de beneficiários
+@return json, dados do titular extraídos do JSON da requisição
+/*/
+method getRequestHolder(jRequest as json) as json class ImportBatchProtocol
+
+	local jHolderData as json
+	local cHolderKinship := superGetMV("MV_PLCDTGP", .F., "00") as character
+	local nPos as numeric
+
+	nPos := aScan(jRequest["beneficiaries"], {|x| x["values"]["B2N_GRAUPA"] == cHolderKinship})
+
+	if nPos > 0
+		jHolderData := JsonObject():new()
+		jHolderData["name"] := upper(jRequest["beneficiaries"][nPos]["values"]["B2N_NOMUSR"])
+		jHolderData["planCode"] := jRequest["beneficiaries"][nPos]["values"]["B2N_CODPRO"]
+		jHolderData["planVersion"] := self:getLastPlanVersion(jRequest["healthInsurerCode"], jHolderData["planCode"])
+		jHolderData["beneficiaryCpf"] := jRequest["beneficiaries"][nPos]["values"]["B2N_CPFUSR"]
+	endif
+
+	freeObj(jRequest)
+
+return jHolderData
+
+/*/{Protheus.doc} getLastPlanVersion
+Retorna a última versão cadastrada de um plano de saúde para uma determinada operadora.
+@type method
+@version 12.1.2510
+@since 07/06/2025
+@author vinicius.queiros
+@param cHealthInsurerCode, character, Código da operadora do plano de saúde
+@param cPlanCode, character, Código do plano
+@return character, Última versão do plano
+/*/
+method getLastPlanVersion(cHealthInsurerCode as character, cPlanCode as character) as character class ImportBatchProtocol
+
+	local cQuery as character
+	local oExecStmt as object
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local cVersion as character
+
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? BIL "
+	cQuery += " WHERE "
+	cQuery += "     BIL.BIL_FILIAL = ? AND "
+	cQuery += "     BIL.BIL_CODIGO = ? AND "
+	cQuery += "     BIL.BIL_DATFIN = ? AND "
+	cQuery += "     BIL.D_E_L_E_T_ = ? "
+	cQuery += " ORDER BY BIL_VERSAO DESC"
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BIL.BIL_VERSAO")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BIL"))
+	oExecStmt:setString(nOrder++, xFilial("BIL"))
+	oExecStmt:setString(nOrder++, cHealthInsurerCode + cPlanCode)
+	oExecStmt:setString(nOrder++, " ")
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	if !(cAlias)->(eof())
+		cVersion := (cAlias)->BIL_VERSAO
+	endif
+
+	(cAlias)->(dbCloseArea())
+
+	oExecStmt:destroy()
+	freeObj(oExecStmt)
+
+return cVersion
