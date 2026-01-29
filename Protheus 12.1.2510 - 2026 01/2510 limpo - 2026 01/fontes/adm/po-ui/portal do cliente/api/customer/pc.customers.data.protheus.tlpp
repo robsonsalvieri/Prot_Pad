@@ -1,0 +1,623 @@
+#include 'tlpp-core.th'
+#Include "FWMVCDEF.ch"
+#Include "AP5MAIL.CH"
+#include 'pc.customers.data.protheus.CH'
+
+Namespace portal.cliente.customer
+using namespace gfin.util
+Using Namespace portal.cliente.util
+
+Static __oInstance As Object
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } LoginDataProtheus
+	Classe para acesso aos dados do Protheus
+
+	@author luiz.nai
+	@since 07/04/2021
+/*/
+//-------------------------------------------------------------------
+Class CustomerDataProtheus
+	protected data cUserLogin          as character
+	protected data cUserEmail          as character
+	protected data cUserAlias          as character
+	protected data cUserName           as character
+	protected data cUserOldPassword    as character
+	protected data cUserPassword       as character
+	protected data lSmtpConnected      as logical
+	protected data lMockData           as logical
+	protected data lChangePasswordMock as logical
+	protected data lEmailSentMock      as logical
+	protected data oEmailManager       as object
+	protected data oHashFilName        as object
+	protected data oStatementLogin     as object
+	protected data oStatementCustomer  as object
+	protected data cWebSRV             as character
+
+	Public Method new()
+	Static Method getInstance()
+	Public Method clear()
+	Public Method getDataCustomer() as Json
+	Public Method changeCustomerPassword(cOldPassword as Character, cNewPassword as Character) as Json
+	Public Method recoveryPasswordCustomer() as Json
+
+	public Method setUserData(cEmail as Character, cLogin as Character)
+	public Method setMockConfigs(jConfigs as json, oFakeMail as Object)
+
+	protected Method loadOldPasswordAndNameUser()
+	protected Method generateNewRandomPassword(nPasswordSize as Numeric)
+	protected Method sendEmailRecoveryPassword() as Logical
+	protected Method createPrepareLoginDetails() as character
+	protected Method createPrepareCustomerDetails() as character
+	protected Method createBodyEmailRecoveryPassword() as Character
+	protected Method connectToSmtpServer() as Character
+	protected Method prepareBranchesNames()
+EndClass
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } New
+	Metodo de instancia da classe.
+
+	@author luiz.nai
+	@since 07/04/2021
+/*/
+//-------------------------------------------------------------------
+Method new() Class CustomerDataProtheus
+	self:clear()
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } New
+	Retorna a instancia statica da classe.
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method getInstance() Class CustomerDataProtheus
+	If __oInstance == Nil
+        __oInstance := CustomerDataProtheus():new()
+	Endif
+Return __oInstance
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } clear
+	Limpa as variaveis da classe.
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method clear() Class CustomerDataProtheus
+	self:cUserLogin          := ""
+	self:cUserEmail          := ""
+	self:cUserAlias          := ""
+	self:cUserName           := ""
+	self:cUserPassword       := ""
+	self:cUserOldPassword    := ""
+	self:lSmtpConnected      := .F.
+	self:lMockData           := .F.
+	self:lChangePasswordMock := .F.
+	self:lEmailSentMock      := .F.
+	self:oEmailManager       := NIL
+	self:oHashFilName        := NIL
+	self:oStatementLogin     := NIL
+	self:oStatementCustomer  := NIL
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDataCustomer
+Função para validar o usuário e senha e retornar as informações dos clientes que este usuário tem acesso.
+
+@params
+username: string - AI3_LOGIN
+password: string - AI3_PSW
+
+@return
+["loginDetails"]: {
+	"internUser": AI3_USRSIS,
+	"internIds": [
+		A1_FILIAL + A1_COD + A1_LOJA
+	],
+	"username": AI3_NOME,
+	"email": AI3_EMAIL
+},
+["customerDetails"]: {
+	"items": [
+		{
+			"branchId": A1_FILIAL,
+			"customerId": A1_COD,
+			"storeId": A1_LOJA,
+			"branches": [
+				{
+					"totalId": Filial com compartilhamento totalmente exclusivo,
+					"branchName": Nome da filial
+				}
+			],
+			"name": A1_NOME,
+			"country": A1_MUN,
+			"cnpj": A1_CGC,
+			"state": A1_ESTADO,
+			"ie": A1_INSCR,
+		}
+	],
+	"hasNext": boolean
+}
+
+@author luiz.nai
+@since 07/04/2021
+/*/
+//-------------------------------------------------------------------
+method getDataCustomer(cUsername as character, password as character) as json class CustomerDataProtheus
+	local cAliasLogin        as character
+	local cAliasCustomer     as character
+	local aCustomersDetails  as array
+	local jResponse          as json
+	local jLoginDetails      as json
+	local aDetails           as array
+	local aInternIds         as array
+	local aBranches          as array
+	local cBranchId          as character
+	local cCustomerId        as character
+	local cStoreId           as character
+	local nI                 as numeric
+	
+	jResponse         := JsonObject():New()
+	jLoginDetails     := JsonObject():New()
+	aCustomersDetails := {}
+	cAliasLogin       := ::createPrepareLoginDetails(cUsername)
+
+	if (cAliasLogin)->(!Eof())
+		jLoginDetails["internUser"] := AllTrim((cAliasLogin)->AI3_USRSIS)
+		jLoginDetails["username"]   := AllTrim((cAliasLogin)->AI3_NOME)
+		jLoginDetails["email"]      := AllTrim((cAliasLogin)->AI3_EMAIL)
+		aInternIds := {}
+		if ::oHashFilName == NIL
+			::oHashFilName := FwHashMap():New()
+			self:prepareBranchesNames(cEmpAnt)
+		endIf
+		while ((cAliasLogin)->(!Eof()))
+			aDetails    := {}
+			cBranchId   := FWxFilial("SA1", (cAliasLogin)->AI3_FILIAL)
+			cCustomerId := (cAliasLogin)->AI4_CODCLI
+			cStoreId    := (cAliasLogin)->AI4_LOJCLI
+
+			// adiciona as informações do cliente para inserir no token
+			aAdd(aInternIds, cBranchId + cCustomerId + cStoreId)
+
+			// retorna as filiais com o maior nível de compartilhamento, ex: 'D MG' -> ['D MG 01', 'D MG 02']
+			aBranches   := branchesOfCustomer(cBranchId)
+			for nI := 1 to Len(aBranches)
+				aAdd(aDetails, {;
+					{ "totalId", aBranches[nI] },;
+					{ "branchName", ::oHashFilName:get(aBranches[nI]) };
+				})
+			next nI
+
+			cAliasCustomer := ::createPrepareCustomerDetails(cBranchId, cCustomerId, cStoreId)
+
+			if ((cAliasCustomer)->(!Eof()))
+				aAdd(aCustomersDetails, {;
+					{ "branchId"  , cBranchId },;
+					{ "customerId", cCustomerId },;
+					{ "storeId"   , cStoreId },;
+					{ "branches"  , arrayToJson(aDetails) },;
+					{ "name"      , AllTrim((cAliasCustomer)->A1_NOME)   },;
+					{ "city"      , AllTrim((cAliasCustomer)->A1_MUN)    },;
+					{ "cnpj"      , AllTrim((cAliasCustomer)->A1_CGC)    },;
+					{ "state"     , AllTrim((cAliasCustomer)->A1_EST)    },;
+					{ "ie"        , AllTrim((cAliasCustomer)->A1_INSCR)  },;
+					{ "paymentcod", AllTrim((cAliasCustomer)->A1_COND)   },;
+					{ "tableprice", AllTrim((cAliasCustomer)->A1_TABELA) };
+				})
+			endif
+
+			(cAliasCustomer)->(DbCloseArea())
+			(cAliasLogin)->(DbSkip())
+		endDo
+
+		jLoginDetails["internIds"] := aInternIds
+
+		jResponse["result"]   := .T.
+		jResponse["response"] := JsonObject():New()
+		jResponse["response"]["loginDetails"]    := jLoginDetails
+		jResponse["response"]["customerDetails"] := arrayToAPI(aCustomersDetails, .F.)
+	else
+		jResponse := AnswerErrorFormat(400, STR0001, STR0001)
+	endIf
+
+	(cAliasLogin)->(DbCloseArea())
+return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } setUserData
+	Inputa os dados de login e email do cliente.
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method setUserData(cLogin as Character, cEmail as Character, cAlias as Character) class CustomerDataProtheus
+	self:cUserLogin := cLogin
+	self:cUserEmail := cEmail
+	self:cUserAlias := cAlias
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } setMockConfigs
+	Realiza o mock das configurações da classe para teste.
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method setMockConfigs(jConfigs as json, oFakeMail as Object) class CustomerDataProtheus
+	self:lMockData := .T.
+	self:cUserOldPassword := jConfigs['set_old_password']
+	self:lChangePasswordMock := jConfigs['set_change_password']
+	self:lEmailSentMock := jConfigs['set_sent_mail']
+	self:oEmailManager := oFakeMail
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPrepareLoginDetails
+	Cria o statment da query de detalhes do usuário.
+
+	@params
+		cUsername: character - AI3_LOGIN
+	@return
+		Character - Alias da query
+	@author luiz.nai
+	@since 07/04/2021
+/*/
+//-------------------------------------------------------------------
+method createPrepareLoginDetails(cUsername as character) as character class CustomerDataProtheus
+	local cQuery  as character
+	
+	if (::oStatementLogin == NIL)
+		::cWebSRV := PadR(SuperGetMV('MV_WEBSVPC', .F., 'PORTALCLIENTEMINGLE'), TamSX3('AI7_WEBSRV')[01])
+		cQuery := "SELECT AI3.AI3_FILIAL, AI3.AI3_CODUSU, AI3.AI3_USRSIS, AI3.AI3_NOME, AI3.AI3_EMAIL, AI4.AI4_CODCLI, AI4.AI4_LOJCLI "
+		cQuery += 	" FROM " + RetSqlName("AI3") + " AI3 "
+		cQuery += 		" JOIN " + RetSqlName("AI4") + " AI4 ON AI3.AI3_FILIAL = AI4.AI4_FILIAL AND AI3.AI3_CODUSU = AI4.AI4_CODUSU "
+		cQuery += 		" JOIN " + RetSqlName("AI6") + " AI6 ON AI6.AI6_FILIAL = AI3.AI3_FILIAL AND AI6.AI6_CODUSU = AI3.AI3_CODUSU "
+		cQuery += 	" WHERE "
+		cQuery += 		" AI3.AI3_LOGIN  = ? AND "
+		cQuery += 		" AI6.AI6_WEBSRV = ? AND "
+		cQuery += 		" AI3.D_E_L_E_T_ = ?   AND "
+		cQuery += 		" AI4.D_E_L_E_T_ = ?   AND "
+		cQuery += 		" AI6.D_E_L_E_T_ = ?"
+		cQuery := ChangeQuery(cQuery)
+		::oStatementLogin := FWExecStatement():New(cQuery)
+	endIf
+
+	::oStatementLogin:setString(1, cUsername) //AI3_LOGIN 
+	::oStatementLogin:setString(2, ::cWebSRV) //AI6_WEBSRV 
+	::oStatementLogin:setString(3, ' ')       //AI3.D_E_L_E_T_
+	::oStatementLogin:setString(4, ' ')       //AI4.D_E_L_E_T_
+	::oStatementLogin:setString(5, ' ')       //AI6.D_E_L_E_T_
+
+return ::oStatementLogin:openAlias()
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } loadOldPasswordAndNameUser
+	Recupera a senha antiga e o nome do usuario no protheus (Tabela AI3).
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method loadOldPasswordAndNameUser() class CustomerDataProtheus
+	Local cQuery		:= "" as Character
+	Local cWebSrv		:= "" as Character
+	Local cOldPassword	:= "" as Character
+	Local cNameUser		:= "" as Character
+	Local cAliasUser	:= "" as Character
+
+	cWebSrv := PadR(SuperGetMV('MV_WEBSVPC', .F., 'PORTALCLIENTEMINGLE'), TamSX3('AI7_WEBSRV')[01])
+
+	cQuery := "SELECT AI3.AI3_PSW USERPASS, AI3.AI3_NOME USERNAME"
+	cQuery += " FROM " + RetSqlName("AI3") + " AI3 INNER JOIN " + RetSqlName("AI6") + " AI6"
+	cQuery += " ON "
+	cQuery += 	" AI3.AI3_FILIAL = AI6.AI6_FILIAL"
+	cQuery += 	" AND AI3.AI3_CODUSU = AI6.AI6_CODUSU"
+	cQuery += " WHERE "
+	cQuery += 	" AI3.AI3_LOGIN = '"+ self:cUserLogin +"' "
+	cQuery += 	" AND AI3.AI3_EMAIL = '"+ self:cUserEmail +"' "
+	cQuery += 	" AND AI6.AI6_WEBSRV = '"+ cWebSrv +"'"
+	cQuery += 	" AND AI3.D_E_L_E_T_ = ' ' "
+	cQuery += 	" AND AI6.D_E_L_E_T_ = ' ' "
+	cQuery := ChangeQuery(cQuery)
+
+	cAliasUser := MpSysOpenQuery(cQuery)
+
+	If (cAliasUser)->(!Eof())
+		cOldPassword := (cAliasUser)->USERPASS
+		cNameUser := (cAliasUser)->USERNAME
+	EndIf
+	
+	(cAliasUser)->(DbCloseArea())
+
+	If !self:lMockData
+		self:cUserOldPassword := cOldPassword
+		self:cUserName := cNameUser
+	EndIf
+Return
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } sendEmailRecoveryPassword
+	Envia o email para recuperação de senha do usuario.
+
+	@author vinicius.prado
+	@since 02/10/2023
+/*/
+//-------------------------------------------------------------------
+Method sendEmailRecoveryPassword() as Logical class CustomerDataProtheus
+	Local oEmailMessage := Nil as Object
+	Local nErrorCode   	:= -1  as Numeric
+
+	If self:lSmtpConnected
+		oEmailMessage := TMailMessage():New()
+		oEmailMessage:Clear()
+
+		oEmailMessage:cFrom		:= self:oEmailManager:cFrom
+		oEmailMessage:cTo		:= self:cUserEmail
+		oEmailMessage:cBcc		:= ''
+		oEmailMessage:cSubject	:= STR0009 // Recuperar senha - Portal do Cliente
+		oEmailMessage:cBody		:= self:createBodyEmailRecoveryPassword()
+
+		nErrorCode := oEmailMessage:Send( self:oEmailManager:oServcMail )
+
+		oEmailMessage:Clear()
+		self:oEmailManager:destroy()
+	EndIf
+
+	lSent := nErrorCode == 0
+
+	If self:lMockData
+		lSent := self:lEmailSentMock
+	EndIF
+
+Return lSent
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPrepareCustomerDetails
+	Cria o statment da query de detalhes do cliente.
+
+	@params
+		cBranch: character - A1_FILIAL
+		cCustomer: character - A1_COD
+		cStore: character - A1_LOJA
+	@return
+		character - Alias da query
+	@author luiz.nai
+	@since 07/04/2021
+/*/
+//-------------------------------------------------------------------
+method createPrepareCustomerDetails(cBranch as character, cCustomer as character, cStore as Character ) as character class CustomerDataProtheus
+	local cQuery as character
+	
+	if (::oStatementCustomer == NIL)
+		cQuery := "SELECT SA1.A1_FILIAL, SA1.A1_COD, SA1.A1_NOME, SA1.A1_MUN, SA1.A1_CGC, SA1.A1_INSCR, SA1.A1_ESTADO, SA1.A1_EST, SA1.A1_COND, SA1.A1_TABELA "
+		cQuery += 	" FROM "
+		cQuery += 		RetSqlName("SA1") + " SA1 "
+		cQuery += 	" WHERE "
+		cQuery += 			" SA1.A1_FILIAL = ? AND "
+		cQuery += 			" SA1.A1_COD = ? AND "
+		cQuery += 			" SA1.A1_LOJA = ? AND "
+		cQuery += 			" SA1.D_E_L_E_T_ = ?"
+		cQuery := ChangeQuery(cQuery)
+		::oStatementCustomer := FWExecStatement():New(cQuery)
+	endIf
+	::oStatementCustomer:SetString(1, cBranch)
+	::oStatementCustomer:SetString(2, cCustomer)
+	::oStatementCustomer:SetString(3, cStore)
+	::oStatementCustomer:SetString(4, ' ')
+return ::oStatementCustomer:OpenAlias()
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} changeCustomerPassword
+	Função para alterar a senha cadastrada do cliente.
+
+	@params
+	cOldPassword: string - AI3_PSW
+	cNewPassword: string - AI3_PSW
+
+	@return
+	["loginDetails"]: {
+		"internUser": AI3_USRSIS,
+		"username": AI3_NOME,
+		"email": AI3_EMAIL
+	}
+
+	@author vinicius.prado
+	@since 17/10/2022
+/*/
+//-------------------------------------------------------------------
+Method changeCustomerPassword(cOldPassword As Character, cNewPassword As Character) as Json class CustomerDataProtheus
+	Local jResponse	  	As Json
+	Local jChangedUsers As Json
+	Local oMdlFATA220  	As Object
+	Local cAliasLogin   As Character
+
+	jResponse := JsonObject():New()
+	jChangedUsers := JsonObject():New()
+	
+	cAliasLogin := ::createPrepareLoginDetails(::cUserLogin)
+
+	While (cAliasLogin)->(!Eof())
+		dbselectarea("AI3")
+		dbsetorder(1)
+		If AI3->(dbSeek((cAliasLogin)->AI3_FILIAL + (cAliasLogin)->AI3_CODUSU))
+			oMdlFATA220 := FWLoadModel( 'FATA220' )
+			oMdlFATA220:SetOperation(MODEL_OPERATION_UPDATE)
+			oMdlFATA220:Activate()
+			oMdlFATA220:loadValue('AI3MASTER', 'AI3_PSW', cNewPassword)
+
+			If oMdlFATA220:VldData()
+				oMdlFATA220:CommitData()
+				If !jResponse:hasProperty('result')
+					jChangedUsers["internUser"] := AllTrim((cAliasLogin)->AI3_USRSIS)
+					jChangedUsers["username"]   := AllTrim((cAliasLogin)->AI3_NOME)
+					jChangedUsers["email"]      := AllTrim((cAliasLogin)->AI3_EMAIL)
+
+					jResponse["result"] := .T.
+					jResponse["response"] := JsonObject():New()
+					jResponse["response"]["loginDetails"] := jChangedUsers
+
+					oMdlFATA220:loadValue('AI3MASTER', 'AI3_PSW', Replicate('*', TamSX3('AI3_PSW')[01]))
+				EndIf
+			Else
+				jResponse := AnswerErrorFormat(400, STR0002, oMdlFATA220:GetErrorMessage()[6]) // Nao foi possivel alterar a senha do usuário.
+			EndIf
+		EndIf
+		(cAliasLogin)->(DBSkip())
+	EndDo
+
+	If !jResponse:hasProperty('result')
+		jResponse := AnswerErrorFormat(400, STR0001, STR0001) // Nao foram encontrados clientes para o login recebido.
+	EndIf
+
+Return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} recoveryPasswordCustomer
+	Função para recuperar a senha do usuario do Portal.
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method recoveryPasswordCustomer() as Json class CustomerDataProtheus
+	Local jResponse	:= JsonObject():New() as Json
+	Local jResultChangePassword := JsonObject():New() as Json
+	Local nSizeNewPassword := 8 as Numeric
+
+	self:connectToSmtpServer()
+
+	If !self:lSmtpConnected
+		jResponse := AnswerErrorFormat(400, STR0003, STR0004) // Não foi possível concluir a operação # Erro ao realizar a conexão com o servidor de e-mail
+		return jResponse
+	EndIf
+
+	self:loadOldPasswordAndNameUser()
+
+	If Empty(self:cUserOldPassword)
+		jResponse := AnswerErrorFormat(400, STR0003, STR0005) // Não foi possível concluir a operação # Usuário ou senha inválido
+		return jResponse
+	EndIf
+
+	self:generateNewRandomPassword(nSizeNewPassword)
+	jResultChangePassword := self:changeCustomerPassword(self:cUserOldPassword, self:cUserPassword)
+
+	If (jResultChangePassword:hasProperty('result') .And. !jResultChangePassword['result']) .And. !self:lChangePasswordMock
+		jResponse := AnswerErrorFormat(400, STR0003, STR0006) // Não foi possível concluir a operação # Erro ao recuperar a senha do usuário
+		return jResponse
+	EndIf
+
+	If self:sendEmailRecoveryPassword()
+		jResponse["result"] := .T.
+		jResponse["response"] := JsonObject():New()
+		jResponse["response"]["message"] := STR0007 // E-mail de recuperação enviado com sucesso
+	Else
+		jResponse := AnswerErrorFormat(400, STR0003, STR0008) // Não foi possível concluir a operação # Erro ao enviar o e-mail de recuperação
+	EndIf
+
+Return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} generateNewRandomPassword
+	Gera senha aleatória (letras e números).
+
+	@author vinicius.prado
+	@since 22/03/2024
+	@param nPasswordSize: Numeric - Tamanho da senha que será gerada.
+/*/
+//-------------------------------------------------------------------
+Method generateNewRandomPassword(nPasswordSize as Numeric) class CustomerDataProtheus
+	Local cCaracters 	:= "" as Character
+	Local cNewPassword  := "" as Character
+	Local nCount		:= 0  as Numeric
+
+	default nPasswordSize := 8
+
+	cCaracters := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+	For nCount := 1 to nPasswordSize
+		cNewPassword += SubStr(cCaracters, Randomize(1, 63), 1)
+	Next
+
+	self:cUserPassword := cNewPassword
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} createBodyEmailRecoveryPassword
+	Cria o corpo do e-mail (HTML) que será utilizado na recuperção de senha.
+
+	@author vinicius.prado
+	@since 22/03/2024
+	@return cBodyEmail: character - Corpo do email de recuperação de senha.
+/*/
+//-------------------------------------------------------------------
+Method createBodyEmailRecoveryPassword() as character class CustomerDataProtheus
+	Local cBodyEmail 		:= "" as Character
+	Local cBodyUserName 	:= Capital(Alltrim(self:cUsername)) as Character
+	Local cBodyUserLogin 	:= Alltrim(self:cUserLogin) as Character
+	Local cBodyUserAlias 	:= Alltrim(self:cUserAlias) as Character
+	Local cBodyUserPassword := Alltrim(self:cUserPassword) as Character
+	Local cBodyCompanyName 	:= AllTrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilAnt, {'M0_NOMECOM'})[1][2]) as Character
+	
+	cBodyEmail := '<div style="width: 600px;">'
+	cBodyEmail += 	'<p>'+ OemToANSI(STR0010) + cBodyUserName +'</p>'
+	cBodyEmail += 	'<p>'+ OemToANSI(STR0011) + ' ' + cBodyCompanyName +'.</p>'
+	cBodyEmail += 	'<p>'+ OemToANSI(STR0012) + ' ' + cBodyUserLogin +'</p>'
+	cBodyEmail += 	'<p>'+ OemToANSI(STR0013) +' </p>'
+
+    cBodyEmail += 	'<div style="background-color: #1E90FF; width: 160px; height: 50px; border-radius: 8px; margin: 15px 0px 15px 240px; text-align: center; padding-top: 12px;">'
+    cBodyEmail += 	   '<span style="color: #FFFFFF; font-weight: bold; font-size: 24px;">'+ cBodyUserPassword +'</span>'
+    cBodyEmail += 	'</div>'
+	
+	cBodyEmail += 	'<p>'+ OemToANSI(STR0014) +' <a href="https://portalfinanceiroprotheus.totvs-solucoes.com.br/login/'+ cBodyUserAlias +'">'+ OemToANSI(STR0015) +'</a>.</p>'
+	cBodyEmail += 	'<p>'+ OemToANSI(STR0016) +'</p>'
+	cBodyEmail += '</div>'
+	
+return cBodyEmail
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} connectToSmtpServer
+	Realiza a conexão com o servidor de email.
+
+	@author vinicius.prado
+	@since 22/03/2024
+/*/
+//-------------------------------------------------------------------
+Method connectToSmtpServer() class CustomerDataProtheus
+	If !self:lMockData
+		self:oEmailManager := gfin.job.bills.email.BillsEMail():new()
+	EndIf
+	self:lSmtpConnected := self:oEmailManager:lConnected
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} prepareBranchesNames
+	Coloca em cache os nomes das filiais para serem utilizados
+
+	@params
+		cEmpFil: character - Empresa da filial
+	@author reenato.ito
+	@since 10/03/2025
+/*/
+//-------------------------------------------------------------------
+method prepareBranchesNames(cEmpFil as character) class CustomerDataProtheus
+	local aSM0 := FwLoadSM0() as array
+	local nFil := 0           as numeric
+
+	for nFil := 1 to len(aSM0)
+		if aSM0[nFil][1] == cEmpFil
+			::oHashFilName:Put(aSM0[nFil][2], Alltrim(aSM0[nFil][6]) + '/' + AllTrim(aSM0[nFil][7]))
+		endif
+	Next nFil
+return

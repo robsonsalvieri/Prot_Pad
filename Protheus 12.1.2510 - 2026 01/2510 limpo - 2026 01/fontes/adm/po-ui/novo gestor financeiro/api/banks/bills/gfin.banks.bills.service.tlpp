@@ -1,0 +1,1255 @@
+#include 'tlpp-core.th'
+#include 'GFIN.BANKS.BILLS.SERVICE.CH'
+#include 'totvs.ch'
+
+NameSpace gfin.api.banks.bills
+using namespace gfin.util
+using namespace gfin.bills.email
+USING NAMESPACE totvs.protheus.backoffice.ngf.bills.payments
+
+Static __oHashCache := FwHashMap():New()		As Object
+Static __lBaiBOL    := ExistBlock("NGFBXBOL")	As Logical
+Static __oFI2Recno	:= Nil		  				As Object
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BanksBillsService
+Serviços para api de boletos/pagamentos
+
+@author Renato Ito
+@since 15/03/2021
+/*/
+//-------------------------------------------------------------------
+Class BanksBillsService
+	Public data lOk      		As Logical
+	public data lPEMai   		As Logical
+	Public data lCodeAuthorized As Logical
+	Public data cFilePDF 		As Character
+	Public data cPathPDF 		As Character
+	Public data jMsgErro 		As Json
+
+	Public Method new()
+	Public Method testConnection()
+	Public Method testConnectionPayment()
+	Public Method sendEmail()
+	Public Method sendAllEmail()
+	Public Method sendMarkEmail()
+	Public Method downloadPdf()
+	Public Method downloadPdfTechfin()
+	Public Method certificates()
+	Public Method postCancel()
+	Public Method postReceive() As Json
+	Public Method deletePendencies() As Json
+	Public Method postPayment()
+	Public Method downloadVoucher()
+	Private Method openFile()
+	Private Method validateCertificateFileExtension()
+	Private Method prepareBodyToTransmit() As Json
+	Private Method getFI2RecnoByKey() As Numeric
+	Private Method getBillDirectory() As Character
+EndClass
+
+Method new() Class BanksBillsService
+	Self:lOk      			:= .F.
+	Self:lPEMai	  			:= .F.
+	Self:lCodeAuthorized	:= .T.
+	Self:cFilePDF 			:= ''
+	Self:cPathPDF 			:= ''
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} testConnection
+
+Comunicação com API do banco para validar conexão
+
+@author Renato Ito
+@since 15/03/2021
+/*/
+//-------------------------------------------------------------------
+Method testConnection(body as Json) Class BanksBillsService
+	Local response As Json
+	Local bills    As Object
+
+	response := JsonObject():new()
+	bills    := gfin.job.bills.Bills():new(body['febraban'])
+
+	bills:setFebraban(body['febraban'])
+	bills:setCredentials(body:toJson())
+
+	If bills:test()
+		response['result']   := .T.
+		response['response'] := JsonObject():new()
+		response['response']:fromJson(bills:getResult())
+	Else
+		response:= AnswerErrorFormat(bills:getCodeError(), STR0003, bills:getError())
+	EndIf
+
+Return response
+
+/*/{Protheus.doc} testConnectionPayment
+	Comunicação com API de pagamento do banco para validar conexão
+	@author Vitor Duca
+	@since 10/01/2023
+	@param jBody, Json, Body da requisição
+/*/
+
+Method testConnectionPayment(jBody as Json) Class BanksBillsService
+	Local response As Json
+	Local bills    As Object
+	Local jToken As Json
+	Local lRet As logical
+
+	response := JsonObject():new()
+	lRet := .T.
+
+	bills := totvs.protheus.backoffice.ngf.bills.payments.Payments():new()
+	bills:setCredentials(jBody:toJson(), jBody['febraban'])
+	jToken := bills:getToken()
+	lRet := len(jToken:getNames()) > 0
+
+	If lRet
+		response['result']   := lRet
+		response['response'] := JsonObject():new()
+		response['response']:fromJson(bills:getResult())
+	Else
+		response:= AnswerErrorFormat(400, STR0003, STR0011) //"Credenciais inválidas, verifique se as chaves foram informadas corretamente"
+	EndIf
+
+Return response
+
+/*/
+	{Protheus.doc} sendEmail
+	Método responsável por inicializar o processo de envio do Boleto por E-mail
+
+	@param oBody, object, body recebido
+
+	@return oResponse, object, response da requisição
+
+	@author alison.kaique
+	@since 23/05/2021
+/*/
+Method sendEmail(oBody As Json) Class BanksBillsService
+	Local oResponse   As Json
+	Local oLog        As Json
+	Local cBranch     As Character
+	Local cOrigBranch As Character
+	Local cPrefix     As Character
+	Local cNumber     As Character
+	Local cParcel     As Character
+	Local cType       As Character
+
+	oResponse := JsonObject():New()
+	cBranch     := IIf(ValType(oBody['ea_filial']) == 'C', PadR(AllTrim(oBody['ea_filial']), TamSX3('EA_FILIAL')[01]), "")
+	cOrigBranch := IIf(ValType(oBody['e1_filorig']) == 'C', PadR(AllTrim(oBody['e1_filorig']), TamSX3('E1_FILORIG')[01]), "")
+	cPrefix     := PadR(AllTrim(oBody['ea_prefixo']), TamSX3('EA_PREFIXO')[01])
+	cNumber     := PadR(AllTrim(oBody['ea_num']), TamSX3('EA_NUM')[01])
+	cParcel     := PadR(AllTrim(oBody['ea_parcela']), TamSX3('EA_PARCELA')[01])
+	cType       := PadR(AllTrim(oBody['ea_tipo']), TamSX3('EA_TIPO')[01])
+	If ValType(oBody['ea_filorig']) == 'C'
+		cOrigBranch := PadR(AllTrim(oBody['ea_filorig']), TamSX3('EA_FILORIG')[01])
+	EndIf
+
+	// verifica se o título existe
+	If (foundBill(cBranch, cOrigBranch, cPrefix, cNumber, cParcel, cType))
+		// alterando o campo de status de envio do boleto
+		If (RecLock('SEA', .F.))
+			SEA->EA_APIMAIL := '0'
+			SEA->(MsUnlock())
+		EndIf
+
+		cBranch := SEA->EA_FILIAL
+
+		// chamando rotina de envio do e-mail
+		If F713Mail(cBranch, cPrefix, cNumber, cParcel, cType , 'MANUAL', cOrigBranch)
+
+			// verifica se houve erros e retorna
+			If (SEA->EA_APIMAIL == '1')
+				oResponse["result"]   := .T.
+				oResponse["response"] := JsonObject():New()
+				oResponse["response"]["message"] := STR0005 // #"Título Financeiro encontrado e o processo de envio do Boleto por e-mail será iniciado."
+			Else
+				oLog := JsonObject():New()
+				If (oLog:fromJson(AllTrim(SEA->EA_APILOG)) == Nil .AND. ValType(oLog['mail']) == 'J' .AND. ValType(oLog['mail']['message']) == 'C')
+					oResponse := answerErrorFormat(412, STR0006, AllTrim(oLog['mail']['message'])) // #"E-mail não enviado"
+				EndIf
+			EndIf
+		Else
+			oResponse = answerErrorFormat(412,  STR0015, STR0014)
+		EndIf
+	Else
+		oResponse := answerErrorFormat(412, STR0007, STR0004) // #"Título não encontrado"#"Título Financeiro não encontrado para os dados recebidos."
+	EndIf
+Return oResponse
+
+/*/
+	{Protheus.doc} sendAllEmail
+	Método responsável por inicializar o processo de reenvio dos emails com erro
+
+	@return oResponse, object, response da requisição
+
+	@author daniel.muniz
+	@since 19/05/2023
+/*/
+Method sendAllEmail() Class BanksBillsService
+	Local cQuery      As Character
+	Local oStatement  As Json
+	Local aAreaSEA    := {}  AS Array
+	Local oResponse   As Json
+	Local cLockEmail  As Character
+
+	cLockEmail := cEmpAnt + ' - F713Mail'
+	oResponse := JsonObject():New()
+	If LockByName(cLockEmail, .T./*lEmpresa*/, .F./*lFilial*/ ) // Verifica se o lock está em uso
+		aAreaSEA := SEA->(GetArea())
+
+		cQuery := " SELECT R_E_C_N_O_ AS RECNO "
+		cQuery += " FROM " + RetSQLName('SEA')
+		cQuery += " WHERE D_E_L_E_T_ = ' ' "
+		cQuery += " AND EA_CART = 'R' "
+		cQuery += " AND EA_APIMAIL = '2' "
+		cQuery += " AND EA_BORAPI  = 'S' "
+		cQuery += " AND EA_TRANSF  = 'S' "
+
+		oStatement := FWPreparedStatement():New()
+		oStatement:SetQuery(ChangeQuery(cQuery))
+
+		cMailAlias := MpSysOpenQuery(oStatement:GetFixQuery())
+
+		DbSelectArea('SEA')
+		SEA->(DbSetOrder(1))
+
+		While (cMailAlias)->(!EOF())
+			SEA->(DbGoTo((cMailAlias)->RECNO))
+
+			If (RecLock('SEA', .F.))
+				SEA->EA_APIMAIL := '0'
+				SEA->(MsUnlock())
+			EndIf
+
+			(cMailAlias)->(DbSkip())
+		EndDo
+
+		RestArea(aAreaSEA)
+		(cMailAlias)->(dbCloseArea())
+		UnLockByName(cLockEmail, .T./*lEmpresa*/, .F./*lFilial*/ ) // Destrava o lock
+		// chamando rotina de envio do e-mail
+		StartJob("gfin.api.banks.bills.sendAllF713Mail", GetEnvServer(), .F., cEmpAnt, cFilAnt)
+		// verifica se houve erros e retorna
+		oResponse["result"]   := .T.
+		oResponse["response"] := JsonObject():New()
+		oResponse["response"]["message"] := STR0013 // #"O reenvio dos emails foi configurado com sucesso!"
+	Else
+		oResponse := answerErrorFormat(412, STR0015, STR0014)
+	EndIf
+
+
+Return oResponse
+
+/*/
+	{Protheus.doc} foundBill
+	Busca e posiciona no Título do Borderô
+
+	@param cBranch    , character, filial do título
+	@param cOrigBranch, character, filial original do título
+	@param cPrefix    , character, prefixo do título
+	@param cNumber    , character, prefixo do título
+	@param cParcel    , character, prefixo do título
+	@param cType      , character, prefixo do título
+
+	@return lRet, logical, .T. para body válido
+
+	@author alison.kaique
+	@since 23/05/2021
+/*/
+Static Function foundBill(cBranch As Character, cOrigBranch As Character, cPrefix As Character, cNumber As Character, cParcel As Character, cType As Character) As Logical
+	Local oStatement As Object
+	Local cBillAlias As Character
+	Local lRet       As Logical
+
+	// verifica se o statement já existe
+	If !(Empty(cOrigBranch)) // EA_FILORIG
+		If (!__oHashCache:containsKey('bill_origin'))
+			oStatement := createFoundBill(.T.)
+		Else
+			oStatement := __oHashCache:get('bill_origin')
+		EndIf
+
+		oStatement:setString(1, cOrigBranch) // EA_FILORIG
+	Else // EA_FILIAL
+		If (!__oHashCache:containsKey('bill_branch'))
+			oStatement := createFoundBill(.F.)
+		Else
+			oStatement := __oHashCache:get('bill_branch')
+		EndIf
+
+		oStatement:setString(1, cBranch) // EA_FILIAL
+	EndIf
+
+	// faz o bind dos dados
+	oStatement:setString(2, cPrefix) // prefixo do título
+	oStatement:setString(3, cNumber) // número do título
+	oStatement:setString(4, cParcel) // parcela do título
+	oStatement:setString(5, cType) // tipo do título
+	oStatement:setString(6, 'R') // carteira do título
+	oStatement:setString(7, 'S') // status de transferência do título
+	oStatement:setString(8, 'S') // borderô por API?
+
+	// cria a temporária
+	cBillAlias := MpSysOpenQuery(oStatement:getFixQuery())
+
+	// verifica se encontrou o título e posiciona
+	lRet := !((cBillAlias)->(EOF()))
+
+	If (lRet)
+		SEA->(DbGoTop())
+		SEA->(DbGoTo((cBillAlias)->NUMREC))
+	EndIf
+Return lRet
+
+/*/{Protheus.doc } createFoundBill
+	Cria o statement da query de busca do título financeiro
+
+	@param lOrigin, logical, busca por filial de origem?
+
+	@return oStatement, objecy, statement da query
+
+	@author Alison Lemes
+	@since 23/05/2021
+/*/
+Static Function createFoundBill(lOrigin As Logical) As object
+	Local oStatement As Object
+	Local cQuery     As Character
+
+	cQuery := ""
+	cQuery += "SELECT"
+	cQuery += "	R_E_C_N_O_ NUMREC"
+	cQuery += " FROM"
+	cQuery += "	" + RetSQLName('SEA')
+	cQuery += " WHERE"
+	If (lOrigin)
+		cQuery += "	EA_FILORIG = ? AND"
+	Else
+		cQuery += "	EA_FILIAL = ? AND"
+	EndIf
+	cQuery += "	EA_PREFIXO = ? AND"
+	cQuery += "	EA_NUM = ? AND
+	cQuery += "	EA_PARCELA = ? AND"
+	cQuery += "	EA_TIPO = ? AND"
+	cQuery += "	EA_CART = ? AND"
+	cQuery += "	EA_TRANSF = ? AND"
+	cQuery += "	EA_BORAPI = ? AND"
+	cQuery += "	D_E_L_E_T_ = ' '"
+	cQuery := ChangeQuery(cQuery)
+
+	oStatement := FwPreparedStatement():New(cQuery)
+	__oHashCache:put(IIf(lOrigin, "bill_origin", "bill_branch"), oStatement)
+Return oStatement
+
+/*/
+	{Protheus.doc} downloadPdf
+	Método responsável pela geração do boleto e download do PDF
+	@param oBody, object, body recebido
+	@return oResponse, object, response da requisição
+
+	@author francisco.carmo
+	@since 30/08/2021
+/*/
+
+Method downloadPdf(billsPdf As Character, lBase64 As Logical) Class BanksBillsService
+
+	Local cPDFName    := ''  As Character
+	Local cKeySEA     := ''  As Character
+	Local cDataBol    := ''  As Character
+	Local aAreaSEA    := {}  AS Array
+	Local aBoletos    := {}  As Array
+	Local aBoletosTF  := {}  As Array
+	Local aGerBol	  := {}  As Array
+	Local nCountBill  := 0   As numeric
+	Local nEaFilial   := 0   As numeric
+	Local nEaNumbor   := 0   As numeric
+	Local nEaPrefixo  := 0   As numeric
+	Local nEaNum      := 0   As numeric
+	Local nEaParcela  := 0   As numeric
+	Local nEaTipo     := 0   As numeric
+	Local lRetForm    := .F. As Logical
+	Local lIsTechFin  := .F. As Logical
+	Local jAPIMSG	  := JsonObject():new() As Json
+	Local jBody   	  := JsonObject():new() As Json
+	Default lBase64 := .F.
+
+	aAreaSEA := SEA->(GetArea())
+
+	Self:lOk      := .F.
+	Self:cFilePDF := ''
+	Self:cPathPDF := ''
+
+	jBody:FromJson(billsPdf)
+
+	(DbSelectArea('SEA'))
+
+	If Len(jBody['bills']) > 0
+		nEaFilial   := TamSX3('EA_FILIAL')[1]
+		nEaNumbor   := TamSX3('EA_NUMBOR')[1]
+		nEaPrefixo  := TamSX3('EA_PREFIXO')[1]
+		nEaNum      := TamSX3('EA_NUM')[1]
+		nEaParcela  := TamSX3('EA_PARCELA')[1]
+		nEaTipo     := TamSX3('EA_TIPO')[1]
+
+		For nCountBill := 1 To Len(jBody['bills'])
+			lIsTechFin := .F.
+			If jBody['bills'][nCountBill]:hasProperty('ea_filorig')
+				SEA->(DbSetOrder(4))// EA_FILORIG+EA_NUMBOR+EA_CART+EA_PREFIXO+EA_NUM+EA_PARCELA+EA_TIPO+EA_FORNECE+EA_LOJA
+				cKeySEA := PadR(jBody['bills'][nCountBill]['ea_filorig'],  nEaFilial)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_numbor'],  nEaNumbor)
+				cKeySEA += 'R'
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_prefixo'], nEaPrefixo)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_num'],     nEaNum)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_parcela'], nEaParcela)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_tipo'],    nEaTipo)
+			Else
+				SEA->(DbSetOrder(1)) // EA_FILIAL+EA_NUMBOR+EA_PREFIXO+EA_NUM+EA_PARCELA+EA_TIPO+EA_FORNECE+EA_LOJA
+				cKeySEA := PadR(jBody['bills'][nCountBill]['ea_filial'],  nEaFilial)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_numbor'],  nEaNumbor)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_prefixo'], nEaPrefixo)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_num'],     nEaNum)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_parcela'], nEaParcela)
+				cKeySEA += PadR(jBody['bills'][nCountBill]['ea_tipo'],    nEaTipo)
+			EndIf
+
+			If SEA->(DbSeek(cKeySEA))
+				jAPIMSG:FromJSON(SEA->EA_APIMSG)
+				lIsTechFin := jAPIMSG:hasProperty('produto') .And. jAPIMSG['produto'] == 'boleto_hibrido_techfin'
+				If !lIsTechFin
+					If !Empty(jAPIMSG:ToJson()) .And. Len(jAPIMSG:ToJson()) > 5
+						lRetForm := formatMail(jAPIMSG, @cDataBol)
+						If lRetForm
+							AADD(aBoletos, {cDataBol, SEA->(RECNO())})
+						Endif
+					ElseIf __lBaiBOL
+						AADD(aGerBol, {"", SEA->(RECNO())})
+					Endif
+				Else
+					AADD(aBoletosTF, {jBody['bills'][nCountBill]:ToJson(), SEA->(RECNO())})
+				Endif
+			Else
+				Self:jMsgErro := answerErrorFormat(412, STR0007, STR0004) // #"Título não encontrado"#"Título Financeiro não encontrado para os dados recebidos."
+			Endif
+		Next nCountBill
+
+		If Len(aBoletos) > 0 .And. Len(aGerBol) == 0
+			cPDFName := jAPIMSG['banco']
+			If jAPIMSG['banco'] == '341'
+				If jAPIMSG['version'] == "v2"
+					If jAPIMSG['boleto']['data']['dado_boleto']['pagador']['pessoa']['tipo_pessoa']['codigo_tipo_pessoa'] == "F"
+						cPDFName += jAPIMSG['boleto']['data']['dado_boleto']['pagador']['pessoa']['tipo_pessoa']['numero_cadastro_pessoa_fisica']
+					Else
+						cPDFName += jAPIMSG['boleto']['data']['dado_boleto']['pagador']['pessoa']['tipo_pessoa']['numero_cadastro_nacional_pessoa_juridica']
+					EndIf
+				Else
+					cPDFName += jAPIMSG['boleto']['pagador']['cpf_cnpj_pagador']
+				EndIf
+			ElseIf jAPIMSG['banco'] == '237'
+				cPDFName += jAPIMSG['boleto']['nuCpfcnpjPagador']
+			ElseIf jAPIMSG['banco'] == '001'
+				cPDFName += jAPIMSG['boleto']['pagador']['numeroInscricao']
+			ElseIf jAPIMSG['banco'] == '104'
+				If jAPIMSG:hasProperty('nrcpfcnpj')
+					cPDFName += jAPIMSG['nrcpfcnpj']
+				Else
+					cPDFName += jAPIMSG['boleto']['nrcpfcnpj']
+				EndIf
+			ElseIf jAPIMSG['banco'] == '033'
+				cPDFName += jAPIMSG['boleto']['nrcpfcnpj']
+			ENDIF
+			cPDFName += StrZero(Randomize(1, 999), 3)
+			cPDFName += StrTran(Time(), ':', '') + ".pdf"
+		ElseIf Len(aGerBol) > 0 .And. Empty(aGerBol[1][1]) .And. __lBaiBOL
+			cPDFName := Alltrim(SubStr(cKeySEA, nEaFilial + nEaNumbor + 1, Len(cKeySEA) ))
+			aBoletos := aGerBol
+		Endif
+
+		If Len(aBoletos) > 0
+			Self:cPathPDF := gfin.job.bills.email.getBolPdf(aBoletos, @cPDFName, @::lPEMai, .T.)
+			::openFile(lBase64, cPDFName)
+		Endif
+		If Len(aBoletosTF) > 0
+			::downloadPdfTechfin(aBoletosTF)
+		EndIf
+	Endif
+
+	RestArea(aAreaSEA)
+
+Return
+/*/
+	{Protheus.doc} downloadPdfTechfin
+	Método responsável pelo download do PDF do boleto Techfin
+	@param cBillsPdf, character, boletos para download
+	@param lBase64, logical, indica se deve ser convertido para Base64
+	@author Claudio Yoshio Muramatsu
+	@since 19/02/2025
+/*/
+
+Method downloadPdfTechfin(aBillsPdf As Array) Class BanksBillsService
+	Local aArea     := {}             As Array
+	Local aGetError := {}             As Array
+	Local cLocal                      As Character
+	Local cPDFName                    As Character
+	Local jBody := JsonObject():New() As Json
+	Local nCountBill := 0             As Numeric
+	Local nLenBills  := 0             As Numeric
+	Local lBase64    := .T.           As Logical
+	Local oConfigTF                   As Object
+	
+	aArea     := GetArea()
+	oConfigTF := &("totvs.protheus.backoffice.gfin.billstechfin.BillsTechfin():New()")	
+	cLocal    := ::getBillDirectory()
+	nLenBills := Len(aBillsPdf)
+	For nCountBill := 01 To nLenBills
+		jBody:FromJson(aBillsPdf[ nCountBill ][ 01 ])
+		cPDFName := oConfigTF:getBillsPdf( jBody, cLocal, @aGetError, aBillsPdf[ nCountBill ][ 02 ])
+		If !Empty( cPDFName )
+			Self:cPathPDF := cLocal + cPDFName
+			::openFile(lBase64, cPDFName)
+		Else
+			Self:jMsgErro := answerErrorFormat(aGetError[01], aGetError[02], aGetError[03])
+		EndIf		
+	Next nCountBill
+
+	RestArea(aArea)
+	aSize(aArea, 0)
+	aSize(aGetError, 0)
+	FwFreeArray( aArea )
+	FwFreeArray( aGetError )
+
+
+	jBody:FromJSON("{}")
+	FreeObj(jBody)
+	FreeObj(oConfigTF)
+
+Return
+
+/*/
+	{Protheus.doc} certificates
+	Método responsável pela validação dos arquivos de certificados digitais
+	@param oBody, object, body recebido
+	@return oResponse, object, response da requisição
+
+	@author francisco.carmo
+	@since 17/09/2021
+/*/
+
+Method certificates(jCertifiedName As Json) Class BanksBillsService
+
+	Self:lOk := .T.
+
+	if jCertifiedName:hasProperty("febraban")
+		self:validateCertificateFileExtension(jCertifiedName)
+	endIf
+
+	if !self:lOK
+		return
+	endIf
+
+	If !File(jCertifiedName['cert']) .Or. !File(jCertifiedName['key'])
+		Self:lOk		:= .F.
+		Self:jMsgErro	:= answerErrorFormat(412, STR0008, STR0008)
+	Endif
+
+Return
+
+/*/{Protheus.doc} validateCertificateFileExtension
+	Método privado para validar se a extensão do certificado corresponde com o tipo de certificado que a API do banco espera.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/02/2024
+	@version 12.1.2310
+	@param jCertificade, json, Deve conter as propriedades cFebraban, cCertFileName e cKeyFileName
+/*/
+method validateCertificateFileExtension(jCertificate as json) class BanksBillsService
+	local cBanksPem := "033, 237" as character
+	local cBanksCrt := "001, 341" as character
+
+	local cCertExtension := lower(right(allTrim(jCertificate["cert"]), 4)) as character
+	local cKeyExtension := lower(right(allTrim(jCertificate["key"]), 4)) as character
+
+	if jCertificate["febraban"] $ cBanksPem
+		self:lOK := cCertExtension == ".pem" .and. cKeyExtension == ".pem"		
+		Self:jMsgErro := answerErrorFormat(400, STR0020, STR0021 +" (.pem)") //Arquivo inválido, Extensão do arquivo de certificado não corresponde com a extensão esperada
+	
+	elseIf jCertificate["febraban"] $ cBanksCrt
+		self:lOK := cCertExtension == ".crt" .and. cKeyExtension == ".key"
+		Self:jMsgErro := answerErrorFormat(400, STR0020, STR0021 + " (.crt/.key)") //Arquivo inválido, Extensão do arquivo de certificado não corresponde com a extensão esperada
+	
+	else
+		self:lOk := .T.
+	endIf
+return
+
+/*/{Protheus.doc} postCancel
+	Realiza a requisição de cancelamento do pagamento registrado online (API)
+	@author Vitor Duca
+	@since 08/03/2023
+	@version 1.0
+	@param cIdBills, Character, Chave para posicionamento no titulo a pagar
+/*/
+Method postCancel(cIdBills As Character) Class BanksBillsService
+	Local aIdBills := {} As Array
+	Local jLayout  := JsonObject():new() As Json
+	Local lRet	   := .T. As Logical
+	Local cApiMsg  := "" As Character
+	Local oBills   := totvs.protheus.backoffice.ngf.bills.payments.payments():new()  As Object
+	Local jResponse := JsonObject():new() As Json
+
+	aIdBills := STRtokARR2(cIdBills, '|', .T.)
+
+	If Len(aIdBills) == 8
+		aIdBills[1] := Padr(aIdBills[1], TamSx3("EA_FILORIG")[1])
+		aIdBills[2] := Padr(aIdBills[2], TamSx3("EA_NUMBOR")[1])
+		aIdBills[3] := Padr(aIdBills[3], TamSx3("EA_PREFIXO")[1])
+		aIdBills[4] := Padr(aIdBills[4], TamSx3("EA_NUM")[1])
+		aIdBills[5] := Padr(aIdBills[5], TamSx3("EA_PARCELA")[1])
+		aIdBills[6] := Padr(aIdBills[6], TamSx3("EA_TIPO")[1])
+		aIdBills[7] := Padr(aIdBills[7], TamSx3("EA_FORNECE")[1])
+		aIdBills[8] := Padr(aIdBills[8], TamSx3("EA_LOJA")[1])
+
+		If FindFunction("F717DbArea") .and. FindFunction("F717PosInd")
+			//Posiciona os indices das tabela envolvida no processo
+			F717PosInd()
+
+			// Posiciona as tabelas
+			If F717DbArea(aIdBills[1], aIdBills[2], aIdBills[3], aIdBills[4], aIdBills[5], aIdBills[6], aIdBills[7], aIdBills[8])
+
+				If !Empty(jLayout:FromJson(SA6->A6_CFGBOLP))
+					lRet	:= .F.
+					cApiMsg  := "Problema na configuração do layout na conta (A6_CFGBOLP)."
+				Else
+					// configura as credenciais do banco
+					If jLayout:hasProperty("credentials") .And. !oBills:setCredentials(jLayout["credentials"]:toJSON(), SA6->A6_BCOOFI)
+						lRet := .F.
+						cApiMsg := "Não foi possíver obter as credenciais do layout. "
+					Else
+						If oBills:cancel()
+							SaveInter()
+							FA590Canc(,,,,, .T.)// Chamada Função FA590Canc para que o Título seja retirado corretamente do borderô Imp.
+							RestInter()
+							cApiMsg :=  "Cancelamento efetuado com sucesso"
+						Else
+							lRet := .F.
+							cApiMsg := oBills:getLog()
+						Endif
+					Endif
+				EndIf
+			Else
+				lRet := .F.
+				cApiMsg := "Não foi possível posicionar as tabelas para o título:" + aIdBills[1] +"|"+ aIdBills[2] +"|"+ aIdBills[3] +"|"+ aIdBills[4] +"|"+ aIdBills[5] +"|"+ aIdBills[6] +"|"+ aIdBills[7] +"|"+ aIdBills[8]
+			EndIf
+		Endif
+	Endif
+
+	jResponse := totvs.protheus.backoffice.fin.apiutil.answerFormat(lRet, 200, cApiMsg, "")
+
+	If !lRet
+		jResponse := NIL
+		jResponse := JsonObject():new()
+		jResponse := totvs.protheus.backoffice.fin.apiutil.answerFormat(lRet, 400, "Não foi possivel cancelar o pagamento", cApiMsg)
+	Endif
+
+Return jResponse
+
+/*/{Protheus.doc} postReceive
+	Realiza a baixa do titulo a receber pela rotina FINA715
+	@author Vitor Duca
+	@since 12/04/2023
+	@version 1.0
+	@param lReceivableReturn, Logical, Define se o processo sera de baixa dos titulos a receber
+	@param jBody, Json, Body enviado pela API, contendo o array de borderos que serão transmitidos
+/*/
+Method postReceive(lReceivableReturn as Logical, jBody As Json) As Json Class BanksBillsService
+	Local jRecnos := JsonObject():new() 		As Json
+	Local jResponse := JsonObject():new() 		As Json
+	Local cFunName := AllTrim(UPPER(FunName()))	As Character
+
+	Default lReceivableReturn := .T.
+	Default jBody := JsonObject():new()
+
+	If lReceivableReturn
+		SetFunName("FINA715")
+		//Chama a função para processar as baixas dos titulos a receber
+		FINA715(.F.)
+		jResponse := totvs.protheus.backoffice.fin.apiutil.answerFormat(.T., 200, STR0012, "") //"Baixas processadas com sucesso!"
+		SetFunName(cFunName)
+	Else
+		jRecnos := ::prepareBodyToTransmit(jBody)
+
+		//Chama a função para processar a transmisão dos titulos a receber
+		If FINA713(.F., jRecnos['bills'], jRecnos['cancel'])
+			jResponse := totvs.protheus.backoffice.fin.apiutil.answerFormat(.T., 200, STR0016, "") //"Processamento concluido com sucesso!"
+		Else
+			jResponse := answerFormat(.F., 403, STR0017, STR0018 )
+		Endif
+	Endif	
+
+Return jResponse
+
+/*/{Protheus.doc} postPayment
+	Realiza a transmissão do pagamento de titulos a pagar pela rotina FINA717
+	@author Vitor Duca
+	@since 12/04/2023
+	@version 1.0
+	@param jBody, Json, Body da requisição que deve conter os borderos que serão processados
+	@param lAutomato, Logical, Define se é automação
+	@param jResponseMock, Json, Resposta mockada da API (Só enviar quando for automação)
+	@param jQueryParams, Json, Query params da requisição
+/*/
+Method postPayment(jBody As Json, lAutomato As Logical, jReponseMock As Json, jQueryParams As Json) Class BanksBillsService
+	Local jResponse 	:= JsonObject():new() 		As Json
+	Local jRecnos 		:= JsonObject():new() 		As Json
+	Local cLockName 	:= cEmpAnt + ' - FINA717'	As Character
+	Local nTypeSend		:= 1						As Numeric
+	Local cFilterQuery	:= " |V|P|B"				As Character
+	Local oSX1			:= NIL						As Object
+	Local aPergunte		:= {}						As Array
+
+	DEFAULT jBody := JsonObject():new()
+	DEFAULT lAutomato := .F.
+	DEFAULT jReponseMock := JsonObject():new()
+
+	If LockByName(cLockName, .T./*lEmpresa*/, .F./*lFilial*/ ) //Verifica lock do job
+		jRecnos := ::prepareBodyToTransmit(jBody)
+
+		If jQueryParams:hasProperty("typeSend") .and. Alltrim(jQueryParams["typeSend"]) == "lote"
+			nTypeSend := 2
+		Endif
+
+		If jQueryParams:hasProperty("filter") .and. Alltrim(jQueryParams["filter"]) <> "pendentes"
+			cFilterQuery := "F"
+			If jQueryParams["filter"] == "todos"
+				cFilterQuery := " |F|V|P|B"
+			Endif
+		Endif
+
+		oSX1 := FWSX1Util():New()
+		oSX1:AddGroup("FINA717")
+		oSX1:SearchGroup()
+		aPergunte := oSX1:GetGroup("FINA717")
+
+		If Len(aPergunte[2]) >= 2
+			SetMVValue("FINA717", "MV_PAR02", nTypeSend)
+			PERGUNTE("FINA717", .F.)
+		Endif
+
+		//Chama a função para processar a transmisão dos titulos a pagar
+		F717Pagar(jRecnos['bills'], lAutomato, jReponseMock, "API", cFilterQuery)
+		jResponse["result"]   := .T.
+		jResponse["response"] := JsonObject():New()
+		jResponse["response"]["message"] := STR0016 //"Processamento concluido com sucesso!"
+		UnLockByName(cLockName, .T./*lEmpresa*/, .F./*lFilial*/ )
+	Else
+		jResponse := answerFormat(.F., 403, STR0017, STR0018 ) //"Não foi possivel realizar a transmissão"#"O processo esta em uso, por favor aguarde alguns minutos e tente novamente"
+	Endif
+
+Return jResponse
+
+/*/{Protheus.doc} prepareBodyToTransmit
+	Formata o envio do body pela API, para ser utilizado na transmissão de um pagameto ou boleto
+	@author Vitor Duca
+	@since 22/03/2024
+	@version 1.0
+	@param jBody, Json, Corpo da API enviado, contendo as informações do bordero
+	@return jRecnos, Json, json contendo a Matriz contendo os R_E_C_N_O_ que serão utilizados no processo (SEA, FI2).
+/*/
+Method prepareBodyToTransmit(jBody as Json) As Json Class BanksBillsService
+	Local nX 			:= 0							As Numeric
+	Local jRecnos		:= JsonObject():New()			As Json
+	Local nTamFilOrig	:= TamSX3("EA_FILORIG")[1]		As Numeric
+	Local nTamNumBor	:= TamSX3("EA_NUMBOR")[1]		As Numeric
+	Local nTamCart		:= TAMSX3("EA_CART")[1]			As Numeric
+	Local nTamPrefixo	:= TAMSX3("EA_PREFIXO")[1]		As Numeric
+	Local nTamNum		:= TAMSX3("EA_NUM")[1]			As Numeric
+	Local nTamParcela	:= TAMSX3("EA_PARCELA")[1]		As Numeric
+	Local nTamTipo		:= TamSX3("EA_TIPO")[1]			As Numeric
+	Local nTamFornece	:= TamSX3("EA_FORNECE")[1]		As Numeric
+	Local nTamLoja		:= TamSX3("EA_LOJA")[1]			As Numeric
+	Local cBranch 		:= ""							As Character
+	Local cNumBor 		:= ""							As Character
+	Local cPrefix 		:= ""							As Character
+	Local cNumber 		:= ""							As Character
+	Local cParcela 		:= ""							As Character
+	Local cType 		:= ""							As Character
+	Local cWallet		:= ""							As Character
+	Local cSupplier 	:= space(nTamFornece)			As Character
+	Local cStore 		:= space(nTamLoja)				As Character
+	Local aAreaSEA		:= SEA->(FwGetArea())			As Array
+	
+	dbSelectArea("FI2")
+	SEA->(DbSetOrder(4)) //EA_FILORIG, EA_NUMBOR, EA_CART, EA_PREFIXO, EA_NUM, EA_PARCELA, EA_TIPO, EA_FORNECE, EA_LOJA
+	FI2->(DbSetOrder(1)) //FI2_FILIAL, FI2_CARTEI, FI2_NUMBOR, FI2_PREFIX, FI2_TITULO, FI2_PARCEL, FI2_TIPO, FI2_CODCLI, FI2_LOJCLI, FI2_OCORR, FI2_GERADO
+
+	jRecnos['bills'] := {}
+	jRecnos['cancel'] := {}
+
+	If jBody:hasProperty("bordero") .and. ValType(jBody["bordero"]) == "A"
+		For nX := 1 to len(jBody["bordero"])
+			cBranch := Padr(jBody["bordero"][nX]["ea_filorig"], nTamFilOrig)
+			cNumBor := Padr(jBody["bordero"][nX]["ea_numbor"], nTamNumBor)
+			cWallet := Padr(jBody["bordero"][nX]["ea_cart"], nTamCart)
+			cPrefix := Padr(jBody["bordero"][nX]["ea_prefixo"], nTamPrefixo)
+			cNumber := Padr(jBody["bordero"][nX]["ea_num"], nTamNum)
+			cParcela := Padr(jBody["bordero"][nX]["ea_parcela"], nTamParcela)
+			cType 	:= Padr(jBody["bordero"][nX]["ea_tipo"], nTamTipo)
+			If jBody["bordero"][nX]:hasProperty("ea_fornece")
+				cSupplier := Padr(jBody["bordero"][nX]["ea_fornece"], nTamFornece)
+			Endif
+			If jBody["bordero"][nX]:hasProperty("ea_loja")
+				cStore := Padr(jBody["bordero"][nX]["ea_loja"], nTamLoja)
+			Endif
+			If (jBody["bordero"][nX]:hasProperty("operacao") .and. jBody["bordero"][nX]['operacao'] == "C") ;
+				.or. (jBody["bordero"][nX]:hasProperty("fi2_opeapi") .and. jBody["bordero"][nX]['fi2_opeapi'] == "C")
+				nRecnoFI2 := self:getFI2RecnoByKey(jBody["bordero"][nX])
+				If nRecnoFI2 > 0
+					Aadd(jRecnos['cancel'], nRecnoFI2)
+				EndIf
+			ElseIf SEA->(MsSeek(cBranch + cNumBor + cWallet + cPrefix + cNumber + cParcela + cType + cSupplier + cStore))
+				Aadd(jRecnos['bills'], SEA->(Recno()))
+			Endif
+		next nX
+	Endif
+
+	FwRestArea(aAreaSEA)
+Return jRecnos
+
+
+/*/{Protheus.doc} getFI2RecnoByKey
+	Retorna o RECNO conforme a chave da FI2.
+	Chave: FI2_FILIAL, FI2_CARTEI, FI2_NUMBOR, FI2_PREFIX, FI2_TITULO,
+	FI2_PARCEL, FI2_TIPO, FI2_CODCLI, FI2_LOJCLI, FI2_OCORR, FI2_GERADO
+
+	@author Vinicius do Prado
+	@since 08/10/2024
+	@version 1.0
+	@param jParamsBol, Json, parametros com dados do boleto.
+	@return nRecno, numeric,  R_E_C_N_O_ da ocorrencia na FI2.
+/*/
+Method getFI2RecnoByKey(jParamsBol as json) as Numeric Class BanksBillsService
+
+	Local cBranch  		 	as Character
+	Local cWallet  			as Character
+	Local cNumBor  			as Character
+	Local cPrefix  		 	as Character
+	Local cNumber  			as Character
+	Local cParcela 		 	as Character
+	Local cType 	 		as Character
+	Local cCustomerCode  	as Character
+	Local cCustomerStore	as Character
+	Local cOcurrence 		as Character
+	Local cGenerate 		as Character
+	Local cOperation		as Character
+	Local nRecno			as Numeric
+
+	nRecno	:= 0
+
+	If jParamsBol:hasProperty('fi2_filial')  .and. jParamsBol:hasProperty('fi2_cartei') .and.;
+		jParamsBol:hasProperty('fi2_numbor') .and. jParamsBol:hasProperty('fi2_prefix') .and.;
+		jParamsBol:hasProperty('fi2_titulo') .and. jParamsBol:hasProperty('fi2_parcel') .and.;
+		jParamsBol:hasProperty('fi2_tipo') 	 .and. jParamsBol:hasProperty('fi2_codcli') .and.;
+		jParamsBol:hasProperty('fi2_lojcli') .and. jParamsBol:hasProperty('fi2_ocorr')  .and.;
+		jParamsBol:hasProperty('fi2_gerado') .and. jParamsBol:hasProperty('fi2_opeapi')
+
+		cBranch  		:= Padr(jParamsBol["fi2_filial"], 	TamSX3("FI2_FILIAL")[1])
+		cWallet  		:= Padr(jParamsBol["fi2_cartei"], 	TamSX3("FI2_CARTEI")[1]) 
+		cNumBor  		:= Padr(jParamsBol["fi2_numbor"], 	TAMSX3("FI2_NUMBOR")[1]) 	
+		cPrefix  		:= Padr(jParamsBol["fi2_prefix"], 	TAMSX3("FI2_PREFIX")[1])
+		cNumber  		:= Padr(jParamsBol["fi2_titulo"], 	TAMSX3("FI2_TITULO")[1]) 	
+		cParcela 		:= Padr(jParamsBol["fi2_parcel"], 	TAMSX3("FI2_PARCEL")[1])
+		cType 	 		:= Padr(jParamsBol["fi2_tipo"], 	TamSX3("FI2_TIPO")[1]) 	
+		cCustomerCode  	:= Padr(jParamsBol["fi2_codcli"], 	TamSX3("FI2_CODCLI")[1])
+		cCustomerStore 	:= Padr(jParamsBol["fi2_lojcli"], 	TamSX3("FI2_LOJCLI")[1]) 	
+		cOcurrence 	 	:= Padr(jParamsBol["fi2_ocorr"], 	TamSX3("FI2_OCORR")[1]) 
+		cGenerate 	 	:= Padr(jParamsBol["fi2_gerado"], 	TamSX3("FI2_GERADO")[1]) 	
+		cOperation 	 	:= Padr(jParamsBol["fi2_opeapi"], 	TamSX3("FI2_OPEAPI")[1]) 	
+
+		If __oFI2Recno == NIl
+
+			cQuery := " SELECT R_E_C_N_O_ RECNOFI2 FROM " + RetSqlName('FI2')
+			cQuery += " WHERE FI2_FILIAL = ? "
+			cQuery += "   AND FI2_CARTEI = ? "
+			cQuery += "   AND FI2_NUMBOR = ? "
+			cQuery += "   AND FI2_PREFIX = ? "
+			cQuery += "   AND FI2_TITULO = ? "
+			cQuery += "   AND FI2_PARCEL = ? "
+			cQuery += "   AND FI2_TIPO = ? "
+			cQuery += "   AND FI2_CODCLI = ? "
+			cQuery += "   AND FI2_LOJCLI = ? "
+			cQuery += "   AND FI2_OCORR = ? "
+			cQuery += "   AND FI2_GERADO = ? "			
+			cQuery += "   AND FI2_OPEAPI = ? "
+			cQuery += "   AND FI2_BORAPI = ? "
+			cQuery += "   AND FI2_TRANSF <> ? "
+			cQuery += "   AND D_E_L_E_T_ = ? "   
+
+			cQuery	:= ChangeQuery(cQuery)
+
+			__oFI2Recno := FwExecStatement():new(cQuery)
+
+		Endif
+
+		__oFI2Recno:SetString(1,cBranch)
+		__oFI2Recno:SetString(2,cWallet)
+		__oFI2Recno:SetString(3,cNumBor)
+		__oFI2Recno:SetString(4,cPrefix)
+		__oFI2Recno:SetString(5,cNumber)
+		__oFI2Recno:SetString(6,cParcela)
+		__oFI2Recno:SetString(7,cType)
+		__oFI2Recno:SetString(8,cCustomerCode)
+		__oFI2Recno:SetString(9,cCustomerStore)
+		__oFI2Recno:SetString(10,cOcurrence)
+		__oFI2Recno:SetString(11,cGenerate)
+		__oFI2Recno:SetString(12,cOperation)
+		__oFI2Recno:SetString(13,'S')	// FI2_BORAPI
+		__oFI2Recno:SetString(14,'S')	// FI2_TRANSF
+		__oFI2Recno:SetString(15,' ')	// D_E_L_E_T_
+
+		nRecno := __oFI2Recno:ExecScalar('RECNOFI2')
+
+	EndIf
+Return nRecno
+
+/*/
+	{Protheus.doc} downloadVoucher
+	Método responsável pela geração do comprovante e download do PDF
+	@author Vitor Duca
+	@since 23/06/2023
+/*/
+
+Method downloadVoucher(jBody As Json, lAutomato As Logical, jResponseMock As Json) Class BanksBillsService
+	Local oBills 									As Object
+	Local aAreaSEA 	:= SEA->(FwGetArea()) 			As Array
+	Local aAreaSA6 	:= SA6->(FwGetArea()) 			As Array
+	Local aAreaSE2 	:= SE2->(FwGetArea()) 			As Array
+	Local aAreaSEE 	:= SEE->(FwGetArea()) 			As Array
+	Local nX 		:= 0 							As Numeric
+	Local oPrint 	:= NIL 							As Object
+	Local oLayout	 								As Object
+	Local oApiMsg	 								As Object
+	Local lCodAut	:= .F. 							As Logical
+    Local lRet      := .F.                          As Logical
+
+	Default lAutomato 		:= .F.
+	Default jResponseMock   := JsonObject():new()
+
+    oBills := &("totvs.protheus.backoffice.ngf.bills.payments.payments():new()")
+	oBills:setAutomato(lAutomato, jResponseMock) //Configura a classe para automação caso necessario
+
+	SEA->(DbSetOrder(4)) //EA_FILORIG, EA_NUMBOR, EA_CART, EA_PREFIXO, EA_NUM, EA_PARCELA, EA_TIPO, EA_FORNECE, EA_LOJA
+
+	If ValType(jBody["bordero"]) == "A"
+
+		For nX := 1 to Len(jBody["bordero"])
+			If oBills:lPrintOk .And. F717DbArea(jBody["bordero"][nX]["ea_filorig"], jBody["bordero"][nX]["ea_numbor"] , jBody["bordero"][nX]["ea_prefixo"] , jBody["bordero"][nX]["ea_num"] , jBody["bordero"][nX]["ea_parcela"] , jBody["bordero"][nX]["ea_tipo"], jBody["bordero"][nX]["ea_fornece"] , jBody["bordero"][nX]["ea_loja"])
+
+				If !Empty(SEA->EA_APIMSG)
+					lCodAut := verifyCodAuthorization(SEA->EA_APIMSG)
+				EndIf
+
+				If !lCodAut
+					oLayout	:= JsonObject():New()
+					oLayout:FromJson(SA6->A6_CFGBOLP)
+
+					oBills:setCredentials(oLayout["credentials"]:toJson(), SA6->A6_BCOOFI)
+					lRet := oBills:consult()
+
+					oApiMsg	:= JsonObject():New()
+
+					oApiMsg["bank"]    := SA6->A6_BCOOFI
+					oApiMsg["log"]     := oBills:getResult()
+
+					If lRet .And. !Empty(oApiMsg["log"])
+						RecLock('SEA', .F.)
+						SEA->EA_APIMSG  := oApiMsg:ToJSON()
+						SEA->(MsUnlock())
+
+						lCodAut := verifyCodAuthorization(SEA->EA_APIMSG)
+					EndIf
+				EndIf
+
+				If Self:lCodeAuthorized
+					Self:lCodeAuthorized := lCodAut
+				EndIf
+
+				Self:cPathPDF := oBills:printOut(SA6->A6_BCOOFI, SEA->EA_MODELO, SEA->EA_APIMSG, @oPrint)
+			EndIf
+
+		Next nX
+
+		If oBills:lPrintOk
+			oPrint:Print()
+			::openFile(.T., oBills:getFileName())
+		Else
+			Self:jMsgErro := answerErrorFormat(412, STR0019, oBills:getPrintErr()) // "Falha na geração do arquivo"
+		EndIf
+
+	EndIf
+
+	FreeObj(oBills)
+	FreeObj(oLayout)
+	FreeObj(oApiMsg)
+
+	FwRestArea(aAreaSEA)
+	FwRestArea(aAreaSA6)
+	FwRestArea(aAreaSE2)
+	FwRestArea(aAreaSEE)
+Return
+
+/*/{Protheus.doc} openFile
+	Realiza a abertura do arquivo utilizando a função FwFileReader
+	@author Vitor Duca
+	@since 26/06/2023
+	@version 1.0
+	@param lBase64, Logical, Define se converte o arquivo em base64
+/*/
+Method openFile(lBase64 As Logical, cPDFName As Character) Class BanksBillsService
+	Local oFile := NIL As Object
+
+	DEFAULT lBase64 := .T.
+	DEFAULT cPDFName := ""
+
+	If !Empty(Self:cPathPDF)
+		oFile := FwFileReader():New(Self:cPathPDF) // Caminho abaixo do ROOTPATH//
+		If (oFile:Open())
+			Self:cFilePDF := oFile:FullRead() // Efetua a leitura do arquivo
+			Self:lOk := .T. // Controle de sucesso da requisição
+			If lBase64
+				Self:cFilePDF := Encode64(Self:cFilePDF)
+				Self:cPathPDF := cPDFName
+			EndIf
+			oFile:Close()
+		Else
+			oFile:Close()
+			Self:jMsgErro := answerErrorFormat(412, STR0009, STR0010 + Self:cPathPDF + ".") // #"Sem acesso ao arquivo PDF"#"Não foi possível acessar o arquivo"
+		EndIf
+	Endif
+
+Return
+
+/*/{Protheus.doc} sendAllF713Mail
+    Reenvio de boletos com falha manualmente
+    @type function
+    @version 12.1.2210
+    @author daniel.muniz
+    @since 22/05/2023
+
+    @param cEmpAtual, character, cEmpAnt - Empresa Atual
+    @param cFilAtual, character, cFilAnt - Filial Atual
+
+/*/
+Function sendAllF713Mail(cEmpAtual as Character, cFilAtual as Character)
+	//Seta job para nao consumir licensas
+	RpcSetType(3)
+	// Seta job para empresa filial desejada
+	RpcSetEnv(cEmpAtual,cFilAtual, Nil, Nil, 'FIN', "FINA713")
+	F713Mail()
+	RpcClearEnv()
+Return
+
+/*/{Protheus.doc} verifyCodAuthorization
+	Verifica se o código de autorização está preenchido
+	@type  Function
+	@author user
+	@since 18/12/2023
+	@version 1.0
+	@param jEA_APIMSG, json, Mensagem API
+	@return lCodAut, logical, verifica o preenchimento
+	/*/
+Function verifyCodAuthorization(cAPIMSG As Character) As Logical
+	Local lCodAut 		:= .F. 					As Logical
+	Local jEA_APIMSG	:= JsonObject():New() 	As Json
+	Local jLog 			:= JsonObject():New() 	As Json
+
+	Default cAPIMSG 	:= ''
+
+	jEA_APIMSG:FromJson(cAPIMSG)
+	jLog:FromJson(jEA_APIMSG["log"])
+	jLog['response'] := JsonObject():New()
+	jLog['response']:FromJson(jLog["consult"]["response"])
+
+	If (jLog['response']:hasProperty("codigoAutenticacaoPagamento") .And. !Empty(jLog['response']["codigoAutenticacaoPagamento"])) .Or. (jLog['response']:hasProperty("autenticacaoPagamento") .And. !Empty(jLog['response']["autenticacaoPagamento"]))
+		lCodAut := .T.
+	EndIf
+
+Return lCodAut
+
+/*/{Protheus.doc} deletePendencies
+	Deleta instruções de cobranças
+	@type  Function
+	@author user
+	@since 18/12/2023
+	@version 1.0
+	@param cInternalID, character, chave do título
+	@param lMockUserPrivilege, logical, variável para automação
+	@return lCodAut, logical, verifica o preenchimento
+/*/
+Method deletePendencies(cInternalID As Character, lMockUserPrivilege As Logical, jOcurrencies as Json) As Json Class BanksBillsService
+	Local jResponse				:= JsonObject():new()				As Json
+	Local jDataOcurrencies		:= JsonObject():new()				As Json
+	Local aArea 				:= GetArea()						As Array
+	Local aAreaFI2 				:= FI2->(GetArea())					As Array
+	Local cUserID       		:= RetCodUsr(cUserName) 			As Character
+	Local aItemSelected    		:= {}								As Array	
+	Local nRecnoFI2				:= 0 								As Numeric
+	Local lWithoutPrevilegeDelete 									As Logical
+	Local nX					:= 0								As Numeric
+	Local nY					:= 0								As Numeric
+
+	Default cInternalID			:= '' 
+	Default lMockUserPrivilege 	:= .F.
+	Default jOcurrencies 		:= JsonObject():new()
+
+	lWithoutPrevilegeDelete := !(MPUserHasAccess('FINA151', 5, cUserID, .F.)) .Or. lMockUserPrivilege
+
+	If lWithoutPrevilegeDelete
+		jResponse := AnswerErrorFormat(400, STR0022, STR0023) // Usuário sem privilégio para exclusão
+	Else
+		If jOcurrencies:hasProperty("ocurrencies") .and. Valtype( jOcurrencies["ocurrencies"] ) == "A"
+			For nY := 1 to Len(jOcurrencies["ocurrencies"])
+				Aadd(aItemSelected, {;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_filial"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_prefix"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_titulo"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_parcel"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_tipo"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_codcli"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_lojcli"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_cartei"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_numbor"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_ocorr"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_gerado"),;
+					jOcurrencies["ocurrencies"][nY]:GetJsonText("fi2_opeapi");
+				})
+			Next nY
+		Else
+			Aadd(aItemSelected, STRtokARR2(cInternalID, '|', .T.))
+		Endif
+
+		DbSelectArea('FI2')
+		For nX := 1 To Len(aItemSelected)
+			jDataOcurrencies['fi2_filial'] := PadR(Alltrim(aItemSelected[nX][1]), TamSX3('FI2_FILIAL')[01], '')
+			jDataOcurrencies['fi2_prefix'] := PadR(Alltrim(aItemSelected[nX][2]), TamSX3('FI2_PREFIX')[01], '')
+			jDataOcurrencies['fi2_titulo'] := PadR(Alltrim(aItemSelected[nX][3]), TamSX3('FI2_TITULO')[01], '')
+			jDataOcurrencies['fi2_parcel'] := PadR(Alltrim(aItemSelected[nX][4]), TamSX3('FI2_PARCEL')[01], '')
+			jDataOcurrencies['fi2_tipo']   := PadR(Alltrim(aItemSelected[nX][5]), TamSX3('FI2_TIPO')[01], '')
+			jDataOcurrencies['fi2_codcli'] := PadR(Alltrim(aItemSelected[nX][6]), TamSX3('FI2_CODCLI')[01], '')
+			jDataOcurrencies['fi2_lojcli'] := PadR(Alltrim(aItemSelected[nX][7]), TamSX3('FI2_LOJCLI')[01], '')
+			jDataOcurrencies['fi2_cartei'] := PadR(Alltrim(aItemSelected[nX][8]), TamSX3('FI2_CARTEI')[01], '')
+			jDataOcurrencies['fi2_numbor'] := PadR(Alltrim(aItemSelected[nX][9]), TamSX3('FI2_NUMBOR')[01], '')
+			jDataOcurrencies['fi2_ocorr']  := PadR(Alltrim(aItemSelected[nX][10]), TamSX3('FI2_OCORR')[01], '')
+			jDataOcurrencies['fi2_gerado'] := PadR(Alltrim(aItemSelected[nX][11]), TamSX3('FI2_GERADO')[01], '')
+			jDataOcurrencies['fi2_opeapi'] := PadR(Alltrim(aItemSelected[nX][12]), TamSX3('FI2_OPEAPI')[01], '')
+			
+			nRecnoFI2 := self:getFI2RecnoByKey(jDataOcurrencies)
+			If nRecnoFI2 > 0
+				FI2->(DbGoTo(nRecnoFI2))
+				RecLock("FI2", .F.)
+				FI2->(DbDelete())
+				FI2->(MsUnLock())
+				jResponse := answerFormat(.T., 200, STR0025, '')
+			Else
+				jResponse := AnswerErrorFormat(400, STR0022, STR0027) // "Opção disponível apenas para exclusão de ocorrências (Tabela FI2), para excluir esse registro retire o título do borderô"
+			EndIf
+		Next nX
+		RestArea(aAreaFI2)
+	EndIf
+
+	RestArea(aArea)
+Return jResponse
+
+/*/{Protheus.doc} getBillDirectory
+  Retorna o diretório onde serão gravados os boletos
+  @type function
+  @return Character, diretório para gravação do arquivo pdf
+  @author Claudio Yoshio Muramatsu
+  @since 06/03/2025
+/*/
+Method getBillDirectory() As Character Class BanksBillsService
+	Local cDir       As Character
+	Local cSeparator As Character
+
+	If IsSrvUnix()
+		cSeparator := "/"
+	Else
+		cSeparator := "\"
+	EndIf
+
+	cDir := cSeparator + 'spool' + cSeparator + 'boletos' + cSeparator + Lower(cEmpAnt) + cSeparator
+
+	If !ExistDir( cDir )
+		// criar diretório \spool\boletos
+		If !ExistDir(cSeparator + 'spool' + cSeparator + 'boletos')
+			MakeDir( cSeparator + 'spool' + cSeparator + 'boletos' )
+		EndIf
+		// criar diretório \spool\boletos\'Empresa'
+		If !ExistDir(cSeparator + 'spool' + cSeparator + 'boletos' + cSeparator + Lower(cEmpAnt))
+			MakeDir( cSeparator + 'spool' + cSeparator + 'boletos' + cSeparator + Lower(cEmpAnt) )
+		EndIf
+	EndIf
+Return cDir
+
+/*/
+	{Protheus.doc} sendMarkEmail
+	Método responsável por inicializar o processo de envio do Boleto por E-mail
+	que foram selecionados para reenvio.
+	@param oBody, object, body recebido
+
+	@return oResponse, object, response da requisição
+
+	@author Daniel Moda
+	@since 29/05/2025
+/*/
+Method sendMarkEmail(oBody As Json) Class BanksBillsService
+	Local oResponse   As Json
+	Local cBranch     As Character
+	Local cOrigBranch As Character
+	Local cPrefix     As Character
+	Local cNumber     As Character
+	Local cParcel     As Character
+	Local cType       As Character
+	Local aRecnoSEA   As Array
+	Local nTotalBol   As Numeric
+	Local nX          As Numeric
+
+	oResponse := JsonObject():New()
+
+	aRecnoSEA := {}
+	nTotalBol := Len(oBody['bordero'])
+	nX        := 01
+
+	For nX := 01 To nTotalBol
+		cBranch     := IIf(ValType(oBody['bordero'][nX]['ea_filial']) == 'C', PadR(AllTrim(oBody['bordero'][nX]['ea_filial']), TamSX3('EA_FILIAL')[01]), "")
+		cOrigBranch := IIf(ValType(oBody['bordero'][nX]['e1_filorig']) == 'C', PadR(AllTrim(oBody['bordero'][nX]['e1_filorig']), TamSX3('E1_FILORIG')[01]), "")
+		cPrefix     := PadR(AllTrim(oBody['bordero'][nX]['ea_prefixo']), TamSX3('EA_PREFIXO')[01])
+		cNumber     := PadR(AllTrim(oBody['bordero'][nX]['ea_num']), TamSX3('EA_NUM')[01])
+		cParcel     := PadR(AllTrim(oBody['bordero'][nX]['ea_parcela']), TamSX3('EA_PARCELA')[01])
+		cType       := PadR(AllTrim(oBody['bordero'][nX]['ea_tipo']), TamSX3('EA_TIPO')[01])
+		If ValType(oBody['bordero'][nX]['ea_filorig']) == 'C'
+			cOrigBranch := PadR(AllTrim(oBody['bordero'][nX]['ea_filorig']), TamSX3('EA_FILORIG')[01])
+		EndIf
+
+		// verifica se o título existe
+		If (foundBill(cBranch, cOrigBranch, cPrefix, cNumber, cParcel, cType))
+			// alterando o campo de status de envio do boleto
+			If (RecLock('SEA', .F.))
+				SEA->EA_APIMAIL := '0'
+				SEA->(MsUnlock())
+			EndIf
+			AADD( aRecnoSEA, SEA->( Recno() ) )
+		EndIf
+	Next
+	// chamando rotina de envio do e-mail
+	If Len( aRecnoSEA ) > 0
+		If F713Mail(,,,,,,,,aRecnoSEA)
+			oResponse["result"]   := .T.
+			oResponse["response"] := JsonObject():New()
+			oResponse["response"]["message"] := STR0005 // #"Título Financeiro encontrado e o processo de envio do Boleto por e-mail será iniciado."
+		Else
+			oResponse = answerErrorFormat(412,  STR0015, STR0014)
+		EndIf
+	EndIf
+
+Return oResponse

@@ -1,0 +1,434 @@
+#include "totvs.ch"
+#include 'tlpp-core.th'
+#include 'agd.wizard.tco.service.ch'
+
+namespace agd.wizardTCOService
+using namespace agd.utilsService
+using namespace agd.tcoRepository
+
+
+/*/{Protheus.doc} agdWizardTCOService
+Servico para ajuste da entidade de ACL de Contratos do Barter
+@type class
+@version 12
+@author jean.schulze
+@since 07/01/2025
+/*/
+class agdWizardTCOService FROM agdUtilsService
+	public Data cCodigoNegocio   As Character
+
+	public method new()
+
+	public method informarFiliais()
+	public method ativarFiliais()
+	public method getIncompatibilidadeFeatures() as character
+	public method finalizarConfiguracao()
+	
+	private Method checkModuleDependencies(aFeatures) As Array
+	private Method groupIncompatibilities(aErros) as Array
+	private method validateFeatureIncompatibilities() as object	
+	private method validarFiliais()
+
+endclass
+
+/*/{Protheus.doc} new
+Constructor
+@type method
+@version 12
+@author jean.schulze
+@since 02/01/2025
+@param pcCodigoNegocio, character, Codigo Negocio Barter
+@return variant, instância
+/*/   
+method new() class agdWizardTCOService
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} informarFiliais
+Registra as filiais que serão utilizadas no módulo
+@type method
+@version 12
+@author jean.schulze
+@since 25/09/2025
+@param lTodasFiliais, logical, compartilha filial
+@param aListaFiliais, array, lista de filiais
+@return variant, retorno
+/*/
+method informarFiliais(lTodasFiliais as Logical, aListaFiliais as Array) Class agdWizardTCOService
+	Local oRepository  as object
+	Local jPayloadSave := JsonObject():new()
+	Local jDetalhe     := JsonObject():new()
+
+	//valida se as filiais informadas estao corretas
+	if(!lTodasFiliais .and. len(aListaFiliais) = 0)
+		Self:setError(STR0001, 404)
+		return nil
+	endif
+
+	//validar filiais informadas
+	if len(aListaFiliais) > 0 .and. !Self:validarFiliais(aListaFiliais)
+		return nil		
+	endif
+
+	jDetalhe['compartilhaFilial'] = lTodasFiliais
+	jDetalhe['filiais'] = aListaFiliais
+
+	jPayloadSave['codigo'] := 'TCO'
+	jPayloadSave['status'] := '1' //pendente
+	jPayloadSave['tipo'] := '3' //tecnologia
+	jPayloadSave['ativo'] := '1' //ativo
+	jPayloadSave['data'] := Date()
+	jPayloadSave['hora'] := SubStr(Time(),1,5)
+	jPayloadSave['usuario'] := RetCodUsr()
+	jPayloadSave['detalhe'] := jDetalhe:toJSON()
+
+	oRepository := agdTCORepository():New()
+	//verifica se o tco já está informado
+	oRepository:findById(oRepository:getFilterById('TCO')) //codigo travado
+	if(oRepository:isSuccess())
+		oTCOFeature := oRepository:getResponse()
+		oRepository:DeActivate() 
+
+		//se tiver finalizado, cria um erro
+		if(oTCOFeature['status'] = '2') 
+			Self:setError(STR0002, 404)			
+			return nil
+		endif
+
+		//se for update, realizar o poscionamento do registro
+		oRepository := agdTCORepository():New(xfilial('NE1')+'TCO')
+		oRepository:save(jPayloadSave, .t.)
+	else
+	  oRepository:DeActivate() //reset
+	  oRepository := agdTCORepository():New()
+	  oRepository:save(jPayloadSave)
+	endif
+
+	if(oRepository:isSuccess())
+		//ativar filiais
+		if lTodasFiliais
+			PutMv( "MV_SIGAAGD" , .T.)
+		else
+			Self:ativarFiliais(aListaFiliais)
+		endif
+	endif
+
+	Self:setFullResponse(oRepository)
+
+	FreeObj(oRepository)
+
+return nil
+
+/*/{Protheus.doc} ativarFiliais
+Ativa as filiais selecionadas
+@type method
+@version 12
+@author jean.schulze
+@since 25/09/2025
+@param aListaFiliais, array, lista de filiais
+@return variant, retorno
+/*/
+method ativarFiliais(aListaFiliais as Array) Class agdWizardTCOService
+	Local nX as numeric
+	Local aSM0Data := FWLoadSM0()   
+
+	//reset geral
+	PutMv( "MV_SIGAAGD" , .F.)
+    
+	//replica o parametro para todo mundo
+	FWSX6Util():ReplicateParam( 'MV_SIGAAGD' , '*' )
+
+    For nX := 1 To Len(aSM0Data)
+        // Filtra apenas pela empresa atual
+		If aSM0Data[nX][1] == cEmpAnt  // Código da empresa
+			If  aScan(aListaFiliais, aSM0Data[nX][2]) > 0 //filial a ser ativada
+				PutMvFil( "MV_SIGAAGD" , .T. , aSM0Data[nX][2] )
+			else
+				//verifica se tem um parametro ativo, tendo o parametro desativa
+				if SUPERGETMV("MV_SIGAAGD", .F., .F., aSM0Data[nX][2])
+					PutMvFil( "MV_SIGAAGD" , .F. , aSM0Data[nX][2])
+				endif
+			EndIf
+		endif
+    Next	
+
+	
+
+return nil
+
+/*/{Protheus.doc} validarFiliais
+Valida a lista de filiais
+@type method
+@version 12
+@author jean.schulze
+@since 25/09/2025
+@param aListaFiliais, array, lista de filial
+@return variant, falso/verdadeiro
+/*/
+method validarFiliais(aListaFiliais as Array) Class agdWizardTCOService
+    Local nX as numeric
+    Local nY as numeric
+    Local aSM0Data := FWLoadSM0()
+    Local aFiliaisValidas := {}
+    Local aFiliaisInvalidas := {}
+    Local lRet := .T.
+    
+    // Monta array com filiais válidas da empresa atual
+    For nX := 1 To Len(aSM0Data)
+        If aSM0Data[nX][1] == cEmpAnt  // Código da empresa
+            aAdd(aFiliaisValidas, aSM0Data[nX][2])  // Código da filial
+        EndIf
+    Next
+
+    // Verifica se cada filial informada existe
+    For nY := 1 To Len(aListaFiliais)
+        If aScan(aFiliaisValidas, aListaFiliais[nY]) == 0
+            aAdd(aFiliaisInvalidas, aListaFiliais[nY])
+            lRet := .F.
+        EndIf
+    Next
+
+    // Se houver filiais inválidas, seta erro
+    If !lRet
+        Self:setError(STR0003 + ArrTokStr(aFiliaisInvalidas), 404)
+    EndIf
+
+Return lRet
+
+/*/{Protheus.doc} getIncompatibilidadeFeatures
+Verifica incompatibilidades das features ativas (compartilhamento e dependências)
+@type method
+@version 12
+@author scheronlini
+@since 08/10/2025
+@return character, JSON consolidado das incompatibilidades
+/*/
+method getIncompatibilidadeFeatures() class agdWizardTCOService as character
+	Local oRepo      := agdTCORepository():New()
+	Local aFeatures  := oRepo:getAllClassFeaturesAtivas()
+	Local jResp      := JsonObject():New()
+	Local aIncompats := {}
+	Local nCount     := 0
+	Local oFeat, aItensFeat, jFeature, nF
+	Local cJson      := ""
+	Local aParams    := {}
+
+	If Len(aFeatures) == 0
+		jFeature := JsonObject():New()
+		jFeature["items"] := { JsonObject():New() }
+		jFeature["items"][1]["type"] := "INCOMPLETO"
+		jFeature["items"][1]["description"] := {STR0004 } //"Nenhuma Feature ativa encontrada na NE1. É necessário pelo menos 1 feature válida para operação."
+		AAdd(aIncompats, jFeature)
+	Else
+		For nF := 1 To Len(aFeatures)
+			oFeat := aFeatures[nF][1]
+			aItensFeat := {}
+			aParams := {}	
+
+			aEval(oFeat:getParametros(), {|x| iif(x['validaAtivacao'] == .T., aAdd(aParams, x), Nil) })
+			aEval(oFeat:getCheckAtivacao(), {|x| AAdd(aItensFeat, x)})
+			aEval(Self:checkModuleDependencies(oFeat:getCodigo(), aParams), {|x| AAdd(aItensFeat, x)})
+
+			If Len(aItensFeat) > 0
+				jFeature := JsonObject():New()
+				jFeature["feature"] := oFeat:getCodigo()
+				jFeature["items"]    := aItensFeat
+				AAdd(aIncompats, jFeature)
+				nCount++
+			EndIf
+		Next nF
+	EndIf
+
+	jResp["hasIncompatibilities"] := (nCount > 0)
+	jResp["incompatibilities"] := aIncompats
+	cJson := jResp:toJson()
+
+Return cJson
+
+/*/{Protheus.doc} checkModuleDependencies
+Valida dependências de parâmetros declaradas nas Features (DTOs)
+@type method
+@version P12
+@author scheronlini.martins
+@since 08/10/2025
+@param aFeatures, array, param_Features
+@return variant, return_erros
+/*/
+Method checkModuleDependencies(cFeature, aParams) Class agdWizardTCOService
+	Local nP        := 0
+	Local nX        := 0
+	Local cMsg      := ""
+	Local aErros    := {}
+	Local oRepository := agdTCORepository():New(xfilial('NE1')+'TCO')
+	Local oFiliais  := nil
+	Local aFilialParam := {}
+
+	For nP := 1 To Len(aParams)
+
+		oFiliais := oRepository:getDetalheFeature('TCO')
+	
+		if oFiliais:hasProperty("compartilhaFilial") .and. oFiliais["compartilhaFilial"] == .T.
+			aFilialParam := {""}
+		else
+			aFilialParam := oFiliais["filiais"]
+			aAdd(aFilialParam, "") //verifica tambem a filial vazia
+		endif
+
+		For nX:= 1 to Len(aFilialParam)
+
+			lErro := .F.
+			cValorAtual := SUPERGETMV(aParams[nP]['parametro'], .F., SUPERGETMV(aParams[nP]['parametro'], .f., ""), aFilialParam[nX])
+			if ValType(cValorAtual) != "C"
+				cValorAtual := CValToChar(cValorAtual)
+			endif
+			cValorAtual := AllTrim(cValorAtual)
+		
+			//checagem se existe valor esperado
+			if !empty(aParams[nP]['valorEsperado'])
+				
+				if aParams[nP]['conteudoCompleto']
+					//verifica se o conteudo é completo
+					lErro := (AllTrim(cValorAtual) != AllTrim(aParams[nP]['valorEsperado']))
+				else
+					//verifica se contem o valor esperado
+					lErro := (AT(AllTrim(aParams[nP]['valorEsperado']), AllTrim(cValorAtual)) == 0)
+				endif
+
+				if lErro
+					cMsg := STR0011  + cFeature + STR0012 + aParams[nP]['parametro'] + ;//"A feature '"   // "' exige que o parâmetro '"
+							"' deveria conter " + aParams[nP]['valorEsperado'] + ; //" deveria ser "
+							iif(!empty(aFilialParam[nX]), STR0014 + AllTrim(aFilialParam[nX]), "" ) + ; //" na filial '"
+							STR0015 + "'"+ cValorAtual + "'."  //", mas está configurada  "
+					AAdd(aErros, agdFeatUtils():setError(cMsg, "PARAMETRO"))
+				endif
+			endif
+
+			if !Empty(cValorAtual) .and. len(aParams[nP]['options']) > 0 .and. !lErro
+				npos := aScan(aParams[nP]['options'], {|x| AllTrim(x['value']) == AllTrim(cValorAtual) } )	
+				if npos == 0
+					cMsg :=STR0011 + cFeature + STR0018 + aParams[nP]['parametro'] + ;//"A feature '" //"' possui valores esperados específicos para o parâmetro '"
+						STR0015 +":  " + "'" +cValorAtual +"'" + ; //"' na filial '" //", mas está configurada:  "
+						STR0019 + "." //" não correspondendo a nenhum dos valores permitidos: "
+					AAdd(aErros, agdFeatUtils():setError(cMsg, "PARAMETRO"))
+				endIf
+			endif
+
+			if Empty(cValorAtual) .and. !lErro
+				cMsg := STR0011  + cFeature + STR0012 + aParams[nP]['parametro'] + ;//"A feature '"   // "' exige que o parâmetro '"
+						STR0026 //" nao esteja vazio "
+				AAdd(aErros, agdFeatUtils():setError(cMsg, "PARAMETRO"))
+			endif
+		Next nX
+	Next nP
+
+Return aErros
+
+
+/*/{Protheus.doc} validateFeatureIncompatibilities
+Valida incompatibilidades de uma feature (tabelas e parâmetros)
+Agrupa por tipo (TABLE_SHARING / MODULE_DEPENDENCY) antes de montar o JSON.
+@type method
+@version P12
+@author scheronlini
+@since 08/10/2025
+@param oFeat, object, (DTO da feature)
+@return JsonObject, JSON com incompatibilidades agrupadas
+/*/
+method validateFeatureIncompatibilities(aFeatures) class agdWizardTCOService
+	Local jFeature := JsonObject():New()
+	Local aErros   := {}
+	Local aRet1, aRet2 := {}
+	Local oFeat := aFeatures[1]
+
+	jFeature["feature"] := iif(ValType(oFeat) == "O", oFeat:getCodigo(), "")
+	jFeature["items"]   := {}
+
+	If ValType(oFeat) == "O"
+		aRet1 := oFeat:getCheckFinalizacao()
+		aRet2 := Self:checkModuleDependencies(oFeat:getCodigo(), oFeat:getParametros())
+
+		If ValType(aRet1) == "A" .And. Len(aRet1) > 0
+			AEval(aRet1, {|x| AAdd(aErros, x)})
+		EndIf
+		If ValType(aRet2) == "A" .And. Len(aRet2) > 0
+			AEval(aRet2, {|x| AAdd(aErros, x)})
+		EndIf
+	EndIf
+
+	// Agrupa incompatibilidades via método genérico
+	jFeature["items"] := aErros
+
+Return jFeature
+
+/*/{Protheus.doc} finalizarConfiguracao
+Finaliza a configuração das features, atualizando status e data de finalização.
+Valida incompatibilidades antes da atualização.
+@type method
+@version 12
+@author scheronlini
+@since 08/10/2025
+/*/
+method finalizarConfiguracao() class agdWizardTCOService
+	Local oRepo        := agdTCORepository():New()
+	Local aFeatures    := oRepo:getAllClassFeaturesAtivas()
+	Local jResp        := JsonObject():New()
+	Local cDataHora    := DtoC(Date()) + " " + Time()
+	Local oFeat        := Nil
+	Local cStatus, cMsgErro := ""
+	Local jFeatureIncompat
+	Local lTemIncompat := .F.
+	Local nF, nI, nJ := 0
+	Local cFeatureTCO := "TCO"
+	Local lExisteTCO := .F.
+	local aFeatAtiva := oRepo:findActiveFeatures()
+	local nPosTCO := AScan(aFeatAtiva, {|x| AllTrim(x[1]) == cFeatureTCO })
+
+	If Len(aFeatures) == 0
+		::setError(STR0021, 400) //Nenhuma feature ativa encontrada para finalização.
+		Return
+	EndIf
+
+	If nPosTCO > 0
+		lExisteTCO := .T.
+	endIf
+
+	For nF := 1 To Len(aFeatures)
+		oFeat := aFeatures[nF][1]
+
+		jFeatureIncompat := ::validateFeatureIncompatibilities(aFeatures[nF])
+		If Len(jFeatureIncompat["items"]) > 0
+			lTemIncompat := .T.
+
+			For nI := 1 To Len(jFeatureIncompat["items"])
+				cMsgErro += jFeatureIncompat["feature"] + " - [" + jFeatureIncompat["items"][nI]["tipo"] + "]" + CRLF
+				cMsgErro += " - " + jFeatureIncompat["items"][nI]["error"][nJ] + CRLF			
+			Next
+		EndIf
+	Next nF
+
+	If lTemIncompat
+		::setError(STR0022 + " - " + cMsgErro, 400) //Foram encontradas incompatibilidades.
+		Return
+	EndIf
+
+	If !lExisteTCO
+		::setError(STR0023, 400) //"Feature TCO não está ativa para ser finalizada."
+		Return
+	EndIf
+
+	cStatus := oRepo:getFeatureStatus(cFeatureTCO)
+
+	If cStatus $ "12"
+		If oRepo:updateFeatureStatus(cFeatureTCO, "3", Date(), Time())
+			jResp["feature"]          := cFeatureTCO
+			jResp["status"]           := "success"
+			jResp["message"]          := STR0024 // "Finalizada com sucesso."
+			jResp["data_finalizacao"] := cDataHora
+		EndIf
+	Else
+		::setError(STR0025, 400) //"Feature TCO já finalizada ou com status inválido para finalização."
+		Return
+	EndIf
+
+	::setSuccess(jResp)
+Return

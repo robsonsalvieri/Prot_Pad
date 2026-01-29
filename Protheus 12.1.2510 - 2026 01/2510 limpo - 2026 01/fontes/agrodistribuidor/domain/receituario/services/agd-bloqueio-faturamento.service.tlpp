@@ -1,0 +1,566 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "agd.bloqueio.faturamento.service.ch"
+
+namespace agd.bloqueioFaturamentoService
+using namespace agd.utilsService
+using namespace agd.solicitacaoReceitaRepository
+using namespace agd.bloqueioPedidoVendaRepository
+using namespace agd.solicitacaoReceitaService
+using namespace agd.produtoRepository
+
+/*/{Protheus.doc} agdBloqueioFaturamentoService
+Serviço para verificação de bloqueio de faturamento (receituário agronômico)
+@type class
+@version P12.1.2610
+@author Gilson.Venturi
+@since 10/11/2025
+/*/
+class agdBloqueioFaturamentoService FROM agdUtilsService
+
+	public method New()
+    public method validaPedidoBloqueioReceita()
+    public method gerarBloqueioReceita()
+
+    //Validação SC9 MATA460A    
+    public method validaMarcacaoFaturamentoEstornoSC9()
+    public Method solicitaDecisaoParaUsuario()
+    Static Method removeItemSemIntegracaoReceituario()
+    Static Method isTodosItensDoGrupoMarcados()
+    Static Method isItensNoBrowse()
+    Static Method geraMensagemMarcacaoItens()
+    Static Method geraMensagemDataEntrega()
+    Static Method removeGrupoValidado()
+    Static Method enviarCancelamentoSolicitacao()
+
+    //Validação data prevista entrega
+    public Method validaDataPrevistaEntrega()
+
+endclass
+
+/*/{Protheus.doc} New
+Constructor
+@type method
+@version P12.1.2610
+@author Gilson.Venturi
+@since 10/11/2025
+@return variant, this
+/*/
+method New() class agdBloqueioFaturamentoService
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} validaPedidoBloqueioReceita
+Realiza varredura no pedido(SC9) para verificar se há necesidade de bloquear/liberar Faturamento (C9_BLAGRO)
+@type method
+@version P12.1.2610
+@author Gilson.Venturi
+@since 05/11/2025
+@param cNumPedido, Character, Número do pedido
+@return variant, this
+/*/
+method validaPedidoBloqueioReceita(cNumPedido) class agdBloqueioFaturamentoService
+    Local aAreaSC9   := SC9->(GetArea())
+
+    dbSelectArea('SC9')
+    SC9->(dbSetOrder(1))
+    if SC9->(dbSeek(FWxFilial('SC9')+cNumPedido))
+       	while SC9->(!EoF()) .and. ;
+              SC9->(C9_FILIAL + C9_PEDIDO) == FWxFilial('SC9') + cNumPedido .and. ;
+              SC9->C9_QTDLIB > 0 // Verifica se tem quantidade liberada
+
+            Self:gerarBloqueioReceita(SC9->C9_PEDIDO, SC9->C9_ITEM, SC9->C9_SEQUEN, SC9->C9_PRODUTO)
+            SC9->(dbSkip())
+        enddo
+    endif
+
+    RestArea(aAreaSC9)
+return nil
+
+
+/*/{Protheus.doc} gerarBloqueioReceita
+Gerar bloqueio ou liberação faturamento (C9_BLAGRO) de acordo com status da solicitação de receita 
+que está vinculada ao pedido
+@type method
+@version P12.1.2610
+@author Gilson.Venturi
+@since 05/11/2025
+@param cNumPedido, Character, Número do pedido
+@param cItemPed, Character, Item do pedido
+@param cSeq, Character, Sequência do item do pedido
+@param cProduto, Character, Código do produto
+@return variant, this
+/*/
+method gerarBloqueioReceita(cNumPedido, cItemPed, cSeq, cProduto) class agdBloqueioFaturamentoService
+    Local aAreaNET   := NET->(GetArea())
+    Local aAreaNEU   := NEU->(GetArea())
+    Local aAreaSC6   := SC6->(GetArea())
+    Local aAreaSC9   := SC9->(GetArea())
+    Local cStReceita := ''
+
+    if SUPERGETMV("MV_SIGAAGD", .f., .f.) .And. SC9->(FieldPos("C9_BLAGRO")) > 0
+
+        dbSelectArea('SC9')
+        SC9->(dbSetOrder(1))
+        if SC9->(dbSeek(xFilial('SC9') + cNumPedido + cItemPed + cSeq + cProduto))
+            oRepoReceituario := agdSolicitacaoReceitaRepository():New()
+
+            dbSelectArea('NEU')
+            NEU->(dbSetOrder(2)) // NEU_FILIAL+NEU_NUMPED+NEU_ITEMPE
+            if NEU->(dbSeek(xFilial('NEU') + SC9->C9_PEDIDO + SC9->C9_ITEM + SC9->C9_SEQUEN))
+
+                cStReceita := posicione("NET",2,FWxFilial("NET")+SC9->C9_PEDIDO,"NET_STSREC")
+
+                if  cStReceita <> '1' .and. empty(SC9->C9_BLAGRO)  //1-Emitida
+                    if RecLock('SC9',.F.)
+                        SC9->C9_BLAGRO := "01"
+                        MsUnlock()
+                    endif
+                elseif cStReceita == '1' .and. !empty(SC9->C9_BLAGRO)  //1-Emitida
+                    if RecLock('SC9',.F.)
+                        SC9->C9_BLAGRO := ""
+                        MsUnlock()
+                    endif
+                endif
+            else //Verifica se pedido precisa de receita e a mesma ainda nao foi gerada
+                dbSelectArea('SC6')
+                SC6->(dbSetOrder(1)) //C6_FILIAL+C6_NUM+C6_ITEM+C6_PRODUTO
+                if SC6->(dbSeek(FWxFilial('SC6') + SC9->C9_PEDIDO + SC9->C9_ITEM + SC9->C9_PRODUTO))
+
+                    If  oRepoReceituario:IsGeraReceita(SC6->C6_PRODUTO) .and. ;
+                        oRepoReceituario:IsPropriedadeRural(SC6->C6_CLI, SC6->C6_LOJA) .and. ;
+                        oRepoReceituario:IsRegraReceita(SC6->C6_NUM, SC6->C6_TES, SC6->C6_CLI, SC6->C6_LOJA)
+
+                        if empty(SC9->C9_BLAGRO)
+                            if RecLock('SC9',.F.)
+                                SC9->C9_BLAGRO := "01"
+                                MsUnlock()
+                            endif
+                        endif
+                    endif
+                endif
+            endif
+
+            FreeObj(oRepoReceituario)
+        endif
+    endif
+
+    RestArea(aAreaNET)
+    RestArea(aAreaNEU)
+    RestArea(aAreaSC6)
+    RestArea(aAreaSC9)
+return nil
+
+
+/*/{Protheus.doc} validaMarcacaoFaturamentoEstornoSC9
+Processo de validacao dos registros marcados no MATA460A. Para faturamento ou estorno devem ser marcados todos os registros que possuem a mesma receita
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aItensMark, array, SC9 marcadas no browse
+@param cMarca, Character, marca do browse
+@param lEstorno, logical, está estornando
+@param lPosicionado, logical, parametro posicionado ou marcados
+@return lRet, logical, trava o processo ou continua
+/*/
+Method validaMarcacaoFaturamentoEstornoSC9(aItensMark, aItensBrowse, cMarca, lEstorno, lPosicionado) class agdBloqueioFaturamentoService
+    Local lRet         := .T.
+    Local nX           := 1
+    Local nPos         := 1
+    Local aNEUGrupo    := {}
+    Local nQtdItens    := 0
+    Local aItensToMark := {}
+    Local nCount       := 0
+    Local oStatReceita := Nil
+    Local oStatGrupo   := Nil
+    Local cMensgItens  := ""
+    Local lItensNoBrowse := .T.
+    Local cWhereItens  := ""
+    Local oRepSolicRec := agdSolicitacaoReceitaRepository():New()
+    Local oProdutoRep  := Nil
+    Local lCtrlReceita := .F.
+    Default aItensMark := {}
+
+    If Empty(aItensMark)
+        Return .T.
+    Else
+        nQtdItens := Len(aItensMark)
+        While nPos <= Len(aItensMark)
+            cWhereItens  := ""
+            aItensToMark := {}
+            nCount++
+            oProdutoRep := Nil
+        	oProdutoRep := agdProdutoRepository():New(FwXFilial('NCR') + aItensMark[nX,5])
+        	lCtrlReceita := oProdutoRep:isItemControlaReceituario()
+            If lCtrlReceita
+                cReceita := oRepSolicRec:getReceitaPorItemSolicitacao(@oStatReceita, aItensMark[nX,1] , aItensMark[nX,2] , aItensMark[nX,3] , aItensMark[nX,4])
+                If Empty(cReceita)
+                    //O item "" possui controle de receituário agronômico, mas não possui receita.""Verifique o item: ""Pedido:"" Item:"" Seq. Lib:"
+                    AGDHELP(STR0005, STR0019 + aItensMark[nX,2] + STR0020, STR0021 + STR0002 + AllTrim(aItensMark[nX][2]) + STR0003 + AllTrim(aItensMark[nX][3]) + STR0004 + AllTrim(aItensMark[nX][4]))
+                    Return .F.
+                EndIf
+                aNEUGrupo := oRepSolicRec:getItensDaSolicitacaoPorReceita(@oStatGrupo, cReceita, aItensMark[nX,1],aItensMark[nX,2] , aItensMark[nX,3] , aItensMark[nX,4] )
+            Else
+                aItensMark := Self:removeItemSemIntegracaoReceituario(aItensMark, 1)
+                Loop
+            EndIf
+            
+            If !Empty(aNEUGrupo)	
+                If !Self:isTodosItensDoGrupoMarcados(aNEUGrupo, aItensMark, @aItensToMark)
+                    cMensgItens    := Self:geraMensagemMarcacaoItens(aItensToMark, @cWhereItens)
+                    lItensNoBrowse := Self:isItensNoBrowse(aItensToMark, aItensBrowse)
+                    lRet           := Self:solicitaDecisaoParaUsuario(cMensgItens, lItensNoBrowse, aItensToMark, lEstorno, lPosicionado, cMarca, cReceita, cWhereItens)
+                EndIf
+                If lRet .And. !lEstorno //Se usuario decidiu faturar tudo ou ja tinham todos marcados
+                    lRet := Self:validaDataPrevistaEntrega(aNEUGrupo,aItensMark)
+                EndIf
+                If lRet .And. lEstorno
+                    Self:enviarCancelamentoSolicitacao(aNEUGrupo)
+                EndIf
+                aItensMark := Self:removeGrupoValidado(aItensMark, aNEUGrupo)
+            EndIf
+
+            If nCount == nQtdItens .Or. !lRet //Seguranca para nao acontecer loop eterno. Vai iterar ate ter o mesmo tamanho do array
+                Return lRet
+            EndIf
+        EndDo
+    EndIf
+Return lRet
+
+
+/*/{Protheus.doc} removeItemSemIntegracaoReceituario
+Remove SC9 que nao possui integracao de receituário agronômico
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aArray, array, array com SC9 marcadas
+@param nIndex, numeric, indice para remover
+@return aNovo, array, array com SC9 marcadas atualizado sem o registro
+/*/
+Method removeItemSemIntegracaoReceituario(aArray, nIndex) class agdBloqueioFaturamentoService
+    Local aNovo := {}
+    Local nI
+
+    For nI := 1 To Len(aArray)
+        If nI != nIndex
+            AAdd(aNovo, aArray[nI])
+        EndIf
+    Next
+Return aNovo
+
+
+/*/{Protheus.doc} isTodosItensDoGrupoMarcados
+Valida se todos os itens da receita estão marcados no browse
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aGrupo, array, grupo de registros que devem ser marcados juntos (itens da receita)
+@param aItensMark, array, registros que foram marcados no browse
+@param aItensToMark, array, itens que não foram marcados
+@return lRet, array, retorna .T. se todos estao marcados corretamente
+/*/
+Method isTodosItensDoGrupoMarcados(aGrupo, aItensMark, aItensToMark) class agdBloqueioFaturamentoService
+    Local nI 	 := 0
+	Local nJ 	 := 0
+	Local lFound := .F.
+
+    For nI := 1 To Len(aGrupo)
+        lFound := .F.
+        For nJ := 1 To Len(aItensMark)
+            If  aItensMark[nJ][1] == aGrupo[nI][1] .And. ; //NEU_FILIAL = C9_FILIAL
+                aItensMark[nJ][2] == aGrupo[nI][2] .And. ; //NEU_NUMPED = C9_PEDIDO
+				aItensMark[nJ][3] == aGrupo[nI][3] .And. ; //NEU_ITEMPE = C9_ITEM
+				aItensMark[nJ][4] == aGrupo[nI][4]         //NEU_SEQLIB = C9_SEQUEN
+                lFound := .T.
+                Exit
+            EndIf
+        Next nJ
+
+        If !lFound
+			aAdd(aItensToMark, aGrupo[nI])
+        EndIf
+    Next nI
+
+	If !Empty(aItensToMark)
+		Return .F.
+	EndIf
+
+Return .T.
+
+
+/*/{Protheus.doc} isItensNoBrowse
+Valida se itens que precisam ser marcados estao no browse
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aGrupo, array, grupo de registros que devem ser marcados juntos (itens da receita)
+@param aItensBrowse, array, registros que estao no browse
+@return lRet, array, retorna .T. se todos estao marcados corretamente
+/*/
+method isItensNoBrowse(aGrupo, aItensBrowse) class agdBloqueioFaturamentoService
+    Local nI 	 := 0
+	Local nJ 	 := 0
+	Local lFound := .F.
+    
+    For nI := 1 To Len(aGrupo)
+        lFound := .F.
+        For nJ := 1 To Len(aItensBrowse)
+            If  aItensBrowse[nJ][1] == aGrupo[nI][1] .And. ; //NEU_FILIAL = C9_FILIAL
+                aItensBrowse[nJ][2] == aGrupo[nI][2] .And. ; //NEU_NUMPED = C9_PEDIDO
+				aItensBrowse[nJ][3] == aGrupo[nI][3] .And. ; //NEU_ITEMPE = C9_ITEM
+				aItensBrowse[nJ][4] == aGrupo[nI][4]         //NEU_SEQLIB = C9_SEQUEN
+                lFound := .T.
+                Exit
+            EndIf
+        Next nJ
+        If !lFound
+		    Return .F.
+        EndIf
+    Next nI
+Return .T.
+
+
+/*/{Protheus.doc} geraMensagemMarcacaoItens
+Gera mensagem de pendencia de marcacao
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aItensToMark, array, itens que não foram marcados
+@param cMsgItens, Character, mensagem para retorno
+@param cWhereItens, Character, string usada para marcar registros no browse posteriormente
+@return cMsgItens, Character, String com mensagem para retorno
+/*/
+Method geraMensagemMarcacaoItens(aItensToMark, cWhereItens) class agdBloqueioFaturamentoService
+    Local nI 	    := 0
+    Local cMsgItens := ""
+
+	If !Empty(aItensToMark)
+		cMsgItens += STR0001 //"Em conformidade com a regra de faturamento do receituário agronômico, os itens abaixo devem ser marcados conjuntamente: "
+		For nI := 1 To Len(aItensToMark)
+			If nI > 1
+				cMsgItens += ", "
+				cWhereItens += " OR "
+			EndIf
+			cMsgItens += STR0002 + AllTrim(aItensToMark[nI][2] ) + STR0003 + AllTrim(aItensToMark[nI][3] ) + STR0004 + AllTrim(aItensToMark[nI][4] ) //"Pedido:"" Item:"" Seq. Lib:"
+			cWhereItens += " (C9_FILIAL = '" + aItensToMark[nI][1] + "' AND C9_PEDIDO = '" + aItensToMark[nI][2] + "' AND C9_ITEM = '" + aItensToMark[nI][3] + "' AND C9_SEQUEN = '" + aItensToMark[nI][4] + "') "
+		Next nI
+	EndIf
+
+Return cMsgItens
+
+
+/*/{Protheus.doc} solicitaDecisaoParaUsuario
+Estrutura de exibição das mensagens e decisão do usuário durante o faturamento e estorno
+O parametro MV_AGD0006 define se será solicitada a marcação automática, caso .F. exibe help e pede marcação manual para o usuário
+O parametro lItensNoBrowse indica se todos os itens da mesma receita estão no browse, caso .T., continua processo de validação, caso .F. exibe help e solicita alteração do pergunte (SX1)
+Não é realizada marcação automática em registros que não estão no browse pelo risco de alteração na query do MATA461 e parar e funcionar
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param cMsgItens, Character, mensagem para retorno
+@param lItensNoBrowse, logical, indica se todos os itens estão no browse
+@param aItensToMark, array, itens que não foram marcados
+@param lEstorno, logical, está estornando
+@param lPosicionado, logical, parametro posicionado ou marcados
+@param cMarca, Character, marca do browse
+@return lRet, logical, retorna .T. se ocorrerá marcação automática
+/*/
+Method solicitaDecisaoParaUsuario(cMsgItens, lItensNoBrowse, aItensToMark, lEstorno, lPosicionado, cMarca, cReceita, cWhereItens) class agdBloqueioFaturamentoService
+	Local lRet          := .F.
+	Local lMarcarItens  := .F.
+    Local lPergMarkAuto := SuperGetMV("MV_AGD0007",.F.,.F.)
+    Local lIsBlind      := isBlind()
+    Local oRepBlqPedido := Nil
+
+    //Faturamento
+	If !lEstorno
+        If !lItensNoBrowse
+            AGDHELP( STR0005, cMsgItens, STR0006) //"Validação de itens com receituário agronômico.""Realize a alteração dos parâmetros informados, pois existem itens não listados."
+            Return .F.
+        EndIf
+        If lPergMarkAuto .And. !lIsBlind
+            //". Deseja marcar automaticamente todos os itens da receita "" e completar o processo de faturamento?""Ao informar sim, você confirma que além dos itens marcados, todos os itens da receita serão faturados."
+            lMarcarItens := FWAlertYesNo(cMsgItens + STR0007 + cReceita + STR0008 + STR0009, STR0005)
+        Else
+            AGDHELP( STR0005, cMsgItens, STR0010)//"Caso possua filtro de visualização de itens, remova os filtros e realize a marcação dos itens informados."
+            Return .F.
+        EndIf
+	EndIf
+
+    If lEstorno
+        //Estorno Marcados
+        If !lPosicionado
+            If !lItensNoBrowse
+                AGDHELP( STR0005, cMsgItens, STR0006)
+                Return .F.
+            EndIf
+            If lPergMarkAuto .And. !lIsBlind
+                //" e completar o estorno das liberações de pedidos?" "Ao informar 'Sim', você confirma que além dos itens marcados, todos os itens da receita serão estornados."
+                lMarcarItens := FWAlertYesNo(cMsgItens + STR0007 + cReceita + STR0011 + STR0012, STR0005)
+            Else
+                AGDHELP( STR0005, cMsgItens, STR0010)
+                lRet := .F.
+            EndIf
+        //Estorno Posicionado
+        ElseIf lPosicionado
+            //". Como há mais de um item a ser marcado, favor reabrir a rotina informando o parâmetro 'Estorno da Liberc. ?' com a opção 'Marcados'." "Após alterar o parâmetro, realize a marcação dos itens informados."
+            AGDHELP( STR0005, cMsgItens + STR0013, STR0014)
+            lRet := .F.
+        EndIf
+	EndIf
+
+	If lMarcarItens
+        oRepBlqPedido := agdBloqueioPedidoVendaRepository():New()
+		oRepBlqPedido:marcaTodosItensGrupoReceita(aItensToMark, cMarca, cWhereItens)
+        FreeObj(oRepBlqPedido)
+		lRet := .T.
+	EndIf
+
+Return lRet
+
+
+/*/{Protheus.doc} removeGrupoValidado
+Ao final da validação, remove os itens que foram validados. O array de itens marcados tem seu tamanho reduzido
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aItensToMark, array, itens que não foram marcados
+@param aGrupo, array, grupo de registros que devem ser marcados juntos (itens da receita)
+@param aNovo, array, novo array sem os itens que já foram validados
+/*/
+Method removeGrupoValidado(aItensMark, aGrupo) class agdBloqueioFaturamentoService
+    Local aNovo     := {}
+    Local nI 	    := 0
+	Local nJ 	    := 0
+    Local lValidado := .F. //Item SC9 ja validado?
+
+    For nI := 1 To Len(aItensMark)
+        lValidado := .F.
+
+        For nJ := 1 To Len(aGrupo)
+            If  aItensMark[nI][1] == aGrupo[nJ][1] .And. ; //NEU_FILIAL = C9_FILIAL
+                aItensMark[nI][2] == aGrupo[nJ][2] .And. ; //NEU_NUMPED = C9_PEDIDO
+				aItensMark[nI][3] == aGrupo[nJ][3] .And. ; //NEU_ITEMPE = C9_ITEM
+				aItensMark[nI][4] == aGrupo[nJ][4]         //NEU_SEQLIB = C9_SEQUEN
+                lValidado := .T.
+                Exit
+            EndIf
+        Next nJ
+        If !lValidado
+            AAdd(aNovo, aItensMark[nI])
+        EndIf
+    Next nI
+
+Return aNovo
+
+
+/*/{Protheus.doc} enviarCancelamentoSolicitacao
+Recebe um grupo de NEU e envia o cancelamento desta solicitacao
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 29/12/2025
+@param aItensToMark, array, itens que não foram marcados
+@param aGrupo, array, grupo de registros que devem ser marcados juntos (itens da receita)
+@param aNovo, array, novo array sem os itens que já foram validados
+/*/
+Method enviarCancelamentoSolicitacao(aNEUGrupo) class agdBloqueioFaturamentoService
+    Local oSerSolicRec := agdSolicitacaoReceitaService():New()
+    Local aAreaNEU     := NEU->(GetArea())
+    Local aAreaNET     := NET->(GetArea())
+
+    NEU->(dbSetOrder(2)) // NEU_FILIAL+NEU_NUMPED+NEU_ITEMPE
+    If NEU->(dbSeek(aNEUGrupo[1][1] + aNEUGrupo[1][2] + aNEUGrupo[1][3] + aNEUGrupo[1][4]))
+        NET->(dbSetOrder(1))
+        If NET->(dbSeek(NEU->NEU_FILIAL + NEU->NEU_CODIGO))
+            oSerSolicRec:atualizaStatus(NET->NET_CODIGO,NET->NET_STSSOL,NET->NET_STSREC)
+        EndIf
+    EndIf
+
+    FreeObj(oSerSolicRec)
+    RestArea(aAreaNEU)
+    RestArea(aAreaNET)
+Return nil
+
+/*/{Protheus.doc} validaDataPrevistaEntrega
+Ao final da validação, remove os itens que foram validados. O array de itens marcados tem seu tamanho reduzido
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aNEUGrupo, array, grupo de itens que serão faturados juntos
+@param aNovo, array, novo array sem os itens que já foram validados
+/*/
+Method validaDataPrevistaEntrega(aNEUGrupo,aItensMark) class agdBloqueioFaturamentoService
+    Local lRet          := .T.
+	Local cPergBkp      := ""
+    Local cDtPrevEntAnt := ""
+    Local nI            := 0
+    Local cPedido       := ""
+    Local cMsgItens     := ""
+
+    If FWSX1Util():ExistItem( 'MT460A', "Data de Entrega ?             ")
+        SaveInter() // Salva variaveis publicas 
+        cPergBkp := SX1->X1_GRUPO
+        Pergunte("MT460A", .F.)
+        If Empty(MV_PAR28) 
+
+            For nI := 1 To Len(aNEUGrupo) //Verifica se todos os itens da receita possuem a mesma data de entrega
+                If Empty(cDtPrevEntAnt)
+                    cDtPrevEntAnt := aNEUGrupo[nI][5]
+                    Loop
+                EndIf
+                If cDtPrevEntAnt != aNEUGrupo[nI][5]
+                    lRet := .F.
+                    cPedido := aNEUGrupo[nI][2]
+                    Exit
+                EndIf
+            Next nI
+
+            If !lRet
+                cMsgItens := Self:geraMensagemDataEntrega(aNEUGrupo)
+                //"O pedido "" possui itens com receituário agronômico e com datas de entrega diferentes. Com isso, seriam geradas mais de uma NF-e. ""Verifique o preenchimento do parâmetro 'Data de Entrega ?' para unificar a data de entrega e prosseguir com o faturamento para que seja gerada apenas uma NF-e."
+                AGDHELP(STR0005, STR0015 + cPedido + STR0016 + cMsgItens, STR0017) //"Validação de itens com receituário agronômico.
+            EndIf
+
+        EndIf
+        Pergunte(cPergBkp, .F.)
+        RestInter()//Recupera as variaveis pulicas
+    EndIf
+Return lRet
+
+
+/*/{Protheus.doc} geraMensagemDataEntrega
+Gera mensagem de pendencia de marcacao
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param aItensGrupo, array, itens do grupo da receita gerada
+@return cMsgItens, Character, String com mensagem para retorno
+/*/
+Method geraMensagemDataEntrega(aItensGrupo) class agdBloqueioFaturamentoService
+    Local nI 	    := 0
+    Local cMsgItens := ""
+    Local dEntrega  := Nil
+    Local cDataMsg  := ""
+
+	If !Empty(aItensGrupo)
+		For nI := 1 To Len(aItensGrupo)
+			If nI > 1
+				cMsgItens += ", "
+			EndIf
+            dEntrega := StoD(aItensGrupo[nI][5])
+            cDataMsg := DtoC(dEntrega)
+			cMsgItens += STR0002 + AllTrim(aItensGrupo[nI][2] ) + STR0003 + AllTrim(aItensGrupo[nI][3] ) + STR0004 + AllTrim(aItensGrupo[nI][4] ) + STR0018 + cDataMsg //"Pedido:"" Item:"" Seq. Lib:"" Dt Prev Entrega: "
+		Next nI
+	EndIf
+
+Return cMsgItens

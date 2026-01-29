@@ -1,0 +1,782 @@
+#include 'totvs.ch'
+#include 'tlpp-core.th'
+#include 'agd.tco.documentos.fiscais.service.ch'
+
+namespace agd.TCOdocumentosFiscaisService
+
+using namespace agd.utilsService
+using namespace agd.tcoRepository
+using namespace agd.tcoFeatureComplementosRepository
+using namespace agd.TCODeParaService
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService
+Classe de serviço para integração com documentos fiscais
+@type class
+@version 12
+@author jc.maldonado
+@since 11/11/2025
+/*/
+class agdTCOdocumentosFiscaisService FROM agdUtilsService
+	public method new()
+
+	public method getDocEntradaById()                      as json
+	public method getDocSaidaById()                        as json
+
+	private method getDistinctTESfromDocumentoEntrada()    as array
+	private method getDistinctTESfromDocumentoSaida()      as array
+	private method getIdentificaoIntegracao()              as character
+	private method validTESdePara()                        as logical
+	private method getItemsFromDocumentoSaida()            as array
+	private method getItemsFromDocumentoEntrada()          as array
+	private method getDistinctDeParaTesIntegracao()        as array
+	private method docEntradaHasTipoCommodityValido()      as logical
+	private method docSaidaHasTipoCommodityValido()        as logical
+	private method createSF1key()                          as character
+	private method createSF2key()                          as character
+	private method getInternalIdItemFromCompraFutura()     as character
+	private method getInternalIdItemFromContratoParceria() as character
+endClass
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::new
+Constructor
+@type method
+@version 12
+@author jc.maldonado
+@since 11/11/2025
+@return object, Nova instância da classe agdTCOdocumentosFiscaisService
+/*/
+method new() class agdTCOdocumentosFiscaisService
+	_Super:New()
+return self
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getDocEntradaById
+Obtem o documento de entrada
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param cFeature, character, codigo da feature
+@param cDocId, character, chave do documento
+/*/
+method getDocEntradaById(cFeature as character, cDocId as character) as json class agdTCOdocumentosFiscaisService
+	local cIdentificacaoInteg as character
+	local aDocId              as array
+	local cChaveSF1           as character
+	local aArea               as array
+	local aTESdistinct        as array
+	local jDoc                as json
+	local jBody               as json
+	local cInternalId         as character
+	local cExternalId         as character
+
+	default cFeature := ""
+	default cDocId   := ""
+
+	if empty(cDocId) .or. empty(cIdentificacaoInteg := ::getIdentificaoIntegracao(cFeature))
+		return
+	endIf
+
+	aDocId := StrTokArr2(cDocId, "|", .t. /*lEmptyStr*/)
+	if Len(aDocId) != 4
+		::setError(STR0001, 404) //"Id do documento inválido."
+		return
+	endIf
+
+	cChaveSF1 := ::createSF1key(aDocId[1], aDocId[2], aDocId[3], aDocId[4])
+
+	dbSelectArea("SF1")
+	aArea := SF1->(FWgetArea())
+	SF1->(DBsetOrder(1))
+	SF1->(dbGoTop())
+	if ! SF1->(dbSeek(cChaveSF1));
+			.Or. ! (cChaveSF1 == SF1->(F1_FILIAL + F1_DOC + F1_SERIE + F1_FORNECE + F1_LOJA))
+
+		::setError(STR0002, 404)  //"Documento não encontrado."
+		FwRestArea(aArea)
+		return
+	EndIf
+
+	jDoc := JSONobject():New()
+	jDoc['filial']            := SF1->F1_FILIAL
+	jDoc['doc']               := SF1->F1_DOC
+	jDoc['serie']             := SF1->F1_SERIE
+	jDoc['fornecedor']        := SF1->F1_FORNECE
+	jDoc['loja']              := SF1->F1_LOJA
+	jDoc['tipo']              := SF1->F1_TIPO
+	jDoc['nfOrigem']          := SF1->F1_NFORIG
+	jDoc['serieOrigem']       := SF1->F1_SERORIG
+	jDoc['formularioProprio'] := SF1->F1_FORMUL 
+
+	FwRestArea(aArea)
+
+	if ! ::docEntradaHasTipoCommodityValido(jDoc)
+		::setError(STR0004, 404) //"O documento não possuí nenhum produto com tipo de commodity definido e com a opção diferente de 'Não Se Aplica'."
+		return
+	endIf
+
+	aTESdistinct := ::getDistinctTESfromDocumentoEntrada(jDoc)
+	if ! ::validTESdePara(aTESdistinct, cIdentificacaoInteg)
+		return
+	endIf
+
+	jBody := JSONobject():New()
+	oTCOdeParaService := agdTCODeParaService():new()
+
+	If jDoc['tipo'] $ "DB"
+		cInternalId := oTCOdeParaService:formatInternalIDcliente(nil, nil, jDoc['fornecedor'], jDoc['loja'])
+		cExternalId := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SA1", "A1_COD", cInternalId))
+		if empty(cExternalId)
+			cExternalId := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SA2", "A2_COD", cInternalId))
+		endIf
+		if empty(cExternalId)
+			::setError(STR0007, 404) //"Código interno do cliente não está vinculado a um código externo."
+			return
+		endIf
+		jBody['clienteExterno'] := cExternalId
+	Else
+		cInternalId := oTCOdeParaService:formatInternalIDfornecedor(nil, nil, jDoc['fornecedor'], jDoc['loja'])
+		cExternalId := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SA1", "A1_COD", cInternalId))
+		if empty(cExternalId)
+			cExternalId := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SA2", "A2_COD", cInternalId))
+		endIf
+		if empty(cExternalId)
+			::setError(STR0008, 404) //"Código interno do fornecedor não está vinculado a um código externo."
+			return
+		endIf
+		jBody['fornecedorExterno'] := cExternalId
+	EndIf
+
+	jBody['formularioProprio'] := jDoc['formularioProprio']
+	jBody['items'] := ::getItemsFromDocumentoEntrada(jDoc, cIdentificacaoInteg)
+	::setSuccess(jBody)
+
+	SF1->(FWrestArea(aArea))
+return jBody
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getDocSaidaById
+Obtem informações do documento de saída
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param cFeature, character, codigo da feature
+@param cDocId, character, chave do documento
+@return json, response body
+/*/
+method getDocSaidaById(cFeature as character, cDocId as character) as json class agdTCOdocumentosFiscaisService
+	local cIdentificacaoInteg      as character
+	local aDocId                   as array
+	local cChaveSF2                as character
+	local aArea                    as array
+	local aTESdistinct             as array
+	local jDoc                     as json
+	local cCodClienteInternoDePara as character
+	local cCodCliForExterno        as character
+	local jBody                    as json
+
+	default cFeature := ""
+	default cDocId   := ""
+
+	if empty(cDocId) .or. empty(cIdentificacaoInteg := ::getIdentificaoIntegracao(cFeature))
+		return
+	endIf
+
+	aDocId := StrTokArr2(cDocId, "|", .t. /*lEmptyStr*/)
+	if Len(aDocId) != 4
+		::setError(STR0001, 404) //"Id do documento inválido."
+		return
+	endIf
+
+	cChaveSF2  := ::createSF2key(aDocId[1], aDocId[2], aDocId[3], aDocId[4])
+
+	dbSelectArea("SF2")
+	aArea := SF2->(FWgetArea())
+	SF2->(DBsetOrder(1))
+	SF2->(dbGoTop())
+	if ! SF2->(dbSeek(cChaveSF2));
+			.Or. ! (cChaveSF2 == SF2->(F2_FILIAL + F2_DOC + F2_SERIE + F2_CLIENTE + F2_LOJA))
+
+		::setError(STR0002, 404) //"Documento não encontrado."
+		FwRestArea(aArea)
+		return
+	EndIf
+
+	jDoc := JSONobject():New()
+	jDoc['filial']            := SF2->F2_FILIAL
+	jDoc['doc']               := SF2->F2_DOC
+	jDoc['serie']             := SF2->F2_SERIE
+	jDoc['cliente']           := SF2->F2_CLIENTE
+	jDoc['loja']              := SF2->F2_LOJA
+	jDoc['tipo']              := SF2->F2_TIPO
+	jDoc['nfOrigem']          := SF2->F2_NFORI
+	jDoc['nfSerieOrigem']     := SF2->F2_SERIORI
+	jDoc['formularioProprio'] := SF2->F2_FORMUL
+
+	FwRestArea(aArea)
+
+	if ! ::docSaidaHasTipoCommodityValido(jDoc)
+		::setError(STR0004, 404) //"O documento não possuí nenhum produto com tipo de commodity definido e com a opção diferente de 'Não Se Aplica'."
+		return
+	endIf
+
+	aTESdistinct := ::getDistinctTESfromDocumentoSaida(jDoc)
+	if ! ::validTESdePara(aTESdistinct, cIdentificacaoInteg)
+		return
+	endIf
+
+	oTCOdeParaService        := agdTCODeParaService():new()
+	cCodClienteInternoDePara := oTCOdeParaService:formatInternalIDcliente(nil, nil, jDoc['cliente'], jDoc['loja'])
+	cCodCliForExterno        := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SA1", "A1_COD", cCodClienteInternoDePara))
+
+	if empty(cCodCliForExterno)
+		cCodClienteInternoDePara := oTCOdeParaService:formatInternalIDfornecedor(nil, nil, jDoc['cliente'], jDoc['loja'])
+		cCodCliForExterno        := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SA1", "A1_COD", cCodClienteInternoDePara))
+	endIf
+
+	if empty(cCodCliForExterno)
+		::setError(STR0007, 404) //"Código interno do cliente não está vinculado a um código externo."
+		return
+	endIf
+
+	jBody := JSONobject():New()
+	jBody['clienteExterno'] := cCodCliForExterno
+
+	jBody['formularioProprio'] := jDoc['formularioProprio']
+	jBody['items'] := ::getItemsFromDocumentoSaida(jDoc, cIdentificacaoInteg)
+	::setSuccess(jBody)
+
+	SF2->(FWrestArea(aArea))
+return jBody
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getIdentificaoIntegracao
+Retorna a identificação da integração
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param cCodigoFeature, character, codigo da feature
+@return character, identificação
+/*/
+method getIdentificaoIntegracao(cCodigoFeature as character) as character class agdTCOdocumentosFiscaisService
+	local oTCOrepository as object
+	local oFeatureClass  as object
+	local cIdentificao   as character
+
+	oTCOrepository := agdTCORepository():New()
+	oFeatureClass  := oTCOrepository:getFeatureClassById(cCodigoFeature)
+
+	if oFeatureClass == nil .or. ! (oFeatureClass:getTipo() == "2") //="2" Integracao
+		::setError(STR0003, 404) //"Feature inválida"
+
+		FWFreeObj(oTCOrepository)
+		FWFreeObj(oFeatureClass)
+		return ""
+	endIf
+
+	cIdentificao := oFeatureClass:getIdentificaoIntegracao()
+
+	FWFreeObj(oTCOrepository)
+	FWFreeObj(oFeatureClass)
+return cIdentificao
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::docEntradaHasTipoCommodityValido
+Verifica se o documento de entrada possuí um produto com B5_TPCOMMO > '0'
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param jDoc, json, documento entrada
+@return logical, resultado da verificação
+/*/
+method docEntradaHasTipoCommodityValido(jDoc as json) as logical class agdTCOdocumentosFiscaisService
+	Local cQuery          as character
+	Local aBindQry  := {} as array
+	Local cNewAlias       as character
+	local lRet            as logical
+
+	cQuery := "SELECT"
+	cQuery += " 	1"
+	cQuery += " FROM"
+	cQuery += " 	" + retSQLName("SD1") + " SD1"
+	cQuery += " JOIN " + retSQLName("SB5") + " SB5 ON"
+	cQuery += " 	SB5.B5_COD = SD1.D1_COD"
+	cQuery += " WHERE"
+	cQuery += " 	SD1.D1_FILIAL = ?"        ; aAdd(aBindQry, jDoc['filial'])
+	cQuery += " 	AND SD1.D1_DOC = ?"       ; aAdd(aBindQry, jDoc['doc'])
+	cQuery += " 	AND SD1.D1_SERIE = ?"     ; aAdd(aBindQry, jDoc['serie'])
+	cQuery += " 	AND SD1.D1_FORNECE = ?"   ; aAdd(aBindQry, jDoc['fornecedor'])
+	cQuery += " 	AND SD1.D1_LOJA = ?"      ; aAdd(aBindQry, jDoc['loja'])
+	cQuery += " 	AND SD1.D_E_L_E_T_ = ' '"
+	cQuery += " 	AND SB5.B5_FILIAL = ?"    ; aAdd(aBindQry, FWxFilial("SB5"))
+	cQuery += " 	AND SB5.B5_TPCOMMO > '0'"
+	cQuery += " 	AND SB5.D_E_L_E_T_ = ' '"
+	cQuery := ChangeQuery(cQuery)
+
+	cNewAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+	lRet :=  (cNewAlias)->(! EOF())
+	(cNewAlias)->(DBCloseArea())
+Return lRet
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::docSaidaHasTipoCommodityValido
+Verifica se o documento de saída possuí um produto com B5_TPCOMMO > '0'
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param jDoc, json, documento saida
+@return logical, resultado da verificação
+/*/
+method docSaidaHasTipoCommodityValido(jDoc as json) as logical class agdTCOdocumentosFiscaisService
+	Local cQuery          as character
+	Local aBindQry  := {} as array
+	Local cNewAlias       as character
+	local lRet            as logical
+
+	cQuery := " SELECT"
+	cQuery += " 	1"
+	cQuery += " FROM"
+	cQuery += " 	" + retSQLName("SD2") + " SD2"
+	cQuery += " JOIN " + retSQLName("SB5") + " SB5 ON"
+	cQuery += " 	SB5.B5_COD = SD2.D2_COD"
+	cQuery += " WHERE"
+	cQuery += " 	SD2.D2_FILIAL = ?"        ; aAdd(aBindQry, jDoc['filial'])
+	cQuery += " 	AND SD2.D2_DOC = ?"       ; aAdd(aBindQry, jDoc['doc'])
+	cQuery += " 	AND SD2.D2_SERIE = ?"     ; aAdd(aBindQry, jDoc['serie'])
+	cQuery += " 	AND SD2.D2_CLIENTE = ?"   ; aAdd(aBindQry, jDoc['cliente'])
+	cQuery += " 	AND SD2.D2_LOJA = ?"      ; aAdd(aBindQry, jDoc['loja'])
+	cQuery += " 	AND SD2.D_E_L_E_T_ = ' '"
+	cQuery += " 	AND SB5.B5_FILIAL = ?"    ; aAdd(aBindQry, FWxFilial("SB5"))
+	cQuery += " 	AND SB5.B5_TPCOMMO > '0'"
+	cQuery += " 	AND SB5.D_E_L_E_T_ = ' '"
+	cQuery := ChangeQuery(cQuery)
+
+	cNewAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+	lRet :=  (cNewAlias)->(! EOF())
+	(cNewAlias)->(DBCloseArea())
+Return lRet
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getDistinctTESfromDocumentoEntrada
+Obtem uma lista de TES distintas do documento de entrada
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param jDoc, json, documento de entrada
+@return array, lista de tes
+/*/
+method getDistinctTESfromDocumentoEntrada(jDoc as json) as array class agdTCOdocumentosFiscaisService
+	Local cQuery          as character
+	Local aBindQry  := {} as array
+	Local cNewAlias       as character
+	local aTES      := {} as array
+
+	cQuery := "SELECT"
+	cQuery += " 	DISTINCT D1_TES"
+	cQuery += " FROM"
+	cQuery += " 	" + retSQLName("SD1")
+	cQuery += " WHERE"
+	cQuery += " 	D1_FILIAL = ?"        ; aAdd(aBindQry, jDoc['filial'])
+	cQuery += " 	AND D1_DOC = ?"       ; aAdd(aBindQry, jDoc['doc'])
+	cQuery += " 	AND D1_SERIE = ?"     ; aAdd(aBindQry, jDoc['serie'])
+	cQuery += " 	AND D1_FORNECE = ?"   ; aAdd(aBindQry, jDoc['fornecedor'])
+	cQuery += " 	AND D1_LOJA = ?"      ; aAdd(aBindQry, jDoc['loja'])
+	cQuery += " 	AND D_E_L_E_T_ = ' '"
+	cQuery := ChangeQuery(cQuery)
+
+	cNewAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+
+	While (cNewAlias)->(! EOF())
+		aAdd(aTES, (cNewAlias)->D1_TES)
+		(cNewAlias)->(DBSkip())
+	EndDo
+	(cNewAlias)->(DBCloseArea())
+Return aTES
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getDistinctTESfromDocumentoSaida
+Obtem uma lista de TES distintas do documento de saída
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param jDoc, json, documento de saída
+@return array, lista de TES
+/*/
+method getDistinctTESfromDocumentoSaida(jDoc as json) as array class agdTCOdocumentosFiscaisService
+	Local cQuery          as character
+	Local aBindQry  := {} as array
+	Local cNewAlias       as character
+	local aTES      := {} as array
+
+	cQuery := "SELECT"
+	cQuery += " 	DISTINCT D2_TES"
+	cQuery += " FROM"
+	cQuery += " 	" + retSQLName("SD2")
+	cQuery += " WHERE"
+	cQuery += " 	D2_FILIAL = ?"        ; aAdd(aBindQry, jDoc['filial'])
+	cQuery += " 	AND D2_DOC = ?"       ; aAdd(aBindQry, jDoc['doc'])
+	cQuery += " 	AND D2_SERIE = ?"     ; aAdd(aBindQry, jDoc['serie'])
+	cQuery += " 	AND D2_CLIENTE = ?"   ; aAdd(aBindQry, jDoc['cliente'])
+	cQuery += " 	AND D2_LOJA = ?"      ; aAdd(aBindQry, jDoc['loja'])
+	cQuery += " 	AND D_E_L_E_T_ = ' '"
+	cQuery := ChangeQuery(cQuery)
+
+	cNewAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+
+	While (cNewAlias)->(! EOF())
+		aAdd(aTES, (cNewAlias)->D2_TES)
+		(cNewAlias)->(DBSkip())
+	EndDo
+	(cNewAlias)->(DBCloseArea())
+Return aTES
+
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::validTESdePara
+Realiza validações do código TES com a lista de De/Para
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param aTES, array, lista de TES distintas
+@param cIdentificacaoInteg, character, identificador integracao
+@return logical, resultado da validacao
+/*/
+method validTESdePara(aTES as array, cIdentificacaoInteg as character) as logical class agdTCOdocumentosFiscaisService
+	local aDeParaTESintegracao as array
+
+	aDeParaTESintegracao := ::getDistinctDeParaTesIntegracao(cIdentificacaoInteg, aTES)
+
+	if ! empty(aDeParaTESintegracao[2/*tesSemCodigoExterno*/])
+		::setError(STR0009 + ArrTokStr(aDeParaTESintegracao[2], ", "), 404) //"TES não possuí código externo: "
+		return .f.
+	endIf
+
+	if len(aDeParaTESintegracao[1/*códigosExternosDistintos*/]) > 1
+		::setError(STR0006 , 404) //"O documento possuí­ produtos com códigos TES que se relacionam com diferentes códigos externos."
+		return .f.
+	endIf
+return .t.
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getDistinctDeParaTesIntegracao
+Retornar os códigos externos a partir do codigo da tes e da indentificação da integração
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param cIdentificacaoInteg, character, Identificação da integração
+@param aTES, array, lista de TES distintas
+@return array, {aDeparaExterno, aTESsemIDexterno}
+/*/
+method getDistinctDeParaTesIntegracao(cIdentificacaoInteg, aTES) as array class agdTCOdocumentosFiscaisService
+	local nX                        as numeric
+	local aDePara          := {}    as array
+	local cExternalId               as character
+	local aTESsemIDexterno := {}    as array
+
+	for nX := 1 to len(aTes)
+		cExternalId := RTRIM(CFGA070Ext(cIdentificacaoInteg, "SF4", "F4_CODIGO", aTes[nX]))
+		if empty(cExternalId)
+			if aScan(aTESsemIDexterno, aTes[nX]) == 0
+				aAdd(aTESsemIDexterno, aTes[nX])
+			endif
+		else
+			if aScan(aDePara, cExternalId) == 0
+				aAdd(aDePara, cExternalId)
+			endIf
+		endIF
+	next nX
+return {aDePara, aTESsemIDexterno}
+
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getItemsFromDocumentoEntrada
+Obtem os itens do documento de entrada
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param jDoc, json, documento
+@param cIdentificacaoInteg, character, identificação da integração
+@return array, items do documento
+/*/
+method getItemsFromDocumentoEntrada(jDoc as json, cIdentificacaoInteg as character) as array class agdTCOdocumentosFiscaisService
+	local aAreaSD1                    as array
+	local cChave                      as character
+	local oTCOdeParaService           as object
+	local aJSONitems := {}            as array
+	local nIt                         as numeric
+	local cCodProdutoInternal         as character
+	local cInternalIdItemCompraFutura as character
+
+	dbSelectArea("SD1")
+	aAreaSD1 := SD1->(FWgetArea())
+	SD1->(DBsetOrder(1)) //D1_FILIAL+D1_DOC+D1_SERIE+D1_FORNECE+D1_LOJA+D1_COD+D1_ITEM
+	SD1->(dbGoTop())
+
+	cChave := jDoc['filial'] + jDoc['doc'] + jDoc['serie'] + jDoc['fornecedor'] + jDoc['loja']
+
+	if SD1->(dbSeek(cChave))
+		oTCOdeParaService := agdTCODeParaService():new()
+
+		while SD1->(! EOF());
+				.and. cChave == SD1->(D1_FILIAL + D1_DOC + D1_SERIE + D1_FORNECE + D1_LOJA)
+			aAdd(aJSONitems, JSONobject():New())
+			nIt++
+
+			cCodProdutoInternal :=	oTCOdeParaService:formatInternalIdProduto(nil, nil, SD1->D1_COD)
+
+			aJSONitems[nIt]['internalId']     := oTCOdeParaService:formatInternalIDdocEntradaItem(nil, SD1->D1_FILIAL, SD1->D1_DOC, SD1->D1_SERIE, SD1->D1_FORNECE, SD1->D1_LOJA, SD1->D1_COD, SD1->D1_ITEM)
+			aJSONitems[nIt]['produtoExterno'] := Rtrim(CFGA070Ext(cIdentificacaoInteg, "SB1", "B1_COD", cCodProdutoInternal))
+			aJSONitems[nIt]['tipo']           := Rtrim(CFGA070Ext(cIdentificacaoInteg, "SF4", "F4_CODIGO", SD1->D1_TES))
+
+			if Empty(SD1->D1_NFORI)
+				if ! empty(cInternalIdItemCompraFutura := ::getInternalIdItemFromCompraFutura(SD1->D1_DOC, SD1->D1_SERIE, SD1->D1_FORNECE, SD1->D1_LOJA, SD1->D1_ITEM))
+					aJSONitems[nIt]['nfOrigemInternalId'] := cInternalIdItemCompraFutura
+				endif
+			else
+				aJSONitems[nIt]['nfOrigemInternalId'] := oTCOdeParaService:formatInternalIDdocSaidaItem(nil, SD1->D1_FILIAL, SD1->D1_NFORI, SD1->D1_SERIORI, SD1->D1_FORNECE, SD1->D1_LOJA, SD1->D1_COD, SD1->D1_ITEMORI)
+			endIf
+
+			SD1->(dbSkip())
+		endDo
+
+		FWFreeObj(oTCOdeParaService)
+	endIf
+
+	SD1->(FWrestArea(aAreaSD1))
+return aJSONitems
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getInternalIdItemFromCompraFutura
+Retorna o internalId do Item do documento de entrada referente a compra futura
+@type method
+@version 12
+@author jc.maldonado
+@since 01/12/2025
+@param cDoc, character, documento
+@param cSerie, character, serie
+@param cForn, character, fornecedor
+@param cLoja, character, loja
+@param cItem, character, item
+@return character, internalIDitemDocOrigem
+/*/
+method getInternalIdItemFromCompraFutura(cDoc as character, cSerie as character, cForn as character, cLoja as character, cItem as character) as character class agdTCOdocumentosFiscaisService
+	local cQuery          as character
+	local cNewAlias       as character
+	local aBindQry  := {} as array
+	local cInternalId     as character
+
+	cQuery += " SELECT"
+	cQuery += " 	DOCTP1.DHQ_FILIAL, DOCTP1.DHQ_DOC, DOCTP1.DHQ_SERIE, DOCTP1.DHQ_FORNEC, DOCTP1.DHQ_LOJA, DOCTP1.DHQ_ITEM, DOCTP1.DHQ_COD"
+	cQuery += " FROM"
+	cQuery += " 	 " + retSQLname("DHQ") + " DOCTP2"
+	cQuery += " JOIN " + retSQLname("DHQ") + " DOCTP1 ON"
+	cQuery += " 	DOCTP1.DHQ_FILIAL = DOCTP2.DHQ_FILIAL"
+	cQuery += " 	AND DOCTP1.DHQ_IDENT = DOCTP2.DHQ_IDENT"
+	cQuery += " 	AND DOCTP1.DHQ_TIPO = '1'" //1=Compra Futura"
+	cQuery += " 	AND DOCTP1.DHQ_ITEM = DOCTP2.DHQ_ITEM"
+	cQuery += " 	AND DOCTP1.DHQ_COD = DOCTP2.DHQ_COD"
+	cQuery += " 	AND DOCTP1.D_E_L_E_T_ = ' '"
+	cQuery += " WHERE"
+	cQuery += " 	DOCTP2.DHQ_FILIAL = ?"     ; aAdd(aBindQry, FWxFilial("DHQ"))
+	cQuery += " 	AND DOCTP2.DHQ_DOC = ?"    ; aAdd(aBindQry, cDoc            )
+	cQuery += " 	AND DOCTP2.DHQ_SERIE = ?"  ; aAdd(aBindQry, cSerie          )
+	cQuery += " 	AND DOCTP2.DHQ_FORNEC = ?" ; aAdd(aBindQry, cForn           )
+	cQuery += " 	AND DOCTP2.DHQ_LOJA = ?"   ; aAdd(aBindQry, cLoja           )
+	cQuery += " 	AND DOCTP2.DHQ_ITEM = ?"   ; aAdd(aBindQry, cItem           )
+	cQuery += " 	AND DOCTP2.DHQ_TIPO = '2'" // 2=Entrega"
+	cQuery += " 	AND DOCTP2.D_E_L_E_T_ = ' '"
+	cQuery := ChangeQuery(cQuery)
+
+	cNewAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+
+	if (cNewAlias)->(! EOF())
+		cInternalId := oTCOdeParaService:formatInternalIDdocEntradaItem(;
+			nil, (cNewAlias)->DHQ_FILIAL, (cNewAlias)->DHQ_DOC, (cNewAlias)->DHQ_SERIE, (cNewAlias)->DHQ_FORNEC,;
+			(cNewAlias)->DHQ_LOJA, (cNewAlias)->DHQ_COD, (cNewAlias)->DHQ_ITEM)
+	endIf
+
+	(cNewAlias)->(DBCloseArea())
+return cInternalId
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getItemsFromDocumentoSaida
+Obtem os itens do documento de saída
+@type method
+@version 12
+@author jc.maldonado
+@since 17/11/2025
+@param jDoc, json, documento de saída
+@param cIdentificacaoInteg, character, identificação da integração
+@return array, itens do documento
+/*/
+method getItemsFromDocumentoSaida(jDoc as json, cIdentificacaoInteg as character) as array class agdTCOdocumentosFiscaisService
+	local aAreaSD2                        as array
+	local cChave                          as character
+	local oTCOdeParaService               as object
+	local aJSONitems := {}                as array
+	local nIt                             as numeric
+	local cCodProdutoInternal             as character
+	local cInternalIdItemContratoParceria as character
+
+	dbSelectArea("SD2")
+	aAreaSD2 := SD2->(FWgetArea())
+	SD2->(DBsetOrder(3)) //D2_FILIAL+D2_DOC+D2_SERIE+D2_CLIENTE+D2_LOJA+D2_COD+D2_ITEM
+	SD2->(dbGoTop())
+
+	cChave := jDoc['filial'] + jDoc['doc'] + jDoc['serie'] + jDoc['cliente'] + jDoc['loja']
+
+	if SD2->(dbSeek(cChave))
+		oTCOdeParaService := agdTCODeParaService():new()
+
+		while SD2->(! EOF());
+				.and. cChave == SD2->(D2_FILIAL + D2_DOC + D2_SERIE + D2_CLIENTE + D2_LOJA)
+			aAdd(aJSONitems, JSONobject():New())
+			nIt++
+
+			cCodProdutoInternal := oTCOdeParaService:formatInternalIdProduto(nil, nil, SD2->D2_COD)
+
+			aJSONitems[nIt]['internalId']     := oTCOdeParaService:formatInternalIDdocSaidaItem(nil, SD2->D2_FILIAL, SD2->D2_DOC, SD2->D2_SERIE, SD2->D2_CLIENTE, SD2->D2_LOJA, SD2->D2_COD, SD2->D2_ITEM)
+			aJSONitems[nIt]['produtoExterno'] := Rtrim(CFGA070Ext(cIdentificacaoInteg, "SB1", "B1_COD", cCodProdutoInternal))
+			aJSONitems[nIt]['tipo']           := Rtrim(CFGA070Ext(cIdentificacaoInteg, "SF4", "F4_CODIGO", SD2->D2_TES))
+
+			if empty(SD2->D2_NFORI)
+				if ! empty(cInternalIdItemContratoParceria := ::getInternalIdItemFromContratoParceria(SD2->D2_PEDIDO, SD2->D2_CLIENTE, SD2->D2_LOJA, SD2->D2_ITEMPV, SD2->D2_COD))
+					aJSONitems[nIt]['nfOrigemInternalId'] := cInternalIdItemContratoParceria
+				endIf
+			else
+				if jDoc['tipo'] == 'D' //Devolucao
+					aJSONitems[nIt]['nfOrigemInternalId'] := oTCOdeParaService:formatInternalIDdocEntradaItem(nil, SD2->D2_FILIAL, SD2->D2_NFORI, SD2->D2_SERIORI, SD2->D2_CLIENTE, SD2->D2_LOJA, SD2->D2_COD, SD2->D2_ITEMORI)
+				else
+					aJSONitems[nIt]['nfOrigemInternalId'] := oTCOdeParaService:formatInternalIDdocSaidaItem(nil, SD2->D2_FILIAL, SD2->D2_NFORI, SD2->D2_SERIORI, SD2->D2_CLIENTE, SD2->D2_LOJA, SD2->D2_COD, SD2->D2_ITEMORI)
+				endIf
+			endIf
+
+			SD2->(dbSkip())
+		endDo
+
+		FWFreeObj(oTCOdeParaService)
+	endIf
+
+	SD2->(FWrestArea(aAreaSD2))
+return aJSONitems
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::getInternalIdItemFromContratoParceria
+Retorna o InternalId do Item do Documento de Saída referente ao contrato de parceria (Remessa, Entrega Futura).
+@type method
+@version 12
+@author jc.maldonado
+@since 04/12/2025
+@param cPedidoVenda, character, codigo pedido de venda
+@param cCodCliente, character, codigo cliente
+@param cLoja, character, codigo loja
+@param cItemPedidoVenda, character, item do pedido de venda
+@param cCodigoProduto, character, codigo do produto
+@return character, internalId do item do documento de saída referente ao contrato de parceria
+/*/
+method getInternalIdItemFromContratoParceria(cPedidoVenda as character, cCodCliente as character, cLoja as character, cItemPedidoVenda, cCodigoProduto as character) as character class agdTCOdocumentosFiscaisService
+	local cQuery          as character
+	local cNewAlias       as character
+	local aBindQry  := {} as array
+	local cInternalId     as character
+
+	cQuery += " SELECT"
+	cQuery += " 	SD2.D2_FILIAL,"
+	cQuery += " 	SD2.D2_DOC,"
+	cQuery += " 	SD2.D2_SERIE,"
+	cQuery += " 	SD2.D2_CLIENTE,"
+	cQuery += " 	SD2.D2_LOJA,"
+	cQuery += " 	SD2.D2_COD,"
+	cQuery += " 	SD2.D2_ITEM"
+	cQuery += " FROM"
+	cQuery += " 	" + retSQLname("SC6") + " SC6"
+	cQuery += " JOIN"
+	cQuery += "     " + retSQLname("ADB") + " ADB ON"
+	cQuery += " 	ADB.ADB_FILIAL = SC6.C6_FILIAL"
+	cQuery += " 	AND ADB.ADB_NUMCTR = SC6.C6_CONTRAT"
+	cQuery += " 	AND ADB.ADB_ITEM = SC6.C6_ITEMCON"
+	cQuery += " 	AND ADB.ADB_CODCLI = SC6.C6_CLI"
+	cQuery += " 	AND ADB.ADB_LOJCLI = SC6.C6_LOJA"
+	cQuery += " 	AND ADB.ADB_CODPRO = SC6.C6_PRODUTO"
+	cQuery += " 	AND ADB.ADB_PEDCOB <> SC6.C6_NUM"
+	cQuery += " 	AND ADB.D_E_L_E_T_ = ' '"
+	cQuery += " JOIN"
+	cQuery += "     " + retSQLname("SC6") + " SC6ORI ON"
+	cQuery += " 		SC6ORI.C6_FILIAL = ADB.ADB_FILIAL"
+	cQuery += " 	AND SC6ORI.C6_NUM = ADB.ADB_PEDCOB"
+	cQuery += " 	AND SC6ORI.C6_CLI = ADB.ADB_CODCLI"
+	cQuery += " 	AND SC6ORI.C6_LOJA = ADB.ADB_LOJCLI"
+	cQuery += " 	AND SC6ORI.C6_ITEM = ADB.ADB_ITEM"
+	cQuery += " 	AND SC6ORI.D_E_L_E_T_ = ' '"
+	cQuery += " JOIN"
+	cQuery += "     " + retSQLname("SD2") + " SD2 ON"
+	cQuery += " 	SD2.D2_FILIAL = SC6ORI.C6_FILIAL"
+	cQuery += " 	AND SD2.D2_DOC = SC6ORI.C6_NOTA"
+	cQuery += " 	AND SD2.D2_SERIE = SC6ORI.C6_SERIE"
+	cQuery += " 	AND SD2.D2_CLIENTE = SC6ORI.C6_CLI"
+	cQuery += " 	AND SD2.D2_LOJA = SC6ORI.C6_LOJA"
+	cQuery += " 	AND SD2.D2_ITEM = SC6ORI.C6_ITEM"
+	cQuery += " 	AND SD2.D2_COD = SC6ORI.C6_PRODUTO"
+	cQuery += " 	AND SD2.D_E_L_E_T_ = ' '"
+	cQuery += " WHERE"
+	cQuery += " 	SC6.C6_FILIAL = ?"      ; aAdd(aBindQry, FWxFilial("SC6"))
+	cQuery += " 	AND SC6.C6_NUM = ?"     ; aAdd(aBindQry, cPedidoVenda    )
+	cQuery += " 	AND SC6.C6_CLI = ?"     ; aAdd(aBindQry, cCodCliente     )
+	cQuery += " 	AND SC6.C6_LOJA = ?"    ; aAdd(aBindQry, cLoja           )
+	cQuery += " 	AND SC6.C6_ITEM = ?"    ; aAdd(aBindQry, cItemPedidoVenda)
+	cQuery += " 	AND SC6.C6_PRODUTO = ?" ; aAdd(aBindQry, cCodigoProduto  )
+	cQuery += " 	AND SC6.C6_CONTRAT <> ' '"
+	cQuery += " 	AND SC6.D_E_L_E_T_ = ' '"
+
+	cQuery := ChangeQuery(cQuery)
+
+	cNewAlias := MPSysOpenQuery(cQuery,,,,aBindQry)
+
+	if (cNewAlias)->(! EOF())
+		cInternalId := oTCOdeParaService:formatInternalIDdocSaidaItem(;
+			nil, (cNewAlias)->D2_FILIAL, (cNewAlias)->D2_DOC, (cNewAlias)->D2_SERIE, (cNewAlias)->D2_CLIENTE,;
+			(cNewAlias)->D2_LOJA, (cNewAlias)->D2_COD, (cNewAlias)->D2_ITEM)
+	endIf
+
+	(cNewAlias)->(DBCloseArea())
+return cInternalId
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::createKeySF1
+Gera a chave de acordo com o tamanho dos campos da tabela SF1
+@type method
+@version 12
+@author jc.maldonado
+@since 27/11/2025
+@param cDoc, character, documento
+@param cSerie, character, serie
+@param cCliFor, character, fornecedor/cliente
+@param cLoja, character, loja
+@return character, chave
+/*/
+method createSF1key(cDoc as character, cSerie as character, cCliFor as character, cLoja as character) as character class agdTCOdocumentosFiscaisService
+	local cChave as character
+
+	cChave := FWxFilial("SF1")                        +;
+		PadR(rTrim(cDoc)   , TamSX3("F1_DOC"    )[1]) +;
+		PadR(rTrim(cSerie) , TamSX3("F1_SERIE"  )[1]) +;
+		PadR(rTrim(cCliFor), TamSX3("F1_FORNECE")[1]) +;
+		PadR(rTrim(cLoja)  , TamSX3("F1_LOJA"   )[1])
+return cChave
+
+/*/{Protheus.doc} agdTCOdocumentosFiscaisService::createKeySF2
+Gera a chave de acordo com o tamanho dos campos da tabela SF2
+@type method
+@version 12
+@author jc.maldonado
+@since 27/11/2025
+@param cDoc, character, documento
+@param cSerie, character, serie
+@param cCliFor, character, cliente
+@param cLoja, character, loja
+@return character, chave
+/*/
+method createSF2key(cDoc as character, cSerie as character, cCliente as character, cLoja as character) as character class agdTCOdocumentosFiscaisService
+	local cChave as character
+
+	cChave := FWxFilial("SF2")                         +;
+		PadR(rTrim(cDoc)    , TamSX3("F2_DOC"    )[1]) +;
+		PadR(rTrim(cSerie)  , TamSX3("F2_SERIE"  )[1]) +;
+		PadR(rTrim(cCliente), TamSX3("F2_CLIENTE")[1]) +;
+		PadR(rTrim(cLoja)   , TamSX3("F2_LOJA"   )[1])
+return cChave

@@ -1,0 +1,1500 @@
+#INCLUDE "totvs.ch"
+#INCLUDE 'tlpp-core.th'
+#INCLUDE "FWMVCDEF.CH"
+#include "agd.solicitacao.receita.repository.ch"
+
+namespace agd.solicitacaoReceitaRepository
+using namespace agd.repositoryUtils
+using namespace agd.bloqueioFaturamentoService
+
+#DEFINE STATUS_SOLICITACAO_PENDENTE '0'
+#DEFINE STATUS_SOLICITACAO_CONFIRMADA '1'
+#DEFINE STATUS_RECEITA_PENDENTE '0'
+#DEFINE STATUS_RECEITA_EMITIDA '1'
+
+/*/{Protheus.doc} agdSolicitacaoReceitaRepository
+Repositório de Solicitação de Receita (NET/NEU)
+@type class
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 01/10/2025
+/*/
+class agdSolicitacaoReceitaRepository FROM agdRepositoryUtils
+	public Data cChaveIDRepository	As Object
+	protected Data aRecProdutos		As Array
+	protected Data aPedProdutos		As Array
+
+	public Method New()
+	public Method gerarSolicitacao()
+	public Method setProdutos()
+	public Method criarSolicitacao()
+	public Method orderByProdutos()
+	public Method groupByCulturaMapa()
+	public Method groupByMapa()
+
+	public Method hasReceita() as Logical
+	public Method isGeraReceita() as Logical
+	public Method isPropriedadeRural() as Logical
+	public Method isRegraReceita() as Logical
+	public Method maxProdUF() as numeric
+	public Method getRecProdutos() as Array
+	public Method getPedProdutos() as Array
+	public Method getCodigoMapa() as Character
+	public Method getFields()
+	public Method getJoins()
+	public Method save()
+	public Method atualizaStatus()
+	public Method getSolicPedidos() as Array
+	public Method reaproveitaReceita() as Logical
+	public Method confirmarSolicitacao()
+
+	//Recebimento de Receita
+	public Method quantidadePorMapaNaSolicitacao()
+
+	//Reaproveitamento de Receita
+	public Method vincularReceita()
+	public method isSolicitacaoStatusPendente()
+	public method validaIntegridadeItensNEUBySC9()
+	public method isReceitaValidaParaReaproveitamento()
+	public method hasItemSolicitacaoPendenteByMapa()
+	public method executarReaproveitamentoItemReceitaByMapa()
+	public method isItemSolicitacaoPendenteDeReceita()
+	public method gravaEfetivacaoReaproveitamentoNoItem()
+	public method retornaStatusSolicitacaoAndReceita()
+	public Method atualizaStatusSolicitacao()
+
+	//Validação itens marcados SC9 MATA460A
+	public method getReceitaPorItemSolicitacao()
+	public method getItensDaSolicitacaoPorReceita()
+	
+	public method isIncompleta()
+
+endclass
+
+/*/{Protheus.doc} new
+Constructor
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 01/10/2025
+@return variant, instância
+/*/
+Method New(pcChaveIDRepository as character) Class agdSolicitacaoReceitaRepository
+	Self:cChaveIDRepository := pcChaveIDRepository
+	_Super:New('NET', self:getFields(), Self:getJoins())
+	self:aRecProdutos := {}
+	self:aPedProdutos := {}
+Return Self
+
+/*/{Protheus.doc} hasReceita
+Verifica se o produto já foi adicionado em outra solicitação
+@type function
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 01/10/2025
+@param cPedido, Character, Número do pedido
+@param cItemPed, Character, Item do pedido
+@param cSeq, Character, Sequencia de liberacao
+@param cCodSolic, Character, Código da solicitação atual
+@return Logical, .T. se já foi adicionado, .F. caso contrário
+/*/
+Method hasReceita(cPedido, cItemPed, cSeq, cCodSolic) Class agdSolicitacaoReceitaRepository
+	Local lRet  	:= .F.
+	Local aAreaNEU 	:= NEU->(GetArea())
+
+	dbSelectArea('NEU')
+	NEU->(dbSetOrder(2)) // NEU_FILIAL+NEU_NUMPED+NEU_ITEMPE
+
+	If NEU->(dbSeek(xFilial('NEU') + cPedido + cItemPed + cSeq))
+		// Verifica se é de outra solicitação
+
+		While  NEU->(!EoF()) .And. ;
+				NEU->(NEU_FILIAL+NEU_NUMPED+NEU_ITEMPE) == ;
+				xFilial('NEU') + cPedido + cItemPed
+			If NEU->NEU_CODIGO != cCodSolic .And. NEU->NEU_ITEMPE == cItemPed .And. NEU->NEU_SEQLIB == cSeq
+				//Verifica se O STATUS da solicitação é diferente de cancelado
+				dbSelectArea('NET')
+				NET->(dbSetOrder(1))
+				If NET->(dbSeek(xFilial('NET') + NEU->NEU_CODIGO))
+					IF NET->NET_STSSOL == '1'
+						lRet := .T.
+					ENDIF
+				ENDIF
+			EndIf
+			NEU->(dbSkip())
+		EndDo
+	EndIf
+
+	RestArea(aAreaNEU)
+
+Return lRet
+
+
+/*/{Protheus.doc} isGeraReceita
+Verifica se o produto necessita de receituário
+@type function
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 01/10/2025
+@param cProduto, Character, Código do produto
+@return Logical, .T. se necessita receituário, .F. caso contrário
+/*/
+Method isGeraReceita(cProduto) Class agdSolicitacaoReceitaRepository
+	Local lRet := .F.
+	Local aAreaNCR := NCR->(GetArea())
+
+	dbSelectArea('NCR')
+	NCR->(dbSetOrder(1)) // NCR_FILIAL+NCR_PROD
+
+	If NCR->(dbSeek(xFilial('NCR') + cProduto))
+		lRet := (NCR->NCR_EMREC == '1' .And. !Empty(NCR->NCR_MAPA))
+	EndIf
+
+	RestArea(aAreaNCR)
+
+Return lRet
+
+/*/{Protheus.doc} gerarSolicitacao
+Gera solicitação(ões) de receituário a partir de um pedido
+Considera limite de produtos por UF, criando múltiplas solicitações se necessário
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 07/10/2025
+@param cPedido, Character, Número do pedido
+@return Array, Array com códigos das solicitações geradas ou nil em caso de erro
+/*/
+Method gerarSolicitacao(cPedido) Class agdSolicitacaoReceitaRepository
+	Local aAreaSC9      	:= SC9->(GetArea())
+	Local aAreaSA1      	:= SA1->(GetArea())
+	Local aSolicitacoes 	:= {}
+	Local aProdutos     	:= {}
+	Local aPedProdutos		:= {}
+	Local aRecProdutos		:= {}
+	Local aGrupos       	:= {}
+	Local cUFCliente    	:= ""
+	Local cCliente      	:= ""
+	Local cLoja         	:= ""
+	Local nMaxProdUF    	:= 0
+	Local nI            	:= 0
+	
+	aPedProdutos := self:getPedProdutos(cPedido)
+	aRecProdutos := self:getRecProdutos()
+
+	if len(aPedProdutos) == 0
+		Self:setError(STR0002,404, STR0003)
+		RestArea(aAreaSC9)
+		RestArea(aAreaSA1)
+		Return nil
+	endif
+
+	// Posiciona no pedido
+	dbSelectArea('SC9')
+	SC9->(dbSetOrder(1))
+
+	If !SC9->(dbSeek(xFilial('SC9') + cPedido))
+		if len(aPedProdutos) > 0
+			Self:setError(STR0004,404, STR0005)
+		endif
+		RestArea(aAreaSC9)
+		RestArea(aAreaSA1)
+		Return nil
+	EndIf
+
+	// Captura dados do cliente
+	cCliente := SC9->C9_CLIENTE
+	cLoja    := SC9->C9_LOJA
+
+	// Busca UF do cliente
+	dbSelectArea('SA1')
+	SA1->(dbSetOrder(1))
+
+	If SA1->(dbSeek(xFilial('SA1') + cCliente + cLoja))
+		cUFCliente := SA1->A1_EST
+	Else
+		Self:setError(STR0006, 404)
+		RestArea(aAreaSC9)
+		RestArea(aAreaSA1)
+		Return nil
+	EndIf
+
+	// Obtém limite de produtos por UF
+	nMaxProdUF := Self:maxProdUF(cUFCliente)
+
+	If nMaxProdUF <= 0
+		Self:setError(STR0007 + cUFCliente , 404)
+		RestArea(aAreaSC9)
+		RestArea(aAreaSA1)
+		Return nil
+	EndIf
+
+	// Coleta produtos que necessitam receituário
+	aProdutos := Self:setProdutos(cPedido, cCliente, cLoja, "")
+
+	if len(aProdutos) == 0
+		if len(aPedProdutos) == len(aRecProdutos)
+			Self:setError(STR0008, 404)
+		elseif len(aPedProdutos) > len(aRecProdutos)
+			Self:setError(STR0004,404, STR0005)
+		endif
+		RestArea(aAreaSC9)
+		RestArea(aAreaSA1)
+		Return nil
+	EndIf
+
+	// ORDENA produtos por CULTURA + MAPA
+	aProdutos := Self:orderByProdutos(aProdutos)
+
+	// Agrupa produtos por CULTURA + MAPA
+	aGrupos := Self:groupByCulturaMapa(aProdutos, nMaxProdUF)
+
+	// Gera solicitações para cada grupo
+	For nI := 1 To Len(aGrupos)
+		cCodSolic := Self:criarSolicitacao(aGrupos[nI][2], cPedido, aGrupos[nI][1])
+
+		If !Empty(cCodSolic)
+			aAdd(aSolicitacoes, cCodSolic)
+		EndIf
+	Next nI
+
+	// Restaura áreas
+	RestArea(aAreaSC9)
+	RestArea(aAreaSA1)
+
+	If Len(aSolicitacoes) == 0
+		Self:setError(Self:getMessageError(), 404)
+		Return nil
+	EndIf
+
+	Self:setSuccess(aSolicitacoes)
+Return aSolicitacoes
+
+/*/{Protheus.doc} setProdutos
+Coleta produtos do pedido que necessitam receituário
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 07/10/2025
+@param cPedido, Character, Número do pedido
+@param cCliente, Character, Código do cliente
+@param cLoja, Character, Loja do cliente
+@return Array, Array com os produtos que necessitam receituário
+/*/
+Method setProdutos(cPedido, cCliente, cLoja, cCodSolic) Class agdSolicitacaoReceitaRepository
+
+	Local aProdutos 	:= {}
+	Local aProduto  	:= {}
+	Local cUMProd   	:= ""
+	Local cCodigoMapa 	:= ""
+	Local cCultura  	:= ""
+
+	// Posiciona no início do pedido
+	SC9->(dbSeek(xFilial('SC9') + cPedido))
+
+	While SC9->(!EoF()) .And. ;
+			SC9->(C9_FILIAL + C9_CLIENTE + C9_LOJA + C9_PEDIDO) == ;
+			xFilial('SC9') + cCliente + cLoja + cPedido
+
+		// Verifica se tem quantidade liberada
+		If SC9->C9_QTDLIB > 0
+
+			// Verifica se produto necessita receituário
+			If Self:isGeraReceita(SC9->C9_PRODUTO)
+
+				// Verifica se produto já foi adicionado em outra solicitação
+				If !Self:hasReceita(cPedido, SC9->C9_ITEM, SC9->C9_SEQUEN, cCodSolic)
+
+					cCodigoMapa := Self:getCodigoMapa(SC9->C9_PRODUTO) 	// Obtém MAPA
+					cCultura := Posicione("SC6", 1, xFilial("SC6") + SC9->C9_PEDIDO + SC9->C9_ITEM, "C6_CULTRA") //	// Obtém Cultura
+					cUMProd  := Posicione("SB1", 1, xFilial("SB1") + SC9->C9_PRODUTO, "B1_UM") // Obtém UM do produto
+
+					// Adiciona produto ao array
+					aProduto := {}
+					aAdd(aProduto, SC9->C9_ITEM)			// [1] Item do pedido
+					aAdd(aProduto, SC9->C9_PEDIDO)			// [2] Número do pedido
+					aAdd(aProduto, SC9->C9_PRODUTO)			// [3] Código do produto
+					aAdd(aProduto, cUMProd)					// [4] Unidade de medida
+					aAdd(aProduto, SC9->C9_QTDLIB)			// [5] Quantidade liberada
+					aAdd(aProduto, SC9->C9_SEQUEN)    		// [6] Sequencia liberada
+					aAdd(aProduto, AllTrim(cCodigoMapa))	// [7] Código MAPA
+					aAdd(aProduto, AllTrim(cCultura))		// [8] Cultura
+
+					aAdd(aProdutos, aProduto)
+
+				EndIf
+
+			EndIf
+
+		EndIf
+
+		SC9->(dbSkip())
+	EndDo
+
+Return aProdutos
+
+/*/{Protheus.doc} criarSolicitacao
+Cria uma solicitação de receituário
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 07/10/2025
+@param aProdutos, Array, Array com produtos do lote
+@param cPedido, Character, Número do pedido
+@param cCultura, Character, Cultura da Solicitação
+@return Character, Código da solicitação gerada ou vazio em caso de erro
+/*/
+Method criarSolicitacao(aProdutos, cPedido, cCultura) Class agdSolicitacaoReceitaRepository
+	Local oModel    := FwLoadModel("AGDA040")
+	Local oNET      := nil
+	Local oNEU      := nil
+	Local nI        := 0
+	Local cCodigo   := ""
+//verifica parametro
+//verifica se tem net invalida  nasce com status pendente
+	oModel:SetOperation(MODEL_OPERATION_INSERT)
+	oModel:Activate()
+
+	oNET := oModel:GetModel("AGDA040_NET")
+	oNEU := oModel:GetModel("AGDA040_NEU")
+
+	oNET:SetValue('NET_NUMPED', cPedido)
+	oNET:SetValue('NET_CULTRA', cCultura)
+
+	if self:reaproveitaReceita()
+		oNET:SetValue('NET_STSSOL', "0")
+	endif
+
+	If oNEU:Length() > 0
+		oNEU:DelAllLine()
+		oNEU:ClearData()
+	EndIf
+
+	For nI := 1 To Len(aProdutos)
+		If nI > 1
+			oNEU:AddLine()
+		EndIf
+
+		oNEU:SetValue("NEU_ITEM"  , StrZero(nI, TamSX3("NEU_ITEM")[1]))
+		oNEU:SetValue("NEU_ITEMPE", aProdutos[nI][1])
+		oNEU:SetValue("NEU_NUMPED", aProdutos[nI][2])
+		oNEU:SetValue("NEU_PRODUT", aProdutos[nI][3])
+		oNEU:SetValue("NEU_UM"    , aProdutos[nI][4])
+		oNEU:SetValue("NEU_QTDVEN", aProdutos[nI][5])
+		oNEU:SetValue("NEU_SEQLIB", aProdutos[nI][6])
+		oNEU:SetValue("NEU_MAPA"  , aProdutos[nI][7])
+	Next nI
+
+	if Self:isSuccess()
+		If oModel:VldData()
+			oModel:CommitData()
+			cCodigo := oNET:GetValue("NET_CODIGO")
+		Else
+			Self:setErrorByErrorMessageModel(oModel, 400)
+		EndIf
+	endif
+
+	oModel:DeActivate()
+	oModel:Destroy()
+	FreeObj(oModel)
+
+Return cCodigo
+
+/*/{Protheus.doc} getCodigoMapa
+Retorna o código MAPA do produto
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 28/10/2025
+@param cProduto, character, Codigo do Produto
+@return Character, Codigo MAPA do produto
+/*/
+Method getCodigoMapa(cProduto) Class agdSolicitacaoReceitaRepository
+	Local cMapa := ""
+	Local aAreaNCR := NCR->(GetArea())
+
+	dbSelectArea('NCR')
+	NCR->(dbSetOrder(1)) // NCR_FILIAL+NCR_PROD
+
+	If NCR->(dbSeek(xFilial('NCR') + cProduto))
+		cMapa := NCR->NCR_MAPA
+	EndIf
+
+	RestArea(aAreaNCR)
+Return AllTrim(cMapa)
+
+/*/{Protheus.doc} orderByProdutos
+Ordena produtos por CULTURA + MAPA
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 31/10/2025
+@param aProdutos, Array, Array com todos os produtos
+@return Array, Array ordenado por cultura e mapa
+/*/
+Method orderByProdutos(aProdutos) Class agdSolicitacaoReceitaRepository
+	// Ordena por CULTURA (posição 8) + MAPA (posição 7) + ITEM (posição 1)
+	aSort(aProdutos,,, {|x,y| x[8] + x[7] + x[1] < y[8] + y[7]+ y[1]})
+Return aProdutos
+
+/*/{Protheus.doc} groupByCulturaMapa
+Agrupa produtos por CULTURA + MAPA respeitando limite de MAPA por UF
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 31/10/2025
+@param aProdutos, Array, Array com produtos ordenados
+@param nMaxProdUF, Numeric, Limite de produtos MAPA por UF
+@return Array, Array com grupos: {{CULTURA, {produtos}}, ...}
+/*/
+Method groupByCulturaMapa(aProdutos, nMaxProdUF) Class agdSolicitacaoReceitaRepository
+	Local aGrupos       := {}
+	Local aProdGrupo    := {}
+	Local aMapasGrupo   := {}
+	Local cCulturaAtual := ""
+	Local cCulturaAnt   := ""
+	Local cMapaAtual    := ""
+	Local lNovoGrupo    := .F.
+	Local nI            := 0
+
+	For nI := 1 To Len(aProdutos)
+		cCulturaAtual := aProdutos[nI][8]
+		cMapaAtual    := aProdutos[nI][7]
+		lNovoGrupo    := .F.
+
+		// Verifica se precisa criar novo grupo
+		If Len(aProdGrupo) == 0
+			// Primeiro produto ou logo após fechar grupo
+			lNovoGrupo := .F.
+		ElseIf cCulturaAtual != cCulturaAnt
+			// Mudou de cultura
+			lNovoGrupo := .T.
+		ElseIf aScan(aMapasGrupo, cMapaAtual) == 0 .And. Len(aMapasGrupo) >= nMaxProdUF
+			// Novo MAPA e atingiu limite
+			lNovoGrupo := .T.
+		EndIf
+
+		// Fecha grupo atual se necessário
+		If lNovoGrupo
+			aAdd(aGrupos, {cCulturaAnt, aClone(aProdGrupo)})
+			aProdGrupo  := {}
+			aMapasGrupo := {}
+		EndIf
+
+		// Adiciona produto ao grupo atual
+		aAdd(aProdGrupo, aProdutos[nI])
+
+		// Adiciona MAPA ao controle se ainda não existe
+		If aScan(aMapasGrupo, cMapaAtual) == 0
+			aAdd(aMapasGrupo, cMapaAtual)
+		EndIf
+
+		cCulturaAnt := cCulturaAtual
+	Next nI
+
+	// Fecha último grupo
+	If Len(aProdGrupo) > 0
+		aAdd(aGrupos, {cCulturaAtual, aClone(aProdGrupo)})
+	EndIf
+
+Return aGrupos
+
+/*/{Protheus.doc} maxProdUF
+Retorna a quantidade máxima de produtos permitidos por UF
+conforme legislação de receituário agronômico
+@type function
+@version P12
+@author lindembergson.pacheco
+@since 07/10/2025
+@param cUF, Character, Sigla da UF (AC, AL, AM, etc)
+@return Numeric, Quantidade máxima de produtos permitidos (1, 2, 3 ou 5)
+@example
+    nQtdMax := maxProdUF("SP") // Retorna 5
+    nQtdMax := maxProdUF("AM") // Retorna 1
+    nQtdMax := maxProdUF("SC") // Retorna 2
+/*/
+Method maxProdUF(cUF) Class agdSolicitacaoReceitaRepository
+	Local nMax := 0
+
+	// Converte para maiúsculo e remove espaços
+	cUF := Upper(AllTrim(cUF))
+
+	// Valida se foi passado o parâmetro
+	If Empty(cUF)
+		Return 0
+	EndIf
+	// Define quantidade conforme UF
+	dbSelectArea("SX5")
+	dbSetOrder(1) //X5_FILIAL+X5_TABELA+X5_CHAVE
+	If DBSeek( xFilial("SX5") + "WI" + cUF )
+		nMax := VAL(AllTrim(X5Descri())) //VAL(AllTrim(SX5->X5_DESCRI))
+	Else
+		nMax := 0
+	EndIf
+
+Return nMax
+
+/*/{Protheus.doc} getPedProdutos
+Retorna o array de produtos que necessitam de receita - SC6
+@type function
+@version P12
+@author lindembergson.pacheco
+@since 13/10/2025
+@param cPedido, Character, Número do pedido
+@return Array, Array com códigos de produtos que precisam de receituario
+/*/
+Method getPedProdutos(cPedido) Class agdSolicitacaoReceitaRepository
+
+	Local nQtdLib	:= 0
+	Local nQtdPed	:= 0
+
+	dbSelectArea('SC6')
+	SC6->(dbSetOrder(1)) //C6_FILIAL+C6_NUM+C6_ITEM+C6_PRODUTO
+	SC6->(dbSeek(xFilial('SC6') + cPedido))
+	self:aRecProdutos := {}
+	self:aPedProdutos := {}
+	While SC6->(!EoF()) .And. ;
+			SC6->(C6_FILIAL+C6_NUM) == ;
+			xFilial('SC6') + cPedido
+		// Verifica se produto necessita receituário
+		If Self:isGeraReceita(SC6->C6_PRODUTO) .and. ;
+		   Self:isPropriedadeRural(SC6->C6_CLI, SC6->C6_LOJA) .and. ;
+		   Self:isRegraReceita(SC6->C6_NUM, SC6->C6_TES, SC6->C6_CLI, SC6->C6_LOJA)
+
+			nQtdPed := SC6->C6_QTDVEN
+			nQtdLib := 0
+
+			dbSelectArea('SC9')
+			SC9->(dbSetOrder(1)) // C9_FILIAL+C9_PEDIDO+C9_ITEM+C9_SEQUEN+C9_PRODUTO
+			If SC9->(dbSeek(xFilial('SC9') + SC6->C6_NUM + SC6->C6_ITEM))
+				While SC9->(!EoF()) .And. ;
+						SC9->(C9_FILIAL + C9_PEDIDO + C9_ITEM) == ;
+						SC6->(C6_FILIAL + C6_NUM + C6_ITEM)
+					nQtdLib += SC9->C9_QTDLIB
+					IF nQtdPed == nQtdLib
+						//ARRAY COM ITEM DE RECEITA - LIBERACAO PEDIDO
+						aAdd(self:aRecProdutos, SC6->C6_PRODUTO)
+					ENDIF
+					SC9->(dbSkip())
+				EndDo
+			ENDIF
+			//ARRAY COM ITEM DE RECEITA - PEDIDO
+			aAdd(self:aPedProdutos, SC6->C6_PRODUTO)
+		EndIf
+		SC6->(dbSkip())
+	EndDo
+
+Return self:aPedProdutos
+
+
+/*/{Protheus.doc} getRecProdutos
+Retorna o array de produtos que necessitam de receita - SC9
+@type function
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 13/10/2025
+@return Array, Array com códigos de produtos que precisam de receituario
+/*/
+Method getRecProdutos() Class agdSolicitacaoReceitaRepository
+Return self:aRecProdutos
+
+/*/{Protheus.doc} getFields
+Retorna a lista de campos do repositório
+@type function
+@version P12.1.2610
+@author carlos.augusto
+@since 04/11/2025
+@return Array, Array com campos do receituario
+/*/
+Method getFields() Class agdSolicitacaoReceitaRepository
+	Local aArrayFields := {}
+	AAdd(aArrayFields, {'filial'                  , 'NET_FILIAL', 'C', .T.})
+	AAdd(aArrayFields, {'idSolicitacao'           , 'NET_CODIGO', 'C', .T.})
+	AAdd(aArrayFields, {'numeroPedido'            , 'NET_NUMPED', 'C', .T.})
+	AAdd(aArrayFields, {'dataEmissao'             , 'NET_EMISSA', 'D', .T.})
+	AAdd(aArrayFields, {'codigoEngenheiro'        , 'NET_CODENG', 'C', .T.})
+	AAdd(aArrayFields, {'codigoCliente'           , 'NET_CLIENT', 'C', .T.})
+	AAdd(aArrayFields, {'codigoLoja'              , 'NET_LOJA'  , 'C', .T.})
+	AAdd(aArrayFields, {'numeroNotaFiscal'        , 'NE6_DOC'   , 'C', .T.})
+	AAdd(aArrayFields, {'serieNotaFiscal'         , 'NE6_SERIE' , 'C', .T.})
+	AAdd(aArrayFields, {'cultura'                 , 'NET_CULTRA', 'C', .T.})
+	AAdd(aArrayFields, {'localDescarteEmbalagem'  , 'NET_LOCDES', 'C', .T.})
+	AAdd(aArrayFields, {'statusSolicitacao'       , 'NET_STSSOL', 'C', .T.})
+	AAdd(aArrayFields, {'statusReceita'           , 'NET_STSREC', 'C', .T.})
+	AAdd(aArrayFields, {'numeroReceituario'       , 'NE6_NUMREC', 'C', .T.})
+	AAdd(aArrayFields, {'urlReceita'              , 'NE6_URLREC', 'C', .T.})
+	AAdd(aArrayFields, {'emissao'                 , 'NE6_DTEMIS', 'D', .T.})
+	AAdd(aArrayFields, {'hora'                    , 'NE6_HREMIS', 'C', .T.})
+	AAdd(aArrayFields, {'observacao'              , 'NE6_OBS'   , 'M', .T.})
+	AAdd(aArrayFields, {'descricaoEngenheiro'     , 'NP8_NOME'  , 'C', .T.})
+	AAdd(aArrayFields, {'descricaoCliente'        , 'A1_NOME'   , 'C', .T.})
+	AAdd(aArrayFields, {'descricaoLocalDescarte'  , 'NEO_NOME'  , 'C', .T.})
+Return aArrayFields
+
+/*/{Protheus.doc} getJoins
+Relacionamentos para a requisicao
+@type function
+@version 12
+@author carlos.augusto
+@since 04/11/2025
+@return Array, Array com campos do receituario
+/*/
+Method getJoins() Class agdSolicitacaoReceitaRepository
+	Local aArrayJoins  := {}
+
+	AAdd(aArrayJoins, {'LEFT OUTER', 'NP8' , Self:getWhereDefault('NP8.NP8_CODIGO = NET.NET_CODENG', 'NP8')})
+	AAdd(aArrayJoins, {'LEFT OUTER', 'SA1' , Self:getWhereDefault('SA1.A1_COD = NET.NET_CLIENT AND SA1.A1_LOJA = NET_LOJA', 'SA1')})
+	AAdd(aArrayJoins, {'LEFT OUTER', 'NEO' , Self:getWhereDefault('NEO.NEO_CODIGO = NET.NET_LOCDES', 'NEO')})
+	AAdd(aArrayJoins, {'LEFT OUTER', 'NE6' , Self:getWhereDefault('NE6.NE6_NUMSOL = NET.NET_CODIGO', 'NE6')})
+
+Return aArrayJoins
+
+/*/{Protheus.doc} isPropriedadeRural
+Verifica se a propriedade do cliente é Rural
+@type function
+@version P12.1.2610
+@author Gilson.Venturi
+@since 31/10/2025
+@param cCliente, Character, Código do cliente
+@param cLoja, Character, Loja do cliente
+@return Logical, .T. é propriedade rural, .F. caso contrário
+/*/
+Method isPropriedadeRural(cCliente, cLoja) Class agdSolicitacaoReceitaRepository
+	lRet := IIF(Posicione("NEP",1,FwXFilial("NEP") + cCliente + cLoja, "NEP_PRORUR") == '1',.T.,.F.)
+Return lRet
+
+/*/{Protheus.doc} isRegraReceita
+Verificar na rotina de Regras de Receita se há TES e UF´s informados
+será considerado SIM, se encontrar ao menos 1 registro que atenda ao requisito
+@type function
+@version P12.1.2610
+@author Gilson.Venturi
+@since 31/10/2025
+@param cNumero, Character, numero do pedido
+@param cTes, Character, TES do pedido
+@param cCliente, Character, Código do cliente
+@param cLoja, Character, Loja do cliente
+@return Logical, .T. se atender as regra da receita, .F. caso contrário
+/*/
+Method isRegraReceita(cNumero, cTes, cCliente, cLoja) Class agdSolicitacaoReceitaRepository
+	Local cQuery     As character
+	Local oStmt      As object
+	Local lRet       := .F.
+	Local nQtd       := 0
+	Local aAreaNEP   := NEP->(GetArea())
+
+	cEmissao   := Posicione("SC5",1,FWxFilial("SC5")+cNumero,"C5_EMISSAO")
+	cUFCliente := Posicione("SA1",1,FWxFilial("SA1")+ cCliente + cLoja,"A1_EST")
+	cUFCliente := '%'+alltrim(cUFCliente)+'%'
+
+	cQuery := " SELECT COUNT(*) AS QTDE "
+	cQuery += "   FROM " + RetSqlName("NEY") + " NEY "
+	cQuery += "  INNER JOIN " + RetSqlName("NEZ") + " NEZ "
+	cQuery += "     ON NEZ.NEZ_FILIAL  = ?"
+	cQuery += "    AND NEZ.NEZ_CODREG  = NEY.NEY_CODIGO"
+	cQuery += "    AND NEZ.NEZ_TES     = ?"
+	cQuery += "    AND NEZ.NEZ_LISTUF  LIKE ?"
+	cQuery += "    AND NEZ.D_E_L_E_T_  = ''"
+	cQuery += "  WHERE NEY.NEY_FILIAL  = ?"
+	cQuery += "    AND NEY.NEY_DATINI <= ?"
+	cQuery += "    AND NEY.NEY_DATFIM >= ?"
+	cQuery += "    AND NEY.D_E_L_E_T_  = ''"
+	cQuery := ChangeQuery(cQuery)
+
+	// Prepara os parâmetros
+	oStmt:= FWPreparedStatement():New()
+	oStmt:SetQuery(cQuery)
+	oStmt:SetString(1, FWxFilial("NEZ"))
+	oStmt:SetString(2, cTes)
+	oStmt:SetString(3, cUFCliente)
+	oStmt:SetString(4, FWxFilial("NEY"))
+	oStmt:SetDate(5, cEmissao)
+	oStmt:SetDate(6, cEmissao)
+	cQuery := oStmt:GetFixQuery()
+
+	nQtd := MPSysExecScalar(oStmt:GetFixQuery(), "QTDE")
+	lRet := IIf(nQtd > 0,.T.,.F.)
+
+	RestArea(aAreaNEP)
+Return lRet
+
+/*/{Protheus.doc} save
+Faz atualização ou inserção de uma solicitação receituário
+@type method
+@version P12.1.2610
+@author Gilson.Venturi
+@since 12/11/2025
+@param jPayload, json, payload recebido
+/*/
+method save(jPayload as json, lUpdate as logical) class agdSolicitacaoReceitaRepository
+	Local oModel           as object
+	Local oBloqFatService  as object
+	Local aFieldsCabecalho := Self:getFields()
+
+	Default lUpdate := .F.
+
+	if !lUpdate .or. (lUpdate .and. Self:existsById(Self:cChaveIDRepository))
+
+		// Carrega o Model da rotina AGDA040
+		oModel := FwLoadModel("AGDA040")
+		oModel:SetOperation(IIF(lUpdate, MODEL_OPERATION_UPDATE, MODEL_OPERATION_INSERT))
+		oModel:Activate()
+
+		// Carregamento do cabeçalho
+		aFields := Self:jsonToArrayFields(jPayload, aFieldsCabecalho)
+		aAdd(aFields, {'NET_STSREC', '1'}) // '1-Emitida'
+		Self:setValueModel(oModel:GetModel("AGDA040_NET"), aFields)
+
+		if Self:isSuccess()
+			oModel:VldData()
+			oModel:CommitData()
+
+			cCodReceita := oModel:GetModel("AGDA040_NET"):GetValue("NET_CODIGO")
+			oBloqFatService := agdBloqueioFaturamentoService():New()
+			dbSelectArea('NEU')
+			NEU->(dbSetOrder(1)) // NEU_FILIAL+NEU_CODIGO
+			if NEU->(dbSeek(xFilial('NEU') + cCodReceita ))
+				while NEU->(!EoF()) .and. NEU->(NEU_FILIAL + NEU_CODIGO) == FWxFilial('NEU') + cCodReceita
+					oBloqFatService:gerarBloqueioReceita(NEU->NEU_NUMPED, NEU->NEU_ITEMPE, NEU->NEU_SEQLIB, NEU->NEU_PRODUT)
+					NEU->(dbSkip())
+				EndDo
+			EndIf
+			FreeObj(oBloqFatService)
+		Endif
+
+		oModel:DeActivate()
+		oModel:Destroy()
+		FWFreeObj(oModel)
+	endif
+Return
+
+
+/*/{Protheus.doc} groupByMapa
+Agrupa produtos por código MAPA somando as quantidades
+@type method
+@version P12.1.2610
+@author lindembergson.pacheco
+@since 24/11/2025
+@param aProdutos, Array, Array com os produtos
+@return Array, Array agrupado: {{MAPA, QTDTOTAL, {produtos}}, ...}
+@example
+    aConsolidado := Self:groupByMapa(aProdutos)
+    // Retorna:
+    // {
+    //   {"AGD-MAPA-01", 13.00, {{item1}, {item2}, {item3}}},
+    //   {"AGD-MAPA-02", 7.00, {{item4}, {item5}}}
+    // }
+/*/
+Method groupByMapa(aProdutos) Class agdSolicitacaoReceitaRepository
+	Local aConsolidado	:= {}
+	Local nPos			:= 0
+	Local cMapa			:= ""
+	Local nQtd			:= 0
+	Local cUM			:= ""
+	Local cIdExt		:= ""
+	Local nI			:= 0
+
+	For nI := 1 To Len(aProdutos)
+		cMapa	:= AllTrim(self:getCodigoMapa(aProdutos[nI][1]))	// Produto
+		nQtd	:= aProdutos[nI][2]									// Quant
+		cUM		:= AllTrim(aProdutos[nI][3])						// UM
+		cIdExt	:= aProdutos[nI][4]									// Id Externo
+
+		// Procura se MAPA já existe
+		nPos := aScan(aConsolidado, {|x| AllTrim(x[2]) == cMapa})
+
+		If nPos == 0
+			// Não existe, cria novo registro
+			aAdd(aConsolidado, {;
+				cIdExt,;			// [1] Id Externo
+			cMapa,;				// [2] Código MAPA
+			nQtd,; 				// [3] Quantidade total
+			cUM,;				// [4] UM
+			{aProdutos[nI]};	// [5] Array com produtos
+			})
+		Else
+			// Já existe, soma quantidade e adiciona produto
+			aConsolidado[nPos][3] += nQtd
+			aAdd(aConsolidado[nPos][5], aProdutos[nI])
+		EndIf
+	Next nI
+
+	// Ordena por código MAPA
+	aSort(aConsolidado,,, {|x,y| x[2] < y[2]})
+
+Return aConsolidado
+
+/*/{Protheus.doc} atualizaStatus
+Atualiza Status da Solicitação
+@type Method
+@version P12
+@author scheronlini.martins
+@since 03/12/2025
+/*/
+method atualizaStatus(cStatusSol) Class agdSolicitacaoReceitaRepository
+	Local oModel As Object
+	Local oNet   As Object
+
+	if Self:existsById(Self:cChaveIDRepository)
+		oModel := FwLoadModel("AGDA040")
+		oModel:SetOperation(MODEL_OPERATION_UPDATE)
+		oModel:Activate()
+
+		oNET := oModel:GetModel("AGDA040_NET")
+		oNET:SetValue('NET_STSSOL', cStatusSol)
+
+		if Self:isSuccess()
+			If oModel:VldData()
+				oModel:CommitData()
+				Self:setSuccess(oNET:GetValue("NET_CODIGO"))
+			Else
+				Self:setErrorByErrorMessageModel(oModel, 400)
+			EndIf
+		endif
+	endif
+
+	oModel:DeActivate()
+	oModel:Destroy()
+	FreeObj(oModel)
+
+return
+
+/*/{Protheus.doc} agdSolicitacaoReceitaRepository::reaproveitaReceita
+Verifica se deve reaproveitar receita
+@type method
+@version P12
+@author scheronlini.martins
+@since 10/12/2025
+@return variant, return_true or false
+/*/
+method reaproveitaReceita() class agdSolicitacaoReceitaRepository
+	Local aSoliciReceit, n
+
+	if SuperGetMv("MV_AGD0006",.f.,.f.)
+
+		aSoliciReceit:= Self:getSolicPedidos(SC5->C5_NUM)
+
+		if !Empty(aSoliciReceit)
+
+			for n:= 1 to len(aSoliciReceit)
+
+				if aSoliciReceit[n][2] == "3"
+					return .t.
+				endif
+			Next
+
+		endif
+
+	endif
+
+return .F.
+
+/*/{Protheus.doc} agdSolicitacaoReceitaRepository::getSolicPedidos
+Obtem Codigo da Solicitação
+@type method
+@version P12
+@author scheronlini.martins
+@since 04/12/2025
+@param aListSolic, ARRAY, Lista de solicitações por pedido
+/*/
+method getSolicPedidos(cPedido) class agdSolicitacaoReceitaRepository
+	Local oState
+	Local cQuery
+	Local cAlias
+	Local aListSolic := {}
+
+	cQuery:= "SELECT NET_CODIGO, NET_STSSOL, NET_STSREC FROM " +RetSqlName("NET") + " WHERE NET_NUMPED = ? "
+	cQuery+= "AND NET_FILIAL = ? AND D_E_L_E_T_ = ' '"
+
+	oState := FWPreparedStatement():New()
+	oState:SetQuery(cQuery)
+	oState:SetString(1, cPedido)
+	oState:SetString(2,FWxFilial('NET'))
+	cQuery := oState:GetFixQuery()
+
+	cAlias := GetNextAlias()
+	dbUseArea(.T.,"TOPCONN",TCGenQry(,,cQuery),cAlias,.T.,.T.)
+
+	While !(cAlias)->(Eof())
+		aadd(aListSolic,{(cAlias)->NET_CODIGO,(cAlias)->NET_STSSOL,(cAlias)->NET_STSREC})
+		(cAlias)->(DBSkip())
+	EndDo
+	(cAlias)->(DBCloseArea())
+
+return aListSolic
+
+/*/{Protheus.doc} confirmarSolicitacao
+Confirma uma solicitação de receita alterando seu status para "Confirmado"
+Valida se o status atual permite a confirmação antes de executar
+@type method
+@version P12.1.2610
+@author beatriz.dantas
+@since 10/12/2025
+@return nil
+/*/
+method confirmarSolicitacao() Class agdSolicitacaoReceitaRepository
+	Local oConfirmarSolicitacao as object
+	Local lPodeConfirm  		as logical
+
+	Default lPodeConfirm := .F.
+
+	if Self:existsById(Self:cChaveIDRepository) 
+		lPodeConfirm := ( Alltrim(NET->NET_STSSOL) $ "0|3" ) //0-Pendente | 3-Aguardando Envio
+		
+		If !lPodeConfirm
+			Self:setError( STR0019, 400, STR0020) //"Solicitação não pode ser confirmada. Status atual: " //"Apenas solicitações com status Pendente (0) ou Aguardando Envio (3) podem ser confirmadas"
+			Return nil
+		EndIf
+
+		oConfirmarSolicitacao := Self:atualizaStatus("1") //1-Confirmado
+	endif
+	
+	FWFreeObj(oConfirmarSolicitacao)
+	
+Return nil
+
+
+/*/{Protheus.doc} quantidadePorMapaNaSolicitacao
+Retorna a quantidade de produtos por mapa na solicitacao
+@author carlos.augusto
+@since 05/12/2025
+@param cCodigoSolicitacao, character, Código da solicitação
+/*/
+Method quantidadePorMapaNaSolicitacao(cCodigoSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local aQuantidadePorMapaNaSolicitacao := {}
+	Local cQuery 	:= ""
+	Local cAliQry 	:= GetNextAlias()
+	Local oStateQry := nil
+
+	cQuery := " SELECT SUM(NEU_QTDVEN) AS QTDERECEITA, NEU_MAPA "
+	cQuery += " FROM "+ RetSqlName('NEU') +" NEU "
+	cQuery += " WHERE NEU_FILIAL = ? "
+	cQuery += 	" AND NEU.NEU_CODIGO = ? "
+	cQuery += 	" AND NEU.D_E_L_E_T_ = ' ' "
+	cQuery += 	" GROUP BY NEU_MAPA "
+
+	oStateQry := FWPreparedStatement():New()
+	oStateQry:SetQuery(cQuery)
+	oStateQry:SetString(1, FWxFilial('NEU'))
+	oStateQry:SetString(2, cCodigoSolicitacao)
+
+	cQuery := ChangeQuery(oStateQry:GetFixQuery())
+	dbUseArea(.T., "TOPCONN", TCGenQry(,,cQuery), cAliQry, .T., .T.)
+
+	While (cAliQry)->(! EOF())
+		aAdd(aQuantidadePorMapaNaSolicitacao, {(cAliQry)->NEU_MAPA, (cAliQry)->QTDERECEITA})
+		(cAliQry)->(DBSkip())
+	EndDo
+	(cAliQry)->(dbCloseArea())
+
+Return aQuantidadePorMapaNaSolicitacao
+
+
+/*/{Protheus.doc} atualizaStatusSolicitacao
+Atualiza os campos NET_STSSOL e NET_STSREC
+@author carlos.augusto
+@since 05/12/2025
+@param cChaveSolicitacao, character, Filial + Codigo da solicitação (NET_FILIAL + NET_CODIGO)
+/*/
+Method atualizaStatusSolicitacao(cChaveSolicitacao, cStatusSolicitacao, cStatusReceita) class agdSolicitacaoReceitaRepository
+	Local aAreaNET			  := NET->(GetArea())
+	Default cChaveSolicitacao := Self:cChaveIDRepository
+
+	NET->(dbSetOrder(1))
+	If NET->(DbSeek(cChaveSolicitacao ))
+		RecLock("NET",.F.)
+			NET->NET_STSSOL := cStatusSolicitacao
+			NET->NET_STSREC := cStatusReceita
+		NET->(MsUnLock())
+	EndIf
+	RestArea(aAreaNET)
+Return 
+
+
+/*/{Protheus.doc} vincularReceita
+Recebe o body com os ids de receita para vincular na solicitacao
+@author carlos.augusto
+@since 05/12/2025
+@param jPayload, json, { "items": [{ "codigoReceita": "0000000005" }]}
+/*/
+Method vincularReceita(jPayload as json) class agdSolicitacaoReceitaRepository
+	Local cChaveSolicitacao  := Self:cChaveIDRepository
+	Local cCodigoSolicitacao := Substr(cChaveSolicitacao,len(NET->NET_FILIAL)+1)
+	Local nI   				 := 1
+	Local lRet 				 := .T.
+	Local aStatus 			 := {}
+	Local cCodigoReceita 	 := ""
+	Local oStatementQtde     := Nil
+
+	lRet := Self:existsById(cChaveSolicitacao)
+	If lRet
+		lRet := Self:isSolicitacaoStatusPendente(cChaveSolicitacao)
+	EndIf
+	If lRet
+		lRet := Self:validaIntegridadeItensNEUBySC9(cCodigoSolicitacao)
+	EndIf
+	If lRet
+		If jPayload:hasProperty("items")
+			If ValType(jPayload["items"]) == "A"
+				For nI := 1 To Len(jPayload["items"])
+					cCodigoReceita := jPayload["items"][nI]['codigoReceita']
+					lRet := Self:isReceitaValidaParaReaproveitamento(cCodigoReceita, cChaveSolicitacao)
+					If lRet
+
+						Begin Transaction
+							NE7->(dbSetOrder(1))
+							If NE7->(dbSeek(xFilial('NE7') + cCodigoReceita))
+								While NE7->(!EoF()) .And. NE7->NE7_FILIAL == FWxFilial('NE7') .And. NE7->NE7_CODREC == cCodigoReceita
+									If Self:hasItemSolicitacaoPendenteByMapa(cCodigoSolicitacao, NE7->NE7_MAPA)
+										If NE7->NE7_QTDISP > 0
+											Self:executarReaproveitamentoItemReceitaByMapa(@oStatementQtde, NE7->NE7_CODREC, NE7->NE7_SEQREC, cCodigoSolicitacao)
+										EndIf
+									EndIf
+									NE7->(dbSkip())
+								EndDo
+							EndIf
+						End Transaction
+					Else
+						Exit
+					EndIf
+				Next
+			EndIf
+		Else
+			Self:setError(STR0010, 404) //"Não foram enviados itens para reaproveitamento de receita."
+			lRet := .F.
+		EndIf
+		If lRet
+			aStatus := Self:retornaStatusSolicitacaoAndReceita(cChaveSolicitacao)
+			Self:atualizaStatusSolicitacao(cChaveSolicitacao, aStatus[1], aStatus[2])
+		EndIf
+	EndIf
+Return lRet
+
+
+/*/{Protheus.doc} isSolicitacaoStatusPendente
+Verifica se a solicitacao enviada no path está com status pendente
+@author carlos.augusto
+@since 05/12/2025
+@param cChaveSolicitacao, character, Filial + Codigo da solicitação (NET_FILIAL + NET_CODIGO)
+/*/
+Method isSolicitacaoStatusPendente(cChaveSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local lRet                := .F.
+	Local aAreaNET            := NET->(GetArea())
+	Default cChaveSolicitacao := Self:cChaveIDRepository
+
+	NET->(dbSetOrder(1))
+	If NET->(dbSeek(cChaveSolicitacao))
+		If NET->NET_STSSOL == "0"
+			lRet := .T.
+		Else
+			Self:setError(STR0011, 404) //"A solicitação de receita não está com status pendente."
+			lRet := .F.
+		EndIf
+	EndIf
+	RestArea(aAreaNET)
+Return lRet
+
+
+/*/{Protheus.doc} validaIntegridadeItensNEUBySC9
+Valida se os itens da solicitação de receita NEU, são espelho da SC9
+@author carlos.augusto
+@since 05/12/2025
+@param cChaveSolicitacao, character, Filial + Codigo da solicitação (NET_FILIAL + NET_CODIGO)
+/*/
+Method validaIntegridadeItensNEUBySC9(cCodigoSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local aAreaNEU 	:= NEU->(GetArea())
+	Local lRet 		:= .F.
+
+	NEU->(dbSetOrder(1))
+	If NEU->(dbSeek(Self:cChaveIDRepository))
+		While NEU->(!EoF()) .and. NEU->NEU_FILIAL + NEU->NEU_CODIGO == FwXFilial("NEU") + cCodigoSolicitacao
+			SC9->(DbSetOrder(1))
+			If SC9->(DbSeek(xFilial("SC9") + NEU->NEU_NUMPED + NEU->NEU_ITEMPE + NEU->NEU_SEQLIB))
+				If SC9->C9_QTDLIB = NEU->NEU_QTDVEN
+					lRet := .T.
+				Else
+					lRet := .F.
+					Exit
+				EndIf
+			Else
+				lRet := .F.
+				Exit
+			EndIf
+		NEU->(dbSkip())
+		EndDo
+	EndIf
+
+	If !lRet
+		Self:setError(STR0012 + cCodigoSolicitacao + ".", 404) //"Os itens da solicitação de receita não estão compatíveis com os itens da liberação de pedido gerado. Solicitação: "
+	EndIf
+	RestArea(aAreaNEU)
+Return lRet
+
+
+/*/{Protheus.doc} isReceitaValidaParaReaproveitamento
+Valida se a receita pode ser reaproveitada
+@author carlos.augusto
+@since 05/12/2025
+@param cReceita, character, receita enviada no body
+@param cChaveSolicitacao, character, Filial + Codigo da solicitação (NET_FILIAL + NET_CODIGO)
+/*/
+Method isReceitaValidaParaReaproveitamento(cReceita as character, cChaveSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local lRet     			  := .F.
+	Local aAreaNE6 			  := NE6->(GetArea())
+	Local aAreaNET 			  := NET->(GetArea())
+	Default cChaveSolicitacao := Self:cChaveIDRepository
+
+	NE6->(dbSetOrder(1))
+	If NE6->(dbSeek(xFilial('NE6') + cReceita))
+		lRet := .T.
+
+		If !Empty(NE6->NE6_DOC)
+			Self:setError(STR0013 + cReceita + ".", 404) //"Receita faturada: "
+			lRet := .F.
+		EndIf
+		If lRet .And. NE6->NE6_STATUS != "1"
+			Self:setError(STR0014, 404) //"Apenas receitas com status 'Emitida' podem ser reaproveitadas."
+			lRet := .F.
+		EndIf
+
+		If lRet
+			NET->(dbSetOrder(1))
+			If NET->(dbSeek(cChaveSolicitacao))
+				If NET->NET_NUMPED != NE6->NE6_PEDORI
+					Self:setError(STR0015 + cReceita + ".", 404) //"A receita informada não pertence ao pedido da solicitação. Receita: "
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+		If lRet
+			NET->(dbSetOrder(1))
+			If NET->(dbSeek(cChaveSolicitacao))
+				If NET->NET_CULTRA != NE6->NE6_CULTUR
+					Self:setError(STR0016 + NET->NET_CULTRA + ".", 404) //"A cultura da solicitação difere da cultura da receita. Cultura da solicitação: "
+					lRet := .F.
+				EndIf
+			EndIf
+		EndIf
+	Else
+		Self:setError(STR0009 + cReceita + ".", 404) //"Receita não encontrada: "
+		lRet := .F.
+	EndIf
+	RestArea(aAreaNE6)
+	RestArea(aAreaNET)
+Return lRet
+
+
+/*/{Protheus.doc} isItemSolicitacaoPendenteDeReceita
+O item da solicitação esta pendente de receita?
+@author carlos.augusto
+@since 05/12/2025
+@param cChaveSolicitacao, character, Filial + Codigo da solicitação (NET_FILIAL + NET_CODIGO)
+@param cPedido, character, Pedido
+@param cItem, character, Item no Pedido
+@param cSeqLib, character, Sequencia da liberação
+/*/
+Method isItemSolicitacaoPendenteDeReceita(cChaveSolicitacao as character, cPedido as character, cItem as character, cSeqLib as character) class agdSolicitacaoReceitaRepository
+	Local lRet         		  := .F.
+	Local aAreaNEU     		  := NEU->(GetArea())
+	Default cChaveSolicitacao := Self:cChaveIDRepository
+
+	NEU->(dbSetOrder(4))
+	If NEU->(DbSeek(cChaveSolicitacao + cPedido + cItem + cSeqLib ))
+		If Empty(NEU->NEU_CODREC) .And. Empty(NEU->NEU_SEQREC)
+			lRet := .T.
+		EndIf
+	EndIf
+	RestArea(aAreaNEU)
+Return lRet
+
+
+/*/{Protheus.doc} hasItemSolicitacaoPendenteByMapa
+Existe algum item na solicitação (filtrando pelo mapa) que está pendente de receita?
+@author carlos.augusto
+@since 05/12/2025
+@param cCodigoSolicitacao, character, código da solicitacao
+@param cMapa, character, codigo mapa
+/*/
+Method hasItemSolicitacaoPendenteByMapa(cCodigoSolicitacao as character, cMapa as character) class agdSolicitacaoReceitaRepository
+	Local lRet   		:= .F.
+	Local cQuery 		:= ""
+	Local aParamsQuery  := {}
+	Local cAliasQryNEU  as character
+
+	cQuery := " SELECT NEU_CODIGO"
+	cQuery += " FROM " + RetSQLname("NEU")
+	cQuery += " WHERE NEU_FILIAL = ?"        
+	cQuery += 	" AND NEU_CODIGO = ?" 
+	cQuery += 	" AND NEU_MAPA = ?"   
+	cQuery += 	" AND NEU_CODREC = ?"    
+	cQuery += 	" AND NEU_SEQREC = ?"    
+	cQuery += 	" AND D_E_L_E_T_ = ' '"
+
+	aAdd(aParamsQuery, FWxFilial("NEU"))
+	aAdd(aParamsQuery, cCodigoSolicitacao)
+	aAdd(aParamsQuery, cMapa)
+	aAdd(aParamsQuery, Space(Len(NE7->NE7_CODREC)))
+	aAdd(aParamsQuery, Space(Len(NE7->NE7_SEQREC)))
+
+	cQuery := changeQuery(cQuery)
+
+	cAliasQryNEU := GetNextAlias()
+	dbUseArea(.T., "TOPCONN", TcGenQry2(,,cQuery, aParamsQuery), cAliasQryNEU, .F., .T.)
+
+	If (cAliasQryNEU)->(!EOF())
+		lRet := .T.
+	Endif
+	(cAliasQryNEU)->(dbCloseArea())
+Return lRet
+
+
+/*/{Protheus.doc} executarReaproveitamentoItemReceitaByMapa
+Inicia a lógica para gravar a receita nos itens da solicitação
+@author carlos.augusto
+@since 05/12/2025
+@param oStatementQtde, object, statement de query para quantidade
+@param cReceita, character, codigo da receita
+@param cSequencia, character, sequencia do mapa na receita
+@param cCodigoSolicitacao, character, codigo da solicitacao de receita
+/*/
+Method executarReaproveitamentoItemReceitaByMapa(oStatementQtde as object, cReceita as character, cSequencia as character, cCodigoSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local aAreaNEU     := NEU->(GetArea())
+	Local aAreaNE7     := NE7->(GetArea())
+	Local cSolicitacao := Self:cChaveIDRepository
+
+	//Existe saldo para o item posicionado?
+	NE7->(dbSetOrder(1))
+	If NE7->(MsSeek(FwXFilial("NE7") + cReceita + cSequencia ))
+		If NE7->NE7_QTDISP > 0
+			NEU->(dbSetOrder(3)) // NEU_FILIAL+NEU_CODIGO+NEU_MAPA
+			If NEU->(dbSeek(cSolicitacao + NE7->NE7_MAPA))
+				While NEU->(!EoF()) .And. (NEU->NEU_FILIAL + NEU->NEU_CODIGO) == cSolicitacao .And. NEU->NEU_MAPA == NE7->NE7_MAPA
+
+					If NE7->NE7_QTDISP = 0
+						Exit
+					EndIf	
+
+					If (NE7->NE7_QTDISP >= NEU->NEU_QTDVEN)
+						If Self:isItemSolicitacaoPendenteDeReceita(cSolicitacao,NEU->NEU_NUMPED,NEU->NEU_ITEMPE,NEU->NEU_SEQLIB)
+							Self:gravaEfetivacaoReaproveitamentoNoItem(NEU->NEU_NUMPED,NEU->NEU_ITEMPE,NEU->NEU_SEQLIB,NE7->NE7_CODREC, NE7->NE7_SEQREC,NEU->NEU_CODIGO)
+						EndIf
+					EndIf
+					NEU->(dbSkip())
+				EndDo
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aAreaNEU)
+	RestArea(aAreaNE7)
+Return
+
+
+/*/{Protheus.doc} gravaEfetivacaoReaproveitamentoNoItem
+Grava a receita e sequencia na NEU (item da solicitação) e diminui o saldo do mapa na NE7 (item da receita) do mapa
+@author carlos.augusto
+@since 05/12/2025
+@param cPedido, character, pedido 
+@param cItem, character, item no pedido
+@param cSeqLib, character, sequencia de liberacao
+@param cReceita, character, codigo da receita
+@param cSequencia, character, sequencia do mapa na receita
+@param cSolicitacao, character, codigo da solicitacao de receita
+/*/
+Method gravaEfetivacaoReaproveitamentoNoItem(cPedido as character, cItem as character, cSeqLib as character, cReceita as character, cSequencia as character, cSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local aAreaNEU := NEU->(GetArea())
+	Local aAreaNE7 := NE7->(GetArea())
+
+	//Se achar SC9, este item deve ser reaproveitado
+	SC9->(DbSetOrder(1))
+	If SC9->(DbSeek(xFilial("SC9") + cPedido + cItem + cSeqLib))
+		NEU->(dbSetOrder(4)) // NEU_FILIAL+NEU_CODIGO
+		If NEU->(MsSeek(FwXFilial("NEU") + cSolicitacao + cPedido + cItem + cSeqLib ))
+			RecLock("NEU",.F.)
+				NEU->NEU_CODREC := cReceita
+				NEU->NEU_SEQREC := cSequencia
+			NEU->(MsUnLock())
+			
+			NE7->(dbSetOrder(1))
+			If NE7->(MsSeek(FwXFilial("NE7") + cReceita + cSequencia ))
+				RecLock("NE7",.F.)
+					NE7->NE7_QTDISP := Abs(NE7->NE7_QTDISP - SC9->C9_QTDLIB)
+				NE7->(MsUnLock())
+			EndIf
+		EndIf
+	EndIf
+	RestArea(aAreaNEU)
+	RestArea(aAreaNE7)
+
+Return
+
+
+/*/{Protheus.doc} retornaStatusSolicitacaoAndReceita
+Retorna a situação dos status da receita
+@author carlos.augusto
+@since 05/12/2025
+@param cSolicitacao, character, codigo da solicitacao de receita
+/*/
+Method retornaStatusSolicitacaoAndReceita(cSolicitacao as character) class agdSolicitacaoReceitaRepository
+	Local aAreaNEU          := NEU->(GetArea())
+	Local lReaproveitamento := .F.
+	Local lItemPendente     := .F.
+	Local aStatusNET        := {}
+	Default cSolicitacao := Self:cChaveIDRepository
+
+	NEU->(dbSetOrder(1)) // NEU_FILIAL+NEU_CODIGO
+	If NEU->(dbSeek(cSolicitacao))
+		While NEU->(!EoF()) .and. NEU->NEU_FILIAL + NEU->NEU_CODIGO == cSolicitacao
+			If Empty(NEU->NEU_CODREC) .And. Empty(NEU->NEU_SEQREC)
+				lItemPendente := .T.
+			Else
+				lReaproveitamento := .T.
+			EndIf
+			NEU->(dbSkip())
+		EndDo
+	EndIf
+
+	If !lReaproveitamento
+		aStatusNET := {STATUS_SOLICITACAO_PENDENTE,STATUS_RECEITA_PENDENTE}
+	ElseIf lReaproveitamento .And. lItemPendente
+		aStatusNET := {STATUS_SOLICITACAO_PENDENTE,STATUS_RECEITA_EMITIDA}
+	ElseIf lReaproveitamento .And. !lItemPendente
+		aStatusNET := {STATUS_SOLICITACAO_CONFIRMADA,STATUS_RECEITA_EMITIDA}
+	EndIf
+
+	RestArea(aAreaNEU)
+Return aStatusNET
+
+
+/*/{Protheus.doc} getReceitaPorItemSolicitacao
+Retorna a receita da SC9 posicionada, caso tenha
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param oStatReceita, object, objeto para query
+@param cFilialSC9, Character, filial do pedido
+@param cPedido, Character, pedido
+@param cItem, Character, item
+@param cSeqLib, Character, sequencia liberacao
+@return cReceita, Character, codigo da receita
+/*/
+Method getReceitaPorItemSolicitacao(oStatReceita, cFilialSC9, cPedido, cItem, cSeqLib ) class agdSolicitacaoReceitaRepository
+	Local cReceita  := ""
+	Local cQuery 	:= ""
+	Local cAliQry 	:= GetNextAlias()
+
+	If oStatReceita == Nil
+	    oStatReceita := FWPreparedStatement():New()
+        cQuery := " SELECT NEU_CODREC "
+        cQuery += 	" FROM "+ RetSqlName('NEU') +" NEU "
+        cQuery += 		" INNER JOIN "+ RetSqlName('NET') +" NET "
+        cQuery += 			" ON ( NET.NET_FILIAL = NEU.NEU_FILIAL "
+        cQuery += 				" AND NET.NET_CODIGO = NEU.NEU_CODIGO) "
+        cQuery += " WHERE NEU_FILIAL = ? "
+        cQuery += 	" AND NEU.NEU_NUMPED = ? "
+        cQuery += 	" AND NEU.NEU_ITEMPE = ? "
+        cQuery += 	" AND NEU.NEU_SEQLIB = ? "
+        cQuery += 	" AND NET.NET_STSSOL = '1' "
+        cQuery += 	" AND NET.NET_STSREC = '1' "
+        cQuery += 	" AND NEU.D_E_L_E_T_ = ' ' "
+        cQuery += 	" AND NET.D_E_L_E_T_ = ' ' "
+        cQuery := ChangeQuery(cQuery)
+	    oStatReceita:SetQuery(cQuery)
+    EndIf
+
+    oStatReceita:SetString(1, cFilialSC9)
+	oStatReceita:SetString(2, cPedido)
+	oStatReceita:SetString(3, cItem)
+	oStatReceita:SetString(4, cSeqLib)
+	cQuery := ChangeQuery(oStatReceita:GetFixQuery())
+	dbUseArea(.T., "TOPCONN", TCGenQry(,,cQuery), cAliQry, .T., .T.)
+
+	If (cAliQry)->(! EOF())
+		cReceita := (cAliQry)->NEU_CODREC
+	EndIf
+	(cAliQry)->(dbCloseArea())
+
+Return cReceita
+
+
+/*/{Protheus.doc} getItensDaSolicitacaoPorReceita
+Retorna todos os registros da receita que estao na NEU. 
+@type method
+@version P12.1.2610
+@author carlos.augusto
+@since 15/12/2025
+@param oStatGrupo, object, objeto para query
+@param cCodRec, Character, receita
+@param cPedido, Character, pedido
+@param cItem, Character, item
+@param cSeqLib, Character, sequencia liberacao
+@return aNEURec, array, registros da NEU relacionados com a SC9
+/*/
+Method getItensDaSolicitacaoPorReceita(oStatGrupo, cCodRec, cFilialSC9, cPedido, cItem, cSeqLib ) class agdSolicitacaoReceitaRepository
+	Local aNEURec   := {}
+	Local cQuery 	:= ""
+	Local cAliQry 	:= GetNextAlias()
+	
+	If oStatGrupo == Nil
+	    oStatGrupo := FWPreparedStatement():New()
+        cQuery := " SELECT NEU_FILIAL,NEU_NUMPED,NEU_ITEMPE,NEU_SEQLIB,C9_DATENT"
+        cQuery += 	" FROM "+ RetSqlName('NEU') +" NEU"
+        cQuery += 		" INNER JOIN "+ RetSqlName('NET') +" NET"
+        cQuery += 			" ON ( NET.NET_FILIAL = NEU.NEU_FILIAL"
+        cQuery += 				" AND NET.NET_CODIGO = NEU.NEU_CODIGO)"
+	 	cQuery += 		" INNER JOIN "+ RetSqlName('SC9') +" SC9"
+		cQuery += 			" ON (SC9.C9_FILIAL = ? "
+		cQuery += 				" AND SC9.C9_PEDIDO = NEU.NEU_NUMPED"
+		cQuery += 				" AND SC9.C9_ITEM = NEU.NEU_ITEMPE"
+		cQuery += 				" AND SC9.C9_SEQUEN = NEU.NEU_SEQLIB"
+		cQuery += 				" AND SC9.C9_PRODUTO = NEU.NEU_PRODUT)"
+        cQuery += " WHERE NEU_FILIAL = ? "
+        cQuery += 	" AND NEU.NEU_CODREC = ? "
+        cQuery += 	" AND NEU.NEU_NUMPED = ? "
+        cQuery += 	" AND NET.NET_STSSOL = '1' "
+        cQuery += 	" AND NET.NET_STSREC = '1' "
+        cQuery += 	" AND NEU.D_E_L_E_T_ = ' ' "
+        cQuery += 	" AND NET.D_E_L_E_T_ = ' ' "
+		cQuery += 	" AND SC9.D_E_L_E_T_ = ' ' "
+        cQuery := ChangeQuery(cQuery)
+	    oStatGrupo:SetQuery(cQuery)
+    EndIf
+
+	oStatGrupo:SetString(1, cFilialSC9)
+	oStatGrupo:SetString(2, cFilialSC9)
+	oStatGrupo:SetString(3, cCodRec)
+	oStatGrupo:SetString(4, cPedido)
+	cQuery := ChangeQuery(oStatGrupo:GetFixQuery())
+	dbUseArea(.T., "TOPCONN", TCGenQry(,,cQuery), cAliQry, .T., .T.)
+
+	While (cAliQry)->(! EOF())
+		aAdd(aNEURec, {(cAliQry)->NEU_FILIAL, (cAliQry)->NEU_NUMPED, (cAliQry)->NEU_ITEMPE, (cAliQry)->NEU_SEQLIB, (cAliQry)->C9_DATENT})
+		(cAliQry)->(DBSkip())
+	EndDo
+	(cAliQry)->(dbCloseArea())
+
+Return aNEURec
+
+/*/{Protheus.doc} isIncompleta
+Verifica se a receita está completa ou será gerada com o status 4 - incompleta
+@type method
+@version P12.1.2610
+@author joao.vtargino
+@since 28/10/2025
+@return Character, Codigo MAPA do produto
+/*/
+Method isIncompleta() Class agdSolicitacaoReceitaRepository
+
+    Local lRet 		:= .F. 
+	Local aAreaNET	:= NET->(GetArea())
+	
+	NET->(dbSetOrder(1)) 
+	If NET->(dbSeek(Self:cChaveIDRepository))                                                                                                                                               
+		If Empty(NET->NET_LOCDES) .or. Empty(NET->NET_CODENG) .or. Empty(NET->NET_CULTRA) 
+			lRet := .T.
+		Endif
+	Endif
+
+	RestArea(aAreaNET)
+    
+Return lRet

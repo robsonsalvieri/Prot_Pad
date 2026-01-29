@@ -1,0 +1,610 @@
+#include "totvs.ch"
+#include 'tlpp-core.th'
+#INCLUDE "agd.instrucao.embarque.pedido.service.ch"
+
+namespace agd.instrucaoEmbarquePedidoService
+using namespace agd.utilsService
+using namespace agd.negocioService
+using namespace agd.negocioStatusService
+
+/*/{Protheus.doc} agdInstrucaoEmbarquePedidoService
+Classe de Servico para o Gerenciamento de Pedidos da Instrucao de Embaque
+@type class
+@version 12
+@author jean.schulze
+@since 26/12/2024
+/*/
+class agdInstrucaoEmbarquePedidoService FROM agdUtilsService
+	public Data cIdInstrucaoEmbarque   As Character
+
+	public method new()
+
+
+	public method hasPedido() as Logical
+	public method getPedido() as Character
+	public method removerPedido()
+	public method novoPedido()
+	public method faturarPedido()
+	public method hasNotaFiscalPedido() as Logical
+	public method getNotaFiscalPedido() as json
+	public method isPedidoInstrucEmbarque() as Logical
+	public method validLiberacaoPedido()    as Logical
+	public method setInstrucaoEmbarqueFromPedido() as Logical
+	public method removerVinculoPedido() as Logical
+
+	private method getPayloadPedido()  as array
+	private method getErrorExecAuto()  as Character
+endclass
+
+/*/{Protheus.doc} new
+Constructor da Classe de Serviço
+@type method
+@version 12
+@author jean.schulze
+@since 26/12/2024
+@param pcIdInstrucaoEmbarque, character, Id da Instrucao de Embarque
+@return object, Retorna a instancia da Classe de Servico
+/*/
+method new(pcIdInstrucaoEmbarque as Character) class agdInstrucaoEmbarquePedidoService
+	Self:cIdInstrucaoEmbarque := pcIdInstrucaoEmbarque
+	_Super:new()
+return Self
+
+
+/*/{Protheus.doc} getPedido
+Retorna o ID do Pedido de Venda
+@type method
+@version 12
+@author jean.schulze
+@since 26/12/2024
+@return character, Id do Pedido de Venda
+/*/
+method getPedido() as Character class agdInstrucaoEmbarquePedidoService
+	Local aArea		     := GetArea()
+	Local cIdPedidoVenda := ""
+	dbSelectArea('NEC')  // Instrução de Embarque
+	dbSetOrder(1)
+	If dbSeek(xFilial('NEC')+Self:cIdInstrucaoEmbarque)
+		cIdPedidoVenda :=  NEC->NEC_NUMPED
+	EndIf
+	RestArea(aArea)
+return cIdPedidoVenda
+
+/*/{Protheus.doc} hasPedido
+Verifica se Existe Pedido
+@type method
+@version 12
+@author jean.schulze
+@since 26/12/2024
+@return logical, Existe Pedido
+/*/
+method hasPedido() as Logical class agdInstrucaoEmbarquePedidoService
+return !Empty(Self:getPedido())
+
+/*/{Protheus.doc} novoPedido
+Registra Novo Pedido de Venda para a IE
+@type method
+@version 12
+@author jean.schulze
+@since 26/12/2024
+@return variant, nil
+/*/
+method novoPedido() class agdInstrucaoEmbarquePedidoService
+	Local aArea		     := GetArea()
+	Local aPedidoPayload := {}
+	Local cPvGerado	     as character  // Ira Armazenar o nr. do Pv Gerado
+
+	Private _cModAtu    := cModulo	//*Salvando Modulo Atual
+	Private _nModAtu    := nModulo  //*Salvando Modulo Atual
+	Private lMSErroAuto     := .F.
+	Private lAutoErrNoFile  := .T.
+
+	if ! ::isSIGAAGDactive()
+		return
+	endif
+
+	If Self:hasPedido()
+		Self:setError(STR0001 + ' ' + NEC->NEC_NUMPED) //'Já Existe Pedido de Venda'
+	else
+		cPvGerado	   := GetSXENum('SC5','C5_NUM') 
+		aPedidoPayload := Self:getPayloadPedido(cPvGerado)
+
+        /*Campos alteráveis*/
+		aAdd(aPedidoPayload[1],{'C5_EMISSAO', ddatabase	, Nil}) //Data de Emissao
+		aAdd(aPedidoPayload[1],{'C5_LIBEROK', 'S'		, Nil}) //Liberacao
+
+        /*Executa a rotina pelo modulo de Faturamento*/
+		cModulo := "FAT"
+		nModulo := 5
+
+		MSExecAuto({|x,y,z|Mata410(x,y,z)}, aPedidoPayload[1], aPedidoPayload[2], 3) //Opção para Inclusão
+
+        /*Retornando o modulo do SIGAAGD*/
+		cModulo := _cModAtu
+		nModulo := _nModAtu
+
+		If lMsErroAuto
+			Self:setError(Self:getErrorExecAuto())
+		Else
+
+			dbSelectArea('NEC')  // Instrução de Embarque
+			dbSetOrder(1)
+			If dbSeek(xFilial('NEC')+Self:cIdInstrucaoEmbarque)
+				RecLock("NEC",.f.)
+				NEC->NEC_NUMPED := cPvGerado
+				NEC->(MsUnlock())
+			EndIf
+
+			If __lSX8
+				ConfirmSX8()
+			Endif
+
+			//Criar Histórico do processo
+			Sleep(1000)// Garantir que gere uma diferenca de 1 segundo na geracao do LOG de PEDIDO
+			AGDGRAVAHIS("","NEC",xFilial("NEC")+Self:cIdInstrucaoEmbarque, STR0004,.F., STR0002 + ': ' + cPvGerado) //#"GERAR PEDIDO" //"Pedido Gerado"
+
+			Self:setSuccess(cPvGerado)
+
+		EndIf
+
+	Endif
+
+	RestArea(aArea)
+return nil
+
+/*/{Protheus.doc} removerPedido
+Remover Pedido de Venda
+@type method
+@version 12
+@author jean.schulze
+@since 26/12/2024
+@return variant, nil
+/*/
+method removerPedido() class agdInstrucaoEmbarquePedidoService
+	Local aPedidoPayload := {}
+
+	Private _cModAtu    := cModulo	//*Salvando Modulo Atual
+	Private _nModAtu    := nModulo  //*Salvando Modulo Atual
+	Private lMSErroAuto     := .F.
+	Private lAutoErrNoFile  := .T.
+
+	If ::isSIGAAGDactive() .And. ::hasPedido()
+
+		aPedidoPayload := Self:getPayloadPedido(Self:getPedido())
+
+        /*Executa a rotina pelo modulo de Faturamento*/
+		cModulo := "FAT"
+		nModulo := 5
+
+		MSExecAuto({|a, b, c| MATA410(a, b, c)}, aPedidoPayload[1], aPedidoPayload[2], 5)
+
+       /*Retornando o modulo do SIGAAGD*/
+		cModulo := _cModAtu
+		nModulo := _nModAtu
+
+		If lMsErroAuto
+			Self:setError(Self:getErrorExecAuto())
+		Else
+			Self:setSuccess()
+		EndIf
+
+	Endif
+return nil
+
+/*/{Protheus.doc} getPayloadPedido
+Retorna o Payload para uso do Mata410
+@type method
+@version 12
+@author jean.schulze
+@since 27/12/2024
+@param pcPvGerado, variant, numero do pedido
+@return array, Cabecalho do Pedido, Lista de Itens do Pedido
+/*/
+method getPayloadPedido(pcPvGerado) as array class agdInstrucaoEmbarquePedidoService
+	Local aPedCab	:= {}
+	Local aPedIte	:= {}
+	Local aItens	:= {}
+	Local cItSC6	:= STRZERO(0,TAMSX3("C6_ITEM")[1])
+	Local oNegocio	:= nil
+	Local nFrete    := 0
+	Local cCultura  := ""
+
+	dbSelectArea('NEC')  // Instrução de Embarque
+	dbSetOrder(1)
+	If dbSeek(xFilial('NEC')+Self:cIdInstrucaoEmbarque )
+
+
+		aAdd(aPedCab,{'C5_FILIAL' , FwXFilial('SC5')	, Nil}) //Filial
+		aAdd(aPedCab,{'C5_NUM'    , pcPvGerado			, Nil}) //Numero do Pedido
+		aAdd(aPedCab,{'C5_TIPO'   , 'N'					, Nil}) //Tipo de Pedido
+		aAdd(aPedCab,{'C5_CLIENTE', NEC->NEC_CODCLI		, Nil}) //Codigo do Cliente
+		aAdd(aPedCab,{'C5_LOJACLI', NEC->NEC_LOJCLI		, Nil}) //Loja do Cliente
+		aAdd(aPedCab,{'C5_CLIENT' , NEC->NEC_CODCLI		, Nil}) //Codigo do Cliente
+		aAdd(aPedCab,{'C5_LOJAENT', NEC->NEC_LOJCLI		, Nil}) //Loja do Cliente
+		aAdd(aPedCab,{'C5_TRANSP' , NEC->NEC_TRANSP		, Nil}) //Transportadora   
+		aAdd(aPedCab,{'C5_VEICULO', NEC->NEC_VEICUL		, Nil}) //Veiculo		
+
+		oNegocio := agdNegocioService():New()
+		cIdChaveNegocio := oNegocio:buscarIdUnicoNegocio(NEC->NEC_CODBRT)
+
+		dbSelectArea('NEA')  // Negociacao
+		dbSetOrder(1)
+		If dbSeek(cIdChaveNegocio)
+			aAdd(aPedCab,{'C5_CONDPAG', NEA->NEA_CONDPG, Nil})
+			aAdd(aPedCab,{'C5_VEND1',	NEA->NEA_CVEND1, Nil})
+			aAdd(aPedCab,{'C5_TABELA',	NEA->NEA_TABPRC, Nil})
+			aAdd(aPedCab,{'C5_TPFRETE',	NEA->NEA_TPFRET, Nil})
+			aAdd(aPedCab,{'C5_CODSAF',	NEA->NEA_CODSAF, Nil})
+			cCultura := NEA->NEA_CULTRA
+		EndIF
+
+	Endif
+
+	dbSelectArea('NED') //Itens da Instrução de Embarque
+	dbSetOrder(1)
+	If dbSeek(xFilial('NED')+Self:cIdInstrucaoEmbarque)
+		While NED->(!Eof()) .AND. NED->(NED_FILIAL + NED_CODIEB) == (xFilial('NED') + Self:cIdInstrucaoEmbarque)
+			aPedIte	:= {}
+
+			cItSC6	:= Soma1(cItSC6)
+			nFrete  +=  NED->NED_FRETE
+
+			aAdd(aPedIte,{'C6_NUM'    , pcPvGerado		, Nil})
+			aAdd(aPedIte,{'C6_ITEM'   , cItSC6			, Nil})
+			aAdd(aPedIte,{'C6_PRODUTO', NED->NED_CODPRO	, Nil})
+			aAdd(aPedIte,{'C6_UM'     , NED->NED_UM		, Nil})
+			aAdd(aPedIte,{'C6_LOCAL'  , NED->NED_LOCAL	, Nil})
+			aAdd(aPedIte,{'C6_QTDVEN' , NED->NED_QTDIEB	, Nil})
+			aAdd(aPedIte,{'C6_PRCVEN' , Round(NED->NED_VALOR / NED->NED_QTDIEB,2), Nil})
+			aAdd(aPedIte,{'C6_VALOR'  , NED->NED_VALOR	, Nil})
+			aAdd(aPedIte,{'C6_TES'    , NED->NED_TES	, Nil})
+			aAdd(aPedIte,{'C6_PRUNIT' ,	NED->NED_PRCUNI	, Nil})
+			aAdd(aPedIte,{'C6_LOTECTL', NED->NED_LOTCTL	, Nil})
+			aAdd(aPedIte,{'C6_ENTREG' , NED->NED_ENTREG	, Nil})
+			IF !Empty(cCultura)
+				aAdd(aPedIte,{'C6_CULTRA', cCultura	    , Nil})
+			EndIf
+
+			aAdd(aItens, aPedIte)
+
+			RecLock('NED', .f.)
+			NED->NED_ITEMPV := PadL(cItSC6, TamSX3( "NED_ITEMPV" )[1],"0")
+			NED->(MsUnlock())
+
+			NED->( DBSkip() )
+		EndDo
+
+	Endif
+
+	aAdd(aPedCab,{'C5_FRETE', nFrete , Nil})
+
+return {aPedCab,aItens}
+
+/*/{Protheus.doc} getErrorExecAuto
+Retorna o erro do ExecAuto
+@type method
+@version 12
+@author jean.schulze
+@since 26/12/2024
+@return character, String de Erro
+/*/
+method getErrorExecAuto() as Character class agdInstrucaoEmbarquePedidoService
+	Local cRet		:= ""
+	Local nPos		:= 0
+	Local aLog      := GetAutoGRLog()
+
+	For nPos := 1 To Len(aLog)
+		If !Empty(cRet)
+			cRet += CRLF
+		EndIf
+		cRet += aLog[nPos]
+	Next nPos
+
+	if Empty(cRet)
+		cRet := STR0003 //"Erro não Informado ao Remover o Pedido de Venda"
+	endif
+Return cRet
+
+/*/{Protheus.doc} faturarPedido
+Realiza o faturamento do Pedido de Venda caso não haja bloqueios nos pedido de venda
+@type method
+@version 12
+@author claudineia.reinert
+@since 03/02/2025
+@return variant, nil
+/*/
+method faturarPedido() class agdInstrucaoEmbarquePedidoService
+	Local pcNumPed	:= Self:getPedido()
+	Local aArea		:= GetArea()
+	Local aAreaSC5	:= SC5->( GetArea() )
+	Local aAreaSC6	:= SC6->( GetArea() )
+	Local aAreaSC9	:= SC9->( GetArea() )
+
+	Local oDadosNF	:= nil
+	Local cNumNFS	:= Space( TamSX3( "F2_DOC" )[1] )
+	Local cSerieNF  := ''
+
+	//Parametro do AgroDistribuidor para identificar que ação tomar se o ERP bloquear o PV, caso nao existir ele considera '1'
+	Local cAGDTipoLib	:= SuperGetMV( "MV_AGD0002",.F., '1' )
+						// 1=Não toma nenhuma ação usuario deve analisar o pq do bloqueio e se for o caso utilizar a rotina de lib. manual do Faturamento.
+						// 2=Força Liberar Credito / Não meche em outros bloqueios
+
+	Local lOkFaturar := .F.
+	Local cModAtu	:= cModulo	//*Salvando Modulo Atual
+	Local nModAtu	:= nModulo  //*Salvando Modulo Atual
+
+	// -- Retorno da Ma410LBNFS --
+	Local aPvlNfs   := {}
+	Local aBloqueio := {{"","","","","","","",""}}
+
+	Private Inclui		:= .T.
+
+	If ::isSIGAAGDactive() .And. ::hasPedido()
+		If ! Self:hasNotaFiscalPedido()
+			/*Executa a rotina pelo modulo de Faturamento*/
+			cModulo := "FAT"
+			nModulo := 5
+
+			// -- Verificando se o PV encontra-se Liberado e Abastecendo os Arrays [ APVLNFS e Abloqueio ] -- //
+			DBSelectArea("SC5")
+			SC5->( dbSetOrder(1) )
+			IF SC5->( dbSeek(xFilial("SC5")+ pcNumPed ) )
+
+				// Chama Rotina para Liberacao de pedido
+				Ma410LbNfs( 2, @aPvlNfs, @aBloqueio )
+
+				// Checa itens liberados
+				Ma410LbNfs( 1, @aPvlNfs, @aBloqueio )
+
+				IF  ! Empty( aBloqueio )  	//ERP bloqueou o PV
+
+					If cAGDTipoLib == '2' // Força Liberar o Credito
+
+						dbSelectArea("SC9")
+						SC9->( dbSetOrder(1) )
+						SC9->( dbSeek(FwxFilial('SC9')+ pcNumPed ) )
+						While SC9->( !Eof() ) .And. SC9->( C9_FILIAL + C9_PEDIDO) == FwxFilial("SC9") + pcNumPed
+							//-- Libera de Credito para o item da liberacao do Pedido de Venda ( SC9 )
+							a450Grava(1,.T.,.F.)
+							SC9->(dbSkip() )
+						EndDO
+
+						// -- Apos Liberar o Credito, verifica novamente se ainda está bloqueado -- //
+						aPvlNfs 	:= {}
+						aBloqueio	:= {}
+						Ma410LbNfs( 1, @aPvlNfs, @aBloqueio )
+						If ! Empty(aBloqueio)
+							lOkFaturar := .F.
+						Else
+							lOkFaturar := .T.
+						EndIF
+					Else // Não Libera
+						lOkFaturar := .F.
+					Endif
+
+				Else
+					lOkFaturar := .T.
+				EndIf
+			Endif
+
+			IF ! lOkFaturar	.OR. Empty(aPvlNfs) // Indica que o PV está bloqueado mesmo apos aplicar as regras especificas do agroDistribuidor
+				Self:setError(STR0012) // O pedido vendas referente a instrução de embarque encontra-se bloqueado. Favor verificar
+			else
+				Pergunte("MT460A",.F.)
+
+				//Proteção do campo
+				If NEC->(ColumnPos('NEC_SERNF')) > 0
+					cSerieNF := NEC->NEC_SERNF
+				EndIf
+
+				cNumNFS := MaPvlNfs(aPvlNfs,cSerieNF,.F.,.F.,.F.,.F.,.F.,0,0,.F.,.F.)
+
+				If Self:hasNotaFiscalPedido() //gerou NF
+					oDadosNF := Self:getNotaFiscalPedido()
+					AGDGRAVAHIS("","NEC",xFilial("NEC")+Self:cIdInstrucaoEmbarque, STR0006,.F., STR0007 + oDadosNF:F2_DOC + " / " + oDadosNF:F2_SERIE ) //#"PEDIDO FATURADO" //"Nota Fiscal "
+					Self:setSuccess(STR0007 + " " + oDadosNF:F2_DOC + " / " + oDadosNF:F2_SERIE + STR0008) //"Nota Fiscal " //" gerada com sucesso."
+				Else
+					Self:setError(STR0009) //#"Nota Fiscal não gerada."
+				EndIf
+			Endif
+
+       		/*Retornando o modulo do SIGAAGD*/
+			cModulo := cModAtu
+			nModulo := nModAtu
+		Else
+			oDadosNF := Self:getNotaFiscalPedido()
+			Self:setError(STR0010 + " " + STR0007 + oDadosNF:F2_DOC + " / " + oDadosNF:F2_SERIE ) //"Pedido de venda já faturado. " //#"Nota Fiscal "
+		EndIf
+
+	Endif
+
+	RestArea(aArea)
+	RestArea(aAreaSC5)
+	RestArea(aAreaSC6)
+	RestArea(aAreaSC9)
+
+return nil
+
+/*/{Protheus.doc} getNotaFiscalPedido
+Retorna os dados principais da nota fiscal do pedido de venda
+@type method
+@version 12
+@author claudineia.reinert
+@since 03/02/2025
+@return character, oDados dados da nota fiscal
+/*/
+method getNotaFiscalPedido() as json class agdInstrucaoEmbarquePedidoService
+	Local aArea		:= GetArea()
+	Local aAreaSC5	:= SC5->(GetArea())
+	Local aAreaSF2	:= SF2->(GetArea())
+	Local cIdPedido := Self:getPedido()
+	Local oDados	:= JsonObject():New()
+
+	DbSelectArea("SC5")
+	DbSetOrder(01) //C5_FILIAL+C5_NUM
+	If !Empty(cIdPedido) .and. SC5->(DbSeek(xFilial("SC5") + Self:getPedido()))
+
+		DbSelectArea("SF2")
+		SF2->(DbSetOrder(01)) //F2_FILIAL+F2_DOC+F2_SERIE+F2_CLIENTE+F2_LOJA+F2_FORMUL+F2_TIPO
+		If SF2->(DbSeek(xFilial("SF2") + SC5->C5_NOTA + SC5->C5_SERIE + SC5->C5_CLIENTE + SC5->C5_LOJACLI ))
+			oDados["F2_DOC"]     := SF2->F2_DOC
+			oDados["F2_SERIE"]   := SF2->F2_SERIE
+			oDados["F2_CLIENTE"] := SF2->F2_CLIENTE
+			oDados["F2_LOJA"]    := SF2->F2_LOJA
+			oDados["F2_TIPO"]    := SF2->F2_TIPO
+		Endif
+
+	EndIf
+
+	RestArea(aArea)
+	RestArea(aAreaSC5)
+	RestArea(aAreaSF2)
+
+return oDados
+
+
+/*/{Protheus.doc} hasNotaFiscalPedido
+Verifica se existe nota fiscal gerada para o pedido de venda
+@type method
+@version 12
+@author claudineia.reinert
+@since 03/02/2025
+@return logical, se existe nota fiscal para o Pedido de Venda
+/*/
+method hasNotaFiscalPedido() as Logical class agdInstrucaoEmbarquePedidoService
+	Local lRet := .F.
+	Local oDadosNF := Self:getNotaFiscalPedido()
+
+	If oDadosNF:HasProperty("F2_DOC") .and. !Empty(oDadosNF:F2_DOC)
+		lRet := .T.
+	EndIf
+
+return lRet
+
+/*/{Protheus.doc} isPedidoInstrucEmbarque
+Verifica se o pedido de venda está vinculado a uma Instrução de Embarque
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 27/02/2025
+@param cNumPedido, character, Número do Pedido de Venda
+@return logical, Retorna .T. se o pedido estiver vinculado a uma Instrução de Embarque
+/*/
+method isPedidoInstrucEmbarque(cNumPedido as Character) as Logical class agdInstrucaoEmbarquePedidoService
+	Local aArea      := GetArea() as array
+	Local lVinculado := .F.       as logical
+
+	// Verifica se o pedido está na tabela NEC com o índice correto
+	dbSelectArea('NEC')
+	NEC->(dbSetOrder(retOrdem("NEC","NEC_FILIAL+NEC_NUMPED")))
+	If dbSeek(xFilial('NEC') + cNumPedido)
+		lVinculado := .T.
+	EndIf
+
+	RestArea(aArea)
+Return lVinculado
+
+/*/{Protheus.doc} validLiberacaoPedido
+Valida se a liberação do pedido pode ser feita sem ser parcial
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 27/02/2025
+@param cNumPedido, character, Número do Pedido de Venda
+@return Logical, Retorna .T. se a liberação for permitida, ou lança erro caso seja parcial
+/*/
+method validLiberacaoPedido(cNumPedido, aHeader, aColsPV) as Logical class agdInstrucaoEmbarquePedidoService
+	Local aArea      := GetArea() as array
+	Local lPermitido as logical
+	Local nX         as numeric
+	Local nQtdTotal  as numeric
+	Local nQtdLib    as numeric
+	Local nPosQVen   as numeric
+	Local nPosQLib   as numeric
+
+	nPosQVen := aScan(aHeader,{ |x| Alltrim(x[2])=="C6_QTDVEN"})
+	nPosQLib := aScan(aHeader,{ |x| Alltrim(x[2])=="C6_QTDLIB"})
+
+	lPermitido := .T. // Por padrão, a liberação é permitida
+
+	// Se o pedido estiver vinculado a uma Instrução de Embarque, validar a liberação total
+	If Self:isPedidoInstrucEmbarque(cNumPedido)
+		// Busca a quantidade total do pedido na tabela SC6
+		For nX:=1 To Len(aColsPV)
+			nQtdTotal += aColsPV[nX][nPosQVen]
+			nQtdLib   += aColsPV[nX][nPosQLib]
+		Next nX
+
+		// Se a quantidade liberada for menor que a quantidade total, bloquear a liberação
+		If nQtdLib < nQtdTotal
+			lPermitido := .F.
+			Self:setError(STR0011) //"Este pedido foi gerado por uma rotina do módulo SIGAAGD e possui uma instrução de embarque vinculada. Por esse motivo, a liberação só poderá ocorrer com a quantidade total."
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+Return lPermitido
+
+/*/{Protheus.doc} agdInstrucaoEmbarquePedidoService::setInstrucaoEmbarqueFromPedido
+Define a Instrucao de Embarque atraves do codigo do pedido
+@type method
+@version 12
+@author jc.maldonado
+@since 28/02/2025
+@param cCodigoPedido, character, codigo do Pedido (SC5->C5_NUM)
+@return logical, resultado
+/*/
+method setInstrucaoEmbarqueFromPedido(cCodigoPedido as character) as logical class agdInstrucaoEmbarquePedidoService
+	local lRetorno as logical
+
+	if Empty(Self:cIdInstrucaoEmbarque)
+		DBSelectArea('NEC')
+		NEC->(DBSetOrder(retOrdem('NEC', 'NEC_FILIAL+NEC_NUMPED')))
+		if lRetorno := NEC->(DBSeek(FWxFilial('NEC') + cCodigoPedido))
+			Self:cIdInstrucaoEmbarque := NEC->NEC_CODIGO
+		endIf
+	endIf
+return lRetorno
+
+/*/{Protheus.doc} agdInstrucaoEmbarquePedidoService::removerVinculoPedido
+Remove o vinculo do pedido com a instrução de embarque
+@type method
+@version 12
+@author jc.maldonado
+@since 28/02/2025
+@return logical, resultado
+/*/
+method removerVinculoPedido() as logical class agdInstrucaoEmbarquePedidoService
+	local cFilialNEC    as character
+	local cCodigoPedido as character
+	local lRetorno      as logical
+
+	if !empty(Self:cIdInstrucaoEmbarque)
+		cFilialNEC := FWxFilial('NEC')
+		dbSelectArea('NEC')
+		dbSetOrder(retOrdem('NEC', 'NEC_FILIAL+NEC_CODIGO'))
+		if lRetorno := NEC->(dbSeek(cFilialNEC + Self:cIdInstrucaoEmbarque))
+			cCodigoPedido := NEC->NEC_NUMPED
+
+			RecLock('NEC', .f.)
+			NEC->NEC_NUMPED := ''
+			NEC->(MsUnlock())
+			
+			// Remove o vinculo do item do pedido na tabela NED - insumos da instrução de embarque
+			dbSelectArea('NED')
+			dbSetOrder(retOrdem('NED', 'NED_FILIAL+NED_CODIEB+NED_ITEM')) 
+			if NED->(dbSeek(cFilialNEC + Self:cIdInstrucaoEmbarque))
+				While NED->(!Eof()) .AND. NED->(NED_FILIAL + NED_CODIEB) == (xFilial('NED') + Self:cIdInstrucaoEmbarque)
+					
+					RecLock('NED', .f.)
+					NED->NED_ITEMPV := ''
+					NED->(MsUnlock())
+
+					NED->(DBSkip())
+				EndDo
+			EndIf
+
+			AGDGRAVAHIS('', 'NEC', cFilialNEC + Self:cIdInstrucaoEmbarque, STR0005, .F., cCodigoPedido) // 'PEDIDO REMOVIDO'
+		endIf
+	endif
+return lRetorno

@@ -1,0 +1,680 @@
+#Include "agd.dta.proxy.service.ch"
+#Include "TOTVS.CH"
+#Include "tlpp-core.th"
+
+#DEFINE BREAK_LINE " \n "
+
+using namespace agd.toolsDTAService
+
+/*/{Protheus.doc} agdDTAProxyService
+Classe de comunicação com o DTA Proxy
+@type class
+@version 12
+@author jean.schulze
+@since 12/9/2025
+/*/
+Class agdDTAProxyService
+	Public Data aToolCalls      as Array
+	Public Data aToolsScore     as Array
+	Public Data aToolsHistory   as Array
+	Public Data cThreadId       as Character
+	Public Data jProxyData      as Json
+	Public Data jSuggestions    as Json
+	Public Data lUseTools       as Logical
+	Public Data oMonitor        as Object
+	Private Data cToken         as Character
+	
+	Public Method New(cThreadId, jChatRequest, lUseTools, cSessionId) Constructor
+	Public Method destroy()
+	Public Method runProxyRequest() as Character
+	Public Method runToolFunction()
+	Public Method setToken(cToken as Character)
+	Private Method createDataForProxyRequest(jChatRequest as Json)
+	Private Method postDTACompletion(cStartTime as Character, cEndTime as Character) as Character
+	Private Method evaluateProxyResponse(cAnswer as Character, cStartTime as Character, cEndTime as Character) as Character
+	
+	Static Method getChatModel() as Character
+	Static Method getEmbeddingModel() as Character
+	Static Method getMessageHistoryToScore(aHistory as Array) as Character
+	Static Method getTemperature() as Numeric
+	Static Method getTools(aTools as Array) as Array
+	//Static Method getFilteredTools(aTools as Array, nQuantityTools as Numeric, cContent as Character, oMonitor as Object, aToolsScore as Array) as Array
+	Static Method getVectorEmbeddingSize() as Numeric
+	Static Method formatToolObject(jTool as Json) as Json
+	Static Method postDTAEmbedding(cMessage as Character) as Character
+	Static Method setChatHistory(jProxyData as Json, aChatMessages as Array)
+	Static Method setChatUserContent(jProxyData as Json, cMessage as Character)
+	Static Method setDeveloperDefinition(jProxyData as Json)
+	Static Method setProxyAuthorizationHeader(aHeader as Array, cToken as Character)
+	Static Method setProxyModel(jProxyData as Json)
+	Static Method setProxyTemperature(jProxyData as Json)
+	Static Method setToolCatalogBySimilarity(jProxyData as Json, cContent as Character, oMonitor as Object)
+	Static Method formatToolExamples(aExamples as Array) as Character
+EndClass
+
+/*/{Protheus.doc} New
+Constructor
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param cThreadId, character, thread
+@param jChatRequest, json, chat request
+@param lUseTools, logical, use tools flag
+@param cSessionId, character, session identifier
+@return variant, self
+/*/
+Method New(cThreadId as Character, jChatRequest as Json, lUseTools as Logical, cSessionId as Character) Class agdDTAProxyService
+	Default lUseTools  := .T.
+
+	Self:aToolsHistory := {}
+	Self:aToolsScore   := {}
+	Self:cThreadId     := cThreadId
+	Self:jProxyData    := JsonObject():New()
+	Self:jSuggestions  := JsonObject():New()
+	Self:lUseTools     := lUseTools
+	Self:cToken        := ""
+
+	Self:createDataForProxyRequest(jChatRequest)
+Return Self
+
+/*/{Protheus.doc} destroy
+Destroy o Objeto
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return variant, nil
+/*/
+Method destroy() Class agdDTAProxyService
+	Self:aToolCalls      := Nil
+	Self:aToolsScore     := Nil
+	Self:aToolsHistory   := Nil
+	Self:jProxyData      := Nil
+	Self:jSuggestions    := Nil
+Return
+
+/*/{Protheus.doc} runProxyRequest
+Executa a requisição
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return character, response
+/*/
+Method runProxyRequest() as Character Class agdDTAProxyService
+	Local cAnswer         := "" as Character
+	Local cResponse       := "" as Character
+	Local cStartTime      := "" as Character
+	Local cEndTime        := "" as Character
+
+	//Executa a requisição e avalia o retorno
+	cAnswer   := Self:postDTACompletion(@cStartTime, @cEndTime)
+	cResponse := Self:evaluateProxyResponse(cAnswer, cStartTime, cEndTime)
+Return cResponse
+
+/*/{Protheus.doc} createDataForProxyRequest
+Build de parametros para requisição ao DTA Proxy
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jChatRequest, json, chat request
+@return variant, nil
+/*/
+Method createDataForProxyRequest(jChatRequest as Json) Class agdDTAProxyService
+	Local cScorePayload := "" as Character
+
+	//Monta dados para requisição ao DTA Proxy.
+	agdDTAProxyService():setProxyModel(@Self:jProxyData)
+	agdDTAProxyService():setProxyTemperature(@Self:jProxyData)
+	agdDTAProxyService():setDeveloperDefinition(@Self:jProxyData)
+	If jChatRequest:hasProperty("data") .And. jChatRequest["data"]:hasProperty("dta-chat-messages")
+		agdDTAProxyService():setChatHistory(@Self:jProxyData, jChatRequest["data"]["dta-chat-messages"])
+	EndIf
+	agdDTAProxyService():setChatUserContent(@Self:jProxyData, jChatRequest["content"])
+	If Self:lUseTools
+		cScorePayload := agdDTAProxyService():getMessageHistoryToScore(Self:jProxyData["messages"])
+		Self:aToolsScore := agdDTAProxyService():setToolCatalogBySimilarity(@Self:jProxyData, cScorePayload, @Self:oMonitor)
+	EndIf
+Return
+
+/*/{Protheus.doc} postDTACompletion
+Executa a chamada ao DTA Proxy para o chat
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param cStartTime, character, start timestamp
+@param cEndTime, character, end timestamp
+@return character, response
+/*/
+Method postDTACompletion(cStartTime as Character, cEndTime as Character) as Character Class agdDTAProxyService
+	Local aHeader      := {} as Array
+	Local cURL         := "" as Character
+	Local cAnswer      := "" as Character
+	Local cSendMessage := "" as Character
+	
+	cStartTime := FWTimeStamp(5, Date(), TimeFull())
+	cURL       := agdDTAUtilsService():getParameter("proxy_url") + agdDTAUtilsService():getParameter("endpoint_chat")
+	cSendMessage := agdDTAUtilsService():encodeUTF8(Self:jProxyData:ToJson())
+
+
+	agdDTAProxyService():setProxyAuthorizationHeader(@aHeader, Self:cToken)
+
+	cAnswer := HTTPPost(cURL, "", cSendMessage, , aHeader)
+	agdDTAUtilsService():validateHTTPResponse(cAnswer, "postDTACompletion", cSendMessage)
+	cEndTime := FWTimeStamp(5, Date(), TimeFull())
+Return cAnswer
+
+/*/{Protheus.doc} postDTAEmbedding
+Executa a requisição para obtenção de embedding
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param cMessage, character, mensagem embedding
+@return character, response
+/*/
+Method postDTAEmbedding(cMessage as Character) as Character Class agdDTAProxyService
+	Local aHeader      := {}                 as Array
+	Local cAnswer      := ""                 as Character
+	Local cSendMessage := ""                 as Character
+	Local cURL         := ""                 as Character
+	Local jData        := JsonObject():New() as Json
+
+	jData["model"] := agdDTAProxyService():getEmbeddingModel()
+	jData["input"] := {agdDTAUtilsService():encodeUTF8(cMessage)}
+	cSendMessage   := jData:ToJson()
+	
+	agdDTAProxyService():setProxyAuthorizationHeader(@aHeader)
+	cURL    := agdDTAUtilsService():getParameter("proxy_url") + agdDTAUtilsService():getParameter("endpoint_embedding")
+	cAnswer := HTTPPost(cURL, "", cSendMessage, , aHeader)
+	agdDTAUtilsService():validateHTTPResponse(cAnswer, "postDTAEmbedding", cSendMessage)
+	
+	aSize(aHeader, 0)
+	FreeObj(jData)
+Return cAnswer
+
+/*/{Protheus.doc} setProxyAuthorizationHeader
+Configura o cabeçalho de autorização
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param aHeader, array, header
+@param cToken, character, token
+@return variant, nil
+/*/
+Method setProxyAuthorizationHeader(aHeader as Array, cToken as Character) Class agdDTAProxyService
+	If Empty(cToken)
+		cToken := agdDTAUtilsService():getParameter("token")
+	EndIf
+	aAdd(aHeader, "Authorization: Bearer " + cToken)
+Return
+
+/*/{Protheus.doc} setToken
+Informa o token a ser utilizado
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param cToken, character, token
+@return variant, nil
+/*/
+Method setToken(cToken as Character) Class agdDTAProxyService
+	Self:cToken := cToken
+Return
+
+/*/{Protheus.doc} getChatModel
+Retorna o model do chat
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return character, model chat
+/*/
+Method getChatModel() as Character Class agdDTAProxyService
+Return agdDTAUtilsService():getParameter("model_chat")
+
+/*/{Protheus.doc} getTemperature
+Retorna a temperatura do modelo
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return numeric, temperatura do modelo
+/*/
+Method getTemperature() as Numeric Class agdDTAProxyService
+Return agdDTAUtilsService():getParameter("model_temperature")
+
+/*/{Protheus.doc} getEmbeddingModel
+Retorna o model de embedding
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return character, model embedding
+/*/
+Method getEmbeddingModel() as Character Class agdDTAProxyService
+Return agdDTAUtilsService():getParameter("model_embedding")
+
+/*/{Protheus.doc} getVectorEmbeddingSize
+Retorna o tamanho do vetor de embedding
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return numeric, tamanho do vetor de embedding
+/*/
+Method getVectorEmbeddingSize() as Numeric Class agdDTAProxyService
+	Local nVectorSize := 1536 as Numeric
+
+	If agdDTAProxyService():getEmbeddingModel() == "text-embedding-3-large"
+		nVectorSize := 3072
+	EndIf
+Return nVectorSize
+
+/*/{Protheus.doc} evaluateProxyResponse
+Ajusta a resposta do DTA
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param cAnswer, character, resposta do proxy
+@param cStartTime, character, horário de início
+@param cEndTime, character, horário de término
+@return character, resposta ajustada
+/*/
+Method evaluateProxyResponse(cAnswer as Character, cStartTime as Character, cEndTime as Character) as Character Class agdDTAProxyService
+	Local aTool      := {}  as Array
+	Local cResponse  := ""  as Character
+	Local cProxyData := ""  as Character
+	Local jChoice    := Nil as Json
+	Local jAnswer    := Nil as Json
+	Local nIndTool   := 0   as Numeric
+	Local nTotTool   := 0   as Numeric
+
+	/*
+	Avalia a resposta do DTA, que pode ser:
+		finish_reason = STOP - indica que a IA já tem a resposta, e deve apresentar ao usuário.
+			Neste caso, obtém o content da mensagem e irá retornar essa mensagem para o CHAT.
+
+		finish_reason = tool_calls - indica que a IA precisa de informações das funções para determinar a resposta.
+			Neste caso a IA retorna uma lista de ferramentas e seus parâmetros para serem executados.
+			Vai pegar essas ferramentas selecionadas montando o array aToolCalls para posteriormente executar estas funções.
+	
+	O retorno desse método será:
+		- Se finish_reason = STOP, retorna em cResponse o texto que deve ser exibido no CHAT
+		- Se finish_reason = tool_calls, retorna por referência em aToolCalls o array aToolCalls com as ferramentas para execução, e cResponse será vazio.
+	
+	*/
+
+	Self:aToolCalls := {}
+	cProxyData := Self:jProxyData:ToJson()
+	jAnswer := JsonObject():New()
+	jAnswer:fromJson(agdDTAUtilsService():decodeUTF8(cAnswer))
+	If jAnswer:hasProperty("choices")
+		If Len(jAnswer["choices"]) > 0
+			jChoice := jAnswer["choices"][1]
+			
+			If jChoice["finish_reason"] == "stop"
+				cResponse := jChoice["message"]["content"]			
+			ElseIf jChoice["finish_reason"] == "tool_calls"
+				aTool := jChoice["message"]["tool_calls"]
+				nTotTool := Len(aTool)
+				For nIndTool := 1 To nTotTool
+					aAdd(Self:aToolCalls, {aTool[nIndTool]["id"], aTool[nIndTool]["function"]["name"], aTool[nIndTool]["function"]["arguments"] })
+				Next nIndTool
+				aTool := Nil
+				//armazena a solicitação de execução de ferramentas pelo assistente
+				aAdd(Self:aToolsHistory, jChoice["message"])
+				aAdd(Self:jProxyData["messages"], jChoice["message"])
+			EndIf
+			FreeObj(jChoice)
+		EndIf
+	EndIf
+	
+	FreeObj(jAnswer)
+Return cResponse
+
+/*/{Protheus.doc} runToolFunction
+Executa a Tool conforme solicitado pelo DTA
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@return variant, nil
+/*/
+Method runToolFunction() Class agdDTAProxyService
+	Local aToolReturn    := {}  as Array
+	Local cFunction      := ""  as Character
+	Local cId            := ""  as Character
+	Local cArguments     := ""  as Character
+	Local cStartTime     := ""  as Character
+	Local jCalledTool    := Nil as Json
+	Local lExceededCalls := .F. as Logical
+	Local nIndex         := 0   as Numeric
+	Local nTotal         := 0   as Numeric
+
+	/*
+		Executa uma ferramenta/função solicitada pelo assistente.
+		Armazena nos arrays aToolsHistory e o jProxyData["messages"] o retorno de cada ferramenta/função executada.
+		
+		aToolsHistory: Armazena as solicitações de execução das ferramentas e o resultado da execução das ferramentas para servir de contexto histórico nas próximas interações do usuário no chat.
+		               É usado como base para gerar o objeto dta-chat-steps.
+
+		jProxyData["messages"]: São as mensagens que serão enviadas para o DTA Proxy, onde irá conter todo o histórico e definições, e também
+		a resposta de cada tools, para que o assistente processe a solicitação do usuário. Armazena apenas as informações da interação corrente.
+	*/
+	nTotal         := Len(Self:aToolCalls)
+	lExceededCalls := agdDTAUtilsService():getMaxToolCalls() < nTotal
+	Self:jSuggestions := JsonObject():New() //limpa as sugestões das ferramentas para manter apenas as sugestões da solicitação corrente
+	For nIndex := 1 To nTotal 
+		cId          := Self:aToolCalls[nIndex][1]
+		cFunction    := Self:aToolCalls[nIndex][2]
+		cArguments   := Self:aToolCalls[nIndex][3]
+		cStartTime   := FWTimeStamp(5, Date(), TimeFull())
+		If lExceededCalls
+			aToolReturn := {Nil, I18N(STR0001, {agdDTAUtilsService():getMaxToolCalls(), nTotal})}  //"Limite de ferramentas excedido. O limite atual é de #1[LIMITE_TOOL]# ferramentas, mas foram solicitadas #2[QTD_TOOL]# ferramentas. Esta ferramenta não foi executada. Oriente o usuário para refinar a busca atual ou utilizar menos informações."
+		Else
+			aToolReturn := agdDTAUtilsService():callToolFunction(cFunction, cArguments, @Self:jSuggestions)
+		EndIf
+		jCalledTool  := JsonObject():New()
+		jCalledTool["role"        ] := "tool"
+		jCalledTool["tool_call_id"] := cId
+		jCalledTool["content"     ] := aToolReturn[2]
+		
+		aAdd(Self:jProxyData["messages"], jCalledTool)
+		aAdd(Self:aToolsHistory, jCalledTool)
+		jCalledTool := Nil
+		aSize(aToolReturn, 0)
+	Next nIndex
+Return
+
+/*/{Protheus.doc} setProxyModel
+Informa o model a ser utilizado
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jProxyData, json, json de configuração
+@return variant, nil
+/*/
+Method setProxyModel(jProxyData as Json) Class agdDTAProxyService
+	jProxyData["model"] := agdDTAProxyService():getChatModel()
+Return
+
+/*/{Protheus.doc} setProxyTemperature
+Informa a temperatura a ser utilizada
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jProxyData, json, json de configuração
+@return variant, nil
+/*/
+Method setProxyTemperature(jProxyData as Json) Class agdDTAProxyService
+	jProxyData["temperature"] := agdDTAProxyService():getTemperature()
+Return
+
+/*/{Protheus.doc} setDeveloperDefinition
+Setup inicial da conversa do chat
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jProxyData, json, proxy config
+@return variant, nil
+/*/
+Method setDeveloperDefinition(jProxyData as Json) Class agdDTAProxyService
+	Local cDefinition := ""  as Character
+
+	jProxyData["messages"] := {}
+	cDefinition := I18N(STR0002, {PCPConvDat(dDataBase, 2), RTrim(DiaSemana(dDataBase))})  //"Considere que a data de hoje é #1[DATA_ATUAL]# e o dia da semana de hoje é #2[DIA_SEMANA]#."
+	cDefinition += BREAK_LINE + I18N(STR0003, {Set(_SET_DATEFORMAT)})  //"Valores do tipo data devem ser apresentados ao usuário no formato #1[DATE_FORMAT]# e trafegados entre as ferramentas no formato 'yyyy-mm-dd'."
+	cDefinition += BREAK_LINE + I18N(STR0004, {agdDTAUtilsService():getLanguageName()})  //"Responda sempre no idioma #1[NOME_IDIOMA]#."
+	aAdd(jProxyData["messages"], {"role": "developer", "content": cDefinition})
+	
+	cDefinition := STR0005 //"Você é um assistente de IA especialista em negociação barter, expedição e recebimento de produtos em um contexto de agroindustria respondendo informações sobre o ERP TOTVS Protheus."
+	cDefinition += BREAK_LINE + STR0006 //"Quando o assunto for software de mercado, você somente pode dar informações sobre o ERP TOTVS Protheus."
+	cDefinition += BREAK_LINE + STR0007 //"Somente fale sobre assuntos que possuem algum tipo de relação com assuntos citados por tool e/ou assistant, caso contrário indique ao usuário que você não pode falar sobre esse assunto pois não possui uma fonte de dados para consulta."
+	aAdd(jProxyData["messages"], {"role": "developer", "content": cDefinition})
+	
+	cDefinition := STR0008 //"Quando uma ferramenta retornar uma mensagem de erro com a tag code possuindo valor 400, sempre solicite ao usuário a correção de parâmetros."
+	cDefinition += BREAK_LINE + STR0009 //"Quando uma ferramenta retornar uma mensagem de erro com a tag code possuindo valor 404 a solicitação deve ser executada novamente e com as informações corretas."
+	aAdd(jProxyData["messages"], {"role": "developer", "content": cDefinition})
+	
+	cDefinition :=STR0010 //"Explique fórmulas matemáticas em palavras, sem formatação matemática."
+	cDefinition += BREAK_LINE + I18N(STR0011, {agdDTAUtilsService():getLanguageName()})  //"Valores numéricos devem ser apresentados ao usuário utilizando separadores de milhares e separadores de decimais conforme a padronização do idioma #1[NOME_IDIOMA]#."
+	aAdd(jProxyData["messages"], {"role": "developer", "content": cDefinition})
+
+	cDefinition := STR0012  //"Formate sua resposta usando Markdown, incluindo listas (*) e destaques em **negrito**."
+	aAdd(jProxyData["messages"], {"role": "developer", "content": cDefinition})
+Return
+
+/*/{Protheus.doc} setChatHistory
+Informa historico de mensagens do chat
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jProxyData, json, json de configuração
+@param aChatMessages, array, mensagens
+@return variant, nil
+/*/
+Method setChatHistory(jProxyData as Json, aChatMessages as Array) Class agdDTAProxyService
+	Local aToolsHistory    := {} as Array
+	Local nIndHistory      := 0  as Numeric
+	Local nIndToolsHistory := 0  as Numeric
+	Local nIndUpdMsg       := 0  as Numeric
+
+	nIndUpdMsg := Len(jProxyData["messages"])
+	For nIndHistory := 1 To Len(aChatMessages)
+		If aChatMessages[nIndHistory]["type"] == "output"         .And.;
+		   aChatMessages[nIndHistory]["body"]:hasProperty("data") .And.;
+		   aChatMessages[nIndHistory]["body"]["data"]:hasProperty("dta-tools-history")
+
+			aToolsHistory := aChatMessages[nIndHistory]["body"]["data"]["dta-tools-history"]
+			For nIndToolsHistory := 1 To Len(aToolsHistory)
+				aAdd(jProxyData["messages"], aToolsHistory[nIndToolsHistory])
+				nIndUpdMsg++
+			Next nIndToolsHistory
+			aToolsHistory := Nil
+		EndIf
+		aAdd(jProxyData["messages"], JsonObject():New())
+		nIndUpdMsg++
+		jProxyData["messages"][nIndUpdMsg]["role"]    := Iif(aChatMessages[nIndHistory]["type"] == "input", "user", "assistant")
+		jProxyData["messages"][nIndUpdMsg]["content"] := aChatMessages[nIndHistory]["body"]["content"]
+	Next
+Return
+
+/*/{Protheus.doc} setChatUserContent
+Informa o conteudo do usuario
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jProxyData, json, json de configuração
+@param cMessage, character, mensagem do usuário
+@return variant, nil
+/*/
+Method setChatUserContent(jProxyData as Json, cMessage as Character) Class agdDTAProxyService
+	Local jUserContent := JsonObject():New() as Json
+
+	jUserContent["role"   ] := "user"
+	jUserContent["content"] := cMessage
+	aAdd(jProxyData["messages"], jUserContent)
+	jUserContent := Nil
+Return
+
+/*/{Protheus.doc} getMessageHistoryToScore
+Retirna a mensagem
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param aHistory, array, lista de histórico de mensagens
+@return character, mensagem concatenada
+/*/
+Method getMessageHistoryToScore(aHistory as Array) as Character Class agdDTAProxyService
+	Local cMessage     := "" as Character
+	Local nIndHistory  := 0  as Numeric
+
+	For nIndHistory := 1 To Len(aHistory)
+		If aHistory[nIndHistory]["role"] == "user"
+			If !Empty(cMessage)
+				cMessage += BREAK_LINE
+			EndIf
+			cMessage += aHistory[nIndHistory]["content"]
+		EndIf
+	Next nIndHistory
+Return cMessage
+
+/*/{Protheus.doc} setToolCatalogBySimilarity
+Informa o catálogo de ferramentas por similaridade
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jProxyData, json, config
+@param cContent, character, conteudo
+@param oMonitor, object, objeto de monitoramento
+@return variant, lista de tools
+/*/
+Method setToolCatalogBySimilarity(jProxyData as Json, cContent as Character, oMonitor as Object) Class agdDTAProxyService
+	Local aTools         := Nil as Array
+	Local aToolsCatalog  := Nil as Array
+	Local aToolsScore    := {}  as Array
+	Local nQuantityTools := 0   as Numeric
+
+	aToolsCatalog  := agdDTAUtilsService():getToolsCatalog()
+	nQuantityTools := agdDTAUtilsService():getParameter("quantity_tools")
+	//If nQuantityTools >= Len(aToolsCatalog)
+		aTools := agdDTAProxyService():getTools(aToolsCatalog)
+	//Else
+	//	aTools := agdDTAProxyService():getFilteredTools(aToolsCatalog, nQuantityTools, cContent, oMonitor, @aToolsScore)
+	//EndIf
+	jProxyData["tools"] := aTools
+	aTools := Nil
+	aSize(aToolsCatalog, 0)
+Return aToolsScore
+
+/*/{Protheus.doc} getTools
+Retorna a lista de tools
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param aTools, array, lista de tools
+@return array, tools
+/*/
+Method getTools(aTools as Array) as Array Class agdDTAProxyService
+	Local aToolsScore := {} as Array
+	Local nIndTools   := 0  as Numeric
+
+	For nIndTools := 1 To Len(aTools)
+		aAdd(aToolsScore, agdDTAProxyService():formatToolObject(@aTools[nIndTools]))
+	Next nIndTools
+Return aToolsScore
+
+/*/{Protheus.doc} getFilteredTools
+Retorna as tools filtradas
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param aTools, array, lista de tools
+@param nQuantityTools, numeric, quantidade de tools
+@param cContent, character, conteudo
+@param oMonitor, object, objeto de monitoramento
+@param aToolsScore, array, lista de scores das tools
+@return array, tools filtradas
+/*/
+/*Method getFilteredTools(aTools as Array, nQuantityTools as Numeric, cContent as Character, oMonitor as Object, aToolsScore as Array) as Array Class agdDTAProxyService
+	Local aEmbedding     := Nil as Array
+	Local aSimilarTools  := {}  as Array
+	Local cEndTime       := ""  as Character
+	Local cStartTime     := ""  as Character
+	Local jEmbedding     := Nil as Json
+	Local nIndTools      := 0   as Numeric
+	Local nStartTime     := 0   as Numeric
+
+	cStartTime := FWTimeStamp(5, Date(), TimeFull())
+	jEmbedding := agdDTAUtilsService():getEmbedding(cContent)
+	cEndTime   := FWTimeStamp(5, Date(), TimeFull())
+	aEmbedding := agdDTAUtilsService():getEmbeddingVector(jEmbedding)
+	nStartTime := MicroSeconds()
+	For nIndTools := 1 To Len(aTools)
+		aTools[nIndTools]["score"] := agdDTAUtilsService():calculateVectorSimilarity(aTools[nIndTools]["embedding"], aEmbedding)
+	Next nIndTools
+
+	aSort(aTools,,,{|x,y| x["score"] > y["score"]})
+	For nIndTools := 1 To nQuantityTools
+		aAdd(aToolsScore, {"name": aTools[nIndTools]["name"], "score": aTools[nIndTools]["score"]})
+		aAdd(aSimilarTools, agdDTAProxyService():formatToolObject(@aTools[nIndTools]))
+	Next nIndTools
+	jEmbedding["tools"] := JsonObject():New()
+	jEmbedding["tools"]["list" ] := aSimilarTools
+	jEmbedding["tools"]["score"] := aToolsScore
+	jEmbedding["tools"]["time_spent_on_search"] := MicroSeconds() - nStartTime
+	
+	aSize(aEmbedding, 0)
+	FreeObj(jEmbedding)
+Return aSimilarTools*/
+
+/*/{Protheus.doc} formatToolObject
+Formata o objeto da tool
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param jTool, json, tool
+@return json, tool formatada
+/*/
+Method formatToolObject(jTool as Json) as Json Class agdDTAProxyService
+	Local cExamples      := ""  as Character
+	Local jFormattedTool := Nil as Json
+
+	jFormattedTool := JsonObject():New()
+	jFormattedTool["type"    ] := "function"
+	jFormattedTool["function"] := JsonObject():New()
+	jFormattedTool["function"]["name"       ] := jTool["name"       ]
+	jFormattedTool["function"]["description"] := jTool["description"]
+
+	aExamples := &(agdDTAToolsEnum():getById(Alltrim(jTool["name"])) + ":getExamples()")
+	cExamples := agdDTAProxyService():formatToolExamples(aExamples)
+	If !Empty(cExamples)
+		jFormattedTool["function"]["description"] += BREAK_LINE + cExamples
+	EndIf
+	If !Empty(jTool["rules"])
+		jFormattedTool["function"]["description"] += BREAK_LINE + jTool["rules"]
+	EndIf
+	
+	jFormattedTool["function"]["strict"     ] := jTool["strict"     ]
+	jFormattedTool["function"]["parameters" ] := jTool["parameters" ]
+
+	aSize(jTool["embedding"], 0)
+	FreeObj(jTool)
+Return jFormattedTool
+
+/*/{Protheus.doc} formatToolExamples
+Formata os exemplos da tool
+@type method
+@version 12
+@author jean.schulze
+@since 12/9/2025
+@param aExamples, array, lista de exemplos
+@return character, exemplo formatado
+/*/
+Method formatToolExamples(aExamples as Array) as Character Class agdDTAProxyService
+	Local cExamples := "" as Character
+	Local nIndex    := 0  as Numeric
+
+	For nIndex := 1 To Len(aExamples)
+		cExamples += BREAK_LINE + "- " + aExamples[nIndex]["description"]
+	Next nIndex
+	If !Empty(cExamples)
+		cExamples := I18N(STR0013, {cExamples})  //"Pode responder perguntas como:#1[PERGUNTA]#"
+	EndIf
+Return cExamples

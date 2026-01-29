@@ -1,0 +1,223 @@
+#Include "agd.dta.chat.service.ch"
+#include "totvs.ch"
+#include "tlpp-core.th"
+
+using namespace agd.utilsService
+
+/*/{Protheus.doc} agdDTAChatService
+Servico para gerenciamento de conversas do chat do DTA
+@type class
+@version 12
+@author jean.schulze
+@since 02/12/2025
+/*/
+Class agdDTAChatService FROM agdUtilsService
+	public Data cThreadId	As Character
+	public Data cSessionId	As Character
+
+	Public Method new() as Object
+
+	Public Method getStartChat() 
+	Public Method postPromptChat() 
+
+	Public Method getSessionID() as Character
+	Public Method getThreadID() as Character
+	
+	Private Method processCompletion(jBody as Json, cThreadId as Character, cSessionId as Character) as Json
+	Private Method processFeedback(cThreadId as Character, jBody as Json)
+	Private Method setSuggestionsResponse(jSuggestions as Json) as Array
+
+EndClass
+
+
+/*/{Protheus.doc} new
+Constructor
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@param jHeaderRequest, json, Objeto com os Headers
+@return object, self
+/*/
+Method new(jHeaderRequest as Json) as Object Class agdDTAChatService
+	If jHeaderRequest:hasProperty("x-dta-session")
+		Self:cSessionId := jHeaderRequest["x-dta-session"]
+	EndIf
+	If jHeaderRequest:hasProperty("x-dta-thread")
+		Self:cThreadId := jHeaderRequest["x-dta-thread"]
+	EndIf
+Return Self
+
+/*/{Protheus.doc} getSessionID
+Retorna a Sessão da Conversa
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@return character, sessao
+/*/
+Method getSessionID() as Character  Class agdDTAChatService
+return Self:cSessionId 
+
+/*/{Protheus.doc} getThreadID
+Retorna a Thread da Conversa
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@return character, Thread
+/*/
+Method getThreadID() as Character  Class agdDTAChatService
+return Self:cThreadId 
+
+/*/{Protheus.doc} getStartChat
+Inicia o chat com os dados base para o componente do DTA
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@return variant, nil
+/*/
+Method getStartChat()  Class agdDTAChatService
+	Local cInitialMessage  := ""  as Character
+	Local cWarningMessage  := ""  as Character
+	Local jReturn          := Nil as Json
+	Local lShowSuggestions := .F. as Logical
+
+	jReturn    := JsonObject():New()
+	
+	//coloca uma trava para nao executar se estiver com alguma restrição
+	If agdDTAUtilsService():canUseConversation(@cInitialMessage)
+		cInitialMessage  := STR0001 //STR0001 //"Em que posso ajudá-lo hoje?"
+		lShowSuggestions := .T.
+	EndIf
+
+
+	//Monta a mensagem inicial que vai exibir no chat
+	jReturn["config"] := JsonObject():New()
+	jReturn["config"]["dta-user-greeting"  ] := STR0002 //"Olá," //"Olá!"
+	jReturn["config"]["dta-user-name"      ] := FwGetUserName(RetCodUsr())
+	jReturn["config"]["dta-initial-message"] := cInitialMessage
+	jReturn["config"]["dta-warning-message"] := cWarningMessage
+	jReturn["config"]["disclaimer"         ] := STR0003 //STR0003 //"A inteligência artificial pode cometer erros. Considere verificar informações importantes."
+		
+	//Sugestões que vão aparecer no chat
+	jReturn["data"] := JsonObject():New()
+	If lShowSuggestions
+		jReturn["data"]["dta-chat-suggestions"] := {}
+		aAdd(jReturn["data"]["dta-chat-suggestions"], {"label": STR0004}) //STR0004 //"Sobre quais assuntos podemos conversar?"
+	EndIf
+
+	Self:setSuccess(jReturn)
+Return nil
+
+/*/{Protheus.doc} postPromptChat
+Recebe um prompt para consulta no DTA
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@param jBody, json, prompt
+@return variant, nil
+/*/
+Method postPromptChat(jBody)  Class agdDTAChatService
+	Local cResponse        := ""                       as Character
+	Local jResponseMessage := JsonObject():New()       as Json
+
+	Try
+		If agdDTAUtilsService():canUseConversation(@cResponse)
+			jResponseMessage := Self:processCompletion(jBody, Self:cThreadId, Self:cSessionId )	
+		Else
+			jResponseMessage := { "content": cResponse, "data": JsonObject():New() }
+		EndIf
+		Self:setSuccess(jResponseMessage)
+	Catch oError
+		Self:setError(oError:Description, 401)
+	EndTry
+	
+	FwFreeObj(jBody)	
+
+Return nil
+
+/*/{Protheus.doc} processCompletion
+Executa a request do prompt para o DTA
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@param jBody, json, prompt
+@return json, retorno
+/*/
+Method processCompletion(jBody as Json) as Json Class agdDTAChatService
+	Local cResponse     := ""  as Character
+	Local jResponse     := Nil as Json
+	Local nCalls        := 0   as Numeric
+	Local oDTAProxy     := Nil as Object
+
+	oDTAProxy := agdDTAProxyService():new(Self:cThreadId, jBody, .T., Self:cSessionId)
+	cResponse := oDTAProxy:runProxyRequest()
+	/*
+		Se tiver que executar ferramentas, entra no loop executando a ferramenta e gerando nova requisição ao DTA Proxy. 
+		O loop se encerra quando receber o finish_reason de "stop", ou quando atingir o limite de loop definido por agdDTAUtilsService():getLoopLimit()
+	*/
+	While !Empty(oDTAProxy:aToolCalls) .And. nCalls < agdDTAUtilsService():getLoopLimit()
+
+		oDTAProxy:runToolFunction()
+
+		//Chama API novamente com os dados das funções
+		cResponse := oDTAProxy:runProxyRequest()
+		nCalls++
+	End
+
+	jResponse := { "content": "", "data": JsonObject():New() }
+	//Mensagem padrão caso não consiga responder a pergunta dentro do limite de loop definido.
+	jResponse["content"] := STR0005 //STR0005 //"Não foi possível processar a sua pergunta. Por favor, seja mais específico."
+	If !Empty(cResponse)
+		//se conseguir uma resposta, retorna ao usuario
+		jResponse["content"] := cResponse
+	EndIf
+	jResponse["data"]["dta-chat-suggestions"] := Self:setSuggestionsResponse(oDTAProxy:jSuggestions)
+
+	If Len(oDTAProxy:aToolsHistory) > 0
+		jResponse["data"]["dta-tools-history"] := oDTAProxy:aToolsHistory
+		jResponse["data"]["dta-chat-steps"   ] := agdDTAUtilsService():setChatToolsSteps(oDTAProxy:aToolsHistory)
+	EndIf
+	/*If Len(oDTAProxy:aToolsScore) > 0
+		jResponse["data"]["dta-tools-score"] := oDTAProxy:aToolsScore
+	EndIf
+	*/
+	oDTAProxy:destroy()
+	FreeObj(oDTAProxy)
+	
+Return jResponse
+
+/*/{Protheus.doc} setSuggestionsResponse
+Informa sugestões
+@type method
+@version 12
+@author jean.schulze
+@since 02/12/2025
+@param jSuggestions, json, sugestoes
+@return array, lista de sugestao
+/*/
+Method setSuggestionsResponse(jSuggestions as Json) as Array Class agdDTAChatService
+	Local aNames                := {} as Array
+	Local aSuggestions          := {} as Array
+	Local nIndexNames           := 0  as Numeric
+	Local nIndexToolSuggestions := 0  as Numeric
+	Local nLenSuggestions       := 0  as Numeric
+
+	aNames := jSuggestions:getNames()
+	For nIndexNames := 1 To Len(aNames)
+		For nIndexToolSuggestions := 1 To Len(jSuggestions[aNames[nIndexNames]])
+			aAdd(aSuggestions, jSuggestions[aNames[nIndexNames]][nIndexToolSuggestions])
+		Next nIndexToolSuggestions
+	Next nIndexNames
+	//Escolher uma sugestão aleatória para mostrar
+	nLenSuggestions := Len(aSuggestions)
+	If nLenSuggestions > 1
+		aSuggestions[1] := aSuggestions[Random(1, nLenSuggestions)]
+		aSize(aSuggestions, 1)
+	EndIf
+	aSize(aNames, 0)
+Return aSuggestions

@@ -1,0 +1,451 @@
+#include "tlpp-core.th"
+
+NAMESPACE gfin.api.banks.balances
+USING NAMESPACE gfin.util
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+
+Static __oHashCache := FwHashMap():New()
+Static _lA6MsBlql   As Variant
+
+class BanksProtheusData FROM FWAdapterBaseV2
+
+  public method new()
+  public method GetAll()
+endclass
+
+method New(restMethod as character, listJSON as logical) class BanksProtheusData
+  Default restMethod  := "GET"
+  Default listJSON   := .T.
+  prepareStruct()
+  _Super:New( restMethod, listJSON )
+  If MethIsMemberOf( self, "setUseSpaces", .T. )
+    ::setUseSpaces(.T.)
+  Endif
+Return
+
+method GetAll(page as numeric, limit as numeric, banks as array, branches as array, inverted as logical, referenceDate as date) class BanksProtheusData
+
+  Local aFields := {}     as array
+  Local aStruct := {}     as array
+  Local jResponse         as json
+  Local generalArea       as array
+  Local bankBranches      as array
+  Local banksIn           as Character
+  Local balancesIn        as Character
+  Local where             as character
+  Local tableName         as character
+  Local jResponseMoeda    as Character
+  local tempTable         as object
+
+  Default branches      := { cFilAnt }
+  Default banks         := {}
+  Default inverted      := .F.
+  Default referenceDate := dDataBase
+
+  generalArea     := GetArea()
+  jResponse       := JsonObject():new()
+  jResponseMoeda  := ""
+
+  // Retornando a Filial de acordo com o nível de compartilhamento
+  bankBranches := branchesGroup(branches, 'SA6')
+  banksIn      := branchesFormatToIn(branches, 'SA6')
+  balancesIn   := branchesFormatToIn(branches, 'SE8')
+
+  // criando tabela temporária
+  createTempTable(@tempTable)
+  tableName := tempTable:GetRealName()
+
+  // inserindo registros
+  insertTemptable(banksIn, balancesIn, banks, inverted, referenceDate, tableName)
+
+  aFields := getDefaultFields()
+  //Adiciona o mapa de campos Json/ResultSet
+  totvs.protheus.backoffice.ngf.util.mapFieldsBaseV2(self, @aStruct, aFields)
+
+  if (page > 0 .AND. limit > 0)
+    ::setPage(page)
+    ::setPageSize(limit)
+  else
+    ::setPage(1)
+    ::setPageSize(getBankCount(bankBranches))
+  endif
+
+  //Informa a Query a ser utilizada pela API
+  ::SetQuery( GetQuery(tableName) )
+
+  //Informa a ordenação a ser Utilizada pela Query
+  where := "D_E_L_E_T_ = ' '"
+
+  ::SetWhere( where )
+
+  //Informa a ordenação a ser Utilizada pela Query
+  ::SetOrder("SA6.A6_FILIAL,SA6.A6_COD,SA6.A6_AGENCIA,SA6.A6_NUMCON")
+
+  //Executa a consulta, se retornar .T. tudo ocorreu conforme esperado
+  if ::Execute()
+    // Gera o arquivo Json com o retorno da Query
+    ::FillGetResponse()
+
+    jResponseMoeda        := ::getJSONResponse()
+    jResponse["result"]   := .T.
+    jResponse["response"] := JsonObject():New()
+
+    If FindFunction("gfin.util.CurrencyValueQuote")
+      jResponseMoeda  := othersCurrency(jResponseMoeda )
+      aStruct         := structCurrency(aStruct)
+      jResponse["response"] := jResponseMoeda
+    Else
+      jResponse["response"]:FromJson(jResponseMoeda)
+    Endif
+
+    jResponse["response"]["struct"] := gfin.util.arrayToJson(aStruct)
+  else
+    jResponse := answerErrorFormat(::GetCode(), ::GetMessage(), ::GetMessage())
+  endif
+
+  RestArea( generalArea )
+  tempTable:Delete()
+
+Return jResponse
+
+/*/
+{Protheus.doc} getDefaultFields
+  campos defauls para retorno na api
+  @return array, lista de campos
+  @author Renato Ito
+  @since 28/10/2021
+/*/
+Static Function getDefaultFields() as array
+  Local aFields       := {} as array
+
+  aadd(aFields, "A6_COD")
+  aadd(aFields, "A6_AGENCIA")
+  aadd(aFields, "A6_NUMCON")
+  aadd(aFields, "A6_NOME")
+  aadd(aFields, "A6_MOEDA")
+  aadd(aFields, "E8_SALATUA")
+  aadd(aFields, "E8_SALRECO")
+  aadd(aFields, "A6_FILIAL")
+
+Return aFields
+
+Static Function GetQuery(tableName as character)
+  Local query as character
+
+  query := " SELECT #QueryFields#"
+    query += " FROM " + tableName + " SA6 "
+    query += " WHERE #QueryWhere#"
+Return query
+
+Static Function getBankCount(branches as array)
+  Local statement  as object
+  Local bankCount as numeric
+
+  Default branches := {FwXFilial('SA6')}
+
+  bankCount := 0
+
+  if (!__oHashCache:containsKey('bank_count'))
+    statement := createPrepareBankCount()
+  else
+    statement := __oHashCache:get('bank_count')
+  endif
+
+  statement:SetIn(1, branches)
+  statement:SetString(2, 'N')
+  statement:SetString(3, ' ')
+
+  bankCount := statement:ExecScalar("BANK_COUNT")
+
+Return bankCount
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPrepareBankCount
+Cria o statment da query de contagem de bancos
+
+@author Alison Lemes
+@since oct|2020
+/*/
+//-------------------------------------------------------------------
+static function createPrepareBankCount() as object
+  local statement      as object
+  local query        as character
+
+  query := "SELECT"
+  query += "  COUNT(A6_COD) BANK_COUNT"
+  query += " FROM"
+  query += "  " + RetSqlName('SA6')
+  query += " WHERE"
+  query += "  A6_FILIAL IN (?) AND"
+  query += "  A6_FLUXCAI <> ? AND"
+  query += "  D_E_L_E_T_ = ?"
+
+  statement := FwExecStatement():New(query)
+  __oHashCache:put("bank_count", statement)
+
+return statement
+
+static function createTempTable(tempTable as object)
+  tempTable := FWTemporaryTable():New()
+
+  tempTable:SetFields(__oHashCache:get('tableStruct'))
+  tempTable:AddIndex("1", {"A6_FILIAL", "A6_COD", "A6_AGENCIA", "A6_NUMCON"})
+  tempTable:AddIndex("2", {"A6_NOME"})
+  tempTable:Create()
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } insertTemptable
+Insere os dados de Banco X Saldo na temporária
+
+@author Rodrigo Oliveira
+@since oct|2020
+/*/
+//-------------------------------------------------------------------
+static function insertTemptable(bankBranches as character, balanceBranches As Character, banks as array, inverted as logical, referenceDate as date, tableName as character)
+  Local query       := "" As Character
+  Local auxQuery    := "" As Character
+  Local filter      := "" As Character
+  Local cBDname     := "" As Character
+  Local cIsNull     := "" As Character
+  Local cInsert     := "" As Character
+  
+  If _lA6MsBlql == Nil
+    _lA6MsBlql := SA6->(ColumnPos("A6_MSBLQL")) > 0
+  EndIf
+
+  cBDname := tcGetdb()
+  cIsNull := totvs.protheus.backoffice.ngf.util.FunctionToDb(cBDname, "ISNULL")
+  cInsert := totvs.protheus.backoffice.ngf.util.FunctionToDb(cBDName, "INSERT")
+	
+  filter      := banksFilter(banks)
+
+  auxQuery := " " + cInsert + " INTO " + tableName + " "
+  auxQuery += " (A6_FILIAL, A6_COD, A6_AGENCIA, A6_NUMCON, A6_NOME, A6_MOEDA, E8_SALATUA, E8_SALRECO) "
+
+  query := " SELECT"
+  query += "  SA6.A6_FILIAL, SA6.A6_COD, SA6.A6_AGENCIA, SA6.A6_NUMCON, SA6.A6_NOME, A6_MOEDA,"
+  query += "  SUM(" + cIsNull + "(SE8.E8_SALATUA, 0)) AS E8_SALATUA,"
+  query += "  SUM(" + cIsNull + "(SE8.E8_SALRECO, 0)) AS E8_SALRECO"
+
+  query += " FROM ("
+  query += " SELECT A6_FILIAL, A6_COD, A6_AGENCIA, A6_NUMCON, A6_NOME, A6_MOEDA, E8_FILIAL, MAX(E8_DTSALAT) E8DTSALAT"
+  query += " FROM " + RetSqlName('SA6') + " SA6"
+  query += " JOIN " + RetSqlName("SE8") + " B ON"
+  query += " B.E8_FILIAL IN (" + balanceBranches + ") AND "
+  query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SA6","A6_FILIAL","SA6"}, {"SE8","E8_FILIAL","B"} )  + " AND"
+  query += " B.E8_BANCO = SA6.A6_COD AND"
+  query += " B.E8_AGENCIA = SA6.A6_AGENCIA AND"
+  query += " B.E8_CONTA = SA6.A6_NUMCON AND"
+  query += " B.E8_DTSALAT <= '" + DToS(referenceDate) + "' AND"
+  query += " B.D_E_L_E_T_ = ' '"
+  
+  query += " WHERE"
+  query += " SA6.A6_FILIAL IN (" + bankBranches + ") AND"
+
+  If !(empty(filter))
+    query += if(inverted, " NOT ", " ") + "  (" + filter + ") AND"
+  EndIf
+
+  query += " SA6.A6_FLUXCAI <> 'N' AND"
+  
+  If _lA6MsBlql
+    query += " (SA6.A6_BLOCKED = '2' OR SA6.A6_MSBLQL <> '1') AND"
+  Else
+    query += " SA6.A6_BLOCKED <> '1' AND"
+  EndIf
+
+  query += " SA6.D_E_L_E_T_ = ' '"
+  query += " GROUP BY A6_FILIAL,A6_COD,A6_AGENCIA,A6_NUMCON,A6_NOME,A6_MOEDA,E8_FILIAL"
+  query += " ) SA6"
+
+  query += " JOIN " + RetSqlName("SE8") + " SE8 ON"
+  query += " SE8.E8_FILIAL IN (" + balanceBranches + ") AND "
+  query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SA6","A6_FILIAL","SA6"}, {"SE8","E8_FILIAL","SE8"} )  + " AND"
+  query += " SE8.E8_BANCO = SA6.A6_COD AND"
+  query += " SE8.E8_AGENCIA = SA6.A6_AGENCIA AND"
+  query += " SE8.E8_CONTA = SA6.A6_NUMCON AND"
+  query += " SE8.D_E_L_E_T_ = ' '"
+  
+  query += " WHERE SE8.E8_FILIAL IN (" + balanceBranches + ") AND"
+  query += " SE8.E8_SALATUA <> 0 AND"
+  query += " SE8.E8_FILIAL = SA6.E8_FILIAL AND"
+  query += " SE8.E8_DTSALAT = E8DTSALAT AND"
+  query += " SE8.D_E_L_E_T_ = ' '"
+
+  query += " GROUP BY"
+  query += "  SA6.A6_FILIAL, SA6.A6_COD, SA6.A6_AGENCIA, SA6.A6_NUMCON, SA6.A6_NOME, A6_MOEDA"
+
+  if TCSqlExec(auxQuery + query) < 0
+    ConOut(TCSqlError())
+  endif
+return
+
+static function prepareStruct()
+  Local struct    As array
+  Local fieldSize As array
+  Local SalReco   As array
+
+  struct    := {}
+  fieldSize := TamSx3('E8_SALATUA')
+  salReco   := TamSx3('E8_SALRECO')
+
+  AAdd(struct, {"A6_FILIAL" , "C", TamSx3("A6_FILIAL")[1] , 0})
+  AAdd(struct, {"A6_COD"    , "C", TamSx3("A6_COD")[1]    , 0})
+  AAdd(struct, {"A6_AGENCIA", "C", TamSx3("A6_AGENCIA")[1], 0})
+  AAdd(struct, {"A6_NUMCON" , "C", TamSx3("A6_NUMCON")[1] , 0})
+  AAdd(struct, {"A6_NOME"   , "C", TamSx3("A6_NOME")[1]   , 0})
+  AAdd(struct, {"A6_MOEDA"  , "C", TamSx3("A6_MOEDA")[1]  , 0})
+  AAdd(struct, {"E8_SALATUA", "N", fieldSize[1], fieldSize[2]})
+  AAdd(struct, {"E8_SALRECO", "N", salReco[1], salReco[2]})
+  __oHashCache:put('tableStruct', struct)
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc }banksFilter
+Filtro de Bancos para Saldo
+
+@param banks, array, Bancos a serem filtrados
+
+@return filter, character, Filtro de Banco
+
+@author Alison Kaique
+@since mar|2021
+/*/
+//-------------------------------------------------------------------
+Static Function banksFilter(banks As Array)
+  Local filter    As Character
+  Local query     As Character
+  Local index     As Numeric
+  Local bankCount As Numeric
+
+  Default banks := {}
+
+  filter    := ""
+  query     := ""
+  bankCount := Len(banks)
+
+  For index := 01 To bankCount
+    // verifica se possui os atributos
+    query := ""
+
+    If (ValType(banks[index]['branch']) == "C")
+      query += " SA6.A6_FILIAL = '" + banks[index]['branch'] + "' AND"
+    EndIf
+
+    If (ValType(banks[index]['id']) == "C")
+      query += " SA6.A6_COD = '" + banks[index]['id'] + "' AND"
+    EndIf
+
+    If (ValType(banks[index]['agency']) == "C")
+      query += " SA6.A6_AGENCIA = '" + banks[index]['agency'] + "' AND"
+    EndIf
+
+    If (ValType(banks[index]['account']) == "C")
+      query += " SA6.A6_NUMCON = '" + banks[index]['account'] + "' AND"
+    EndIf
+
+    If !(Empty(query))
+      // retirando último "AND"
+      query := Left(query, Len(query) - 04)
+
+      // montar filtro
+      filter += " ("
+      filter += query
+      filter += " )"
+      filter += if(index < bankCount, " OR ", "")
+    EndIf
+  Next index
+Return filter
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc }othersCurrency
+Retorna Json com o novo campo SALDOMOEDA
+
+@param currency, JSON, Campo SALDOMOEDA alimentado com o calculo da moeda X valor da conversão
+
+@return filter, character
+
+@author Francisco Oliveira
+@since 09/09/2022
+/*/
+//-------------------------------------------------------------------
+
+Function othersCurrency(response As Character) As jSon
+
+  Local aCurrency := {}   As Array
+  Local nY        := 0    As Numeric
+  Local cSimbOri  := ""   As Character
+  Local jResponse         As Json
+
+  jResponse   := JsonObject():new()
+  jResponse:FromJson(response)
+
+  aCurrency := gfin.util.CurrencyValueQuote()
+  cSimbOri  := Alltrim(SuperGetMV("MV_SIMB1"))
+
+  For nY := 1 To Len(jResponse['items'])
+
+    jResponse['items'][nY]['simbolcurrency'] := aCurrency[Val(Alltrim(jResponse['items'][nY]['a6_moeda']))][3]
+    jResponse['items'][nY]['simbolorigin']   := cSimbOri
+    jResponse['items'][nY]['reconciledYesCurrency'] := jResponse['items'][nY]['e8_salreco']
+    jResponse['items'][nY]['reconciledNoCurrency']  := (jResponse['items'][nY]['e8_salatua'] - jResponse['items'][nY]['e8_salreco'])
+
+    If Alltrim(jResponse['items'][nY]['a6_moeda']) <> '1'
+      jResponse['items'][nY]['saldomoeda']     := jResponse['items'][nY]['e8_salatua'] * aCurrency[Val(Alltrim(jResponse['items'][nY]['a6_moeda']))][2]
+
+      jResponse['items'][nY]['reconciledYesStrong']   := (jResponse['items'][nY]['e8_salreco'] * aCurrency[Val(Alltrim(jResponse['items'][nY]['a6_moeda']))][2])
+      jResponse['items'][nY]['reconciledNoStrong']    := (jResponse['items'][nY]['e8_salatua'] - jResponse['items'][nY]['e8_salreco']) * aCurrency[Val(Alltrim(jResponse['items'][nY]['a6_moeda']))][2]
+    Else
+      jResponse['items'][nY]['saldomoeda']     := jResponse['items'][nY]['e8_salatua']
+
+      jResponse['items'][nY]['reconciledYesStrong']   := jResponse['items'][nY]['e8_salreco']
+      jResponse['items'][nY]['reconciledNoStrong']    := (jResponse['items'][nY]['e8_salatua'] - jResponse['items'][nY]['e8_salreco'])
+    Endif
+  Next nY
+
+Return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc }structCurrency
+Retorna Estrutura com o novo campo SALDOMOEDA
+
+@param currency, Array, Com novo campo SALDOMOEDA
+
+@return filter, character
+
+@author Francisco Oliveira
+@since 09/09/2022
+/*/
+//-------------------------------------------------------------------
+
+Function structCurrency(aStruct As Array) As Array
+
+  Local aStruAux  := {} As Array
+  Local aStruBase := {} As Array
+  Local cPicture  := "" As Character
+  Local nY        := 0  As Numeric
+  
+  cPicture := X3Picture("A6_SALATU")
+
+  Aadd(aStruBase, {"saldomoeda"           , "Saldo Moeda" })
+  Aadd(aStruBase, {"reconciledYesCurrency", "Saldo Conciliado" })
+  Aadd(aStruBase, {"reconciledYesStrong"  , "Saldo Conciliado Forte" })
+  Aadd(aStruBase, {"reconciledNoCurrency" , "Saldo Não Conciliado" })
+  Aadd(aStruBase, {"reconciledNoStrong"   , "Saldo Não Conciliado Forte" })
+
+  For nY := 1 To Len(aStruBase)
+    aStruAux := {}
+    AAdd(aStruAux, { "field"       , aStruBase[nY][1] })
+    AAdd(aStruAux, { "type"        , "N" })
+    AAdd(aStruAux, { "title"       , aStruBase[nY][2] })
+    AAdd(aStruAux, { "description" , aStruBase[nY][2] })
+    AAdd(aStruAux, { "picture"     , cPicture })
+    AAdd(aStruAux, { "xBox"        , .F. })
+
+    AAdd(aStruct, aStruAux)
+  Next nY
+
+Return aStruct
+

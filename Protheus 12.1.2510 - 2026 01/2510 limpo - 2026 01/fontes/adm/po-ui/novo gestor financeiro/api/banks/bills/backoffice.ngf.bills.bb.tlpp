@@ -1,0 +1,2340 @@
+#include 'tlpp-core.th'
+#INCLUDE "backoffice.ngf.bills.bb.ch"
+#include "protheus.ch"
+#INCLUDE "TOTVS.CH"
+
+NAMESPACE totvs.protheus.backoffice.ngf.bills.bb
+USING NAMESPACE totvs.protheus.backoffice.ngf.bills.functions
+
+Static __oHashErros           						as Object
+Static __oHashEstadoPagamento 						as Object
+Static __jModelos             						as Json
+Static __cPrintError          						as Character
+Static __lAgruppedPayments							as Logical
+Static __aRecSE2				:= {}				as Array
+Static __lF717IdCnab := FindFunction("F717IdCnab")	as Logical
+Static __jMockDat 									as Json
+Static __lMockDat := .F.							as Logical
+
+/*/{Protheus.doc} getURLAuth
+	URL para token do ambiente de produção e homologação
+	@type  Function
+	@author renat.ito
+	@since 03/01/2023
+	@param cEnvironment, character, 1 = produção 2- homologação
+	@return cURL, character, url
+/*/
+Function getURLAuth(cEnvironment as Character) as Character
+	Local cURL := "" as Character
+
+	If cEnvironment == "1"
+		cURL := "https://oauth.bb.com.br"
+	Else
+		cURL := "https://oauth.hm.bb.com.br"
+	EndIf
+Return cURL
+
+/*/{Protheus.doc} getURLAPI
+	URL para API do ambiente de produção e homologação
+	@type  Function
+	@author renat.ito
+	@since 03/01/2023
+	@param cEnvironment, character, 1 = produção 2- homologação
+	@return cURL, character, url
+/*/
+Function getURLAPI(cEnvironment as Character) as Character
+	Local cURL := "" as Character
+
+	If cEnvironment == "1"
+		cURL := "https://api-ip.bb.com.br/pagamentos-lote/v1/"
+	Else
+		cURL := "https://api.hm.bb.com.br/pagamentos-lote/v1/"
+	EndIf
+Return cURL
+
+/*/{Protheus.doc} getPathAPI
+	Path para API do ambiente de producao e homologacao
+	@type  Function
+	@author renat.ito
+	@since 03/01/2023
+	@param cModelo, character, modelo
+	@param cProperty, character, propriedaded do json que deve ser retornado
+	@return cPath, character, url
+/*/
+Function getPathAPI(cModelo as Character, cProperty as Character) as Character
+	Local cPath := "" as Character
+
+	If __jModelos == NIL
+		__jModelos := preparaModelos()
+	EndIf
+
+	If __jModelos:hasProperty(cModelo)
+		cPath := __jModelos[cModelo][cProperty]
+	EndIf
+
+Return cPath
+
+/*/{Protheus.doc} mockBillBB
+	Mocka os dados para testes.
+
+	@type  Static Function
+	@author Vinicius do Prado
+	@since 19/09/2024
+	@param jMockData, Json, Json contendo os objetos para teste
+/*/
+Function mockBillBB(jMockData as Json)
+	__jMockDat := jMockData
+	__lMockDat := .T.
+Return
+
+/*/{Protheus.doc} getToken
+	Método de geração de token de acesso para o Banco do Brasil
+	@type functioon
+	@author renato.it
+	@since 03/01/2023
+/*/
+Function getToken(cEnvironment as Character, cAppKey as Character, cID as Character, cSecret as Character, cScopetype as Character) as Json
+	Local aHeaders 		:= {}                       as Array
+	Local cPath    		:= "/oauth/token"           as Character
+	Local cUrlBase 		:= getURLAuth(cEnvironment) as Character
+	Local cBasic   		:= ""                       as Character
+	Local cTokenBody	:= ""                       as Character
+	local jToken   		:= JsonObject():New()       as Json
+	local oRestToken                           		as Object
+
+	cBasic := Encode64(cID + ":" + cSecret)
+
+	If Empty(cScopetype)
+		cScopetype := "P"
+	EndIf
+
+	cTokenBody := "grant_type=client_credentials&scope="
+
+	If cScopetype $ "P|A" // Pagar ou Ambos
+		cTokenBody += "pagamentos-lote.lotes-requisicao pagamentos-lote.pagamentos-info "
+		cTokenBody += "pagamentos-lote.guias-codigo-barras-requisicao pagamentos-lote.transferencias-pix-requisicao "
+		cTokenBody += "pagamentos-lote.boletos-requisicao pagamentos-lote.transferencias-info pagamentos-lote.guias-codigo-barras-info "
+		cTokenBody += "pagamentos-lote.boletos-info pagamentos-lote.pagamentos-codigo-barras-info pagamentos-lote.transferencias-pix-info "
+		cTokenBody += "pagamentos-lote.pix-info pagamentos-lote.devolvidos-info pagamentos-lote.cancelar-requisicao "
+		cTokenBody += "pagamentos-lote.transferencias-requisicao pagamentos-lote.pagamentos-guias-sem-codigo-barras-info "
+		cTokenBody += "pagamentos-lote.lotes-info pagamentos-lote.pagamentos-guias-sem-codigo-barras-requisicao "
+	EndIf
+
+	If !Empty(cAppKey) .And. !Empty(cBasic)
+		aadd(aHeaders, 'Content-Type: application/x-www-form-urlencoded')
+		aadd(aHeaders, 'Authorization: Basic ' + cBasic)
+		cPath += "?gw-dev-app-key=" + cAppKey
+		oRestToken := FwRest():New(cUrlBase)
+		oRestToken:SetPostParams(cTokenBody)
+		oRestToken:SetPath(cPath)
+		If oRestToken:Post(aHeaders)
+			jToken:FromJSON(oRestToken:GetResult())
+		Else
+			jToken["error"]   := oRestToken:GetHTTPCode()
+			jToken["message"] := oRestToken:GetResult()
+		EndIf
+	EndIf
+Return jToken
+
+/*/{Protheus.doc} validCredentials
+	verifica se existe todas as propriedades nas credenciais
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jCredentials, Json, credenciais do layout
+	@return logical, true ou false
+/*/
+Function validCredentials(jCredentials as Json) as Logical
+	Local lCredentials := .F. as Logical
+	Local lCertificate := .F. as Logical
+
+	If jCredentials:hasProperty("environment") .And. jCredentials:hasProperty("appKey") .And. jCredentials:hasProperty("clientId") .And. jCredentials:hasProperty("clientSecret")
+		If !Empty(jCredentials["environment"]) .And. !Empty(jCredentials["appKey"]) .And. !Empty(jCredentials["clientId"]) .And. !Empty(jCredentials["clientSecret"])
+			lCredentials := .T.
+		EndIf
+	EndIf
+
+	If jCredentials["certificate"]:hasProperty("cert") .And. jCredentials["certificate"]:hasProperty("key")
+		If !Empty(jCredentials["certificate"]["cert"]) .And. !Empty(jCredentials["certificate"]["key"])
+			lCertificate := .T.
+		EndIf
+	EndIf
+
+Return lCredentials .And. lCertificate
+
+/*/{Protheus.doc} getBody
+	gera as informações conforme o modelo e layout
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jLayout, Json, layout
+	@return cBody, character, body para o request
+/*/
+Function getBody(jLayout as Json, lBatchPayment As Logical) as Character
+	Local cBody   		:= ""             		as Character
+	Local cModelo 		:= SEA->EA_MODELO 		as Character
+	Local aArea			:= FwGetArea()			as Array
+	Local aAreaSA2		:= SA2->(FwGetArea())	as Array
+	Local aAreaSE2		:= SE2->(FWGetArea())	as Array
+
+	Default lBatchPayment := .F.
+
+	If __jModelos == NIL
+		__jModelos := preparaModelos()
+	EndIf
+
+	__aRecSE2 := {}
+	Aadd(__aRecSE2, SE2->(Recno()))
+
+	If (__lAgruppedPayments := lBatchPayment) .and. FindFunction("F717QrySE2")
+		__aRecSE2 := F717QrySE2(SEA->EA_FILIAL, SEA->EA_NUMBOR)
+	Endif
+
+	If __jModelos:hasProperty(cModelo)
+		cBody := &("totvs.protheus.backoffice.ngf.bills.bb." + __jModelos[cModelo]["layout"] + "(jLayout)")
+	EndIf
+
+	FwRestArea(aAreaSA2)
+	FwRestArea(aAreaSE2)
+	FwRestArea(aArea)
+Return cBody
+
+/*/{Protheus.doc} layoutBoleto
+	layout para pagamentos de boleto
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jLayout, json, layout
+	@return cBody, character, body para o request
+/*/
+Function layoutBoleto(jLayout as Json) as Character
+	Local jBoleto     	:= JsonObject():New()	As Json
+	Local jLancamento 	:= JsonObject():New()	As Json
+	Local cAux        	:= "" 					as character
+	Local nX			:= 0					as Numeric
+
+	jBoleto["numeroRequisicao"]                     := SEA->EA_IDTRANS
+	jBoleto["codigoContrato"]                       := AllTrim(SEE->EE_CODEMP)
+	jBoleto["numeroAgenciaDebito"]                  := AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE())
+	jBoleto["numeroContaCorrenteDebito"]            := AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE())
+	jBoleto["digitoVerificadorContaCorrenteDebito"] := AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaAdvSEE())
+
+	jBoleto["lancamentos"] := {}
+
+	SA2->(DbSetOrder(1))
+	For nX := 1 to Len(__aRecSE2)
+		SE2->(DbGoto(__aRecSE2[nX]))
+		SA2->(msSeek(FwXFilial('SA2') + SE2->E2_FORNECE + SE2->E2_LOJA))
+
+		If __lF717IdCnab
+			F717IdCnab()
+		Endif
+
+		jLancamento := JsonObject():New()
+
+		// Obrigatorio
+		jLancamento["numeroCodigoBarras"]   := AllTrim(SE2->E2_CODBAR)
+		jLancamento["dataPagamento"]        := VAL(dateFormat(&(jLayout["titulo"]["dataPagamento"]), "ddmmyyyy"))
+		jLancamento["valorPagamento"]   	:= &(jLayout["valores"]["valorPagamento"])
+		jLancamento["valorNominal"]			:= SE2->E2_VALOR // Valor original registrado pelo beneficiário do boleto.
+
+		If jLayout["valores"]:hasProperty("valorNominal") .and. !Empty(jLayout["valores"]["valorNominal"])
+			jLancamento["valorNominal"] := &(jLayout["valores"]["valorNominal"])
+		Endif
+
+		jLancamento["documentoBeneficiario"]  := Alltrim(SA2->A2_CGC)
+		jLancamento["codigoTipoBeneficiario"] := If(Len(jLancamento["documentoBeneficiario"]) > 11 , 2 , 1)    // 1=CPF 2=CNPJ
+
+		// Opcional
+		cAux := &(jLayout["titulo"]["numeroDocumentoDebito"])
+		If Empty(Val(cAux))
+			cAux := SE2->E2_IDCNAB
+		EndIf
+		jLancamento["numeroDocumentoDebito"] := VAL(cAux) // Campo numérico - Número que será mostrado no extrato da conta do pagador (Opcional)
+		jLancamento["codigoSeuDocumento"]    := AllTrim(SE2->E2_IDCNAB)
+		jLancamento["valorDesconto"]         := validForMacro(jLayout["valores"]["valorDesconto"], 'valorDesconto', '', "N")
+		jLancamento["valorMoraMulta"]        := validForMacro(jLayout["valores"]["valorMulta"], 'valorMoraMulta', '', "N")
+
+		AAdd(jBoleto["lancamentos"], jLancamento)
+		jLancamento := NIL
+	Next nX
+
+Return jBoleto:toJson()
+
+/*/{Protheus.doc} send
+	comuniacção com as APIS de pagamento
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param cEnvironment, Character, 1= producao 2=homologacao
+	@param cBody, Character, bady que sera enviado
+	@param cAppKey, Character, appKey do cliente
+	@param cCert, Character, caminho do certificado
+	@param cKey, Character, caminho da chave certificado
+	@param cToken, Character, token para autenticacao
+	@return jResult, json, json com a resposta
+/*/
+Function send(cEnvironment as Character, cBody as Character, cAppKey as Character, cCert as Character, cKey as Character, cToken as Character )
+	Local cURL        := getURLAPI(cEnvironment)    as Character
+	Local cPath       := getPathAPI(SEA->EA_MODELO, "path") as Character
+	Local cHeaderRet  := ""                         as Character
+	Local jResult     := JsonObject():New()         as Json
+	Local nStatusCode := 0                          as Numeric
+	Local cResponse	  := ""							as Character
+
+	cPath += "?gw-dev-app-key=" + cAppKey
+
+	aHeaders := {}
+	aadd(aHeaders, "Content-Type: application/json")
+	aadd(aHeaders, "Charset: UTF-8")
+	aadd(aHeaders, "Authorization: Bearer " + cToken)
+
+	If cEnvironment == "2"
+		cCert := ""
+		cKey  := ""
+	EndIf
+
+	cResponse 	:= HTTPSPost(cUrl + cPath, cCert, cKey, "", "", EncodeUTF8(cBody), 30, aHeaders, @cHeaderRet)
+	cResponse 	:= VerifyResponse(cResponse, cEnvironment)
+	nStatusCode := HTTPGetStatus(cHeaderRet)
+
+	If __lMockDat .and. __jMockDat:hasProperty('api_send_bb')
+		cResponse 	:= VerifyResponse(__jMockDat['api_send_bb']['data'], cEnvironment)
+		nStatusCode := __jMockDat['api_send_bb']['status_code']
+	EndIf
+
+	jResult := handleResultRequest(nStatusCode, cResponse, cBody)
+	
+Return jResult
+
+/*/{Protheus.doc} liberation
+	comuniacção com as APIS de pagamento
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param cEnvironment, Character, 1= producao 2=homologacao
+	@param nIDTrans, Numeric, numero da requisicao
+	@param cAppKey, Character, appKey do cliente
+	@param cCert, Character, caminho do certificado
+	@param cKey, Character, caminho da chave certificado
+	@param cToken, Character, token para autenticacao
+	@return jResult, json, json com a resposta
+/*/
+Function liberation(cEnvironment as Character, nIDTrans as Numeric, cAppKey as Character, cCert as Character, cKey as Character, cToken as Character )
+	Local cURL        := getURLAPI(cEnvironment) as Character
+	Local cPath       := "liberar-pagamentos"    as Character
+	Local jBody       := JsonObject():New()      as Json
+	Local cHeaderRet  := ""                      as Character
+	Local jResult     := JsonObject():New()      as Json
+	Local nStatusCode := 0                       as Numeric
+	Local cLog        := ""                      as Character
+	Local cStatus     := ""                      as Character
+	Local cBody       := ""                      as Character
+	Local cResponse	  := ""						 as Character
+
+	cPath += "?gw-dev-app-key=" + cAppKey
+
+	aHeaders := {}
+	aadd(aHeaders, "Content-Type: application/json")
+	aadd(aHeaders, "Charset: UTF-8")
+	aadd(aHeaders, "Authorization: Bearer " + cToken)
+	If cEnvironment == "2"
+		cCert := ""
+		cKey  := ""
+	EndIf
+
+	jBody["numeroRequisicao"] := nIDTrans
+	jBody["indicadorFloat"]   := "N"
+	cBody := jBody:toJson()
+
+	cResponse := HTTPSPost(cUrl + cPath, cCert, cKey, "", "", EncodeUTF8(cBody), 30, aHeaders, @cHeaderRet)
+	cResponse := VerifyResponse(cResponse, cEnvironment)
+	nStatusCode := HTTPGetStatus(cHeaderRet)
+
+	If __lMockDat .and. __jMockDat:hasProperty('api_liberation_bb')
+		cResponse 	:= VerifyResponse(__jMockDat['api_liberation_bb']['data'], cEnvironment)
+		nStatusCode := __jMockDat['api_liberation_bb']['status_code']
+	EndIf
+
+	If nStatusCode >= 200 .and. nStatusCode <= 299
+		cLog    := cResponse
+		cLog    := STR0004 //"Requisição em processamento pelo Banco, liberação efetuada com sucesso"
+		cStatus := "V"
+		jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult(cBody, cResponse, nStatusCode, cStatus, cLog)
+	Else
+		jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult(cBody, cResponse, nStatusCode, "F")
+	EndIf
+Return jResult
+
+/*/{Protheus.doc} errorCodes
+	lista de erros do bb
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param nCode, numeric, número do codigo
+	@return cErro, character, mensagem de erro
+/*/
+Function errorCodes(nCode as Numeric) as Character
+	Local cErro := "" as Character
+	If __oHashErros == NIL
+		__oHashErros := FwHashMap():New()
+		__oHashErros:put(1, STR0005) //"Agência de crédito igual a zero. Informe o nº da Agência de Crédito."
+		__oHashErros:put(2, STR0006) //"Conta de crédito não é numérica. Informe apenas números."
+		__oHashErros:put(3, STR0007) //"Dígito conta de crédito igual a espaços. Informe o DV da conta de crédito."
+		__oHashErros:put(4, STR0008) //"CPF não é numérico. Informe apenas números."
+		__oHashErros:put(5, STR0009) //"CNPJ não é numérico. Informe apenas números."
+		__oHashErros:put(6, STR0010) //"Data do pagamento igual a zeros. Informe a data do pagamento."
+		__oHashErros:put(7, STR0011) //"Data do pagamento inválida. Informe uma data de pagamento válida."
+		__oHashErros:put(8, STR0012) //"Valor do pagamento não é númerico. Informe apenas números."
+		__oHashErros:put(9, STR0013) //"Valor do pagamento igual a zeros. Informe o valor do pagamento."
+		__oHashErros:put(10, STR0014) //"Ambos os campos Número Compensação e Número ISPB estão zerados. Informe um dos campos."
+		__oHashErros:put(11, STR0015) //"Ambos os campos Número Compensação e Número ISPB foram informados. Informe apenas um dos campos."
+		__oHashErros:put(12, STR0016) //"Ambos os campos Finalidade DOC e Finalidade TED estão zerados. Informe um dos campos."
+		__oHashErros:put(13, STR0017) //"Ambos os campos Finalidade DOC e Finalidade TED foram informados. Informe apenas um dos campos."
+		__oHashErros:put(14, STR0018) //"Número depósito judicial igual a espaços."
+		__oHashErros:put(15, STR0019) //"Digito da conta de crédito inválido."
+		__oHashErros:put(16, STR0020) //"Ambos os campos CPF e CNPJ foram informados. Informe apenas um dos campos. Caso informado os 2 campos, nas consultas será exibido apenas os dados do CPF."
+		__oHashErros:put(17, STR0021) //"Ambos os campos CPF e CNPJ estão zerados. Informe um dos campos."
+		__oHashErros:put(18, STR0022) //"Digito do CPF inválido. Verifique o dado informado."
+		__oHashErros:put(19, STR0023) //"Dígito do CNPJ inválido. Verifique o dado informado."
+		__oHashErros:put(20, STR0024) //"Agência e conta de crédito estão iguais a de débito. Opção não permitida."
+		__oHashErros:put(21, STR0025) //"Número Compensação inválido. Verifique o dado informado."
+		__oHashErros:put(22, STR0026) //"Número ISPB diferente de zeros. Não informe o nº ISPB."
+		__oHashErros:put(23, STR0027) //"Conta de crédito igual a zeros. Informe o número da conta de crédito."
+		__oHashErros:put(24, STR0028) //"CPF igual a Zeros. Obrigatório informar o nº do CPF."
+		__oHashErros:put(25, STR0029) //"CNPJ diferente de zeros. Não permitido informar CNPJ."
+		__oHashErros:put(26, STR0030) //"Conta de crédito diferente de zeros. Não permitido informar Conta de crédito."
+		__oHashErros:put(27, STR0031) //"Dígito conta de crédito diferente de espaços. Não informar dígito da conta de crédito."
+		__oHashErros:put(28, STR0032) //"Finalidade DOC diferente de zeros. Não informar finalidade DOC."
+		__oHashErros:put(29, STR0033) //"Finalidade TED diferente de zeros. Não informar finalidade TED."
+		__oHashErros:put(30, STR0034) //"Número Depósito Judicial diferente de espaços. Não informar finalidade Depósito Judicial."
+		__oHashErros:put(31, STR0035) //"Número do documento de crédito não é numérico. Informar números."
+		__oHashErros:put(32, STR0036) //"Número do documento de débito não é numérico. Informar números."
+		__oHashErros:put(33, STR0037) //"CPF não encontrado na base da receita federal"
+		__oHashErros:put(34, STR0038) //"CNPJ não encontrado na base da receita federal"
+		__oHashErros:put(35, STR0039) //"Conta de poupança não permitido. Para creditar poupança utilize Código Produto igual a 128 - Pagamentos Diversos. "
+		__oHashErros:put(36, STR0040) //"Código COMPE deve ser igual a 1"
+		__oHashErros:put(37, STR0041) //"Código ISPB deve ser igual a 0"
+		__oHashErros:put(38, STR0042) //"Código de barras não é numérico. Informar números."
+		__oHashErros:put(39, STR0043) //"Código de barras igual a zeros. Informar números."
+		__oHashErros:put(40, STR0044) //"Número de inscrição do pagador não é numérico. Informar números."
+		__oHashErros:put(41, STR0045) //"Número de inscrição do beneficiário não é numérico. Informar números."
+		__oHashErros:put(42, STR0046) //"Número de inscrição do avalista não é numérico. Informar números."
+		__oHashErros:put(43, STR0047) //"Digito do CPF para o pagador inválido. Verifique o nº correto."
+		__oHashErros:put(44, STR0048) //"Digito do CPF para o beneficiário inválido. Verifique o nº correto."
+		__oHashErros:put(45, STR0049) //"Digito do CPF para o avalista inválido. Verifique o nº correto."
+		__oHashErros:put(46, STR0050) //"Digito do CNPJ para o pagador inválido. Verifique o nº correto."
+		__oHashErros:put(47, STR0051) //"Digito do CNPJ para o beneficiário inválido. Verifique o nº correto."
+		__oHashErros:put(48, STR0052) //"Digito do CNPJ para o avalista inválido. Verifique o nº correto."
+		__oHashErros:put(49, STR0053) //"Data do vencimento inválida.  Informar data válida."
+		__oHashErros:put(50, STR0054) //"Valor nominal não é numérico. Informar números."
+		__oHashErros:put(51, STR0055) //"Valor de desconto não é numérico. Informar números."
+		__oHashErros:put(52, STR0056) //"Valor de mora não é numérico. Informar números."
+		__oHashErros:put(53, STR0057) //"Data do pagamento deve ser maior ou igual ao dia atual. "
+		__oHashErros:put(54, STR0058) //"Número do documento de débito igual a zeros"
+		__oHashErros:put(55, STR0059) //"Data do vencimento igual a zeros. Informar data de vencimento."
+		__oHashErros:put(56, STR0060) //"Nome do beneficiário não informado"
+		__oHashErros:put(57, STR0061) //"Número de inscrição do beneficiário não informado. Obrigatório informar o CPF ou CNPJ do beneficiário"
+		__oHashErros:put(58, STR0062) //"Conta pagamento diferente de espaços. Não informar conta pagamento."
+		__oHashErros:put(59, STR0063) //"Ambos os campos conta de crédito e conta pagamento foram informados. Informar apenas um dos campos."
+		__oHashErros:put(60, STR0064) //"Transação cancelada pelo cliente"
+		__oHashErros:put(61, STR0065) //"Código da Receita do Tributo não informado"
+		__oHashErros:put(62, STR0066) //"Tipo de Identificação do Contribuinte não informado"
+		__oHashErros:put(63, STR0067) //"Nº de Identificação do Contribuinte não informado"
+		__oHashErros:put(64, STR0068) //"Nº de Identificação do Contribuinte não numérico"
+		__oHashErros:put(65, STR0069) //"Código de Identificação do Tributo não informado"
+		__oHashErros:put(66, STR0070) //"Período de apuração não informado"
+		__oHashErros:put(67, STR0071) //"Numero de Referência não informado"
+		__oHashErros:put(68, STR0072) //"Valor Principal não é numérico"
+		__oHashErros:put(69, STR0073) //"Valor Principal não informado"
+		__oHashErros:put(70, STR0074) //"Valor da Multa não é numérico"
+		__oHashErros:put(71, STR0075) //"Valor dos Juros/Encargos não é numérico"
+		__oHashErros:put(72, STR0076) //"Data de Vencimento não informada"
+		__oHashErros:put(73, STR0077) //"Mês e ano de competência não informados"
+		__oHashErros:put(74, STR0078) //"Valor previsto do pagamento do INSS não é numérico"
+		__oHashErros:put(75, STR0079) //"Valor previsto do pagamento do INSS não informado"
+		__oHashErros:put(76, STR0080) //"Valor de Outras Entidades não é numérico"
+		__oHashErros:put(77, STR0081) //"Valor de Atualização Monetária não é numérico"
+		__oHashErros:put(78, STR0082) //"Valor de Atualização Monetária não é numérico"
+		__oHashErros:put(79, STR0083) //"Período de apuração inválido"
+		__oHashErros:put(80, STR0084) //"Conta de crédito inválida. Informe o numero sem o 45 do início."
+		__oHashErros:put(81, STR0085) //"A conta informada não pertence ao funcionário."
+		__oHashErros:put(82, STR0086) //"Pagamento permitido apenas para pessoas físicas."
+		__oHashErros:put(83, STR0087) //"Agência e Conta incorretos."
+		__oHashErros:put(84, STR0088) //"A conta informada não está ativa."
+		__oHashErros:put(85, STR0089) //"Conta não permite crédito de salário. Informe outra conta."
+		__oHashErros:put(86, STR0090) //"Ambos os campos agência de crédito e conta pagamento foram informados"
+		__oHashErros:put(90, STR0091) //"Mês de competência inválido"
+		__oHashErros:put(91, STR0092) //"Valor de outras deduções inválido"
+		__oHashErros:put(92, STR0093) //"Valor de outros acréscimos inválido"
+		__oHashErros:put(93, STR0094) //"Código da forma de identificação do cliente não foi informado"
+		__oHashErros:put(94, STR0095) //"DDD do cliente do Pix não foi informado"
+		__oHashErros:put(95, STR0096) //"Telefone do Cliente do Pix não foi informado"
+		__oHashErros:put(96, STR0097) //"Email do cliente do Pix não foi informado"
+		__oHashErros:put(97, STR0098) //"Chave Aleatória do Cliente do Pix não foi informado"
+		__oHashErros:put(98, STR0099) //"Código de tipo de conta do Cliente do Pix não foi informado"
+		__oHashErros:put(99, STR0100) //"Consultar o Banco para detalhar o erro"
+		__oHashErros:put(100, STR0101) //"E-mail inválido"
+		__oHashErros:put(101, STR0102) //"Email do cliente do PIX não deve conter caractere especial"
+		__oHashErros:put(102, STR0103) //"Telefone Inválido"
+		__oHashErros:put(103, STR0104) //"DDD inválido"
+		__oHashErros:put(104, STR0105) //"E-mail com tamanho maior que 77 caracteres."
+		__oHashErros:put(105, STR0106) //"Conta de crédito inválida. Informe um número de conta válido."
+		__oHashErros:put(106, STR0107) //"CPF inválido. Informe um CPF válido."
+		__oHashErros:put(107, STR0108) //"CNPJ inválido. Informe um CNPJ válido."
+		__oHashErros:put(108, STR0109) //"Número do documento de crédito inválido. Informe um número válido."
+		__oHashErros:put(109, STR0110) //"Número do documento de débito inválido. Informe um número válido."
+		__oHashErros:put(110, STR0111) //"Valor do pagamento inválido. Informe um valor válido."
+		__oHashErros:put(111, STR0112) //"Valor nominal inválido. Informe um valor válido."
+		__oHashErros:put(112, STR0113) //"Valor de desconto inválido. Informe um valor válido."
+		__oHashErros:put(113, STR0114) //"Valor de mora inválido. Informe um valor válido."
+		__oHashErros:put(114, STR0115) //"Número de inscrição do beneficiário inválido. Informe um número válido."
+		__oHashErros:put(115, STR0116) //"Número de inscrição do pagador inválido. Informe um número válido."
+		__oHashErros:put(116, STR0117) //"Número de inscrição do avalista inválido. Informe um número válido."
+		__oHashErros:put(117, STR0118) //"Nº de identifiação do contribuinte DARF inválido. Informe um número válido."
+		__oHashErros:put(118, STR0119) //"Número de referência inválido. Informe um número válido."
+		__oHashErros:put(119, STR0120) //"Valor principal inválido. Informe um valor válido."
+		__oHashErros:put(120, STR0121) //"Valor da multa inválido. Informe um valor válido."
+		__oHashErros:put(121, STR0122) //"Valor dos juros/encargos inválido. Informe um valor válido."
+		__oHashErros:put(122, STR0123) //"Nº de identificação do contribuinte GPS inválido. Informe um número válido."
+		__oHashErros:put(123, STR0124) //"Valor previsto do pagamento do INSS inválido. Informe um valor válido."
+		__oHashErros:put(124, STR0125) //"Valor de outras entidades inválido. Informe um valor válido."
+		__oHashErros:put(125, STR0126) //"Valor de atualização monetária inválido. Informe um valor válido."
+		__oHashErros:put(126, STR0127) //"Valor de desconto GRU inválido. Informe um valor válido."
+		__oHashErros:put(200, STR0128) //"Insuficiência de Fundos - Débito Não Efetuado"
+		__oHashErros:put(201, STR0129) //"Crédito ou Débito Cancelado pelo Pagador"
+		__oHashErros:put(202, STR0130) //"Débito Autorizado pela Agência - Efetuado"
+		__oHashErros:put(203, STR0131) //"Controle Inválido. Verificar campos 01, 02 e 03 do header ou segmento A, B, C, J, J52, N, O ou W do Arquivo CNAB240. Limitação de 80 carecteres para uso nos canais logados BB.Controle Inválido. Vide campos 01,02 e 03 do header/segmento do Arquivo CNAB240"
+		__oHashErros:put(204, STR0132) //"Tipo de Operação Inválido"
+		__oHashErros:put(205, STR0133) //"Tipo de Serviço Inválido. Utilize 20 para Pagamento a Fornecedores, 30 Pagamento de Salários ou 98 Pagamentos Diversos"
+		__oHashErros:put(206, STR0134) //"Forma de Lançamento Inválida. Para crédito em Poupança utilize Pagamentos Diversos. Para crédito em Conta Pagamento utilize Pagamentos Diversos ou Pagamento a Fornecedores. Para Pagamento de salário a conta de crédito deve ser do BB. "
+		__oHashErros:put(207, STR0135) //"Tipo/Número de Inscrição Inválido. CPF ou CNPJ inválido."
+		__oHashErros:put(208, STR0136) //"Código de Convênio Inválido"
+		__oHashErros:put(209, STR0137) //"Agência/Conta Corrente/DV Inválido"
+		__oHashErros:put(210, STR0138) //"Nº Sequencial do Registro no Lote Inválido"
+		__oHashErros:put(211, STR0139) //"Código de Segmento de Detalhe Inválido"
+		__oHashErros:put(212, STR0140) //"Lançamento inconsistente, rejeitado na prévia.Corrigir os dados do lançamento e enviar novo pagamento."
+		__oHashErros:put(213, STR0141) //"Nº Compe do Banco para crédito Inválido"
+		__oHashErros:put(214, STR0142) //"Nº do ISPB Banco, Instituição de Pagamento para crédito Inválido"
+		__oHashErros:put(215, STR0143) //"Agência Mantenedora da Conta Corrente do Favorecido Inválida"
+		__oHashErros:put(216, STR0144) //"Conta Corrente/DV/Conta de Pagamento do Favorecido Inválido"
+		__oHashErros:put(217, STR0145) //"Nome do Favorecido Não Informado"
+		__oHashErros:put(218, STR0146) //"Data Lançamento Inválido"
+		__oHashErros:put(219, STR0147) //"Tipo/Quantidade da Moeda Inválido"
+		__oHashErros:put(220, STR0148) //"Valor do Lançamento Inválido"
+		__oHashErros:put(221, STR0149) //"Aviso ao Favorecido - Identificação Inválida"
+		__oHashErros:put(222, STR0150) //"Tipo/Número de Inscrição do Favorecido Inválido CPF ou CNPJ do favorecido inválido."
+		__oHashErros:put(223, STR0151) //"Logradouro do Favorecido Não Informado"
+		__oHashErros:put(224, STR0152) //"Nº do Local do Favorecido Não Informado"
+		__oHashErros:put(225, STR0153) //"Cidade do Favorecido Não Informada"
+		__oHashErros:put(226, STR0154) //"CEP/Complemento do Favorecido Inválido"
+		__oHashErros:put(227, STR0155) //"Sigla do Estado do Favorecido Inválida"
+		__oHashErros:put(228, STR0156) //"Nº do Banco para crédito Inválido "
+		__oHashErros:put(229, STR0157) //"Código/Nome da Agência Depositária Não Informado"
+		__oHashErros:put(230, STR0158) //"Seu Número Inválido"
+		__oHashErros:put(231, STR0159) //"Nosso Número Inválido"
+		__oHashErros:put(232, STR0160) //"Inclusão Efetuada com Sucesso"
+		__oHashErros:put(233, STR0161) //"Alteração Efetuada com Sucesso"
+		__oHashErros:put(234, STR0162) //"Exclusão Efetuada com Sucesso"
+		__oHashErros:put(235, STR0163) //"Agência/Conta Impedida Legalmente"
+		__oHashErros:put(236, STR0164) //"Empresa não pagou salário Conta de crédito só aceita pagamento de salário"
+		__oHashErros:put(237, STR0165) //"Falecimento do mutuário"
+		__oHashErros:put(238, STR0166) //"Empresa não enviou remessa do mutuário"
+		__oHashErros:put(239, STR0167) //"Empresa não enviou remessa no vencimento"
+		__oHashErros:put(240, STR0168) //"Valor da parcela inválida"
+		__oHashErros:put(241, STR0169) //"Identificação do contrato inválida"
+		__oHashErros:put(242, STR0170) //"Operação de Consignação Incluída com Sucesso"
+		__oHashErros:put(243, STR0171) //"Operação de Consignação Alterada com Sucesso"
+		__oHashErros:put(244, STR0172) //"Operação de Consignação Excluída com Sucesso"
+		__oHashErros:put(245, STR0173) //"Operação de Consignação Liquidada com Sucesso"
+		__oHashErros:put(246, STR0174) //"Reativação Efetuada com Sucesso"
+		__oHashErros:put(247, STR0175) //"Suspensão Efetuada com Sucesso"
+		__oHashErros:put(248, STR0176) //"Código de Barras - Código do Banco Inválido"
+		__oHashErros:put(249, STR0177) //"Código de Barras - Código da Moeda Inválido"
+		__oHashErros:put(250, STR0178) //"Código de Barras - Dígito Verificador Geral Inválido"
+		__oHashErros:put(251, STR0179) //"Código de Barras - Valor do Título Inválido"
+		__oHashErros:put(252, STR0180) //"Código de Barras - Campo Livre Inválido"
+		__oHashErros:put(253, STR0181) //"Valor do Documento Inválido"
+		__oHashErros:put(254, STR0182) //"Valor do Abatimento Inválido"
+		__oHashErros:put(255, STR0183) //"Valor do Desconto Inválido"
+		__oHashErros:put(256, STR0184) //"Valor de Mora Inválido"
+		__oHashErros:put(257, STR0185) //"Valor da Multa Inválido"
+		__oHashErros:put(258, STR0186) //"Valor do IR Inválido"
+		__oHashErros:put(259, STR0187) //"Valor do ISS Inválido"
+		__oHashErros:put(260, STR0188) //"Valor do IOF Inválido"
+		__oHashErros:put(261, STR0189) //"Valor de Outras Deduções Inválido"
+		__oHashErros:put(262, STR0190) //"Valor de Outros Acréscimos Inválido"
+		__oHashErros:put(263, STR0191) //"Valor do INSS Inválido"
+		__oHashErros:put(264, STR0192) //"Lote Não Aceito"
+		__oHashErros:put(265, STR0193) //"Inscrição da Empresa Inválida para o Contrato"
+		__oHashErros:put(266, STR0194) //"Convênio com a Empresa Inexistente/Inválido para o Contrato"
+		__oHashErros:put(267, STR0195) //"Agência/Conta Corrente da Empresa Inexistente/Inválido para o Contrato"
+		__oHashErros:put(268, STR0196) //"Tipo de Serviço Inválido para o Contrato"
+		__oHashErros:put(269, STR0197) //"Conta Corrente da Empresa com Saldo Insuficiente"
+		__oHashErros:put(270, STR0198) //"Lote de Serviço Fora de Sequência"
+		__oHashErros:put(271, STR0199) //"Lote de Serviço Inválido"
+		__oHashErros:put(272, STR0200) //"Arquivo não aceito"
+		__oHashErros:put(273, STR0201) //"Tipo de Registro Inválido"
+		__oHashErros:put(274, STR0202) //"Código Remessa / Retorno Inválido"
+		__oHashErros:put(275, STR0203) //"Versão de layout inválida"
+		__oHashErros:put(276, STR0204) //"Mutuário não identificado"
+		__oHashErros:put(277, STR0205) //"Tipo do beneficio não permite empréstimo"
+		__oHashErros:put(278, STR0206) //"Beneficio cessado/suspenso"
+		__oHashErros:put(279, STR0207) //"Beneficio possui representante legal"
+		__oHashErros:put(280, STR0208) //"Beneficio é do tipo PA (Pensão alimentícia)"
+		__oHashErros:put(281, STR0209) //"Quantidade de contratos permitida excedida"
+		__oHashErros:put(282, STR0210) //"Beneficio não pertence ao Banco informado"
+		__oHashErros:put(283, STR0211) //"Início do desconto informado já ultrapassado"
+		__oHashErros:put(284, STR0212) //"Número da parcela inválida"
+		__oHashErros:put(285, STR0213) //"Quantidade de parcela inválida"
+		__oHashErros:put(286, STR0214) //"Margem consignável excedida para o mutuário dentro do prazo do contrato"
+		__oHashErros:put(287, STR0215) //"Empréstimo já cadastrado"
+		__oHashErros:put(288, STR0216) //"Empréstimo inexistente"
+		__oHashErros:put(289, STR0217) //"Empréstimo já encerrado"
+		__oHashErros:put(290, STR0218) //"Arquivo sem trailer"
+		__oHashErros:put(291, STR0219) //"Mutuário sem crédito na competência"
+		__oHashErros:put(292, STR0220) //"Não descontado - outros motivos"
+		__oHashErros:put(293, STR0221) //"Retorno de Crédito não pago"
+		__oHashErros:put(294, STR0222) //"Cancelamento de empréstimo retroativo"
+		__oHashErros:put(295, STR0223) //"Outros Motivos de Glosa"
+		__oHashErros:put(296, STR0224) //"Margem consignável excedida para o mutuário acima do prazo do contrato"
+		__oHashErros:put(297, STR0225) //"Mutuário desligado do empregador"
+		__oHashErros:put(298, STR0226) //"Mutuário afastado por licença"
+		__oHashErros:put(299, STR0227) //"Primeiro nome do mutuário diferente do primeiro nome do movimento do censo ou diferente da base de Titular do Benefício"
+		__oHashErros:put(300, STR0228) //"Benefício suspenso/cessado pela APS ou Sisobi"
+		__oHashErros:put(301, STR0229) //"Benefício suspenso por dependência de cálculo"
+		__oHashErros:put(302, STR0230) //"Benefício suspenso/cessado pela inspetoria/auditoria"
+		__oHashErros:put(303, STR0231) //"Benefício bloqueado para empréstimo pelo beneficiário"
+		__oHashErros:put(304, STR0232) //"Benefício bloqueado para empréstimo por TBM"
+		__oHashErros:put(305, STR0233) //"Benefício está em fase de concessão de PA ou desdobramento"
+		__oHashErros:put(306, STR0234) //"Benefício cessado por óbito"
+		__oHashErros:put(307, STR0235) //"Benefício cessado por fraude"
+		__oHashErros:put(308, STR0236) //"Benefício cessado por concessão de outro benefício"
+		__oHashErros:put(309, STR0237) //"Benefício cessado: estatutário transferido para órgão de origem"
+		__oHashErros:put(310, STR0238) //"Empréstimo suspenso pela APS"
+		__oHashErros:put(311, STR0239) //"Empréstimo cancelado pelo banco"
+		__oHashErros:put(312, STR0240) //"Crédito transformado em PAB"
+		__oHashErros:put(313, STR0241) //"Término da consignação foi alterado"
+		__oHashErros:put(314, STR0242) //"Fim do empréstimo ocorreu durante período de suspensão ou concessão"
+		__oHashErros:put(315, STR0243) //"Empréstimo suspenso pelo banco"
+		__oHashErros:put(316, STR0244) //"Não averbação de contrato - quantidade de parcelas/competências informadas ultrapassou a data limite da extinção de cota do dependente titular de benefícios"
+		__oHashErros:put(317, STR0245) //"Lote Não Aceito - Totais do Lote com Diferença"
+		__oHashErros:put(318, STR0246) //"Título Não Encontrado"
+		__oHashErros:put(319, STR0247) //"Identificador Registro Opcional Inválido"
+		__oHashErros:put(320, STR0248) //"Código Padrão Inválido"
+		__oHashErros:put(321, STR0249) //"Código de Ocorrência Inválido"
+		__oHashErros:put(322, STR0250) //"Complemento de Ocorrência Inválido"
+		__oHashErros:put(323, STR0251) //"Alegação já Informada"
+		__oHashErros:put(324, STR0252) //"Agência / Conta do Favorecido Substituída"
+		__oHashErros:put(325, STR0253) //"Divergência entre o primeiro e último nome do beneficiário versus primeiro e último nome na Receita Federal"
+		__oHashErros:put(326, STR0254) //"Confirmação de Antecipação de Valor"
+		__oHashErros:put(327, STR0255) //"Antecipação parcial de valor"
+		__oHashErros:put(328, STR0256) //"Boleto bloqueado na base. Não passível de pagamento."
+		__oHashErros:put(329, STR0257) //"Sistema em contingência - Boleto valor maior que referência"
+		__oHashErros:put(330, STR0258) //"Sistema em contingência - Boleto vencido"
+		__oHashErros:put(331, STR0259) //"Sistema em contingência - Boleto indexado"
+		__oHashErros:put(332, STR0260) //"Beneficiário divergente."
+		__oHashErros:put(333, STR0261) //"Limite de pagamentos parciais do boleto excedido. Consulte o Beneficiário do boleto."
+		__oHashErros:put(334, STR0262) //"Boleto já liquidado. Não passível de pagamento."
+		__oHashErros:put(999, STR0263) //"Consultar o Banco para detalhar o erro"
+	EndIf
+	If nCode > 0
+		cErro := __oHashErros:get(nCode) + chr(13)+chr(10)
+	EndIf
+Return cErro
+
+/*/{Protheus.doc} ValidBorderoBB
+	Validações para inclusão do bordero para o Banco do Brasil
+	@type  Function
+	@author Vitor Duca
+	@since 09/01/2023
+	@version 1.0
+	@param cModelo, Character, Codigo do modelo de pagamento (Tabela 58 SX5)
+	@return lRet, Logical, Define se o modelo selecionado podera ser usado na geração do bordero
+/*/
+Function ValidBorderoBB(cModelo As Character) As Logical
+	Local lRet As Logical
+	Local aModelos As Array
+	Local nModelos As Numeric
+
+	lRet := .F.
+	aModelos := {}
+	nModelos := 0
+
+	If __jModelos == NIL
+		__jModelos := preparaModelos()
+	Endif
+
+	aModelos := __jModelos:getNames()
+
+	For nModelos := 1 to len(aModelos)
+		If Alltrim(cModelo) == aModelos[nModelos]
+			lRet := .T.
+			Exit
+		Endif
+	Next nModelos
+
+	If !lRet
+		HELP(" ", 1, "APIPAGAR",, STR0001, 2, 0, NIL, NIL, NIL, NIL, NIL, {STR0002}) //"Modelo informado não possui registro online de pagamentos para o banco selecionado."#"Selecione um modelo de pagamento válido."
+	Endif
+
+Return lRet
+
+/*/{Protheus.doc} preparaModelos
+	Prepara objeto com endpoint e layout
+	@type  Function
+	@author renat.ito
+	@since 03/01/2023
+	@param cEnvironment, character, 1 = produção 2- homologação
+	@return jModelos, json
+/*/
+Function preparaModelos() as Json
+	Local jModelos := JsonObject():new() as Json
+	// BOLETO
+	jModelos["30"] := JsonObject():new()
+	jModelos["30"]["path"] := "lotes-boletos"
+	jModelos["30"]["pathret"] := "boletos"
+	jModelos["30"]["layout"] := "layoutBoleto"
+	jModelos["30"]["voucher"] := "voucherBoleto"
+	jModelos["31"] := JsonObject():new()
+	jModelos["31"]["path"] := "lotes-boletos"
+	jModelos["31"]["layout"] := "layoutBoleto"
+	jModelos["31"]["pathret"] := "boletos"
+	jModelos["31"]["voucher"] := "voucherBoleto"
+	// TRNSFERENCIA
+	jModelos["01"] := JsonObject():new()
+	jModelos["01"]["path"] := "lotes-transferencias"
+	jModelos["01"]["pathret"] := "transferencias"
+	jModelos["01"]["layout"] := "layoutTransf"
+	jModelos["01"]["voucher"] := "voucherTransferencia"
+	jModelos["03"] := JsonObject():new()
+	jModelos["03"]["path"] := "lotes-transferencias"
+	jModelos["03"]["pathret"] := "transferencias"
+	jModelos["03"]["layout"] := "layoutTransf"
+	jModelos["03"]["voucher"] := "voucherTransferencia"
+	jModelos["41"] := JsonObject():new()
+	jModelos["41"]["path"] := "lotes-transferencias"
+	jModelos["41"]["pathret"] := "transferencias"
+	jModelos["41"]["layout"] := "layoutTransf"
+	jModelos["41"]["voucher"] := "voucherTransferencia"
+	jModelos["43"] := JsonObject():new()
+	jModelos["43"]["path"] := "lotes-transferencias"
+	jModelos["43"]["pathret"] := "transferencias"
+	jModelos["43"]["layout"] := "layoutTransf"
+	jModelos["43"]["voucher"] := "voucherTransferencia"
+	// GUIA
+	jModelos["13"] := JsonObject():new()
+	jModelos["13"]["path"] := "lotes-guias-codigo-barras"
+	jModelos["13"]["pathret"] := "guias-codigo-barras"
+	jModelos["13"]["layout"] := "layoutGuia"
+	jModelos["13"]["voucher"] := "voucherGuia"
+	// DARF
+	jModelos["16"] := JsonObject():new()
+	jModelos["16"]["path"] := "lotes-darf-normal-preto"
+	jModelos["16"]["pathret"] := "darf-preto"
+	jModelos["16"]["layout"] := "layoutDarf"
+	jModelos["16"]["voucher"] := "voucherTributos"
+	jModelos["18"] := JsonObject():new()
+	jModelos["18"]["path"] := "lotes-darf-normal-preto"
+	jModelos["18"]["pathret"] := "darf-preto"
+	jModelos["18"]["layout"] := "layoutDarf"
+	jModelos["18"]["voucher"] := "voucherTributos"
+	// GPS
+	jModelos["17"] := JsonObject():new()
+	jModelos["17"]["path"] := "lotes-gps"
+	jModelos["17"]["pathret"] := "gps"
+	jModelos["17"]["layout"] := "layoutGps"
+	jModelos["17"]["voucher"] := "voucherTributos"
+	// PIX	
+	jModelos["45"] := JsonObject():new()
+	jModelos["45"]["path"] := "lotes-transferencias-pix"
+	jModelos["45"]["pathret"] := "pix"
+	jModelos["45"]["layout"] := "layoutPix"
+	jModelos["45"]["voucher"] := "voucherPix"
+
+Return jModelos
+
+/*/{Protheus.doc} getDadosDefault
+	layout para tranferencias
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@return jDados, jSon, json com as informações default das apis
+/*/
+Function getDadosDefault() as json
+	Local jDados := JsonObject():new()
+
+	jDados["numeroRequisicao"]               := SEA->EA_IDTRANS
+	jDados["numeroContratoPagamento"]        := AllTrim(SEE->EE_CODEMP)
+	jDados["agenciaDebito"]                  := AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE())
+	jDados["contaCorrenteDebito"]            := AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE())
+	jDados["digitoVerificadorContaCorrente"] := AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaAdvSEE())
+
+Return jDados
+
+/*/{Protheus.doc} layoutTransf
+	layout para tranferencias
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jLayout, json, layout
+	@return cBody, character, body para o request
+/*/
+Function layoutTransf(jLayout as Json) as Character
+	Local jTransf 		:= JsonObject():New()	As Json
+	Local jLancamento	:= JsonObject():New()	As Json
+	Local nTipoPag		:= 0 					as Numeric
+	Local nX			:= 0					as Numeric	
+
+	jTransf := getDadosDefault()
+
+	If SEA->EA_TIPOPAG =='30'
+		nTipoPag :=  127          // 127 pagamento de salário
+	ElseIf SEA->EA_TIPOPAG =='20'
+		nTipoPag :=  126          // 126 pagamento de fornecedores
+	Else
+		nTipoPag :=  128          // 128 pagamentos diversos
+	EndIf
+
+	jTransf["tipoPagamento"]       := nTipoPag
+	jTransf["listaTransferencias"] := {}
+
+	SA2->(DbSetOrder(1))
+	For nX := 1 to Len(__aRecSE2)
+		SE2->(DbGoto(__aRecSE2[nX]))
+		SA2->(msSeek(FwXFilial('SA2') + SE2->E2_FORNECE + SE2->E2_LOJA))
+
+		If __lF717IdCnab
+			F717IdCnab()
+		Endif	
+
+		jLancamento := JsonObject():new()
+
+		If jLayout["transferencia"]:hasProperty("bancoCredito")
+			jLancamento["numeroCOMPE"] := VAL(&(jLayout["transferencia"]["bancoCredito"]))
+		Endif
+
+		//Transferencia para o BB não precisa mandar as tags
+		If jLancamento["numeroCOMPE"] <> 1
+			If SEA->EA_MODELO == "03"
+				jLancamento["codigoFinalidadeDOC"] := 1
+			Else
+				jLancamento["codigoFinalidadeTED"] := 10
+			Endif
+		Endif
+
+		jLancamento["agenciaCredito"]                 := ALLTRIM(&(jLayout["transferencia"]["agenciaCredito"]))
+		jLancamento["contaCorrenteCredito"]           := ALLTRIM(&(jLayout["transferencia"]["contaCorrenteCredito"]))
+		jLancamento["digitoVerificadorContaCorrente"] := ALLTRIM(&(jLayout["transferencia"]["digitoVerificadorContaCorrente"]))
+
+		If len(Alltrim(SA2->A2_CGC)) < 14
+			jLancamento["cpfBeneficiario"]  := ALLTRIM(SA2->A2_CGC)
+		Else
+			jLancamento["cnpjBeneficiario"] := ALLTRIM(SA2->A2_CGC)
+		EndIf
+
+		jLancamento["dataTransferencia"]  := VAL(dateFormat(&(jLayout["titulo"]["dataPagamento"]), "ddmmyyyy"))
+		jLancamento["valorTransferencia"] := &(jLayout["valores"]["valorPagamento"])
+
+		jLancamento['documentoDebito']         :=  VAL(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+		jLancamento['documentoCredito']        :=  VAL(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+
+		jLancamento['descricaoTransferencia']  :=  SE2->E2_IDCNAB
+
+		AAdd(jTransf["listaTransferencias"], jLancamento)
+
+		jLancamento := NIL
+	Next nX	
+
+Return jTransf:toJson()
+
+/*/{Protheus.doc} layoutGuia
+	layout para pagamentos de guias com codigo de barras
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jLayout, json, layout
+	@return cBody, character, body para o request
+/*/
+Function layoutGuia(jLayout as Json) as Character
+	Local jGuia      	:= JsonObject():New()  	As Json
+	Local jDados                            	As Json
+	Local jLancamento 	:= JsonObject():New() 	As Json
+	Local nX			:= 0					As Numeric
+
+	jDados := getDadosDefault()
+
+	jGuia["numeroRequisicao"]                     := jDados["numeroRequisicao"]
+	jGuia["codigoContrato"]                       := jDados["numeroContratoPagamento"]
+	jGuia["numeroAgenciaDebito"]                  := jDados["agenciaDebito"]
+	jGuia["numeroContaCorrenteDebito"]            := jDados["contaCorrenteDebito"]
+	jGuia["digitoVerificadorContaCorrenteDebito"] := jDados["digitoVerificadorContaCorrente"]
+
+	jGuia["lancamentos"] := {}
+
+	SA2->(DbSetOrder(1))
+	For nX := 1 to Len(__aRecSE2)
+		SE2->(DbGoto(__aRecSE2[nX]))
+		SA2->(msSeek(FwXFilial('SA2') + SE2->E2_FORNECE + SE2->E2_LOJA))
+
+		If __lF717IdCnab
+			F717IdCnab()
+		Endif	
+
+		jLancamento := JsonObject():new()
+		jLancamento["codigoBarras"]   := AllTrim(SE2->E2_CODBAR)
+		jLancamento["dataPagamento"]  := VAL(dateFormat(&(jLayout["titulo"]["dataPagamento"]), "ddmmyyyy"))
+		jLancamento["valorPagamento"] := &(jLayout["valores"]["valorPagamento"])
+
+		jLancamento["numeroDocumentoDebito"] := VAL(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+		jLancamento["codigoSeuDocumento"]    := SE2->E2_IDCNAB
+
+		AAdd(jGuia["lancamentos"], jLancamento)
+
+		jLancamento := NIL
+	Next nX	
+
+Return jGuia:toJson()
+
+/*/{Protheus.doc} layoutGps
+	layout para pagamentos de GPS
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jLayout, json, layout
+	@return cBody, character, body para o request
+/*/
+Function layoutGps(jLayout as Json) as Character
+	Local jGuia     	:= JsonObject():New() 	As Json
+	Local jDados  								As Json
+	Local jLancamento 	:= JsonObject():New()	As Json
+	Local nX			:= 0					As Numeric
+
+	jDados := getDadosDefault()
+
+	jGuia["numeroRequisicao"]                     := jDados["numeroRequisicao"]
+	jGuia["codigoContrato"]                       := jDados["numeroContratoPagamento"]
+	jGuia["numeroAgenciaDebito"]                  := jDados["agenciaDebito"]
+	jGuia["numeroContaCorrenteDebito"]            := jDados["contaCorrenteDebito"]
+	jGuia["digitoVerificadorContaCorrenteDebito"] := jDados["digitoVerificadorContaCorrente"]
+
+	jGuia["lancamentos"] := {}
+	
+	SA2->(DbSetOrder(1))
+	For nX := 1 to Len(__aRecSE2)
+		SE2->(DbGoto(__aRecSE2[nX]))
+		SA2->(msSeek(FwXFilial('SA2') + SE2->E2_FORNECE + SE2->E2_LOJA))
+		
+		If __lF717IdCnab
+			F717IdCnab()
+		Endif	
+
+		jLancamento := JsonObject():new()
+		jLancamento["dataPagamento"]                             := Val(dateFormat(&(jLayout["titulo"]["dataPagamento"]), "ddmmyyyy"))
+		jLancamento["valorPagamento"]                            := &(jLayout["valores"]["valorPagamento"])
+		jLancamento["numeroDocumentoDebito"]                     := Val(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+		jLancamento["codigoSeuDocumento"]                        := SE2->E2_IDCNAB
+		jLancamento["textoDescricaoPagamento"]                   := Alltrim(SE2->E2_HIST)
+		jLancamento["codigoReceitaTributoGuiaPrevidenciaSocial"] := Val(SE2->E2_RETINS)
+
+		If jLayout["titulo"]:hasProperty("descricaoPagamento")
+			jLancamento["textoDescricaoPagamento"] := &(jLayout["titulo"]["descricaoPagamento"])
+		Endif
+
+		jLancamento["mesAnoCompetenciaGuiaPrevidenciaSocial"]                    := Val(dateFormat(SE2->E2_EMISSAO, "mmyyyy"))
+		jLancamento["codigoTipoContribuinteGuiaPrevidenciaSocial"]               := 1
+		jLancamento["numeroIdentificacaoContribuinteGuiaPrevidenciaSocial"] 	 := Val(SE2->E2_CNPJRET)
+		jLancamento["codigoIdentificadorTributoGuiaPrevidenciaSocial"]           := "17" // SEM REFERENCIA NO SISTEMA
+		jLancamento["valorPrevistoInstNacSeguridadeSocialGuiaPrevidenciaSocial"] := &(jLayout["valores"]['valorPagamento'])
+		jLancamento["valorOutroEntradaGuiaPrevidenciaSocial"]                    := 0
+		jLancamento["valorAtualizacaoMonetarioGuiaPrevidenciaSocial"]            := 0
+
+		AAdd(jGuia["lancamentos"], jLancamento)
+
+		jLancamento := NIL
+	Next nX	
+
+return jGuia:toJson()
+
+/*/{Protheus.doc} layoutDarf
+	layout para pagamentos de DARF
+	@type  Function
+	@author renato.ito
+	@since 03/01/2023
+	@param jLayout, json, layout
+	@return cBody, character, body para o request
+/*/
+Function layoutDarf(jLayout as Json) as Character
+	Local jDarf       	:= JsonObject():New()	as Json
+	Local jLancamento	:= JsonObject():New()	as Json
+	Local jDados  								As Json
+	Local aFilAtu     	:= {}                 	as Array
+	Local nX			:= 0					as Numeric
+
+	jDados := getDadosDefault()
+
+	jDarf["id"]                                   := jDados["numeroRequisicao"]
+	jDarf["codigoContrato"]                       := jDados["numeroContratoPagamento"]
+	jDarf["numeroAgenciaDebito"]                  := jDados["agenciaDebito"]
+	jDarf["numeroContaCorrenteDebito"]            := jDados["contaCorrenteDebito"]
+	jDarf["digitoVerificadorContaCorrenteDebito"] := jDados["digitoVerificadorContaCorrente"]
+
+	jDarf["lancamentos"] := {}
+
+	SA2->(DbSetOrder(1))
+	For nX := 1 to Len(__aRecSE2)
+		SE2->(DbGoto(__aRecSE2[nX]))
+		SA2->(msSeek(FwXFilial('SA2') + SE2->E2_FORNECE + SE2->E2_LOJA))
+
+		If __lF717IdCnab
+			F717IdCnab()
+		Endif
+
+		jLancamento := JsonObject():new()
+
+		jLancamento["dataPagamento"]           := VAL(dateFormat(&(jLayout["titulo"]["dataPagamento"]), "ddmmyyyy")) // Omitir o zero Ã  esquerda do dia, se houver
+		jLancamento["valorPagamento"]          := &(jLayout["valores"]["valorPagamento"])
+		jLancamento["numeroDocumentoDebito"]   := Val(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+		jLancamento["codigoSeuDocumento"]      := SE2->E2_IDCNAB
+
+		jLancamento["textoDescricaoPagamento"] := Alltrim(SE2->E2_HIST)
+		jLancamento["codigoReceitaTributo"]    := Alltrim(SE2->E2_CODRET)
+
+		If jLayout["titulo"]:hasProperty("descricaoPagamento")
+			jLancamento["textoDescricaoPagamento"] := &(jLayout["titulo"]["descricaoPagamento"])
+		Endif
+
+		jLancamento["codigoTipoContribuinte"]  := 1 // 1 CNPJ
+		If jLayout:Hasproperty("filial")
+			aFilAtu   := FWArrFilAtu(cEmpAnt, jLayout["filial"])
+		Else
+			aFilAtu   := FWArrFilAtu()
+		EndIf
+		jLancamento["numeroIdentificacaoContribuinte"] := AllTrim(aFilAtu[18])
+		// Código de identificação do tributo. 18 - somente para Simples (receita 6106) 16 - demais receitas
+		If jLancamento["codigoReceitaTributo"] == "6106"
+			jLancamento["codigoIdentificadorTributo"] := "18"
+		Else
+			jLancamento["codigoIdentificadorTributo"] := "16"
+		EndIf
+		jLancamento["valorPrincipal"]   := SE2->E2_VALOR
+		jLancamento["valorMulta"]       := validForMacro(jLayout["valores"]["valorMulta"], 'valorMulta', '', "N")
+		jLancamento["valorJuroEncargo"] := validForMacro(jLayout["valores"]["valorJuros"], 'valorJuroEncargo', '', "N")
+		jLancamento["dataVencimento"]   := VAL(dateFormat(SE2->E2_VENCTO, "ddmmyyyy"))
+
+		jLancamento["dataApuracao"]   := VAL(dateFormat(SE2->E2_EMISSAO, "ddmmyyyy"))
+		jLancamento["numeroReferencia"]   := Val(Transform(SE2->E2_IDCNAB, "9999999999"))
+
+		AAdd(jDarf["lancamentos"], jLancamento)
+
+		jLancamento := NIL
+	Next nX
+Return jDarf:toJson()
+
+/*/{Protheus.doc} layoutPix
+	layout para tranferencias PIX
+	@type  Function
+	@author Vitor Duca
+	@since 10/07/2023
+	@param jLayout, json, layout
+	@return cBody, character, body para o request
+/*/
+Function layoutPix(jLayout as Json) as Character
+	Local jTransf 								AS Json
+	Local jLancamento	:= JsonObject():New()	As Json
+	Local nTipoPag   	:= 0 					as Numeric
+	Local cChavePix 	:= "" 					As Character
+	Local nX			:= 0					as Numeric
+
+	jTransf := getDadosDefault()
+
+	jTransf["numeroContrato"] := jTransf["numeroContratoPagamento"]
+	jTransf:DelName("numeroContratoPagamento")
+
+	If SEA->EA_TIPOPAG == '30'
+		nTipoPag :=  127          // 127 pagamento de salário
+	ElseIf SEA->EA_TIPOPAG == '20'
+		nTipoPag :=  126          // 126 pagamento de fornecedores
+	Else
+		nTipoPag :=  128          // 128 pagamentos diversos
+	EndIf
+
+	jTransf["tipoPagamento"]       := nTipoPag
+	jTransf["listaTransferencias"] := {}
+
+	SA2->(DbSetOrder(1))
+	For nX := 1 to Len(__aRecSE2)
+		SE2->(DbGoto(__aRecSE2[nX]))
+		SA2->(msSeek(FwXFilial('SA2') + SE2->E2_FORNECE + SE2->E2_LOJA))
+
+		If __lF717IdCnab
+			F717IdCnab()
+		Endif
+		
+		jLancamento := JsonObject():new()
+		If jLayout["transferencia"]:hasProperty("bancoCredito")
+			jLancamento["numeroCOMPE"] := VAL(&(jLayout["transferencia"]["bancoCredito"]))
+		Endif
+
+		/*
+			Forma de identificação da conta transacional - tipo de chave Pix utilizada:
+			1 Telefone
+			2 Email
+			3 CPF/CNPJ
+			4 Chave Aleatória
+			5 Dados Bancários
+		*/
+		jLancamento["formaIdentificacao"] := Val(FNRETPIX(1))
+
+		cChavePix := Alltrim(FNRETPIX(2))
+
+		Do Case
+			Case jLancamento["formaIdentificacao"] == 1
+				jLancamento["dddTelefone"] := SubStr(cChavePix, 4, 2)
+				jLancamento["telefone"] := SubStr(cChavePix, 6, 9)
+			Case jLancamento["formaIdentificacao"] == 2
+				jLancamento["email"] := cChavePix
+			Case jLancamento["formaIdentificacao"] == 3
+				If len(cChavePix) < 14
+					jLancamento["cpf"] := cChavePix
+				Else
+					jLancamento["cnpj"] := cChavePix
+				EndIf
+			Case jLancamento["formaIdentificacao"] == 4
+				jLancamento["identificacaoAleatoria"] := cChavePix
+		End Case
+
+		jLancamento["data"]  := VAL(dateFormat(&(jLayout["titulo"]["dataPagamento"]), "ddmmyyyy"))
+		jLancamento["valor"] := &(jLayout["valores"]["valorPagamento"])
+
+		jLancamento['documentoDebito']         :=  VAL(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+		jLancamento['documentoCredito']        :=  VAL(&(jLayout["titulo"]["numeroDocumentoDebito"]))
+
+		jLancamento['descricaoPagamento']  :=  SE2->E2_IDCNAB
+		jLancamento['descricaoPagamentoInstantaneo'] := ""
+
+		If jLayout["transferencia"]:hasProperty("descricaoPix") .and. !Empty(jLayout["transferencia"]["descricaoPix"])
+			jLancamento['descricaoPagamentoInstantaneo'] := &(jLayout["transferencia"]["descricaoPix"])
+		Endif
+		
+		/*
+			formaIdentificacao 5 - Dados bancários - Não implementado
+			jLancamento["tipoConta"] := ""
+			jLancamento["agencia"]                 := ALLTRIM(&(jLayout["transferencia"]["agenciaCredito"]))
+			jLancamento["conta"]           := ALLTRIM(&(jLayout["transferencia"]["contaCorrenteCredito"]))
+			jLancamento["digitoVerificadorConta"] := ALLTRIM(&(jLayout["transferencia"]["digitoVerificadorContaCorrente"]))
+			jLancamento["contaPagamento"] := ""
+		*/
+
+		AAdd(jTransf["listaTransferencias"], jLancamento)
+
+		jLancamento := NIL
+	Next nX	
+
+Return jTransf:toJson()
+
+/*/{Protheus.doc} consult
+	consulta de titulos no BB
+	@type  Function
+	@author jailton.urbano
+	@since 10/01/2023
+	@param nCode, numeric, número do codigo
+	@return cErro, character, mensagem de erro
+/*/
+Function consult(cEnvironment as Character, cAppKey as Character, cCert as Character, cKey as Character, cToken as Character, cRecurrenceLyt as Character) As Json
+	Local cURL        := getURLAPI(cEnvironment) 								as Character
+	Local cPath       := getPathAPI(SEA->EA_MODELO, 'pathret') 					as Character
+	Local cHeaderRet  := ""                      								as Character
+	Local jResponse   := JsonObject():New()      								as Json
+	Local jResult     := JsonObject():New()      								as Json
+	Local jRecurrence := JsonObject():New()      								as Json
+	Local nStatusCode := 0                       								as Numeric
+	Local nErro		  := 0                       								as Numeric
+	Local cLog        := ""                      								as Character
+	Local cErro       := ""                      								as Character
+	Local cStatus     := ""                      								as Character
+	Local cResponse	  := ""						 								as Character
+	Local cID 		  := getIdPayment(SEA->EA_APIMSG)							as Character
+	Local cBxStatus   := "D"													as Character
+
+	Default cRecurrenceLyt := ""
+
+	cPath += "/" + cValtoChar(cID)
+	cPath += "?gw-dev-app-key=" + cAppKey
+
+	aHeaders := {}
+	aadd(aHeaders, "Content-Type: application/json")
+	aadd(aHeaders, "Charset: UTF-8")
+	aadd(aHeaders, "Authorization: Bearer " + cToken)
+	If cEnvironment == "2"
+		cCert := ""
+		cKey  := ""
+	EndIf
+
+	cResponse   := HTTPSGet(cUrl + cPath, cCert, cKey, "", "", 30, aHeaders, @cHeaderRet)
+	cResponse 	:= VerifyResponse(cResponse, cEnvironment)
+	nStatusCode := HTTPGetStatus(cHeaderRet)
+
+	If __lMockDat .and. __jMockDat:hasProperty('api_consult_bb')
+		cResponse 	:= VerifyResponse(__jMockDat['api_consult_bb']['data'], cEnvironment)
+		nStatusCode := __jMockDat['api_consult_bb']['status_code']
+	EndIf
+
+	If nStatusCode >= 200 .and. nStatusCode <= 299 .and. Empty(cLog := jResponse:FromJson(cResponse))
+		
+		If !Empty(cRecurrenceLyt) .And. Empty(jRecurrence:FromJson(cRecurrenceLyt)) .And. jRecurrence:hasProperty("baixaStatus")
+			cBxStatus := jRecurrence["baixaStatus"]
+		EndIf
+
+		Do Case
+			// Estados de pagamento transitorios, não definem se a operação ocorreu com sucesso ou não
+			Case jResponse:hasProperty("estadoPagamento") .And. (jResponse["estadoPagamento"] == "CONSISTENTE" .Or.;
+																jResponse["estadoPagamento"] == "AGUARDANDO SALDO" .Or.;
+																jResponse["estadoPagamento"] == "AGUARDANDO DEBITO")
+				cLog    := STR0265 + Lower(AllTrim(jResponse["estadoPagamento"])) //"Requisição em processamento pelo Banco, situação do pagamento "
+				cStatus := "V"
+
+			// Estado de pagamento onde existe a necessidade de liberação manual
+			Case jResponse:hasProperty("estadoPagamento") .And. jResponse["estadoPagamento"] == "PENDENTE"
+				cLog    := msgEstadoPagamento(jResponse["estadoPagamento"])
+				cStatus := "V"
+
+			//Estados de pagamento de erro que não retornam as mensagens na propriedade listaDevolucao
+			Case jResponse:hasProperty("estadoPagamento") .And. jResponse["estadoPagamento"] == "BLOQUEADO" .Or.;
+																jResponse["estadoPagamento"] == "CANCELADO" .Or.;
+																jResponse["estadoPagamento"] == "DEVOLVIDO" .Or.;
+																jResponse["estadoPagamento"] == "VENCIDO" 	.Or.;
+																jResponse["estadoPagamento"] == "REJEITADO" .Or.;
+																jResponse["estadoPagamento"] == "INCONSISTENTE"
+				cLog    := msgEstadoPagamento(jResponse["estadoPagamento"])
+				cStatus := "B"
+
+			// Estado de pagamento com parametrizações via layout do banco - SA6
+			Case jResponse:hasProperty("estadoPagamento") .And. jResponse["estadoPagamento"] == "DEBITADO" .And. cBxStatus == "P"
+				cLog    := msgEstadoPagamento(jResponse["estadoPagamento"])
+				cStatus := "V"
+
+			Otherwise
+				If jResponse:hasProperty("listaDevolucao")
+					If Len(jResponse["listaDevolucao"]) > 0
+						For nErro := 1 To Len(jResponse["listaDevolucao"])
+							cErro += errorCodes(jResponse["listaDevolucao"][nErro]["codigoMotivo"])
+						Next nErro
+						cLog    := cErro
+						cStatus := "B"
+					Else
+						cLog    := STR0264 //"Pagamento registrado com sucesso pelo Banco"
+						cStatus := "S"
+					EndIf
+				Else
+					cLog    := STR0264 //"Pagamento registrado com sucesso pelo Banco"
+					cStatus := "S"
+				Endif
+		End Case
+
+		jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult('', cResponse, nStatusCode, cStatus, cLog)
+	Else
+		jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult('', cResponse, nStatusCode, "V", cLog)
+	EndIf
+Return jResult
+
+/*/{Protheus.doc} formatCodeBB
+	ajusta o campo numerico para string, por limitação do appserver, gerava erro pois cortava o numerico em 16 casas
+	@type method
+	@author jailton.urbano
+	@since 28/12/2022
+	@return cRet string ajustada
+/*/
+Function formatCodeBB(cString as Character, cSeparator as Character, lVazio as Logical) As Character
+   	Local cRet := "" As Character
+    Local nPoSeparator := 0 As Numeric
+    Local nTamSeparator := 0 As Numeric
+    Local i := 0 As Numeric
+
+    Default lVazio := .F.
+
+    While .T.
+        i++
+        // localiza a posicao do separador e separa a string encontrada
+        nPoSeparator := AT(cSeparator, cString)
+        If i == 1
+          	nTotalTag := at(',',substr(cString, nPoSeparator))
+          	nTamSeparator := len(cSeparator)
+          	nTamValue := nTotalTag - nTamSeparator
+        EndIf
+
+        If nPoSeparator <> 0
+          	cRet +=  LEFT(cString, nPoSeparator - 1)
+          	cRet += cSeparator
+
+			If i == 1
+				nPosicao := len(cRet)+1
+			Else
+				nPosicao := nPoSeparator + Len(cSeparator)
+			EndIf
+
+			cString := SUBSTR(cString, nPosicao)
+
+			If lVazio
+				cRet += Alltrim(Substr(Space(nTamValue),1,nTamValue-3))+'"'
+				nPosicao := nTamValue-3
+			Else
+				cRet += ' "'+Alltrim(Substr(cString,1,nTamValue-1))+'"'
+				nPosicao := nTamValue
+			EndIf
+			cString := SUBSTR(cString, nPosicao)
+          	If Empty(cString)
+            	Exit
+          	Endif
+        Else
+            cRet += cString
+          	Exit
+        Endif
+   EndDo
+
+Return cRet
+
+/*/{Protheus.doc} msgEstadoPagamento
+	Retorna as mensagens de erro referentes ao estado de pagamento
+	@type  Function
+	@author Vitor Duca
+	@since 03/02/2023
+	@version 1.0
+	@param cEstadoPagamento, Character, Descrição do estado de pagamento
+	@return cMessage, Characte, Mensagem referente ao estado de pagamento
+/*/
+Function msgEstadoPagamento(cEstadoPagamento As Character) As Character
+	Local cMessage := "" as Character
+
+	If __oHashEstadoPagamento == NIL
+		__oHashEstadoPagamento := FwHashMap():New()
+		__oHashEstadoPagamento:put("BLOQUEADO", STR0267) //"Débito na conta do pagador não efetivado por ocorrência no convênio, inconsistência de data ou falta de saldo"
+		__oHashEstadoPagamento:put("AGUARDANDO SALDO", STR0266) // "Débito não efetivado e em verificação de saldo até o horário limite da teimosinha"
+		__oHashEstadoPagamento:put("CANCELADO", STR0268) //"Pagamento cancelado pelo cliente conveniado antes da data do crédito"
+		__oHashEstadoPagamento:put("DEVOLVIDO", STR0269) //"Pagamento efetuado e posteriormente recusado pelo recebedor. O valor será devolvido para a conta corrente onde ocorreu o débito"
+		__oHashEstadoPagamento:put("VENCIDO", STR0270) //"Pagamento não efetuado na data indicada por falta de saldo ou falta de autorização para débito do pagamento na conta do cliente conveniado"
+		__oHashEstadoPagamento:put("PENDENTE", STR0277) //"Aguardando liberação para débito do pagamento na conta do cliente conveniado"
+		__oHashEstadoPagamento:put("REJEITADO", STR0278) //"Dados do pagamento não passaram nas validações físicas e/ou lógicas. Ex: agência e conta não existem, conta não pertence ao CPF informado"
+		__oHashEstadoPagamento:put("INCONSISTENTE", STR0280) //"Dados recebidos pelo Banco com ocorrências quanto ao formato. A situação será alterada para rejeitado"
+		__oHashEstadoPagamento:put("DEBITADO", STR0281) //"Pagamento debitado na conta do pagador e pendente de crédito ao favorecido"
+	Endif
+
+	If !Empty(cEstadoPagamento)
+		cMessage := __oHashEstadoPagamento:get(cEstadoPagamento) + chr(13)+chr(10)
+	EndIf
+
+Return cMessage
+
+/*/{Protheus.doc} sendUpdate
+	alteração boleto bb
+	@type method
+	@author rafael.rondon
+	@since 28/12/2022
+	@return cRet string ajustada
+/*/
+Function sendUpdate(jLayout As Json, jBolbb As Json,cNewVencto As Character) As Json
+	Local jBody 	:= JsonObject():new()	As jSon
+	Local jVencto 	:= JsonObject():new()	As jSon
+	Local jRespBank	:= JsonObject():new()	As jSon
+	Local oObjToken 						As Object
+	Local aHeaders	:={}					As Array
+	Local cAppKey	:= ""					As Character
+	Local cPath		:= ""					As Character
+	Local cUrl		:= ""					As Character
+	Local cResult	:= ""					As Character
+	Local nHttpCode	:= 0					As Numeric
+
+	If FindFunction("HTTPSQuote") // HTTPSQuote utilizada para alteração de boleto bb verbo Patch (Função nova, não existia antes)
+
+		oObjToken  := &("gfin.job.bills.bills():new()")
+		oObjToken:setCredentials(jLayout['credentials']:ToJSON())
+		oObjToken:token001()
+
+		If (ValType(oObjToken:oToken) == 'J' .or. ValType(oObjToken:oToken) == 'O')
+
+			aHeaders := {}
+			aadd(aHeaders, 'Content-Type: application/json')
+			aadd(aHeaders, 'Authorization: Bearer ' + oObjToken:oToken['access_token'])
+			aadd(aHeaders, "Charset: UTF-8")
+
+			cAppKey := Alltrim(jLayout['credentials']['appKey'])
+
+			cPath := '/cobrancas/v2/boletos'
+			cPath += '/' + jBolbb['response']['numero']
+			If jLayout['credentials', 'environment'] == '1' // Producao
+				cPath += '?' + 'gw-dev-app-key' + '=' + cAppKey
+				cUrl := 'https://api.bb.com.br'
+			Else
+				cPath += '?' + 'gw-app-key' + '=' + cAppKey
+				cUrl := 'https://api.hm.bb.com.br'
+			EndIf
+
+			jBody['numeroConvenio'] := Val(AllTrim(SEE->EE_CODEMP))
+			jBody['indicadorNovaDataVencimento'] := "S"
+			jVencto['novaDataVencimento'] := cNewVencto
+			jBody['alteracaoData'] := jVencto
+
+			cHttpsQuot := 'HTTPSQuote(cUrl+cPath, "", "", "", "PATCH", "", EncodeUTF8(jBody:ToJSON()), 120, aHeaders, Nil, .F.)'
+			cResult    := &cHttpsQuot
+			nHttpCode  := HTTPGetStatus(Nil, Nil)
+
+			If __lMockDat .and. __jMockDat:hasProperty('api_update_bb')
+				cResult		:= __jMockDat['api_update_bb']['data']
+				nHttpCode	:= __jMockDat['api_update_bb']['status_code']
+			EndIf
+
+			If nHttpCode == 200 .OR. nHttpCode == 201
+				jRespBank['response'] := JsonObject():new()
+				jRespBank['response']:FromJSON(DecodeUTF8(cResult))
+			Else
+				jRespBank['error'] := nHttpCode
+				jRespBank['message'] := DecodeUTF8(cResult)
+			EndIf
+			jRespBank['sent'] := jBody
+		Else
+			jRespBank['message'] := STR0271 // 'Erro no retorno do token para autenticação.'
+		EndIf
+	Else
+		jRespBank['message'] := STR0272 // 'AppServer não está atualizado para utilizar função HTTPSQuote.'
+	EndIf
+
+Return jRespBank
+
+/*/{Protheus.doc} cancel
+	cancelemnto boleto bb
+	@type method
+	@author rafael.rondon
+	@since 28/12/2022
+	@return cRet string ajustada
+/*/
+Function cancel(jLayout As Json, jBolbb As Json,cNewVencto As Character) As Json
+	Local jBody 	:= JsonObject():new()	As jSon
+	Local jRespBank	:= JsonObject():new()	As jSon
+	Local oRestBank	:= NIL					As Object
+	Local oObjToken	:= Nil					As Object
+	Local aHeaders	:={}					As Array
+	Local cAppKey	:= ""					As Character
+	Local cPath		:= ""					As Character
+	Local cUrl		:= ""					As Character
+
+	oObjToken  := &("gfin.job.bills.bills():new()")
+	oObjToken:setCredentials(jLayout['credentials']:ToJSON())
+	oObjToken:token001()
+
+	If (ValType(oObjToken:oToken) == 'J' .or. ValType(oObjToken:oToken) == 'O')
+
+		aHeaders := {}
+		aadd(aHeaders, 'Content-Type: application/json')
+		aadd(aHeaders, 'Authorization: Bearer ' + oObjToken:oToken['access_token'])
+		aadd(aHeaders, "Charset: UTF-8")
+
+		cAppKey := Alltrim(jLayout['credentials']['appKey'])
+
+		cPath := '/cobrancas/v2/boletos'
+		cPath += '/' + jBolbb['response']['numero'] + '/baixar'
+		If jLayout['credentials', 'environment'] == '1' // Producao
+			cPath += '?' + 'gw-dev-app-key' + '=' + cAppKey
+			cUrl := 'https://api.bb.com.br'
+		Else
+			cPath += '?' + 'gw-app-key' + '=' + cAppKey
+			cUrl := 'https://api.hm.bb.com.br'
+		EndIf
+
+		jBody['numeroConvenio'] := Val(AllTrim(SEE->EE_CODEMP))
+
+		oRestBank := FwRest():New(cUrl)
+		oRestBank:SetPostParams( EncodeUTF8(jBody:ToJSON()))
+		oRestBank:SetPath(cPath)
+		If oRestBank:Post(aHeaders)
+			jRespBank['response'] := JsonObject():new()
+			jRespBank['response']:FromJSON(DecodeUTF8(oRestBank:GetResult()))
+		Else
+			jRespBank["error"]   := oRestBank:GetHTTPCode()
+			jRespBank["message"] := DecodeUTF8(oRestBank:GetResult())
+		EndIf
+		jRespBank['sent'] := jBody
+
+	Else
+		jRespBank['message'] := STR0271 // 'Erro no retorno do token para autenticação.'
+	EndIf
+
+Return jRespBank
+
+/*/{Protheus.doc} cancelPayment
+	Cancelamento do pagamento via API
+	Exemplo do body que sera enviado:
+	{
+		"agenciaDebito": 0,
+		"contaCorrenteDebito": 0,
+		"digitoVerificadorContaCorrente": "string",
+		"listaPagamentos": [
+			{
+				"codigoPagamento": 0
+			}
+		],
+		"numeroContratoPagamento": 0
+	}
+	@type  Function
+	@author Vitor Duca
+	@since 08/01/2023
+	@param cEnvironment, Character, 1= producao 2=homologacao
+	@param cAppKey, Character, appKey do cliente
+	@param cCert, Character, caminho do certificado
+	@param cKey, Character, caminho da chave certificado
+	@param cToken, Character, token para autenticacao
+	@return jResult, json, json com a resposta
+/*/
+Function cancelPayment(cEnvironment as Character, cAppKey as Character, cCert as Character, cKey as Character, cToken as Character )
+	Local cURL        := getURLAPI(cEnvironment)    	as Character
+	Local cPath       := "cancelar-pagamentos" 			as Character
+	Local cHeaderRet  := ""                         	as Character
+	Local jResponse   := JsonObject():New()         	as Json
+	Local jResult     := JsonObject():New()         	as Json
+	Local nStatusCode := 0                          	as Numeric
+	Local cStatus	  := ""								as Character
+	Local nErro       := 0                          	as Numeric
+	Local cLog        := ""                         	as Character
+	Local cResponse	  := ""								as Character
+	Local jBody		  := JsonObject():New()				as Json
+	Local cID 		  := getIdPayment(SEA->EA_APIMSG)	as Character
+	Local aListPayments := {}							as Array
+	Local cBody			:= ""							as Character
+	Local nPagamentos	:= 0							as Numeric
+
+	Aadd(aListPayments, { "codigoPagamento": cID } )
+
+	jBody := getDadosDefault()
+	jBody:DelName("numeroRequisicao")
+	jBody["listaPagamentos"]	:= aListPayments
+
+	cPath += "?gw-dev-app-key=" + cAppKey
+
+	aHeaders := {}
+	aadd(aHeaders, "Content-Type: application/json")
+	aadd(aHeaders, "Charset: UTF-8")
+	aadd(aHeaders, "Authorization: Bearer " + cToken)
+	If cEnvironment == "2"
+		cCert := ""
+		cKey  := ""
+	EndIf
+
+	cBody := jBody:ToJson()
+	cResponse := HTTPSPost(cUrl + cPath, cCert, cKey, "", "", EncodeUTF8(cBody), 30, aHeaders, @cHeaderRet)
+	cResponse := VerifyResponse(cResponse, cEnvironment)
+	
+	nStatusCode := HTTPGetStatus(cHeaderRet)
+	jResponse:FromJson(cResponse)
+
+	If nStatusCode == 200
+		For nPagamentos := 1 to Len(jResponse["pagamentos"])
+			If Alltrim(Upper(jResponse["pagamentos"][nPagamentos]["indicadorCancelamento"])) == "S"
+				cLog    := STR0273 //"Cancelamento efetuado com sucesso"
+				cStatus := "S"
+			Else
+				cLog    := jResponse["pagamentos"][nPagamentos]["estadoCancelamento"]
+				cStatus := "F"
+			Endif
+		Next nPagamentos
+	Else
+		If jResponse:hasProperty("erros") .and. ValType(jResponse["erros"]) == "A"
+			For nErro := 1 To Len(jResponse["erros"])
+				If jResponse["erros"][nErro]:hasProperty("codigo")
+					cLog += "Código: " + jResponse["erros"][nErro]["codigo"] + " "
+				EndIf
+				If jResponse["erros"][nErro]:hasProperty("mensagem")
+					cLog += jResponse["erros"][nErro]["mensagem"] +  chr(13)+chr(10)
+				EndIf
+			Next nErro
+		EndIf
+		cStatus := "F"
+	EndIf
+
+	jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult(cBody, cResponse, nStatusCode, cStatus, cLog)
+Return jResult
+
+/*/{Protheus.doc} getIdPayment
+	Recupera o id do pagamento que sera utilizado na consulta e no cancelamento
+	@type  Function
+	@author Vitor Duca
+	@since 08/03/2023
+	@version 1.0
+	@param cEA_APIMSG, Character, Conteudo do campo EA_APIMSG
+	@return cID, Character, Id do pagamento registrado no banco
+/*/
+Function getIdPayment(cEA_APIMSG As Character) as Character
+	Local cID 			 := ""				   as Character
+	Local jLote          := JsonObject():New() as Json
+	Local jUnit          := JsonObject():New() as Json
+	Local jEA_APIMSG	 := JsonObject():New() as Json
+	Local cJsonRegister  := ""				   As Character
+
+	jEA_APIMSG:FromJson(cEA_APIMSG)
+	jLote:fromjson(jEA_APIMSG['log'])
+
+	If jLote:hasProperty('register') .and. ValType(jLote['register']) == "J" .and. jLote['register']:hasProperty('response')
+		jUnit:fromjson(jLote['register']['response'])
+
+		If jUnit:hasProperty('transferencias')
+			cID := jUnit['transferencias'][1]['identificadorTransferencia']
+		ElseIf jUnit:hasProperty('lancamentos')
+			cID := jUnit['lancamentos'][1]['codigoIdentificadorPagamento']
+
+			//Ajusta o ID caso seja numerico, pois o tamanho é de 18 e ultrapassa a precisão do appserver
+			If Valtype(cID) == "N"
+				cJsonRegister := formatCodeBB(jLote['register']['response'], '"codigoIdentificadorPagamento":', .f.)
+				jUnit:fromjson(cJsonRegister)
+				cID := jUnit['lancamentos'][1]['codigoIdentificadorPagamento']
+			EndIf
+		ElseIf jUnit:hasProperty('listaTransferencias')
+			cID := jUnit['listaTransferencias'][1]['identificadorPagamento']
+
+			//Ajusta o ID caso seja numerico, pois o tamanho é de 18 e ultrapassa a precisão do appserver
+			If Valtype(cID) == "N"
+				cJsonRegister := formatCodeBB(jLote['register']['response'], '"identificadorPagamento":', .f.)
+				jUnit:fromjson(cJsonRegister)
+				cID := jUnit['listaTransferencias'][1]['identificadorPagamento']
+			EndIf
+		EndIf
+	Endif
+
+Return cID
+
+/*/{Protheus.doc} VerifyResponse
+	Verifica se a resposta da API retornou corretamente, caso contrario
+	será logado no bordero uma mensagem padrão, pois por alguma motivo
+	não foi possivel se conectar com o banco
+	@type  Function
+	@author user
+	@since 18/10/2023
+	@version 1.0
+	@param cResponse, Character, Response da API que será verificado
+	@return cResponse, Character, Response da API com tratamento
+/*/
+Function VerifyResponse(cResponse As Character, cEnvironment As Character) As Character
+	Local jResponse := JsonObject():new() 	As Json
+	Local cResponseAux := ""				As Character
+
+	If !EMPTY(cResponse)
+		cResponseAux := DecodeUTF8(cResponse)
+		//Caso o Decode danifique o formato do json, volta para o conteudo original
+		If !Empty(jResponse:FromJson(cResponseAux))
+			cResponseAux := cResponse
+		Endif
+		cResponse := cResponseAux
+	Else
+		cResponse := STR0274 + IIf(cEnvironment == "2", STR0275, STR0276) //"Falha na comunicação com o Banco do Brasil, verifique com o banco se o serviço de 'Pagamentos em lote' está funcionando corretamente em ambiente de " # "homologação" # "produção"
+	Endif
+Return cResponse
+
+/*/{Protheus.doc} prinOutPayment
+	Realiza a impressão dos comprovantes por modelo de pagamento para o Banco do Brasil
+	@type  Function
+	@author Vitor Duca
+	@since 23/06/2023
+	@version version
+	@param cModelPayment, Character, Modelo de pagamento (EA_MODELO)
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jEA_APIMSG, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function prinOutPayment(cModelPayment As Character, oPrint As Object, jEA_APIMSG As Json)
+
+	DEFAULT cModelPayment := ""
+	DEFAULT oPrint := NIL
+	DEFAULT jEA_APIMSG := JsonObject():new()
+
+	__cPrintError := ""
+
+	If __jModelos == NIL
+		__jModelos := preparaModelos()
+	EndIf
+
+	If __jModelos:hasProperty(cModelPayment)
+		&("totvs.protheus.backoffice.ngf.bills.bb." + __jModelos[cModelPayment]["voucher"] + "(oPrint, jEA_APIMSG)")
+	EndIf
+
+Return __cPrintError
+
+/*/{Protheus.doc} prepareJsonVoucher
+	Prepara o Json que será utilizado na impressão dos comprovantes
+	@type  Function
+	@author Vitor Duca
+	@since 26/06/2023
+	@version 1.0
+	@param jEA_APIMSG, param_type, param_descr
+	@return jVoucher, Json, Json contendo as informações pertinente ao comprovante de pagamento
+/*/
+Function prepareJsonVoucher(jEA_APIMSG As Json) As Character
+	Local jVoucher := JsonObject():new() As Json
+
+	DEFAULT jEA_APIMSG := JsonObject():new()
+
+	If jEA_APIMSG:hasProperty("register") .and. jEA_APIMSG:hasProperty("consult")
+		jVoucher["register"] := JsonObject():new()
+		jVoucher["register"]["response"] := JsonObject():new()
+		jVoucher["register"]["request"] := JsonObject():new()
+
+		jVoucher["consult"] := JsonObject():new()
+
+		jVoucher["register"]["response"]:FromJson(jEA_APIMSG["register"]["response"])
+		jVoucher["register"]["request"]:FromJson(jEA_APIMSG["register"]["request"])
+
+		jVoucher["consult"]:FromJson(jEA_APIMSG["consult"]["response"])
+	Endif
+
+Return jVoucher:ToJson()
+
+/*/{Protheus.doc} voucherTransferencia
+	Comprovante de pagamento das transferencias
+	@type  Function
+	@author Vitor Duca
+	@since 23/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jEA_APIMSG, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function voucherTransferencia(oPrint As Object, jEA_APIMSG As Json)
+	Local jVoucher := JsonObject():new() As Json
+	Local nX := 0 As Numeric
+
+	jVoucher:FromJson(prepareJsonVoucher(jEA_APIMSG))
+
+	If jVoucher["register"]["request"]["tipoPagamento"] == 127
+		transferenciaSalario(oPrint, jVoucher)
+	Else
+		For nX := 1 to Len(jVoucher["register"]["response"]["transferencias"])
+			If jVoucher["register"]["response"]["transferencias"][nX]["numeroCOMPE"] == 1
+				transferenciaBB(oPrint, jVoucher)
+			Else
+				transferenciaTedDoc(oPrint, jVoucher)
+			Endif
+		Next nX
+	Endif
+
+Return
+
+/*/{Protheus.doc} transferenciaBB
+	Layout de transferencia entre contas do BB
+	@type  Function
+	@author Vitor Duca
+	@since 26/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jVoucher, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function transferenciaBB(oPrint As Object, jVoucher As Json)
+	Local nLinha  := 10 As Numeric
+	Local nColuna := 10 As Numeric
+	Local dDataPagamento := Date() As Character
+	Local oFont1 := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+
+	oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+	oPrint:Say(nLinha * 8, nColuna * 21, "COMPROVANTE DE TRANSFERÊNCIA", oFont1)
+	oPrint:Say(nLinha * 10, nColuna * 21, "DE CONTA CORRENTE PARA CONTA CORRENTE", oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 5, "CLIENTE: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 5, "AGENCIA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE()) , oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 35, "CONTA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE()), oFont1)
+
+	oPrint:Say(nLinha * 16, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 17, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 19, nColuna * 5, "DATA DA TRANSFERÊNCIA: " + Dtoc(dDataPagamento), oFont1)
+	oPrint:Say(nLinha * 21, nColuna * 5, "NR DO DOCUMENTO: " + cValToChar(jVoucher["consult"]["documentoDebito"]), oFont1)
+	oPrint:Say(nLinha * 23, nColuna * 5, "VALOR TOTAL: " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+	oPrint:Say(nLinha * 25, nColuna * 5, "***TRANSFERIDO PARA: ", oFont1)
+	oPrint:Say(nLinha * 27, nColuna * 5, "CLIENTE: " + jVoucher["consult"]["listaPagamentos"][1]["nomeBeneficiario"], oFont1)
+	oPrint:Say(nLinha * 29, nColuna * 5, "AGENCIA: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["agenciaCredito"]), oFont1)
+	oPrint:Say(nLinha * 29, nColuna * 35, "CONTA: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["contaCorrenteCredito"]), oFont1)
+	oPrint:Say(nLinha * 31, nColuna * 5, "NR DO DOCUMENTO: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["documentoCredito"]), oFont1)
+
+	oPrint:Say(nLinha * 33, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 34, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 36, nColuna * 5, "NR AUTENTICACAO " + jVoucher["consult"]["codigoAutenticacaoPagamento"], oFont1)
+
+	oPrint:EndPage()
+Return
+
+/*/{Protheus.doc} transferenciaTedDoc
+	Layout de transferencia TED ou DOC
+	@type  Function
+	@author Vitor Duca
+	@since 26/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jVoucher, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function transferenciaTedDoc(oPrint As Object, jVoucher As Json, cErro as Character)
+	Local nLinha         := 10 As Numeric
+	Local nColuna        := 10 As Numeric
+	Local oFont1         := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+	Local dDataPagamento := Date() As Date
+	Local cCpfCnpj       := "" As Character
+	Local cTipo          := "CPF" As Character
+	Local cNumeroCOMPE   := StrZero(jVoucher["register"]["response"]["transferencias"][1]["numeroCOMPE"], 3) As Character
+	Local aNomeBanco     := FWGetSX5("0N", cNumeroCOMPE) As Array
+	Local cNomeBanco     := "" As Character
+	Local cFinalidade    := "" As Character
+	Local lOk            := .T. As Logical
+
+	If Len(aNomeBanco) > 0 .And. Len(aNomeBanco[1]) >= 4
+		cNomeBanco:= aNomeBanco[1] := aNomeBanco[1][4]
+	Else
+		__cPrintError := STR0279 + " " + cNumeroCOMPE //Código do Banco não localizado na tabela 0N (SX5).
+		lOk := .F.
+	EndIf
+
+	If lOk
+		dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+		cCpfCnpj := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["cpfCnpjBeneficiario"])
+
+		If Len(cCpfCnpj) > 11
+			cTipo := "CNPJ"
+		Endif
+
+		cCpfCnpj := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCpfCnpj, cTipo)
+
+		If !Empty(jVoucher["consult"]["codigoFinalidadeTED"])
+			cFinalidade := cValToChar(jVoucher["consult"]["codigoFinalidadeTED"]) + " - Crédito em conta corrente"
+		Else
+			cFinalidade := cValToChar(jVoucher["consult"]["codigoFinalidadeDOC"]) + " - Crédito em conta"
+		Endif
+
+		oPrint:SetPortrait()
+		oPrint:StartPage()
+
+		oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+		oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+		oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+		oPrint:Say(nLinha * 8, nColuna * 21, "COMPROVANTE DOC/TED", oFont1)
+		oPrint:Say(nLinha * 10, nColuna * 5, "CLIENTE: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+		oPrint:Say(nLinha * 12, nColuna * 5, "AGENCIA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE()), oFont1)
+		oPrint:Say(nLinha * 12, nColuna * 35, "CONTA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE()), oFont1)
+
+		oPrint:Say(nLinha * 14, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+		oPrint:Say(nLinha * 15, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+		oPrint:Say(nLinha * 17, nColuna * 5, "NR. DOCUMENTO " + cValToChar(jVoucher["consult"]["documentoDebito"]), oFont1)
+		oPrint:Say(nLinha * 19, nColuna * 5, "DATA DA TRANSFERÊNCIA " + Dtoc(dDataPagamento), oFont1)
+		oPrint:Say(nLinha * 21, nColuna * 5, "REMETENTE: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+		oPrint:Say(nLinha * 23, nColuna * 5, "FAVORECIDO: " + jVoucher["consult"]["listaPagamentos"][1]["nomeBeneficiario"], oFont1)
+		oPrint:Say(nLinha * 25, nColuna * 5, "CPF OU CNPJ: " + cCpfCnpj, oFont1)
+		oPrint:Say(nLinha * 27, nColuna * 5, "BANCO: " + cNumeroCOMPE + " - " + cNomeBanco, oFont1)
+		oPrint:Say(nLinha * 29, nColuna * 5, "AGENCIA: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["agenciaCredito"]), oFont1)
+		oPrint:Say(nLinha * 29, nColuna * 35, "CONTA: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["contaCorrenteCredito"]), oFont1)
+		oPrint:Say(nLinha * 31, nColuna * 5, "FINALIDADE: " + cFinalidade, oFont1)
+		oPrint:Say(nLinha * 33, nColuna * 5, "VALOR (R$) " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+
+		oPrint:Say(nLinha * 35, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+		oPrint:Say(nLinha * 36, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+		oPrint:Say(nLinha * 38, nColuna * 5, "NR. AUTENTICACAO " + jVoucher["consult"]["codigoAutenticacaoPagamento"], oFont1)
+
+		oPrint:EndPage()
+	EndIf
+Return
+
+/*/{Protheus.doc} transferenciaSalario
+	Layout de transferencia dos pagamentos de salario
+	@type  Function
+	@author Vitor Duca
+	@since 26/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jVoucher, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function transferenciaSalario(oPrint As Object, jVoucher As Json)
+	Local nLinha  := 10 As Numeric
+	Local nColuna := 10 As Numeric
+	Local oFont1 := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+	Local dDataPagamento := Date() As Date
+	Local cCpfCnpj := "" As Character
+	Local cTipo := "CPF" As Character
+
+	dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+	cCpfCnpj := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["cpfCnpjBeneficiario"])
+
+	If Len(cCpfCnpj) > 11
+		cTipo := "CNPJ"
+	Endif
+
+	cCpfCnpj := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCpfCnpj, cTipo)
+
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+	oPrint:Say(nLinha * 8, nColuna * 21, "Comprovante de Crédito em Conta", oFont1)
+	oPrint:Say(nLinha * 10, nColuna * 5, "Pagador: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 5, "Finalidade: Pagamento de Salário", oFont1)
+
+	oPrint:Say(nLinha * 14, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 15, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 17, nColuna * 5, "Favorecido: " + jVoucher["consult"]["listaPagamentos"][1]["nomeBeneficiario"], oFont1)
+	oPrint:Say(nLinha * 19, nColuna * 5, "Agencia: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["agenciaCredito"]), oFont1)
+	oPrint:Say(nLinha * 21, nColuna * 5, "Conta: " + cValToChar(jVoucher["consult"]["listaPagamentos"][1]["contaCorrenteCredito"]), oFont1)
+	oPrint:Say(nLinha * 23, nColuna * 5, "CPF/CNPJ: " + cCpfCnpj, oFont1)
+	oPrint:Say(nLinha * 25, nColuna * 5, "Data do Pagamento: " + Dtoc(dDataPagamento), oFont1)
+	oPrint:Say(nLinha * 27, nColuna * 5, "Valor (R$): " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+
+	oPrint:Say(nLinha * 29, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 30, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 32, nColuna * 5, "Nr. Autenticação " + jVoucher["consult"]["codigoAutenticacaoPagamento"], oFont1)
+
+	oPrint:EndPage()
+Return
+
+/*/{Protheus.doc} prepareDataPagamento
+	prepareDataPagamento
+	@type  Function
+	@author user
+	@since 26/06/2023
+	@version version
+	@param nDataPagamento, Numeric, Data do pagamento retornado pela API
+	@return dDataPagamento, Date, Data do pagamento
+/*/
+Function prepareDataPagamento(nDataPagamento As Numeric) As Date
+	Local cDataPagamento := cValToChar(nDataPagamento) As Character
+
+	// Caso a data venha com apenas 1 digito no dia, por exemplo "1032023"
+	// A função GetDtoDate não consegue converter corretamente, nesses casos sera
+	// incrementado um zero a esquerada deixando o valor correto "01032023"
+	If Len(cDataPagamento) == 7
+		cDataPagamento := "0" + cDataPagamento
+	Endif
+
+Return GetDtoDate(cDataPagamento)
+
+/*/{Protheus.doc} voucherGuia
+	Comprovante de pagamento das guias de arrecadação
+	@type  Function
+	@author Vitor Duca
+	@since 23/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jEA_APIMSG, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function voucherGuia(oPrint As Object, jEA_APIMSG As Json)
+	Local jVoucher := JsonObject():new() As Json
+	Local oFont1 := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+	Local nLinha := 10 As Numeric
+	Local nColuna := 10 As Numeric
+	Local dDataPagamento := Date() As Date
+	Local cCodBar1 := "" As Character
+	Local cCodBar2 := "" As Character
+
+	jVoucher:FromJson(prepareJsonVoucher(jEA_APIMSG))
+	dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+
+	cCodBar1 := SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 1, 10) + "-";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 11, 1) + " ";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 12, 10) + "-";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 22, 1) + " "
+
+	cCodBar2 :=	SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 23, 10) + "-";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 33, 1) + " ";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 34, 10) + "-";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 44, 1) + " "
+
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+	oPrint:Say(nLinha * 8, nColuna * 15, "Comprovante de Pagamento de Guia de Arrecadação", oFont1)
+	oPrint:Say(nLinha * 10, nColuna * 5, "Nome: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 5, "Agência: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE()), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 35, "Conta: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE()), oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 5, "Convênio: " + SEE->EE_CODEMP, oFont1)
+	oPrint:Say(nLinha * 16, nColuna * 5, cCodBar1, oFont1)
+	oPrint:Say(nLinha * 18, nColuna * 5, cCodBar2 + " (código de barras)", oFont1)
+
+	oPrint:Say(nLinha * 20, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 21, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 23, nColuna * 5, "Data do Pagamento: " + Dtoc(dDataPagamento), oFont1)
+	oPrint:Say(nLinha * 25, nColuna * 5, "Número do Documento: " + jVoucher["consult"]["listaPagamentos"][1]["seuNumero"], oFont1)
+	oPrint:Say(nLinha * 27, nColuna * 5, "Valor Total (R$): " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+
+	oPrint:Say(nLinha * 29, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 30, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 32, nColuna * 5, "Documento: " + cValToChar(jVoucher["consult"]["documentoDebito"]), oFont1)
+	oPrint:Say(nLinha * 34, nColuna * 5, "Nr. Autenticação " + jVoucher["consult"]["codigoAutenticacaoPagamento"], oFont1)
+
+	oPrint:EndPage()
+Return
+
+/*/{Protheus.doc} voucherBoleto
+	Comprovante de pagamento dos boletos
+	@type  Function
+	@author Vitor Duca
+	@since 23/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jEA_APIMSG, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function voucherBoleto(oPrint As Object, jEA_APIMSG As Json)
+	Local jVoucher := JsonObject():new() As Json
+	Local oFont1 := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+	Local nLinha := 10 As Numeric
+	Local nColuna := 10 As Numeric
+	Local dDataPagamento := Date() As Date
+	Local dDataVencimento := Date() As Date
+	Local cCgcBenef := "" As Character
+	Local cCgcPagador := "" As Character
+	Local cTipo := "CPF" As Character
+
+	jVoucher:FromJson(prepareJsonVoucher(jEA_APIMSG))
+	dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+	dDataVencimento := prepareDataPagamento(jVoucher["consult"]["listaPagamentos"][1]["dataVencimento"])
+
+	cCgcBenef := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["documentoBeneficiario"])
+
+	If Len(cCgcBenef) > 11
+		cTipo := "CNPJ"
+	Endif
+
+	cCgcBenef := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCgcBenef, cTipo)
+
+	cCgcPagador := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["documentoPagador"])
+
+	If Len(cCgcPagador) > 11
+		cTipo := "CNPJ"
+	Endif
+
+	cCgcPagador := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCgcPagador, cTipo)
+
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 15, "-", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 35, "-", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+	oPrint:Say(nLinha * 8, nColuna * 12, "COMPROVANTE DE PAGAMENTO DE BOLETOS", oFont1)
+	oPrint:Say(nLinha * 10, nColuna * 5, "CLIENTE: "  + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 5, "AGENCIA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE()), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 35, "CONTA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE()), oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 5, jVoucher["consult"]["listaPagamentos"][1]["codigo"] + "  (LINHA DIGITÁVEL)", oFont1)
+	oPrint:Say(nLinha * 16, nColuna * 5, "CNPJ/CPF DO PAGADOR: " + cCgcPagador, oFont1)
+	oPrint:Say(nLinha * 18, nColuna * 5, "CNPJ/CPF DO BENEFICIÁRIO: " + cCgcBenef, oFont1)
+	oPrint:Say(nLinha * 20, nColuna * 5, "CNPJ/CPF DO BENEFICIÁRIO FINAL: " + cCgcBenef, oFont1)
+
+	oPrint:Say(nLinha * 22, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 23, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 25, nColuna * 5, "NR. DOCUMENTO " + jVoucher["consult"]["listaPagamentos"][1]["nossoDocumento"], oFont1)
+	oPrint:Say(nLinha * 27, nColuna * 5, "DATA DE VENCIMENTO " + Dtoc(dDataVencimento), oFont1)
+	oPrint:Say(nLinha * 29, nColuna * 5, "DATA DO PAGAMENTO " + Dtoc(dDataPagamento), oFont1)
+	oPrint:Say(nLinha * 31, nColuna * 5, "VALOR DO DOCUMENTO (R$) " + Transform(jVoucher["consult"]["listaPagamentos"][1]["valorNominal"], "@E 9,999,999,999,999.99"), oFont1)
+	oPrint:Say(nLinha * 33, nColuna * 5, "VALOR DO DESCONTO/ABATIMENTO (R$) " + Transform(jVoucher["consult"]["listaPagamentos"][1]["valorDesconto"], "@E 9,999,999,999,999.99"), oFont1)
+	oPrint:Say(nLinha * 35, nColuna * 5, "VALOR DOS JUROS/MORA (R$) " + Transform(jVoucher["consult"]["listaPagamentos"][1]["valorMoraMulta"], "@E 9,999,999,999,999.99"), oFont1)
+	oPrint:Say(nLinha * 37, nColuna * 5, "VALOR COBRADO(R$) " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+
+	oPrint:Say(nLinha * 39, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 40, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 42, nColuna * 5, "NR. AUTENTICACAO " + jVoucher["consult"]["codigoAutenticacaoPagamento"], oFont1)
+
+	oPrint:EndPage()
+Return
+
+/*/{Protheus.doc} voucherTributos
+	Comprovante de pagamento dos tributos
+	@type  Function
+	@author Vitor Duca
+	@since 23/06/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jEA_APIMSG, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function voucherTributos(oPrint As Object, jEA_APIMSG As Json)
+	Local jVoucher := JsonObject():new() As Json
+	Local oFont1 := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+	Local nLinha := 10 As Numeric
+	Local nColuna := 10 As Numeric
+	Local cCgcPagador := "" As Character
+	Local cTipo := "CPF" As Character
+	/*Local cCodBar1 := "" As Character
+	Local cCodBar2 := "" As Character*/
+	Local dDataPagamento := Date() As Date
+	Local cTributo := "" As Character
+	Local cDocumento := "" As Character
+	Local nOffSet := 0 as Numeric
+
+	jVoucher:FromJson(prepareJsonVoucher(jEA_APIMSG))
+
+	cCgcPagador := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["identificacaoContribuinte"])
+
+	If Len(cCgcPagador) > 11
+		cTipo := "CNPJ"
+	Endif
+
+	cCgcPagador := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCgcPagador, cTipo)
+/*
+	cCodBar1 := SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 1, 10) + "-"
+			+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 11, 1) + " ";
+			+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 12, 10) + "-";
+			+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 22, 1) + " "
+
+	cCodBar2 :=	SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 23, 10) + "-";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 33, 1) + " ";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 34, 10) + "-";
+				+ SubStr(jVoucher["consult"]["listaPagamentos"][1]["codigo"], 44, 1) + " "
+*/
+	dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+
+	If jVoucher["consult"]["listaPagamentos"][1]:hasProperty("identificacaoGPS") //Impressão de GPS
+		cTributo := "GPS - Guia Previdencia Social "
+		cDocumento := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["identificacaoGPS"])
+	Else
+		cTributo := "DARF - Documento de Arrecadação de Receitas Federais"
+		cDocumento := cValToChar(jVoucher["consult"]["listaPagamentos"][1]["numeroReferencia"])
+	Endif
+
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+	oPrint:Say(nLinha * 8, nColuna * 15, "Comprovante de Pagamento de Tributos", oFont1)
+	oPrint:Say(nLinha * 10, nColuna * 5, "Nome: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 5, "Agência: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE()), oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 35, "Conta: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE()), oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 5, "CNPJ: " + cCgcPagador, oFont1)
+
+	oPrint:Say(nLinha * 16, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 17, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 19, nColuna * 5, "Convênio: " + SEE->EE_CODEMP, oFont1)
+	oPrint:Say(nLinha * 21, nColuna * 5, "Tipo: " + cTributo, oFont1)
+
+	nOffSet := 23
+/*	oPrint:Say(nLinha * nOffSet, nColuna * 5, cCodBar1 , oFont1)
+	nOffSet += 2
+	oPrint:Say(nLinha * 25, nColuna * 5, cCodBar2 + " (código de barras) ", oFont1)
+	nOffSet += 2
+*/
+	oPrint:Say(nLinha * nOffSet, nColuna * 5, "Data do Pagamento: " + Dtoc(dDataPagamento), oFont1)
+	nOffSet += 2
+	oPrint:Say(nLinha * nOffSet, nColuna * 5, "Valor Total(R$): " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+	nOffSet += 2
+	oPrint:Say(nLinha * nOffSet, nColuna * 5, "Documento: " + cDocumento, oFont1)
+
+	nOffSet += 2
+	oPrint:Say(nLinha * nOffSet, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	nOffSet += 1
+	oPrint:Say(nLinha * nOffSet, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	nOffSet += 2
+	oPrint:Say(nLinha * nOffSet, nColuna * 5, "Nr. Autenticação: " + jVoucher["consult"]["codigoAutenticacaoPagamento"], oFont1)
+
+	oPrint:EndPage()
+Return
+
+/*/{Protheus.doc} voucherPix
+	Comprovante de pagamento PIX
+	@type  Function
+	@author Vitor Duca
+	@since 19/10/2023
+	@version 1.0
+	@param oPrint, Object, Objeto de impressão (FWMsPrinter)
+	@param jEA_APIMSG, Json, Objeto Json contendo as informações que serão utilizadas na impressão
+/*/
+Function voucherPix(oPrint As Object, jEA_APIMSG As Json)
+	Local nLinha  := 10 As Numeric
+	Local nColuna := 10 As Numeric
+	Local dDataPagamento := Date() As Date
+	Local oFont1 := TFont():New("Arial", 9, 12, .T., .F., 5, .T., 5, .T., .F.) As Object
+	Local jVoucher := JsonObject():new() As Json
+	Local cCgcBenef := "" As Character
+	Local cTipo := "CPF" As Character
+	Local cCgcPagador := "" As Character
+
+	jVoucher:FromJson(prepareJsonVoucher(jEA_APIMSG))
+
+	cCgcBenef := cValToChar(jVoucher["consult"]["listaPix"][1]["cpfCnpjBeneficiario"])
+
+	If Len(cCgcBenef) > 11
+		cTipo := "CNPJ"
+	Endif
+
+	cCgcBenef := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCgcBenef, cTipo)
+
+	cCgcPagador := FWSM0Util():GetSM0Data( cEmpAnt , cFilAnt , { "M0_CGC" } )[1][2]
+
+	cTipo := "CPF"
+	If Len(cCgcPagador) > 11
+		cTipo := "CNPJ"
+	Endif
+
+	cCgcPagador := totvs.protheus.backoffice.ngf.bills.functions.printCpfCnpj(cCgcPagador, cTipo)
+
+
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	dDataPagamento := prepareDataPagamento(jVoucher["consult"]["dataPagamento"])
+
+	oPrint:Say(nLinha * 3, nColuna * 5, Dtoc(Date()), oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 25, "BANCO DO BRASIL", oFont1)
+	oPrint:Say(nLinha * 3, nColuna * 45, Time(), oFont1)
+
+	oPrint:Say(nLinha * 8, nColuna * 21, "COMPROVANTE PIX", oFont1)
+	oPrint:Say(nLinha * 12, nColuna * 5, "CLIENTE: " + FWSM0Util():getSM0FullName(cEmpAnt, SEA->EA_FILORIG), oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 5, "AGENCIA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getAgenciaSEE()) , oFont1)
+	oPrint:Say(nLinha * 14, nColuna * 35, "CONTA: " + AllTrim(totvs.protheus.backoffice.ngf.bills.functions.getContaSEE()), oFont1)
+
+	oPrint:Say(nLinha * 16, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 17, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 19, nColuna * 5, "SOBRE A TRANSAÇÃO ", oFont1)
+	oPrint:Say(nLinha * 21, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 23, nColuna * 5, "ID:    " + jVoucher["consult"]["id"], oFont1)
+	oPrint:Say(nLinha * 25, nColuna * 5, "CPF/CNPJ DO PAGADOR:    " + cCgcPagador, oFont1)
+	oPrint:Say(nLinha * 27, nColuna * 5, "VALOR: " + Transform(jVoucher["consult"]["valorPagamento"], "@E 9,999,999,999,999.99"), oFont1)
+	oPrint:Say(nLinha * 29, nColuna * 5, "DATA: " + Dtoc(dDataPagamento), oFont1)
+	oPrint:Say(nLinha * 31, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 33, nColuna * 5, "PAGO PARA: " + jVoucher["consult"]["listaPix"][1]["nomeBeneficiario"], oFont1)
+	oPrint:Say(nLinha * 35, nColuna * 5, "CPF/CNPJ: " + cCgcBenef, oFont1)
+	oPrint:Say(nLinha * 37, nColuna * 5, "AGENCIA: " + cValToChar(jVoucher["consult"]["listaPix"][1]["agenciaCredito"]), oFont1)
+	oPrint:Say(nLinha * 37, nColuna * 35, "CONTA: " + cValToChar(jVoucher["consult"]["listaPix"][1]["contaCorrenteCredito"]), oFont1)
+	
+	oPrint:Say(nLinha * 39, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+	oPrint:Say(nLinha * 40, nColuna * 5, REPLICATE( "-", 150 ), oFont1)
+
+	oPrint:Say(nLinha * 42, nColuna * 5, "DOCUMENTO: " + cValToChar(jVoucher["consult"]["numeroDocumentoDebito"]), oFont1)
+	oPrint:Say(nLinha * 44, nColuna * 5, "NR AUTENTICACAO " + jVoucher["consult"]["autenticacaoPagamento"], oFont1)
+
+	oPrint:EndPage()
+Return
+
+/*/{Protheus.doc} consultRequestPayment
+	Consulta de a solicitação de registro de títulos a pagar BB.
+
+	@type Function
+	@author vinicius.prado
+	@since 19/09/2024
+
+	@param 	cEnvironment, character, ambiente para transmissao.
+	@param 	cAppKey, character, chave da aplicacao do cliente.
+	@param 	cCert, character, caminho do certificado.
+	@param 	cKey, character, caminho da chave do certificado.
+	@param 	cToken, character, token de autenticacao.
+	@return jResult, json, resultado da consulta.
+/*/
+Function consultRequestPayment(cEnvironment as Character, cAppKey as Character, cCert as Character, cKey as Character, cToken as Character ) As Json
+	Local cURL        := getURLAPI(cEnvironment) 			as Character
+	Local cPath       := getPathAPI(SEA->EA_MODELO, 'path') as Character
+	Local jResult     := JsonObject():New()      			as Json
+	Local aHeaders	  := {}									as Array
+	Local nStatusCode := 0                       			as Numeric
+	Local cHeaderRet  := ""                      			as Character
+	Local cResponse	  := ""						 			as Character
+	Local cID 		  := SEA->EA_IDTRANS					as Character
+
+	cPath += "/" + cValtoChar(cID) + "/solicitacao"
+	cPath += "?gw-dev-app-key=" + cAppKey
+
+	aHeaders := {}
+	aadd(aHeaders, "Content-Type: application/json")
+	aadd(aHeaders, "Charset: UTF-8")
+	aadd(aHeaders, "Authorization: Bearer " + cToken)
+
+	If cEnvironment == "2"
+		cCert := ""
+		cKey  := ""
+	EndIf
+
+	cResponse   := HTTPSGet(cUrl + cPath, cCert, cKey, "", "", 30, aHeaders, @cHeaderRet)
+	cResponse 	:= VerifyResponse(cResponse, cEnvironment)
+	nStatusCode := HTTPGetStatus(cHeaderRet)
+
+	If __lMockDat .and. __jMockDat:hasProperty('api_consult_request_bb')
+		cResponse 	:= VerifyResponse(__jMockDat['api_consult_request_bb']['data'], cEnvironment)
+		nStatusCode := __jMockDat['api_consult_request_bb']['status_code']
+	EndIf
+
+	jResult := handleResultRequest(nStatusCode, cResponse)
+
+Return jResult
+
+/*/{Protheus.doc} handleResultRequest
+	Trata o retorno da consulta de solicitacao / registro do pagamento.
+
+	@type Function
+	@author vinicius.prado
+	@since 19/09/2024
+
+	@param nStatusCode, numeric, codigo http do retorno da requisisao.
+	@param cResponse, character, resposta da requisicao.
+	@return jResult, json, resposta da requisicao com tratamentos.
+/*/
+Function handleResultRequest(nStatusCode as Numeric, cResponse as Character, cBody as Character) As Json
+	Local jResponse   := JsonObject():New()	as Json
+	Local jResult     := JsonObject():New()	as Json
+	Local aProperty   := {}					as Array
+	Local nProp       := 0					as Numeric
+	Local nErro		  := 0 					as Numeric
+	Local cLog        := ""					as Character
+	Local cErro       := ""					as Character
+	Local cStatus     := ""					as Character
+
+	default cBody := ""
+
+	If nStatusCode >= 200 .and. nStatusCode <= 299
+		jResponse:FromJson(cResponse)
+		cLog    := STR0003 //"Requisição em processamento pelo Banco"
+		cStatus := "V"
+
+		aProperty := jResponse:getNames()
+
+		For nProp := 1 To Len(aProperty)
+			If ValType(jResponse[aProperty[nProp]]) == "A"
+				If jResponse[aProperty[nProp]][1]:hasProperty("errorCodes")
+					For nErro := 1 To Len(jResponse[aProperty[nProp]][1]["errorCodes"])
+						cErro += errorCodes(jResponse[aProperty[nProp]][1]["errorCodes"][nErro])
+					Next nErro
+				EndIf
+				If jResponse[aProperty[nProp]][1]:hasProperty("erros")
+					For nErro := 1 To Len(jResponse[aProperty[nProp]][1]["erros"])
+						cErro += errorCodes(jResponse[aProperty[nProp]][1]["erros"][nErro])
+					Next nErro
+				EndIf
+			EndIf
+		Next nProp
+		If !Empty(cErro)
+			cLog    := cErro
+			cStatus := "F"
+		EndIf
+		jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult(cBody, cResponse, nStatusCode, cStatus, cLog)
+	Else
+		cStatus := "F"
+		If nStatusCode >= 500 .and. nStatusCode <= 599
+			cStatus := 'P'
+		EndIf
+		jResult := totvs.protheus.backoffice.ngf.bills.payments.prepareResult(cBody, cResponse, nStatusCode, cStatus)
+	EndIf
+Return jResult
