@@ -1,0 +1,292 @@
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#include 'BACKOFFICE.PGC.DOCUMENTS.REPOSITORY.CH'
+
+namespace pgc.documentsRepository
+using namespace pgc.utils
+
+/*/{Protheus.doc} pgcDocumentsRepository
+	Classe para gravação e leitura de documentos da base de conhecimento
+@author juan.felipe
+@since 22/10/2021
+/*/
+Class pgcDocumentsRepository From FWAdapterBaseV2
+    public Data cName           As Character
+    public Data cDescription    As Character
+    public Data cDocument       As Character
+    public Data cContent        As Character
+    public Data cKey            As Character
+    public Data cTable          As Character
+    public Data lOk             As Logical
+    public Data cFilAC9         As Character
+    public Data cFilACB         As Character
+
+    public Method New()
+    public Method attachDocument()
+    public Method getDocumentsList()
+    public Method getDocument()
+    public Method deleteDocument()
+EndClass
+
+/*/{Protheus.doc} New
+	Método construtor
+@author juan.felipe
+@since 22/10/2021
+/*/
+Method New(cVerb) Class pgcDocumentsRepository
+    Self:cName          := ""
+    Self:cDescription   := ""
+    Self:cDocument      := ""
+    Self:cContent       := ""
+    Self:cKey           := ""
+    Self:cTable         := ""
+    Self:lOk            := .F.
+    Self:cFilAC9        := FWxFilial('AC9')
+    Self:cFilACB        := FWxFilial('ACB')
+
+    _Super:New(cVerb, .T.)
+Return Self
+
+/*/{Protheus.doc} attachDocument
+	Anexa documento ao banco de conhecimento.
+@author juan.felipe
+@since 25/10/2021
+/*/
+Method attachDocument() Class pgcDocumentsRepository
+    Local aAreaS As Array
+    Local cDirDocs As Character
+    Local nHandle  As Numeric
+    Local nStack   As Numeric
+    Local oJsonRet As Object
+
+    aAreas   := {ACB->(GetArea()), GetArea()}
+    cDirDocs := MsDocPath()
+    nStack   := GetSX8Len()
+    oJsonRet := JsonObject():New()
+    Self:cName := FwCutOff(Upper(Self:cName),.T.) //-- Grava sem acentos e deixa em maiúsculo
+
+    ACB->(dbSetOrder(2))
+    If Self:lOk := !ACB->(MsSeek(Self:cFilACB + Self:cName)) //-- Verifica se o documento já existe
+        nHandle := FCREATE(cDirDocs + "\" + Self:cName, 0) //-- Cria o documento no diretorio do banco de conhecimento
+        
+        If Self:lOk := nHandle == -1
+            oJsonRet['code'] := 400
+            oJsonRet['message'] := FWHttpEncode(STR0001) //-- Erro na criação do arquivo.
+        Else
+            //-- Escreve documento
+            FWRITE(nHandle, Decode64(Self:cContent))
+
+            oJsonRet['code'] := 400
+            oJsonRet['message'] := FWHttpEncode(STR0003) //-- Erro ao salvar o arquivo.
+            
+            //-- Valida criacao do documento
+            If Self:lOk := FCLOSE(nHandle) .And. File(cDirDocs + "\" + Self:cName)
+
+                //-- Grava tabelas do banco de conhecimento
+                RecLock("ACB" , .T.)
+
+                ACB->ACB_FILIAL := Self:cFilACB
+                ACB->ACB_CODOBJ := GetSX8Num("ACB" , "ACB_CODOBJ")
+                ACB->ACB_OBJETO := Self:cName
+                ACB->ACB_DESCRI := Upper(Self:cDescription)
+                
+                ACB->(MsUnlock())
+
+                RecLock("AC9", .T.)
+                
+                AC9->AC9_FILIAL := Self:cFilAC9
+                AC9->AC9_FILENT := xFilial(Self:cTable)
+                AC9->AC9_ENTIDA := Self:cTable
+                AC9->AC9_CODENT := Self:cKey
+                AC9->AC9_CODOBJ := ACB->ACB_CODOBJ
+
+                AC9->(MsUnlock())
+
+                While GetSX8Len() > nStack //-- Confirma num. sequencial
+                    ConfirmSX8()
+                End
+
+                //-- Inclusao realizada com sucesso
+                oJsonRet['code'] := 200
+                oJsonRet['id'] := ACB->ACB_CODOBJ
+                oJsonRet['key'] := AllTrim(AC9->AC9_CODENT)
+                oJsonRet['message'] := FWHttpEncode(STR0002)	//-- Documento anexado com sucesso.
+            EndIf
+        EndIf
+    Else
+        oJsonRet['code'] := 400
+        oJsonRet['message'] := FWHttpEncode(STR0004 + Self:cName + STR0005)	//-- O arquivo XXX não pode ser incluído pois já existe na pasta do banco de conhecimento.
+    EndIf
+
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+
+Return oJsonRet
+
+/*/{Protheus.doc} getDocumentsList
+	Consulta documentos na base de conhecimento.
+@author juan.felipe
+@since 09/11/2021
+@param nPage, numeric, número da pagina.
+@param nPageSize, numeric, tamanho da página.
+@param cSearchKey, character, chave de busca do anexo na base de conhecimento.
+@return Nil, nulo.
+/*/
+Method getDocumentsList(nPage, nPageSize, cTable, cSearchKey) Class pgcDocumentsRepository
+    Local aArea  As Array
+    Local aQueryRequest As Array
+    Local oUtils As Object
+
+    Default nPage        := 1
+	Default nPageSize    := 10
+	Default cSearchKey := ""
+    
+    aArea := FwGetArea()
+    aQueryRequest := {}
+    oUtils := pgcUtils():New()
+    AddMapFields(Self)
+
+    Self:setPage(nPage)
+    Self:setPageSize(nPageSize)
+    Self:SetQuery(GetQuery(cTable, cSearchKey))
+    Self:SetWhere(GetWhere(Self, cTable, cSearchKey))
+    Self:SetOrder(SqlOrder(AC9->(IndexKey(2))))
+    Self:SetUseSpaces(.T.)
+
+    aQueryRequest := oUtils:queryRequestToArray(oRest:getQueryRequest())
+
+    If Len(aQueryRequest) > 0
+        Self:SetUrlFilter(aQueryRequest)
+    EndIf
+
+    Self:SetOrderQuery(oUtils:getQueryParam('ORDER'))
+    Self:SetFields(oUtils:getQueryParam('FIELDS'))
+    
+    If Self:Execute()
+        Self:FillGetResponse()
+    EndIf
+
+    FwRestArea(aArea)
+    FwFreeArray(aArea)
+    FreeObj(oUtils)
+Return Nil
+
+/*/{Protheus.doc} AddMapFields
+	Cria o Mapa de campos Protheus x API para documentos da base de conhecimento.
+@author juan.felipe
+@since 09/11/2021
+@param oSelf, object, Objeto - Objeto com herança da classe FWAdapterBaseV2.
+@return Nil, nulo.
+/*/
+Static Function AddMapFields(oSelf)
+    oSelf:AddMapFields('id'          , 'ACB_CODOBJ', .T., .T., {'ACB_CODOBJ', 'C', TamSX3('ACB_CODOBJ')[1], 0})
+    oSelf:AddMapFields('name'        , 'ACB_OBJETO', .T., .T., {'ACB_OBJETO', 'C', TamSX3('ACB_OBJETO')[1], 0})
+    oSelf:AddMapFields('description' , 'ACB_DESCRI', .T., .T., {'ACB_DESCRI', 'C', TamSX3('ACB_DESCRI')[1], 0})
+    oSelf:AddMapFields('documentKey' , 'AC9_CODENT', .T., .T., {'AC9_CODENT', 'C', TamSX3('AC9_CODENT')[1], 0})
+Return Nil
+
+/*/{Protheus.doc} GetQuery
+	Monta a expressão SQL para consulta dos documentos da base de conhecimento.
+@author juan.felipe
+@since 09/11/2021
+@param cTable, tabela da entidade.
+@param cSearchKey, chave de busca do documento.
+@return cQuery, string, query dos documentos da base de conhecimento.
+/*/
+Static Function GetQuery(cTable, cSearchKey)
+    Local cQuery As Character
+     
+    cQuery := " SELECT #QueryFields#"
+    cQuery += "   FROM " + RetSqlName('AC9') + " AC9"
+    cQuery += "     INNER JOIN " + RetSqlName('ACB') + " ACB ON"
+    cQuery += "         ACB.ACB_FILIAL = AC9.AC9_FILIAL AND"
+    cQuery += "         ACB.ACB_CODOBJ = AC9.AC9_CODOBJ AND"
+    cQuery += "         ACB.D_E_L_E_T_ = ' ' "
+    cQuery += " WHERE #QueryWhere#"
+
+Return cQuery
+
+/*/{Protheus.doc} getDocument
+	Retorna documento em base64 do banco de conhecimento.
+@author juan.felipe
+@since 11/11/2021
+/*/
+Method getDocument() Class pgcDocumentsRepository
+    Local cFile As Character
+	Local cData	As Character
+	Local lMsMultDir As Logical
+    Local oJsonRet As Object
+    Local oUtils As Object
+
+    lMsMultDir := MsMultDir()
+    oJsonRet := JsonObject():New() 
+    oUtils := pgcUtils():New()
+	ACB->(dbSetOrder(1))
+	
+    If Self:lOk := ACB->(dbSeek(Self:cFilACB + Self:cDocument))
+		cFile := Alltrim(ACB->ACB_OBJETO)
+
+		If Self:lOk := oUtils:readAllFile(cFile, @cData) //Realiza leitura do conteúdo
+			oJsonRet['id'] := ACB->ACB_CODOBJ
+			oJsonRet['name'] := AllTrim(ACB->ACB_OBJETO	)
+			oJsonRet['description'] := FWHttpEncode(Alltrim(ACB->ACB_DESCRI))	
+			oJsonRet['file'] := cData
+		Else
+			oJsonRet['code'] := 400
+			oJsonRet['message'] := FWHttpEncode(STR0006) //-- Não foi possível realizar o download do arquivo pois ele pode estar corrompido.
+		EndIf
+	
+	Else
+		oJsonRet['code'] := 400
+		oJsonRet['message'] := FWHttpEncode(STR0007) //-- Documento não encontrado.
+	EndIf
+
+    FreeObj(oUtils)
+Return oJsonRet
+
+/*/{Protheus.doc} getDocument
+	Deleta documento anexado.
+@author juan.felipe
+@since 08/12/2021
+/*/
+Method deleteDocument() Class pgcDocumentsRepository
+    Local oJsonRet As Object
+
+    oJsonRet := JsonObject():New() 
+	AC9->(dbSetOrder(1))
+	
+	If Self:lOk := AC9->(dbSeek(Self:cFilAC9 + Self:cDocument + Self:cTable + xFilial(Self:cTable) + Self:cKey))
+        RecLock("AC9",.F.)
+        AC9->(dbDelete())
+        AC9->(MsUnlock())
+        
+        oJsonRet['code'] := 200
+        oJsonRet['message'] := FWHttpEncode(STR0008) //-- Documento excluído com sucesso.
+	Else
+		oJsonRet['code'] := 400
+		oJsonRet['message'] := FWHttpEncode(STR0007) //-- Documento não encontrado.
+	EndIf
+
+Return oJsonRet
+
+
+/*/{Protheus.doc} GetWhere
+	Monta a expressão SQL WHERE para busca dos documentos
+@author renan.martins
+@since 10/2025
+@param oSelf, object, objeto da classe
+@param cTable, character, tabela de origem
+@param cSearchKey, character, número do objeto do documento na ACB/AC9
+@return cWhere, string, expressão where para consulta das solicitações de compra.
+/*/
+Static Function GetWhere(oSelf, cTable, cSearchKey)
+    Local cWhere As Character
+    Default cTable := ""
+    Default cSearchKey := 0
+    
+    cWhere := " AC9.AC9_FILIAL = '" + oSelf:cFilAC9 + "' AND "
+    cWhere += " AC9.AC9_ENTIDA = '" + cTable + "' AND "
+    cWhere += " AC9.AC9_FILENT= '" + FWxFilial(cTable) + "' AND "
+    cWhere += " AC9.AC9_CODENT = '" + cSearchKey + "'"
+    cWhere += " AND AC9.D_E_L_E_T_ = ' '"
+
+Return cWhere

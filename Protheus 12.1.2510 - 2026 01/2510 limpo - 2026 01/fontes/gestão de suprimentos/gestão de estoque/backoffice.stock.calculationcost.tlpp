@@ -1,0 +1,731 @@
+#include "protheus.ch" 
+#include "tbiconn.ch"
+
+static __lHasRulesCust  // se esta regra de custo esta habilitado para o Configurador de Tributos 
+
+namespace backoffice.stock.calculationcost
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HasRulesCust
+Função que valida se os campos necessario para funcionar a configuração de custo no Configurador de Impostos.
+
+@author reynaldo
+@since 28.08.2024
+@version 12.1.24
+
+/*/
+//-------------------------------------------------------------------
+Function HasRulesCust()
+Local aArea as array
+Local lContinua as logical
+
+	if __lHasRulesCust == NIL
+
+		aArea := GetArea()
+
+		__lHasRulesCust := .F.
+
+		lContinua := GetRpoRelease() > "12.1.2310" // funcionalidade habilitada a partir da 12.1.2510
+
+		if ! lContinua
+			lContinua := GetRpoRelease() > "12.1.2210" .AND. SuperGetMV("MV_MATA041",.F.,0) == 1  // funcionalidade habilitada a partir da 12.1.2310, baseado no parametro MV_MATA041
+		EndIf 
+
+		if lContinua
+			If findFunction("ChkTrbGen") .AND. ChkTrbGen("SD1", "D1_IDTRIB")
+				If FindClass("totvs.protheus.backoffice.fiscal.tciclass.TCIWritten")
+					if FindFunction("EstViewDef") // declaração no fonte FISA160xEST.PRW
+						if FindFunction("ESTGravF2B") // declaração no fonte FISA160xEST.PRW
+							if FindFunction("FISA170EST") // declaração no fonte FISA170xEST.PRW
+								if FindFunction("MATA041Inf") // declaração no fonte MATA041.PRW
+									if fwAliasInDic("D4H") // Tabela de cadastro de Regras do Custo
+										dbSelectArea("F2B")
+										if F2B->(FieldPos("F2B_RCUSTO"))>0 // campo referencia da regra de custo a ser utilizada no tributo
+											__lHasRulesCust := .T.
+										EndIf
+									EndIF
+								EndIf
+							EndIf
+						EndIf	
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+		RestArea(aArea)
+		aSize(aArea,0)
+		aArea := nil
+
+	EndIf
+
+Return __lHasRulesCust
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CalcTribGen
+Função que calcula o custo do produto com os valores de tributos durante a geração no documento de entradas configurados no Configurador de Tributos.
+Desde que o tributo não contenha ID TOTVS em seu cadastro no configurador de Tributos
+
+Esta função é chamada através da funcao A103xCusto() do fonte MATA103XEST.PRW
+
+- Se houver mais de um tributo com o mesmo id TOTVS, sera considerado o 1o que encontrar
+- Se houver mais de um tributo sem ID TOTVS, sera considerados todos
+- Se a regra do tributo não foi informado a regra de escrituração, então assume que o valor o tributo esta sempre agregado ao valor do produto
+
+
+@type Function
+
+@param   nItem		,character		,item do documento de entrada
+@param   nItemCusto	,numeric		,Custo atual do produto
+
+@param	nTotalCusto, numeric, Custo do produto com a aplicação das regras de custo dos tributos relacionados
+
+@author reynaldo
+@since 28.08.2024
+@version 12.1.24
+
+/*/
+//-------------------------------------------------------------------
+Function CalcTribGen(nItem as numeric)
+Local oDados        as object
+Local jJson1        as json
+Local jRegras       as json
+Local jRegraCalculo as json
+Local cRetorno      as character
+Local nCalculo      as numeric
+Local cItem         as character
+Local nValorTributo as numeric
+Local cIdTOTVS      as character
+Local nTotalCusto   as numeric
+Local oItNfTribs    as json
+Local cRetJson      as character
+Local nPos          as numeric
+Local aJTributo     as array
+Local cOperacao     as character
+
+	aJTributo := {}
+	oItNfTribs := JsonObject():new()
+	nTotalCusto := 0
+
+	if HasRulesCust()
+
+		cItem := cValToChar(nItem)
+
+		oDados := totvs.protheus.backoffice.fiscal.tciclass.TCIProcessing():New()
+		oDados:setItems({nItem})
+		cRetorno := oDados:GetDataItems()
+
+		jJson1 := JsonObject():New()
+		cRet := jJson1:FromJson(cRetorno)
+
+		jRegras := jJson1["dados_itens"][cItem]
+		
+		// Existem tributos gerados pelo configurador de tributos
+		if ! jRegras:HasProperty("Aviso")
+
+			aRegraCalculo := jRegras:GetNames()
+			for nCalculo := 1 to len(aRegraCalculo)
+
+				// REGRA DE CALCULO
+				cRegraCalculo := aRegraCalculo[nCalculo]
+				jRegraCalculo := jRegras[cRegraCalculo]
+
+				// TRIBUTO DA REGRA DE CALCULO
+				cTributo := jRegraCalculo["cod_regra"]
+
+				// Identificador do IDTOTVS
+				cIDTOTVS := jRegraCalculo["ident_trib"]
+
+				nValorTributo := jRegraCalculo["val_trib"]
+
+				cIDRegraCalculo := jRegraCalculo["id_cadastro"]
+				cOperacao := OperacaoCustoTributo( cIDRegraCalculo )
+
+				aAdd(aJTributo,JsonObject():new())
+				nPos := Len(aJTributo)
+				aJTributo[nPos]['Regra']    := cTributo
+				aJTributo[nPos]['IdRegra']  := cIDRegraCalculo
+				aJTributo[nPos]['idTOTVS']  := cIDTOTVS
+				aJTributo[nPos]['Operacao'] := cOperacao
+				aJTributo[nPos]['Valor']    := nValorTributo
+		
+			next nCalculo
+		EndIf
+
+		oItNfTribs['Tributos'] := aJTributo
+		cRetJson := oItNfTribs:ToJson()
+		FreeObj(oItNfTribs)
+
+		oDados:destroy()
+	EndIf
+
+Return cRetJson
+
+/*/{Protheus.doc} EntryCostCalculator
+Classe que carrega os tributos envolvidos ao produto do item do documento de entrada e ajusta para os calculos do custo.
+E ajusta para permitir que os valores em 3 situações:
+- Provenientes do cadastro da TES(SF4) somente
+- Provenientes do cadastro da TES(SF4),porem com motor de calculo do configurador de tributos
+- Provenientes do configurador de tributos somente
+
+Esta função é chamada através da funcao A103xCusto() do fonte MATA103XEST.PRW
+
+- Se houver mais de um tributo com o mesmo id TOTVS, sera considerado o 1o que encontrar
+- Se houver mais de um tributo sem ID TOTVS, sera considerados todos
+- Se a regra do tributo não foi informado a regra de escrituração, então assume que o valor o tributo esta sempre agregado ao valor do produto
+
+
+@type class
+
+@author reynaldo
+@since 08.05.2025
+@version 12.1.25
+
+*/
+Class EntryCostCalculator
+
+	Private Data jTributos as json
+	Private Data nVlrCost as numeric
+
+	public Method new() CONSTRUCTOR
+	public Method loadTribGen( nItem as numeric)
+	public Method setID(cIdTrib as character)
+	public Method getTax(cIDTOTVS as character) as Json
+	public Method getTaxRules() as character // sem uso
+	public Method compatibleTaxValue() as numeric
+	public Method getSumTaxes() as numeric
+
+EndClass
+
+Method new() Class EntryCostCalculator
+	self:jTributos := jsonObject():New()	
+Return self
+
+/*
+Carrego todo os tributos genericos do item do documento de entrada informado
+*/
+Method loadTribGen(nItem as numeric) Class EntryCostCalculator
+Local oDados         as json
+Local jJson1         as json
+Local jRegras        as json
+Local jRegraCalculo  as json
+Local cRetorno       as character
+Local nCalculo       as numeric
+Local cItem          as character
+Local nValorTributo  as numeric
+Local cIdTOTVS       as character
+Local cCodRegra      as character
+Local cOperacao      as character
+Local nTotalTributo  as numeric
+Local nPor_cfgtrib   as numeric
+Local cCredita_Custo as character
+
+	if HasRulesCust()
+
+		cItem := cValToChar(nItem)
+
+		oDados := totvs.protheus.backoffice.fiscal.tciclass.TCIProcessing():New()
+		oDados:setItems({nItem})
+		oDados:setDataItems({"regras_base","regras_escrituracao"})
+		cRetorno := oDados:GetDataItems()
+
+		jJson1 := JsonObject():New()
+		cRet := jJson1:FromJson(cRetorno)
+
+		jRegras := jJson1["dados_itens"][cItem]
+		
+		// Existem tributos gerados pelo configurador de tributos
+		if ! jRegras:HasProperty("Aviso")
+
+			nTotalTributo := 0
+			aRegraCalculo := jRegras:GetNames()
+			for nCalculo := 1 to len(aRegraCalculo)
+				// REGRA DE CALCULO
+				cRegraCalculo := aRegraCalculo[nCalculo]
+				jRegraCalculo := jRegras[cRegraCalculo]
+
+				// TRIBUTO DA REGRA DE CALCULO
+				// Codigo da Regra Fiscal referente ao tributo
+				cCodRegra := jRegraCalculo["cod_regra"]
+
+				// Identificador do IDTOTVS
+				cIDTOTVS := jRegraCalculo["ident_trib"]
+
+				cAcao_tot_nf := "1" // 1-Sem Ação => Entende-se que o valor do tributo pode estar agregado ao valor do item. Sendo necessario subtrair o valor do tributo no item	
+				if jRegraCalculo:HasProperty("regras_escrituracao")
+					cAcao_tot_nf := jRegraCalculo["regras_escrituracao"]["acao_tot_nf"]
+				EndIf
+
+				nValorTributo := jRegraCalculo["val_trib"]
+
+				cIDRegraCalculo := jRegraCalculo["id_cadastro"]
+
+				cOperacao := OperacaoCustoTributo( cIDRegraCalculo )
+
+      		if .NOT. self:jTributos:HasProperty(cCodRegra) .OR. self:jTributos[cCodRegra]==NIL
+					self:jTributos[cCodRegra]                   := JsonObject():new()
+					self:jTributos[cCodRegra]["valor"]          := 0
+					self:jTributos[cCodRegra]["credita_Custo"]  := ""
+					self:jTributos[cCodRegra]['ident_trib']     := cIDTOTVS
+					self:jTributos[cCodRegra]['Acao_tot_nf']    := cAcao_tot_nf
+					self:jTributos[cCodRegra]["calculo_Custo"]  := cOperacao
+					self:jTributos[cCodRegra]["por_cfgtrib"]    := 0
+
+				EndIf
+
+				nTotalTributo := self:jTributos[cCodRegra]["valor"]
+
+				// 2-Subtrai somente do total da nota -
+				// 3-Subtrai do total da nota e da duplicata -
+				// O valor do tributo esta agregado do valor da mercadoria
+				// = valor da mercadoria - impostos
+				if cAcao_tot_nf $ "2;3" 
+
+					 	nTotalTributo += nValorTributo
+				Else
+					// O valor do tributo esta separado do valor da mercadoria
+					// = valor da mercadoria
+					if cAcao_tot_nf $ "1;4;7;8"
+						if cOperacao $ "2" 
+							nTotalTributo += nValorTributo
+						EndIf
+
+					else
+						// O valor do tributo esta somado ao valor da mercadoria
+						// = valor da mercadoria + impostos
+						if cAcao_tot_nf $ "5;6"
+							if cOperacao $ "2" 
+							 	nTotalTributo += nValorTributo
+							EndIf
+
+						endIf
+					endIf
+
+				EndIf
+
+				if cOperacao == "0" .or. Empty(cOperacao)
+					nPor_cfgtrib   := 0 
+					cCredita_Custo := ""
+				Else
+					nPor_cfgtrib   := 1 
+					cCredita_Custo :=  iif(cOperacao $ "2", "S", "N") // "S"
+				EndIf
+				
+				self:jTributos[cCodRegra]["valor"]         := nTotalTributo
+				self:jTributos[cCodRegra]["por_cfgtrib"]   := nPor_cfgtrib    // 1- Custo a ser calculado pelo configurador de tributos
+				self:jTributos[cCodRegra]["credita_Custo"] := cCredita_Custo  // "S"
+			next nCalculo
+		EndIf
+
+		oDados:destroy()
+	
+	EndIf
+
+Return self
+
+/*
+Carrego todo os tributos genericos do item do documento de entrada informado
+*/
+Method setID(cIdTrib as character) Class EntryCostCalculator
+Local oDados         as json
+Local jJson1         as json
+Local jRegras        as json
+Local jRegraCalculo  as json
+Local cRetorno       as character
+Local nCalculo       as numeric
+Local nValorTributo  as numeric
+Local cIdTOTVS       as character
+Local cOperacao      as character
+Local nPor_cfgtrib   as numeric
+Local cCredita_Custo as character
+
+	if HasRulesCust()
+
+		oDados := totvs.protheus.backoffice.fiscal.tciclass.TCIWritten():New()
+		oDados:setId({cIdTrib})
+		oDados:setDataItems({"regras_base","regras_escrituracao"})
+		cRetorno := oDados:GetDataId()
+
+		jJson1 := JsonObject():New()
+		cRet := jJson1:FromJson(cRetorno)
+
+		jRegras := jJson1["dados_Id"][cIdTrib]
+		
+		// Existem tributos gerados pelo configurador de tributos
+		if ! jRegras:HasProperty("Aviso")
+
+			aRegraCalculo := jRegras:GetNames()
+			for nCalculo := 1 to len(aRegraCalculo)
+				// Codigo da Regra de calculo do tributo (Regra Tributaria)
+				cRegraCalculo := aRegraCalculo[nCalculo]
+
+				jRegraCalculo := jRegras[cRegraCalculo]
+
+				// Identificador do tribtuo (ID. TOTVS)
+				cIDTOTVS := jRegraCalculo["codigo_tributo_relacionado"]
+
+				cAcao_tot_nf := "1" // 1-Sem Ação => Entende-se que o valor do tributo pode estar agregado ao valor do item. Sendo necessario subtrair o valor do tributo no item	
+				if jRegraCalculo:HasProperty("regras_escrituracao")
+					if valType(jRegraCalculo["regras_escrituracao"]) != "C"	
+						if jRegraCalculo["regras_escrituracao"]:HasProperty("acao_total_nf")
+							cAcao_tot_nf := jRegraCalculo["regras_escrituracao"]["acao_total_nf"]
+						EndIf
+					Endif
+				EndIf
+
+				// ID da Regra de calculo do tributo (Regra Tributaria)
+				cIDRegraCalculo := jRegraCalculo["id_cadastro_regra_tributo"]
+
+				cOperacao := OperacaoCustoTributo( cIDRegraCalculo )
+
+      		if .NOT. self:jTributos:HasProperty(cRegraCalculo) .OR. self:jTributos[cRegraCalculo]==NIL
+					self:jTributos[cRegraCalculo]                   := JsonObject():new()
+					self:jTributos[cRegraCalculo]["valor"]          := 0
+					self:jTributos[cRegraCalculo]["credita_Custo"]  := ""
+					self:jTributos[cRegraCalculo]['ident_trib']     := cIDTOTVS
+					self:jTributos[cRegraCalculo]['Acao_tot_nf']    := cAcao_tot_nf
+					self:jTributos[cRegraCalculo]["calculo_Custo"]  := cOperacao
+					self:jTributos[cRegraCalculo]["por_cfgtrib"]    := 0
+
+				EndIf
+
+				nValorTributo := jRegraCalculo["valor_tributo"]
+
+				if cOperacao == "0" .or. Empty(cOperacao)
+					nPor_cfgtrib   := 0 
+					cCredita_Custo := ""
+				Else
+					nPor_cfgtrib   := 1 
+					cCredita_Custo :=  iif(cOperacao $ "2", "S", "N") // "S"
+				EndIf
+				
+				self:jTributos[cRegraCalculo]["valor"]         := nValorTributo
+				self:jTributos[cRegraCalculo]["por_cfgtrib"]   := nPor_cfgtrib    // 1- Custo a ser calculado pelo configurador de tributos
+				self:jTributos[cRegraCalculo]["credita_Custo"] := cCredita_Custo  // "S"
+			next nCalculo
+		EndIf
+
+		oDados:destroy()
+	
+	EndIf
+
+Return self
+
+
+/*
+busca os dados do tributo informado que tenha id totvs 
+*/
+Method getTax( cIDTOTVS as character ) as json Class EntryCostCalculator
+Local jTributo as json
+Local aRegraCalculo as array
+Local nRegra as numeric
+Local jRegraCalculo as json
+Local cRegraCalculo as character
+
+	aRegraCalculo := self:jTributos:GetNames()
+	for nRegra := 1 to len(aRegraCalculo)
+		// REGRA DE CALCULO
+		cRegraCalculo := aRegraCalculo[nRegra]
+		jRegraCalculo := self:jTributos[cRegraCalculo]
+
+		if cIDTOTVS == jRegraCalculo["ident_trib"]
+			jTributo := JsonObject():New()
+			jTributo := jRegraCalculo
+			exit
+		EndIf
+
+	Next nRegra	
+
+	if jTributo == NIL
+		jTributo                   := JsonObject():new()
+		jTributo["valor"]          := 0
+		jTributo["credita_Custo"]  := ""
+		jTributo['ident_trib']     := ""
+		jTributo['Acao_tot_nf']    := ""
+		jTributo["por_cfgtrib"]    := 0
+		jTributo["calculo_Custo"]  := " "
+	EndIf
+	
+Return jTributo
+
+/*
+Este metodo tem a finalidade de ajustar o valor que sera enviado para retcusent() para manter
+compatibilidade com o calculo já existe quando é feita pela TES
+
+icms
+ipi
+pis
+cofins
+icmsst
+
+*/
+Method compatibleTaxValue() as numeric Class EntryCostCalculator
+Local nTributo as numeric
+Local aRegraTributos as array
+Local cCodRegra as character
+Local cIDTOTVS as character
+Local nTotalValue as numeric
+Local nValor as numeric
+Local cCalculo_Custo as character
+Local cAcao_tot_nf as character
+Local jIDTOTVS as json
+
+	nTotalValue := 0.00
+
+	jIDTOTVS := JsonObject():New() // contem os ID TOTVS informados
+
+	aRegraTributos := self:jTributos:GetNames()
+	for nTributo := 1 to len(aRegraTributos)
+		cCodRegra := aRegraTributos[nTributo]
+		if self:jTributos[cCodRegra]["por_cfgtrib"] == 1
+			cIDTOTVS := self:jTributos[cCodRegra]['ident_trib']
+
+			if ! self:jTributos:HasProperty(cIDTOTVS)
+				jIDTOTVS[cIDTOTVS] := 1
+
+				cAcao_tot_nf   := self:jTributos[cCodRegra]["Acao_tot_nf"] 
+				cCalculo_Custo := self:jTributos[cCodRegra]["calculo_Custo"]
+				nValor         := self:jTributos[cCodRegra]["valor"]
+
+				// ICMSST/ANTEC, na funcao RETCUSTENT() o valor esta agregado ao custo da mercadoria
+				if cIDTOTVS == "000056" .OR. cIDTOTVS == "000039"
+					if cAcao_tot_nf $ "1;4;7;8;5;6"
+						nTotalValue -= nValor
+					EndIf
+
+				else
+					if cAcao_tot_nf  $ "2;3"
+						nTotalValue += nValor
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+	next nTributo		
+
+	aSize(aRegraTributos, 0)
+	FreeObj(jIDTOTVS)
+	
+Return nTotalValue
+
+/*
+metodo para gerar um json em formato texto com os tributos que estão configurados para somar ou subtrair no custo do produto
+*/
+Method getTaxRules() as character Class EntryCostCalculator
+Local aRegraTributos as array
+Local nTributo as numeric
+Local cIDTOTVS as character
+Local cCodRegra as character
+Local jTaxes as json
+Local jIDTOTVS as json
+
+	jIDTOTVS := JsonObject():New() // contem os ID TOTVS que ja foram lidos
+	jTaxes := JsonObject():New()
+
+	aRegraTributos := self:jTributos:GetNames()
+	for nTributo := 1 to len(aRegraTributos)
+		cCodRegra := aRegraTributos[nTributo]
+		if self:jTributos[cCodRegra]["por_cfgtrib"] == 1
+			cIDTOTVS := self:jTributos[cCodRegra]['ident_trib']
+
+			if ! jIDTOTVS:HasProperty(cIDTOTVS)
+				jIDTOTVS[cIDTOTVS] := 1
+
+				jTaxes[cCodRegra]                  := JsonObject():New()
+				jTaxes[cCodRegra]["ident_trib"]    := self:jTributos[cCodRegra]["ident_trib"]
+				jTaxes[cCodRegra]["credita_Custo"] := self:jTributos[cCodRegra]["credita_Custo"]
+				jTaxes[cCodRegra]["valor"]         := self:jTributos[cCodRegra]["valor"]
+			EndIf
+		EndIf
+	Next nTributo
+
+	aSize(aRegraTributos, 0)
+
+	cReturn := jTaxes:toJson()
+
+	FreeObj(jTaxes)
+	FreeObj(jIDTOTVS)
+	
+Return cReturn
+
+/*
+Retorna o valor a ser acrescido no valor da mercadoria a ser calculado o custo,
+ onde este valor da soma dos tributos que não estáo agregados ao valor da mercadoria (D1_TOTAL)
+*/
+Method getSumTaxes() as numeric Class EntryCostCalculator
+Local nTributo as numeric
+Local aRegraTributos as array
+Local cCodRegra as character
+Local nTotalValue as numeric
+Local nValor as numeric
+Local cAcao_tot_nf as character
+//Local cCalculo_Custo as character
+
+	nTotalValue := 0.00
+
+	aRegraTributos := self:jTributos:GetNames()
+	for nTributo := 1 to len(aRegraTributos)
+		cCodRegra := aRegraTributos[nTributo]
+
+		cAcao_tot_nf   := self:jTributos[cCodRegra]["Acao_tot_nf"]
+		nValor         := self:jTributos[cCodRegra]["valor"]
+		If cAcao_tot_nf $ "2;3" 
+			nTotalValue -= nValor
+		EndIf
+		If cAcao_tot_nf $ "5;6"
+			nTotalValue += nValor
+		EndIf
+	next nTributo		
+
+	aSize(aRegraTributos, 0)
+	
+Return nTotalValue
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CalculationNFETrbGen
+Função que calcula o custo do produto com os valores de tributos gerados no documento de entradas configurados no Configurador de Tributos.
+Desde que o tributo não contenha ID TOTVS em seu cadastro no configurador de Tributos
+
+Esta função é chamada através da funcao GeraCusto() do fonte mata190.PRW
+
+@type Function
+
+@param   cIDTrib		,character	,ID do tributo generico gravado na tabela SD1
+@param   nItemCusto	,numeric		,Custo atual do produto
+
+@param	nTotalCusto, numeric, Custo do produto com a aplicação das regras de custo dos tributos relacionados
+
+@author reynaldo
+@since 28/08/2024
+@version 12.1.2410
+
+/*/
+//-------------------------------------------------------------------
+Function CalculationNFETrbGen(cIDTrib as character)
+
+Local aIdTribs        as array
+Local cResponse       as character
+local oDados          as Json
+local oJson1          as Json
+Local cIdTOTVS        as character
+Local nCalculo        as numeric
+Local nTotalCusto     as numeric
+Local nValorTributo   as numeric
+Local cOperacao       as character
+Local aJTributo       as array
+Local nPos            as numeric
+Local oItNfTribs      as json
+Local cIDRegraCalculo as character
+Local cRetJson        as character
+
+default cIDTrib    := ""
+
+	oItNfTribs := JsonObject():new()
+
+	nTotalCusto := 0
+	aJTributo := {}
+
+	if HasRulesCust()
+
+		IF ! empty(cIDTrib)
+
+			aIdTribs := {cIDTrib}
+			cResponse := ""
+			oDados := totvs.protheus.backoffice.fiscal.tciclass.TCIWritten():New()
+			oDados:SetId(aIdTribs)
+			cResponse := oDados:GetDataId()
+			oDados:destroy()
+			oJson1 := JsonObject():New()
+			cRet := oJson1:FromJson(cResponse)
+
+			aRegraCalculo := oJson1["dados_Id"][cIDTrib]:GetNames()
+			for nCalculo := 1 to len(aRegraCalculo)
+
+				// REGRA DE CALCULO
+				cRegraCalculo := aRegraCalculo[nCalculo]
+				jRegraCalculo := oJson1["dados_Id"][cIDTrib][cRegraCalculo]
+
+				// TRIBUTO DA REGRA DE CALCULO
+				cTributo := jRegraCalculo["tributo"]
+				
+				// Identificador do IDTOTVS 
+				cIDTOTVS := jRegraCalculo["codigo_tributo_relacionado"]
+				
+				nValorTributo := jRegraCalculo["valor_tributo"]
+
+				cIDRegraCalculo := jRegraCalculo["id_cadastro_regra_tributo"]
+				cOperacao := OperacaoCustoTributo( cIDRegraCalculo )
+
+				aAdd(aJTributo,JsonObject():new())
+				nPos := Len(aJTributo)
+				aJTributo[nPos]['IdImposto'] := cTributo
+				aJTributo[nPos]['idTOTVS']   := cIDTOTVS
+				aJTributo[nPos]['Operacao']  := cOperacao
+				aJTributo[nPos]['Valor']     := nValorTributo
+		
+			next nCalculo
+
+			oItNfTribs['Tributos'] := aJTributo
+			cRetJson := oItNfTribs:ToJson()
+			FreeObj(oItNfTribs)
+
+		EndIf
+
+	EndIf
+
+Return cRetJson
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} OperacaoCustoTributo()
+
+Função define como o valor do tributo vai ser aplicado baseado na regra de calculo definida na regra de tributo. 
+
+Esta função é chamada através da funcao GeraCusto() do fonte mata190.PRW
+
+@type Function
+
+@param   cRegraCalculo	,character	,Código da Regra Fiscal
+
+@param	cOperador, caracter, Tipo de operaçao -> conteudo do campo D4H_OPERA
+
+@author reynaldo
+@since 28/08/2024
+@version 12.1.2410
+
+/*/
+//-------------------------------------------------------------------
+static function OperacaoCustoTributo( cIdRegraCalculo as character)
+Local cKeyF2B as character
+Local cF2B_RCUSTO as character
+Local cOperador as character
+
+	cOperador := ""
+
+	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	//
+	// busca pela regra de calculo de documentos fiscais
+	//
+	cKeyF2B := xFilial("F2B")+PADR(cIdRegraCalculo,TamSX3("F28_ID")[1])+"2"
+	cF2B_RCUSTO := ""
+	// busca pela regra de calculo de documentos fiscais ativa
+	dbSelectArea("F2B")
+	aAreaF2B := F2B->(GetArea())
+	//F2B->(dbSetOrder(1)) // F2B_FILIAL+F2B_REGRA+DTOS(F2B_VIGINI)+DTOS(F2B_VIGFIM)+F2B_ALTERA
+	F2B->(dbSetOrder(3)) // F2B_FILIAL+F28_ID
+	if F2B->(MSSeek(cKeyF2B))
+		cF2B_RCUSTO := F2B->F2B_RCUSTO
+		// busca pela regra de custo
+		dbSelectArea("D4H")
+		aAreaD4H := D4H->(GetArea())
+		D4H->(dbSetOrder(1)) // D4H_FILIAL+D4H_REGRA
+		if D4H->(MSSeek(xFilial("D4H")+cF2B_RCUSTO))
+			cOperador := D4H->D4H_OPERA
+		EndIf
+		RestArea(aAreaD4H)
+		aSize(aAreaD4H,0)
+		aAreaD4H := NIL
+	EndIf
+	RestArea(aAreaF2B)
+	aSize(aAreaF2B,0)
+	aAreaF2B := NIL
+
+return cOperador

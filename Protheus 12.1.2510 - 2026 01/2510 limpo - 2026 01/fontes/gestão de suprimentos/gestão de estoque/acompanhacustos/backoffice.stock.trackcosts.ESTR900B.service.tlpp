@@ -1,0 +1,1058 @@
+#include "tlpp-core.th"
+#include "backoffice.stock.trackcosts.estr900b.ch"
+
+STATIC __ProdTot	:= NIL
+
+namespace totvs.protheus.backoffice.stock.trackcosts.ESTR900B.service
+
+class ESTR900BService
+   
+    public data cError as character
+    public data cIdConfiguration as character
+    public data cIdJobTotalizer as character
+    public data oMovements   as Object
+    public data cTableName01 as character
+
+    public method new()
+    public method calculateESTR900B()
+    public method setESTR900B()
+    public method getMovements()
+   
+    public method isBodyValid()
+    public method getRangesByProduct()
+    public method getTotalMovimentsByProductQuery()
+    public method isStillSameProduct()
+    public method getListMovementsColumns()
+    public method getListQueryMovements()
+    public method getListWhereMovements()
+    public method getTotals()
+    public method PosByOrder()
+    public method version()
+    
+endclass
+
+/*/{Protheus.doc} ESTR900Service:New()
+    Metodo responsavel por instanciar e iniciar as variaveis da class acUser
+    @type  Metodo
+    @author Pedro Missaglia
+    @since  Outubro 02, 2020
+    @version 12.1.27
+/*/
+method new() class ESTR900BService
+
+    ::cError := ""
+    ::cIdConfiguration := ""
+    ::cIdJobTotalizer := ""
+    ::oMovements := JsonObject():New()
+    ::cTableName01 := ""
+return Self
+
+/*/{Protheus.doc} ESTR900Service:New()
+    Metodo responsavel por instanciar e iniciar as variaveis da class acUser
+    @type  Metodo
+    @author Pedro Missaglia
+    @since  Outubro 02, 2020
+    @version 12.1.27
+/*/
+method calculateESTR900B(jBody) class ESTR900BService
+    
+    Local oRepository   := Nil
+    Local oTempTable    := ac.TableTempory.Repository.acTableTemporyRepository():new()
+    Local nQuantTot     := 0  
+    Local oRanges       := JsonObject():New()
+    Local nMinimum      := 2000
+    Local cType         := ""
+
+    ::cError            := ""
+    ::cIdJobTotalizer   := ""
+    ::cIdConfiguration  := ""          
+    
+    //Validação do corpo da requisição 
+    If ::isBodyValid(jBody)
+        If oTempTable:doesTableIdExist("A" + Alltrim(Upper(jBody:GetJsonObject("configuration"))) + "_01")
+            
+            ::cIdConfiguration := Alltrim(jBody:GetJsonObject("configuration"))
+            
+            oRepository := totvs.protheus.backoffice.stock.trackcosts.ESTR900B.repository.ESTR900BRepository():New()
+            
+            nQuantTot := ::getTotalMovimentsByProductQuery(jBody)
+
+            If nQuantTot >= nMinimum
+                cType := "MULTI"
+            Else 
+                cType := "MONO"
+            Endif 
+
+            oRanges := ::getRangesByProduct(jBody, cType, nQuantTot)
+            
+            ::cIdJobTotalizer := oRepository:startAsyncESTR900B(jBody, nQuantTot, oRanges, cType)
+        Else 
+            ::cError := STR0001
+        Endif
+    Endif
+
+return Self
+
+/*/{Protheus.doc} ESTR900Service:New()
+    Metodo responsavel por instanciar e iniciar as variaveis da class acUser
+    @type  Metodo
+    @author Pedro Missaglia
+    @since  Outubro 02, 2020
+    @version 12.1.27
+/*/
+method isBodyValid(jBody) class ESTR900BService
+
+Local lBodyValid    as Logical
+Local aKeys         as Array
+Local nx            as Numeric
+Local cAux          as Character 
+Local cCusFil       :=  SuperGetMv('MV_CUSFIL' ,.F.,"A")
+
+nX := 0
+cAux := ""
+lBodyValid := .T.
+aKeys := {  {"configuration", "C", "caracter"},;
+            {"branch", "C", "caracter"},;
+            {"warehouse", "C", "caracter"},;
+            {"product", "C", "caracter"},;
+            {"initialBalance", "N", "numerico"},;
+            {"finalBalance", "N", "numerico"},;
+            {"initialQuantity", "N", "numerico"},;
+            {"finalQuantity", "N", "numerico"};
+}
+
+If jBody == NIL
+    ::cError := STR0002
+    lBodyValid := .F.
+Else 
+    For nX := 1 to Len(aKeys)
+        cAux := aKeys[nX][1]
+
+        If Alltrim(cAux) == "warehouse"
+            If cCusFil $ "F|E"
+                Loop
+            Endif
+        Endif
+
+        If Alltrim(cAux) == "branch"
+            If cCusFil $ "E"
+                Loop
+            Endif
+        Endif
+
+        If jBody:GetJsonObject(cAux) != NIL
+            If !(Valtype(jBody:GetJsonObject(cAux)) == aKeys[nX][2])
+                ::cError := STR0003 + cAux + STR0004 + aKeys[nX][3] + STR0005
+                lBodyValid := .F.
+                Exit
+            Endif
+        Else 
+            ::cError := STR0003 + aKeys[nX][1] + STR0006
+            lBodyValid := .F.
+            Exit
+        Endif
+    Next nX
+Endif 
+
+return lBodyValid
+
+/*/{Protheus.doc} Mtstart
+    Funcao chamada para subir as threads da MANUALJOB
+    @type  Function
+    @author Squad Entradas
+    @since 20/06/2022
+    @version 1.0
+    @param cParam, character, empresa e filial
+/*/
+
+Method getTotalMovimentsByProductQuery(oJson) class ESTR900BService
+
+    Local cIdConfig     := Alltrim(oJson:GetJsonObject("configuration"))
+    Local cBranch       := oJson:GetJsonObject("branch")
+    Local cWare         := oJson:GetJsonObject("warehouse")
+    Local cProd         := oJson:GetJsonObject("product")
+
+    Local cTable        := "A" + Upper(cIdConfig) + "_01"
+    Local cQuery        := ''
+    Local lCusEmp       :=  AllTrim(SuperGetMv('MV_CUSFIL' ,.F.,"A")) == "E"
+    Local lCusFil       :=  AllTrim(SuperGetMv('MV_CUSFIL' ,.F.,"A")) == "F"
+    Local oRepository   := totvs.protheus.backoffice.stock.trackcosts.ESTR900B.repository.ESTR900BRepository():New()
+
+    Local aBindParam    as array
+
+    cQuery := "SELECT COUNT(PRODUTO) REG "
+    cQuery += "FROM  " + cTable + " "
+    cQuery += "WHERE "
+
+    If lCusEmp
+        cQuery     += " PRODUTO = ? AND "
+        aBindParam := {cProd,' '}
+    Elseif lCusFil
+        cQuery     += " FILIAL = ? AND "
+        cQuery     += " PRODUTO = ? AND "
+        aBindParam := {cBranch,cProd,' '}
+    Else 
+        cQuery     += " FILIAL = ? AND "
+        cQuery     += " ARMAZEM = ? AND "
+        cQuery     += " PRODUTO = ? AND "
+        aBindParam := {cBranch,cWare,cProd,' '}
+    Endif
+    cQuery += "D_E_L_E_T_ = ?"
+
+return oRepository:getTotalMovimentsByProduct(cTable, cQuery, aBindParam)
+
+
+/*/{Protheus.doc} Mtstart
+    Funcao chamada para subir as threads da MANUALJOB
+    @type  Function
+    @author Squad Entradas
+    @since 20/06/2022
+    @version 1.0
+    @param cParam, character, empresa e filial
+/*/
+
+Method getRangesByProduct(oJson, cType, nQuantTot) class ESTR900BService
+
+
+Local cIdConfig     := Alltrim(oJson:GetJsonObject("configuration"))
+Local cBranch       := oJson:GetJsonObject("branch")
+Local cWare         := oJson:GetJsonObject("warehouse")
+Local cProd         := oJson:GetJsonObject("product")
+
+Local cTable        := "A" + Upper(cIdConfig) + "_01"
+Local nTotal        := 0 
+Local nHalf         := 0
+
+Local oRanges       := JsonObject():New()
+
+Local oThread01     := JsonObject():New()
+Local oThread02     := JsonObject():New()
+
+Local lCusEmp       :=  AllTrim(SuperGetMv('MV_CUSFIL' ,.F.,"A")) == "E"
+Local lCusFil       :=  AllTrim(SuperGetMv('MV_CUSFIL' ,.F.,"A")) == "F"
+
+Local oRepository   := totvs.protheus.backoffice.stock.trackcosts.ESTR900B.repository.ESTR900BRepository():New()
+Local cQuery        := ""
+Local lNotInvert    := .F.
+
+Local aBindParam    as array
+
+Default cType := "MONO"
+
+DbUseArea(.T.,"TOPCONN",cTable,cTable,.T.,.F.)
+
+If cType == "MONO"
+
+    If lCusEmp
+        (cTable)->(dbSetIndex(cTable + '_04')) //1 PRODUTO, ORDEM 
+        (cTable)->(dbSetIndex(cTable + '_05')) //2 PRODUTO, ORINV 
+        (cTable)->(DbSetOrder(1)) //1 PRODUTO, ORDEM 
+        (cTable)->(DbSeek(cProd))
+    Elseif lCusFil
+        (cTable)->(dbSetIndex(cTable + '_06')) //FILIAL, PRODUTO, ORDEM 
+        (cTable)->(dbSetIndex(cTable + '_07')) //FILIAL, PRODUTO, ORINV 
+        (cTable)->(DbSetOrder(1)) //FILIAL, PRODUTO, ORDEM
+        (cTable)->(DbSeek(cBranch+cProd))
+    Else 
+        (cTable)->(dbSetIndex(cTable + '_01')) //FILIAL, ARMAZEM, PRODUTO, ORDEM 
+        (cTable)->(dbSetIndex(cTable + '_03')) //FILIAL, ARMAZEM, PRODUTO, ORINV 
+        (cTable)->(DbSetOrder(1)) //FILIAL, ARMAZEM, PRODUTO, ORDEM 
+        (cTable)->(DbSeek(cBranch+cWare+cProd))
+    Endif
+
+    oThread01["start"] := (cTable)->ORDEM //Pega a primeira ordem
+
+    If lCusEmp
+        (cTable)->(DbSetOrder(2)) //2 PRODUTO, ORINV 
+        (cTable)->(DbSeek(cProd))
+    Elseif lCusFil
+        (cTable)->(DbSetOrder(2)) //2 FILIAL, PRODUTO, ORINV
+        (cTable)->(DbSeek(cBranch+cProd))
+    Else 
+        (cTable)->(DbSetOrder(2)) //2 FILIAL, ARMAZEM, PRODUTO, ORINV 
+        (cTable)->(DbSeek(cBranch+cWare+cProd))
+    Endif
+
+    oThread01["end"] := (cTable)->ORDEM //Pega a última ordem
+
+    nTotal := nQuantTot
+
+    //Cenário:
+    //Caso o Kardex seja ordenado por sequência de cálculo, mas o recálculo do custo médio
+    //Não tenha sido executado, o SEQCALC das tabelas estará vazio. Neste cenário, o campo
+    //ORINV estará igual ao campo ORDEM, e, o thread01 start será igual ao end, fazendo
+    //com que o Kardex execute somente uma linha. Por isso, o tratamento abaixo força o
+    //range final ser o último possível.
+    If nTotal > 1 .and. (oThread01["end"] == oThread01["start"])
+        cQuery := "SELECT MAX(ORDEM) ORDEM FROM " + cTable + " WHERE "
+
+        If lCusEmp
+            cQuery     += "PRODUTO = ? "
+            aBindParam := {cProd}
+        Elseif lCusFil
+            cQuery     += "FILIAL = ? AND PRODUTO = ? "
+            aBindParam := {cBranch,cProd}
+        Else 
+            cQuery     += "FILIAL = ? AND ARMAZEM = ? AND PRODUTO = ? "
+            aBindParam := {cBranch,cWare,cProd}
+        Endif
+
+        oThread01["end"] := oRepository:getMaxOrdem(cTable, cQuery, aBindParam)
+    Endif
+   
+    oThread01["total"] := nTotal
+    (cTable)->(DBCLOSEAREA())
+
+    oRanges["thread_01"] := oThread01
+
+Elseif cType == "MULTI"
+
+    If lCusEmp
+        (cTable)->(dbSetIndex(cTable + '_04')) //1 PRODUTO, ORDEM 
+        (cTable)->(dbSetIndex(cTable + '_05')) //2 PRODUTO, ORINV 
+        (cTable)->(DbSetOrder(1)) //1 PRODUTO, ORDEM 
+        (cTable)->(DbSeek(cProd))
+    Elseif lCusFil
+        (cTable)->(dbSetIndex(cTable + '_06')) //FILIAL, PRODUTO, ORDEM 
+        (cTable)->(dbSetIndex(cTable + '_07')) //FILIAL, PRODUTO, ORINV 
+        (cTable)->(DbSetOrder(1)) //FILIAL, PRODUTO, ORDEM
+        (cTable)->(DbSeek(cBranch+cProd))
+    Else 
+        (cTable)->(dbSetIndex(cTable + '_01')) //FILIAL, ARMAZEM, PRODUTO, ORDEM 
+        (cTable)->(dbSetIndex(cTable + '_03')) //FILIAL, ARMAZEM, PRODUTO, ORINV 
+        (cTable)->(DbSetOrder(1)) //FILIAL, ARMAZEM, PRODUTO, ORDEM 
+        (cTable)->(DbSeek(cBranch+cWare+cProd))
+    Endif
+
+    oThread01["start"]    := (cTable)->ORDEM //Grava o primeiro registro da primeira thread
+    oThread01["recStart"] := (cTable)->(Recno()) //Grava o recno do primeiro registro
+
+    If lCusEmp
+        (cTable)->(DbSetOrder(2)) //2 PRODUTO, ORINV 
+        (cTable)->(DbSeek(cProd))
+    Elseif lCusFil
+        (cTable)->(DbSetOrder(2)) //2 FILIAL, PRODUTO, ORINV
+        (cTable)->(DbSeek(cBranch+cProd))
+    Else 
+        (cTable)->(DbSetOrder(2)) //2 FILIAL, ARMAZEM, PRODUTO, ORINV 
+        (cTable)->(DbSeek(cBranch+cWare+cProd))
+    Endif
+
+    oThread02["end"]    := (cTable)->ORDEM //Grava o último registro da segunda thread
+    oThread02["recEnd"] := (cTable)->(Recno()) //Recno do último registro da segunda thread
+
+    nTotal := nQuantTot
+
+    //Cenário:
+    //Caso o Kardex seja ordenado por sequência de cálculo, mas o recálculo do custo médio
+    //Não tenha sido executado, o SEQCALC das tabelas estará vazio. Neste cenário, o campo
+    //ORINV estará igual ao campo ORDEM, e, o thread01 start será igual ao thread02 end, fazendo
+    //com que o Kardex execute somente uma linha. Por isso, o tratamento abaixo força o
+    //range final ser o último possível.
+    If nTotal > 1 .and. (oThread02["end"] == oThread01["start"])
+        cQuery := "SELECT MAX(ORDEM) ORDEM FROM " + cTable + " WHERE "
+
+        If lCusEmp
+            cQuery     += "PRODUTO = ? "
+            aBindParam := {cProd}
+        Elseif lCusFil
+            cQuery     += "FILIAL = ? AND PRODUTO = ? "
+            aBindParam := {cBranch,cProd}
+        Else 
+            cQuery     += "FILIAL = ? AND ARMAZEM = ? AND PRODUTO = ? "
+            aBindParam := {cBranch,cWare,cProd}
+        Endif
+
+        oThread02["end"] := oRepository:getMaxOrdem(cTable, cQuery, aBindParam)
+        nAux := oThread02["end"]
+        ::PosByOrder(lCusEmp, lCusFil, cTable, 2, cBranch, cWare, cProd, nAux)
+
+        oThread02["recEnd"] := (cTable)->(Recno())
+        lNotInvert := .T. //Indica que a segunda thread deve processar de baixo para cima
+    Endif
+
+    //Calcula o inicio e fim de cada thread, de forma que não se sobreponham
+    nHalf  := (round(nTotal / 2,0) + 1)
+    oThread01["end"] := oThread01["start"] + nHalf
+
+    nAux := oThread01["end"]
+    ::PosByOrder(lCusEmp, lCusFil, cTable, 2, cBranch, cWare, cProd, nAux)
+
+    oThread01["recEnd"] := (cTable)->(Recno())
+    oThread02["start"] := oThread01["end"] + 1 
+
+    nAux := oThread02["start"]
+    ::PosByOrder(lCusEmp, lCusFil, cTable, 2, cBranch, cWare, cProd, nAux)
+
+    oThread02["recStart"] := (cTable)->(Recno())
+
+    oThread01["total"] := (oThread01["end"] - oThread01["start"]) + 1
+    oThread02["total"] := (oThread02["end"] - oThread02["start"]) + 1
+
+    (cTable)->(DBCLOSEAREA())
+
+    oRanges["thread_01"] := oThread01
+    oRanges["thread_02"] := oThread02
+
+Endif
+
+oRanges["not_invert"] := lNotInvert
+
+return oRanges
+
+/*/{Protheus.doc} PosByOrder
+    Posiciona na tabela baseado no campo de ORDER
+/*/
+Method PosByOrder(lCusEmp, lCusFil, cTable, nOrder, cBranch, cWare, cProd, nAux) class ESTR900BService
+    Local cAux := Str(nAux, 9, 0)
+    
+    If lCusEmp
+        (cTable)->(DbSetOrder(nOrder))
+        (cTable)->(DbSeek(cProd+cAux))
+    Elseif lCusFil
+        (cTable)->(DbSetOrder(2))
+        (cTable)->(DbSeek(cBranch+cProd+cAux))
+    Else 
+        (cTable)->(DbSetOrder(2))
+        (cTable)->(DbSeek(cBranch+cWare+cProd+cAux))
+    EndIf
+Return
+
+/*/{Protheus.doc} setESTR900B
+    Funcao chamada para subir as threads da MANUALJOB
+    @type  Function
+    @author Squad Entradas
+    @since 20/06/2022
+    @version 1.0
+    @param cParam, character, empresa e filial
+/*/
+Method setESTR900B(cEmp,cFil, cArm, cProd, nSaldoIni, nSaldoFim, nQuantIni, nQuantFin, nInitRang1, nFinRang1 , lSecundth, cIdJob, cIdConfig, lNotInvert, nRecStart, nRecEnd)  class ESTR900BService
+
+// TABELA DE PROCESSAMENTO 01 - MOVIMENTAÇÕES
+Local cAliasTRB := 'A' + Alltrim(Upper(cIdConfig)) + '_01'
+// TABELA DE PROCESSAMENTO 02 - PRODUTOS
+Local cAliasTRC := 'A' + Alltrim(Upper(cIdConfig)) + '_02'
+
+Local nTotQuant := IIF(lSecundth, nQuantFin, nQuantIni)
+Local nTotCusto := IIF(lSecundth, nSaldoFim, nSaldoIni)
+Local lFirst := .T.
+Local lContinua := .F.
+Local lImpSMov := .F.
+Local lvercalc := .F.
+Local lTransEnd := .T.
+Local cTipoNf   := ""
+Local lInverteMov :=.F.
+Local lPriApropri :=.T.
+Local oD4A      := totvs.protheus.backoffice.stock.trackcosts.model.D4A.D4A():New()
+Local oD4B      := totvs.protheus.backoffice.stock.trackcosts.model.D4B.D4B():New()
+Local oTotal    := JsonObject():New()
+Local cLocProc  := GetMvNNR('MV_LOCPROC','99')
+Local nSkip     := 1
+Local oParams   := Nil
+Local nCusTotAnt 
+Local nQtTotAnt
+
+Private lCusFil    
+Private lCusEmp 
+
+Default lNotInvert := .F. 
+Default nRecStart  := 0
+Default nRecEnd    := 0
+
+lCusFil:= AllTrim(SuperGetMV('MV_CUSFIL' ,.F.,"A")) == "F"
+lCusEmp := AllTrim(SuperGetMv('MV_CUSFIL' ,.F.,"A")) == "E"
+
+oParams := oD4B:getById(cIdConfig)
+
+::cTableName01 := cAliasTRB
+
+oD4A:PATCH('D4A_STATUS', 'PROCESSING')
+oD4A:LOCK()
+
+DbUseArea(.T.,"TOPCONN",cAliasTRC,cAliasTRC,.T.)
+
+If lCusEmp
+    (cAliasTRC)->(DBClearIndex())
+    (cAliasTRC)->(dbSetIndex(cAliasTRC + '_06')) 
+    (cAliasTRC)->(DbSetOrder(1))
+    (cAliasTRC)->(DbSeek(cProd))
+
+    oTotal := ::getTotals( AllTrim(SuperGetMV('MV_CUSFIL' ,.F.,"A")), , , cProd)
+Elseif lCusFil
+    (cAliasTRC)->(DBClearIndex())
+    (cAliasTRC)->(dbSetIndex(cAliasTRC + '_04')) 
+    (cAliasTRC)->(DbSetOrder(1))
+    (cAliasTRC)->(DbSeek(cFil+cProd))
+
+    oTotal := ::getTotals( AllTrim(SuperGetMV('MV_CUSFIL' ,.F.,"A")), cFil, , cProd)
+
+Else 
+    (cAliasTRC)->(DBClearIndex())
+    (cAliasTRC)->(dbSetIndex(cAliasTRC + '_02'))
+    (cAliasTRC)->(DbSetOrder(1)) 
+    (cAliasTRC)->(DbSeek(cFil+cArm+cProd))
+
+    oTotal := ::getTotals( AllTrim(SuperGetMV('MV_CUSFIL' ,.F.,"A")), cFil, cArm, cProd)
+
+Endif
+
+RecLock(cAliasTRC, .F.) 
+(cAliasTRC)->ID_900B :=  cIdJob
+(cAliasTRC)->TOTQENT  := oTotal["inflowQuantity"]
+(cAliasTRC)->TOTCENT  := oTotal["inflowBalance"]
+(cAliasTRC)->TOTQSAI  := oTotal["outflowQuantity"]
+(cAliasTRC)->TOTCSAI  := oTotal["outflowBalance"]
+(cAliasTRC)->(MSUnlock())
+
+(cAliasTRC)->(DbCloseArea())
+
+DbUseArea(.T.,"TOPCONN",cAliasTRB,cAliasTRB,.T.)
+(cAliasTRB)->( DBClearIndex() )
+if !lSecundth
+    
+    If lCusEmp
+        (cAliasTRB)->(dbSetIndex(cAliasTRB +'_04'))
+        (cAliasTRB)->(DbSetOrder(1))
+        (cAliasTRB)->(DbSeek(cProd))
+    Elseif lCusFil
+        (cAliasTRB)->(dbSetIndex(cAliasTRB +'_06'))
+        (cAliasTRB)->(DbSetOrder(1))
+        (cAliasTRB)->(DbSeek(cFil+cProd))
+    Else 
+        (cAliasTRB)->(dbSetIndex(cAliasTRB +'_01'))
+        (cAliasTRB)->(DbSetOrder(1))
+        (cAliasTRB)->(DbSeek(cFil+cArm+cProd))
+    Endif
+
+else
+    
+    If lCusEmp
+        (cAliasTRB)->(dbSetIndex(cAliasTRB +'_05'))
+        (cAliasTRB)->(DbSetOrder(1))
+        (cAliasTRB)->(DbSeek(cProd))
+    Elseif lCusFil
+        (cAliasTRB)->(dbSetIndex(cAliasTRB +'_07'))
+        (cAliasTRB)->(DbSetOrder(1))
+        (cAliasTRB)->(DbSeek(cFil+cProd))
+    Else 
+        (cAliasTRB)->(dbSetIndex(cAliasTRB +'_03'))
+        (cAliasTRB)->(DbSetOrder(1))
+        (cAliasTRB)->(DbSeek(cFil+cArm+cProd))
+    Endif
+
+    //Caso deva processar de baixo pra cima
+    If lNotInvert
+        nSkip := -1
+        (cAliasTRB)->(DbGoto(nRecEnd))
+    EndIf
+
+endIf
+
+While (cAliasTRB)->(!Eof()) .and.  ::isStillSameProduct(cAliasTRB, cFil, cArm, cProd, lCusEmp, lCusFil)
+
+    If !lSecundth .And. !(cAliasTRB)->ORDEM <= nFinRang1
+        (cAliasTRB)->(DBSKIP(nSkip))
+        exit
+    EndIF
+    
+    If lSecundth
+        If ((cAliasTRB)->ORDEM < nInitRang1 .OR. (cAliasTRB)->ORDEM > nFinRang1)
+            (cAliasTRB)->(DBSKIP(nSkip))
+            exit
+        EndIF
+
+        If (cAliasTRB)->ORDEM == nFinRang1
+            RecLock(cAliasTRB, .F.) 
+            (cAliasTRB)->ID_900B  := cIdJob
+            (cAliasTRB)->TOTQUANT := nTotQuant
+            (cAliasTRB)->TOTCUSTO := nTotCusto
+            (cAliasTRB)->(MSUnlock())
+            lvercalc :=.T.
+        EndIf 
+    Endif
+    
+    RecLock(cAliasTRB, .F.) 
+    lContinua := .F.
+    lImpSMov  := .F.
+    
+    If lSecundth .And. !lvercalc 
+        (cAliasTRB)->TOTCUSTO := nCusTotAnt
+        (cAliasTRB)->TOTQUANT := nQtTotAnt
+        (cAliasTRB)->ID_900B  := cIdJob
+        nTotQuant :=  nQtTotAnt
+        nTotCusto :=  nCusTotAnt
+        (cAliasTRB)->(MSUnlock())
+    EndIf
+
+    
+    If Alltrim((cAliasTRB)->ARQ) $ "SD1/SD2"
+        lFirst:=.T.
+    ElseIf Alltrim((cAliasTRB)->ARQ) == "SD3"
+        lFirst:=.T.
+        //ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+        //³ Quando movimento ref apropr. indireta, so considera os         ³
+        //³ movimentos com destino ao almoxarifado de apropriacao indireta.³
+        //ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+        lInverteMov:=.F.
+        If alltrim((cAliasTRB)->ARMAZEM) == cLocProc .Or. lCusFil .Or. lCusEmp
+            If !(Substr((cAliasTRB)->CF,3,1) == "3")
+                If !(lCusFil .Or. lCusEmp)
+                    (cAliasTRB)->(dbSkip(nSkip))
+                    Loop
+                EndIf
+            ElseIf lPriApropri
+                lInverteMov := .T.
+            EndIf
+        EndIf
+        //ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+        //³ Caso seja uma transferencia de localizacao verifica se lista   ³
+        //³ o movimento ou nao                                             ³
+        //ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+        If oParams:GetJsonObject("D4B_TRANSL") == 2  .And. Substr((cAliasTRB)->CF,3,1) == "4"
+
+            lTransEnd := .T.
+            If Localiza((cAliasTRB)->PRODUTO)
+
+                lContinua := .T.
+                If (cAliasTRB)->TES <= "500"
+                    //aSalAtu[1] += aDadosTran[2] //quantidade
+                    //aSalAtu[mv_par07+1] += aDadosTran[3] //custo
+                    //aSalAtu[7] += aDadosTran[4] //quantidade segunda uni          
+                    
+                    If lSecundth  
+                        nQtTotAnt  := nTotQuant - (cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt := nTotCusto - (cAliasTRB)->CUSTO 
+                    else                
+                        nTotQuant += (cAliasTRB)->QUANTIDADE 
+                        nTotCusto += (cAliasTRB)->CUSTO
+                    EndIF
+                    
+                Else
+                    //aSalAtu[1] -= aDadosTran[2]
+                    //aSalAtu[mv_par07+1] -= aDadosTran[3]
+                    //aSalAtu[7] -= aDadosTran[4]
+                    If lSecundth  
+                        //Adiciona sai de venda simples
+                        nQtTotAnt  := nTotQuant + (cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt := nTotCusto + (cAliasTRB)->CUSTO  
+                    else                
+                        nTotQuant -= (cAliasTRB)->QUANTIDADE 
+                        nTotCusto -= (cAliasTRB)->CUSTO
+                    EndIF
+                EndIf
+
+                lTransEnd := .T.
+            EndIf
+        EndIf
+    EndIf
+    
+    Do Case
+        Case Alltrim((cAliasTRB)->ARQ) == "SD1" .And. !lContinua .And. lTransEnd
+            lDev:=MTR900Dev("SD1",cAliasTRB)
+            /* Condição original do Kardex MATR900 removida
+            Removido o trecho (cAliasTRB)->TES <= "500" .And.
+            da condição abaixo, pois verificou-se que todas as notas SD1 de entrada
+            terão essa condição atendida, e é impossível TES > 500 na SD1
+            */
+            If !lDev
+                /*Condição original do Kardex MATR900 removida
+                Removida condição que zera o custo médio das notas de complemento, pois a query
+                já trata os casos onde se a quantidade for zerada, o custo médio fica zerado.
+                No caso do complemento de quantidade, será considerado o custo médio da movimentação
+
+                If (cAliasTRB)->TIPONF == "C"
+                    (cAliasTRB)->CUSMED := 0
+
+                    //oSection3:Cell("nCusMov"):SetValue(0)
+                    //oSection3:Cell("nCusMov"):Hide()
+                EndIf
+                */
+                If lSecundth  
+                    nQtTotAnt  := nTotQuant - (cAliasTRB)->QUANTIDADE 
+                    nCusTotAnt := nTotCusto - (cAliasTRB)->CUSTO  
+                Else                
+                    nTotQuant += (cAliasTRB)->QUANTIDADE
+                    nTotCusto += (cAliasTRB)->CUSTO
+                EndIf
+            Else
+                /* Condição original do Kardex MATR900 removida
+                Avaliar com PO qual a regra para o cálculo do custo médio na nota
+                de devolução de uma nota de complemento, pois todas as notas
+                de devolução são lançadas com tipo D, esta regra não pode ser atendida
+                */
+                //If (cAliasTRB)->TIPONF == "C"
+                //    (cAliasTRB)->CUSMED := 0
+                    //oSection3:Cell("nCusMov"):SetValue(0)
+                    //oSection3:Cell("nCusMov"):Hide()
+                //EndIf
+
+                //Removido pois lDev sempre .T.
+                //If lDev
+                    //aSalAtu[1] += (cAliasTRB)->QUANTIDADE
+                    //aSalAtu[mv_par07+1] += (cAliasTRB)->CUSTO
+                    //aSalAtu[7] += (cAliasTRB)->QUANT2UM
+                    If lSecundth  
+                        //Adiciona sai de venda simples
+                        nQtTotAnt  := nTotQuant -(cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt := nTotCusto -(cAliasTRB)->CUSTO  
+                    Else                
+                        nTotQuant += (cAliasTRB)->QUANTIDADE
+                        nTotCusto += (cAliasTRB)->CUSTO
+                    EndIf
+                /* Condição original do Kardex MATR900 removida
+                Neste trecho lDev sempre será .T., então o trecho abaixo não será executado:
+                
+                Else
+
+                    //aSalAtu[1] 			-= (cAliasTRB)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	-= (cAliasTRB)->CUSTO
+                    //aSalAtu[7]			-= (cAliasTRB)->QUANT2UM
+                    
+                   If lSecundth  
+                        //Adiciona sai de venda simples
+                        nQtTotAnt :=nTotQuant  +(cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt:= nTotCusto +(cAliasTRB)->CUSTO  
+
+                    else                
+                        nTotQuant -= (cAliasTRB)->QUANTIDADE
+                        nTotCusto -= (cAliasTRB)->CUSTO
+                    EndIF
+                EndIf
+                */
+            EndIf
+        Case Alltrim((cAliasTRB)->ARQ) = "SD2" .And. !lContinua .And. lTransEnd
+            lDev:=MTR900Dev("SD2",cAliasTRB)
+            /* Condição original do Kardex MATR900 removida
+            Removido o trecho (cAliasTRB)->TES <= "500" .Or.
+            da condição abaixo, pois verificou-se que todas as notas SD2 de saída
+            nunca terão essa condição atendida, pois é impossível TES <= 500 na SD2
+            */
+            If lDev
+            //Comentado por redundância 
+            //   If lDev
+                    //aSalAtu[1] 			-= (cAliasTOP)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	-= (cAliasTOP)->CUSTO
+                    //aSalAtu[7]			-= (cAliasTOP)->QUANT2UM
+
+                        If lSecundth  
+                            //Adiciona sai de venda simples
+                            nQtTotAnt  := nTotQuant + (cAliasTRB)->QUANTIDADE 
+                            nCusTotAnt := nTotCusto + (cAliasTRB)->CUSTO  
+                        Else                
+                            nTotQuant -= (cAliasTRB)->QUANTIDADE
+                            nTotCusto -= (cAliasTRB)->CUSTO
+                        EndIf
+            /* Condição original do Kardex MATR900 removida
+            lDev sempre será .T. neste ponto
+                Else
+                    //aSalAtu[1]			+= (cAliasTOP)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	+= (cAliasTOP)->CUSTO
+                    //aSalAtu[7]			+= (cAliasTOP)->QUANT2UM
+
+                    If lSecundth  
+                            //Adiciona sai de venda simples
+                        nQtTotAnt :=nTotQuant  -(cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt:= nTotCusto -(cAliasTRB)->CUSTO  
+
+                    else                
+                        nTotQuant += (cAliasTRB)->QUANTIDADE
+                        nTotCusto += (cAliasTRB)->CUSTO
+                    EndIF
+                EndIf
+            */
+                /* Condição original do Kardex MATR900 removida
+                Avaliar com PO qual a regra para o cálculo do custo médio na nota
+                de devolução de uma nota de complemento, pois todas as notas
+                de devolução são lançadas com tipo D, esta regra não pode ser atendida
+                */
+                //If (cAliasTRB)->TIPONF == "C"
+                //    (cAliasTRB)->CUSMED := 0
+                //EndIf
+            Else
+                /*Condição original do Kardex MATR900 removida
+                Removida condição que zera o custo médio das notas de complemento, pois a query
+                já trata os casos onde se a quantidade for zerada, o custo médio fica zerado.
+                No caso do complemento de quantidade, será considerado o custo médio da movimentação
+                If (cAliasTRB)->TIPONF == "C"
+                    (cAliasTRB)->CUSMED := 0
+                EndIf
+                */
+
+                //aSalAtu[1]			-= (cAliasTRB)->QUANTIDADE
+                //aSalAtu[mv_par07+1]	-= (cAliasTRB)->CUSTO
+                //aSalAtu[7]			-= (cAliasTRB)->QUANT2UM
+                If lSecundth  
+                    //Adiciona sai de venda simples
+                    nQtTotAnt  := nTotQuant + (cAliasTRB)->QUANTIDADE 
+                    nCusTotAnt := nTotCusto + (cAliasTRB)->CUSTO  
+                Else                
+                    nTotQuant -= (cAliasTRB)->QUANTIDADE
+                    nTotCusto -= (cAliasTRB)->CUSTO
+                EndIf
+            EndIf
+        Case Alltrim((cAliasTRB)->ARQ) == "SD3" .And. !lContinua  .And. lTransEnd
+            lDev := .F.
+            If	lInverteMov
+                If (cAliasTRB)->TES > "500"
+                    //aSalAtu[1]			+= (cAliasTRB)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	+= (cAliasTRB)->CUSTO
+                    //aSalAtu[7]			+= (cAliasTRB)->QUANT2UM
+
+                    If lSecundth  
+                        //Adiciona sai de venda simples
+                        nQtTotAnt  := nTotQuant - (cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt := nTotCusto - (cAliasTRB)->CUSTO  
+                    Else                
+                        nTotQuant += (cAliasTRB)->QUANTIDADE
+                        nTotCusto += (cAliasTRB)->CUSTO
+                    EndIF
+                Else
+                    //aSalAtu[1]			-= (cAliasTRB)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	-= (cAliasTRB)->CUSTO
+                    //aSalAtu[7]			-= (cAliasTRB)->QUANT2UM
+
+                    If lSecundth  
+                            //Adiciona sai de venda simples
+                        nQtTotAnt :=nTotQuant  +(cAliasTRB)->QUANTIDADE 
+                        nCusTotAnt:= nTotCusto +(cAliasTRB)->CUSTO  
+
+                    else                
+                        nTotQuant -= (cAliasTRB)->QUANTIDADE
+                        nTotCusto -= (cAliasTRB)->CUSTO
+                    EndIF
+                EndIf
+                If lCusFil .Or. lCusEmp
+                    lPriApropri:=.F.
+                EndIf
+            Else
+                If (cAliasTRB)->TES <= "500"
+                    //aSalAtu[1]			+= (cAliasTRB)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	+= (cAliasTRB)->CUSTO
+                    //aSalAtu[7]			+= (cAliasTRB)->QUANT2UM
+                    If lSecundth
+                        //Adiciona sai de venda simples 
+                        nCusTotAnt:= (cAliasTRB)->TOTCUSTO - (cAliasTRB)->CUSTO       
+                        nQtTotAnt := (cAliasTRB)->TOTQUANT - (cAliasTRB)->QUANTIDADE 
+                        
+                    else                
+                        nTotQuant += (cAliasTRB)->QUANTIDADE
+                        nTotCusto += (cAliasTRB)->CUSTO
+                    EndIf
+                Else
+                    //aSalAtu[1]			-= (cAliasTRB)->QUANTIDADE
+                    //aSalAtu[mv_par07+1]	-= (cAliasTRB)->CUSTO
+                    //aSalAtu[7]			-= (cAliasTRB)->QUANT2UM
+                    If lSecundth  
+                                //Adiciona sai de venda simples
+                            nQtTotAnt :=nTotQuant  +(cAliasTRB)->QUANTIDADE 
+                            nCusTotAnt:= nTotCusto +(cAliasTRB)->CUSTO  
+
+                    else                
+                        nTotQuant -= (cAliasTRB)->QUANTIDADE
+                        nTotCusto -= (cAliasTRB)->CUSTO
+                    EndIF
+                EndIf
+                If lCusFil .Or. lCusEmp
+                    lPriApropri:=.T.
+                EndIf
+            EndIf
+    EndCase
+
+    Do Case
+        Case Alltrim((cAliasTRB)->ARQ) == "SD1" .And. !lContinua .And. lTransEnd
+            cTipoNf := 'F-'
+            SD1->(dbGoTo((cAliasTRB)->NRECNO))
+            SD2->(dbSetOrder(3))
+            If SD2->(dbSeek(xFilial("SD2")+SD1->D1_NFORI+SD1->D1_SERIORI+SD1->D1_FORNECE+SD1->D1_LOJA))
+                If SD2->D2_TIPO <> 'B'
+                    cTipoNf := 'C-'
+                EndIf
+            EndIf
+    EndCase
+    If !lSecundth
+        (cAliasTRB)->ID_900B := cIdJob
+        (cAliasTRB)->TOTQUANT := nTotQuant
+        (cAliasTRB)->TOTCUSTO := nTotCusto
+        (cAliasTRB)->(MSUnlock())
+    EndIf
+
+    lvercalc:= .F.
+    (cAliasTRB)->(DbSkip(nSkip))
+ENDDO
+
+(cAliasTRB)->(DbCloseArea())
+oD4A:PATCH('D4A_STATUS', 'FINISHED')
+
+Return
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Fun‡…o    ³ MTR900Dev³ Autor ³ Rodrigo de A. Sartorio³ Data ³ 17/07/98 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descri‡…o ³Avalia se item pertence a uma nota de devolu‡ao             ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Sintaxe   ³ MTR900Dev(ExpC1,ExpC2)				                      ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Parametros³ ExpC1 = Alias                                              ³±±
+±±³          ³ ExpC2 = Alias Top                                          ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Retorno   ³ .T. / .F.                                                  ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³ Uso      ³ MATR900                                                    ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function MTR900Dev(cAlias,cAliasTop)
+Static lListaDev := NIL
+
+Local lRet:=.F.
+Local cSeek:= (cAliasTop)->DOCUMENTO+(cAliasTop)->SERIE+(cAliasTop)->FORNECEDOR+(cAliasTop)->LOJA
+
+// Identifica se lista dev. na mesma coluna
+lListaDev := If(ValType(lListaDev)#"L",GetMV("MV_LISTDEV"),lListaDev)
+
+If lListaDev .And. cAlias == "SD1"
+	dbSelectArea("SF1")
+	If dbSeek(xFilial("SF1") + cSeek) .And. SF1->F1_TIPO == "D"
+		lRet:=.T.
+	EndIf
+ElseIf lListaDev .And. cAlias == "SD2"
+	dbSelectArea("SF2")
+	If dbSeek(xFilial("SF2") + cSeek) .And. SF2->F2_TIPO == "D"
+		lRet:=.T.
+	EndIf
+EndIf
+dbSelectArea(If(Empty(cAliasTop),cAlias,cAliasTop))
+Return lRet
+
+/*/{Protheus.doc} acResultsAnalysisRepository:getFullFields()
+    Metodo responsavel por verificar se existe uma tabela com o Id informado
+    @type  Metodo
+    @author andre.maximo
+    @since  Jan 29, 2021
+    @version 12.1.27
+/*/
+Method isStillSameProduct(cAliasTRB, cFil, cArm, cProd, lCusEmp, lCusFil) CLASS ESTR900BService
+
+    If lCusEmp
+        cSeek   := Alltrim(cProd)
+        cIndex  := Alltrim((cAliasTRB)->(PRODUTO))
+
+    Elseif lCusFil
+        cSeek   := Alltrim(cFil+cProd)
+        cIndex  := Alltrim((cAliasTRB)->(FILIAL+PRODUTO))     
+
+    Else 
+        cSeek   := Alltrim(cFil+cArm+cProd)
+        cIndex  := Alltrim((cAliasTRB)->(FILIAL+ARMAZEM+PRODUTO))  
+    Endif
+
+
+Return cSeek == cIndex
+
+/*/{Protheus.doc} ACKardexController:New()
+Â Â Â Â Metodo responsavel por instanciar e iniciar as variaveis da class acUser
+Â Â Â Â @typeÂ Â Metodo
+Â Â Â Â @authorÂ Pedro Missaglia
+Â Â Â Â @sinceÂ Â OutubroÂ 02, 2020
+Â Â Â Â @versionÂ 12.1.27
+/*/
+method getTotals(cCusFil, cBranch, cWare, cProd) class ESTR900BService
+
+    Local cAlias        as character
+    Local oTotal        := JsonObject():New()
+    Local cQuery        := ""
+    Local cSubs         := MatiSubStr()
+    Local aBindParam    as array
+
+    cQuery := "SELECT "
+    
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD1' THEN QUANTIDADE ELSE 0 END ) SUMD1QENT, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD1' THEN QUANT2UM ELSE 0 END ) SUMD1QENT2, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD1' THEN CUSTO ELSE 0 END ) SUMD1CENT, "
+
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD1' THEN QUANTIDADE ELSE 0 END ) SUMD1QSAI, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD1' THEN QUANT2UM ELSE 0 END ) SUMD1QSAI2, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD1' THEN CUSTO ELSE 0 END ) SUMD1CSAI, "
+
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD2' THEN QUANTIDADE ELSE 0 END ) SUMD2QSAI, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD2' THEN QUANT2UM ELSE 0 END ) SUMD2QSAI2, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD2' THEN CUSTO ELSE 0 END ) SUMD2CSAI, "
+
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD2' THEN QUANTIDADE ELSE 0 END ) SUMD2QENT,"
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD2' THEN QUANT2UM ELSE 0 END ) SUMD2QENT2, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD2' THEN CUSTO ELSE 0 END ) SUMD2CENT, "
+
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD3' THEN QUANTIDADE ELSE 0 END ) SUMD3QENT, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD3' THEN QUANT2UM ELSE 0 END ) SUMD3QENT2, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD3' THEN CUSTO ELSE 0 END ) SUMD3CENT, "
+
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD3' THEN QUANTIDADE ELSE 0 END ) SUMD3QSAI, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD3' THEN QUANT2UM ELSE 0 END ) SUMD3QSAI2, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD3' THEN CUSTO ELSE 0 END ) SUMD3CSAI, "
+ 
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD3' AND " + cSubs +"(CF, 3, 1) = '3' THEN QUANTIDADE ELSE 0 END ) RE3D3QENT, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD3' AND " + cSubs +"(CF, 3, 1) = '3' THEN QUANT2UM ELSE 0 END ) RE3D3QENT2, "
+    cQuery += "SUM (CASE WHEN TES <= '500' AND ARQ = 'SD3' AND " + cSubs +"(CF, 3, 1) = '3' THEN CUSTO ELSE 0 END ) RE3D3CENT, "
+ 
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD3' AND " + cSubs +"(CF, 3, 1) = '3' THEN QUANTIDADE ELSE 0 END ) RE3D3QSAI, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD3' AND " + cSubs +"(CF, 3, 1) = '3' THEN QUANT2UM ELSE 0 END ) RE3D3QSAI2, "
+    cQuery += "SUM (CASE WHEN TES >= '500' AND ARQ = 'SD3' AND " + cSubs +"(CF, 3, 1) = '3' THEN CUSTO ELSE 0 END ) RE3D3CSAI "
+
+    cQuery += "FROM " + ::cTableName01
+
+    If cCusFil == 'A'
+        cQuery += "WHERE FILIAL = ? AND ARMAZEM = ? AND PRODUTO = ?"
+    Elseif cCusFil == 'F'
+        cQuery += "WHERE FILIAL = ? AND PRODUTO = ?"
+    Else 
+        cQuery += "WHERE PRODUTO = ?"
+    Endif
+
+    cQuery := ChangeQuery(cQuery)
+
+    If cCusFil == 'A'
+        aBindParam := {cBranch, cWare, cProd}
+    Elseif cCusFil == 'F'
+        aBindParam := {cBranch, cProd}
+    Else 
+        aBindParam := {cProd}
+    Endif
+    
+    cAlias  := MPSysOpenQuery(cQuery,,,,aBindParam)
+
+    If cCusFil == 'A'
+
+        oTotal["inflowQuantity"]    := (cAlias)->SUMD1QENT  + (cAlias)->SUMD2QENT   + (cAlias)->SUMD3QENT
+        oTotal["inflowQuantity2"]   := (cAlias)->SUMD1QENT2 + (cAlias)->SUMD2QENT2  + (cAlias)->SUMD3QENT2
+        oTotal["inflowBalance"]     := (cAlias)->SUMD1CENT  + (cAlias)->SUMD2CENT   + (cAlias)->SUMD3CENT
+        oTotal["outflowQuantity"]   := (cAlias)->SUMD1QSAI  + (cAlias)->SUMD2QSAI   + (cAlias)->SUMD3QSAI 
+        oTotal["outflowQuantity2"]  := (cAlias)->SUMD1QSAI2 + (cAlias)->SUMD2QSAI2  + (cAlias)->SUMD3QSAI2
+        oTotal["outflowBalance"]    := (cAlias)->SUMD1CSAI  + (cAlias)->SUMD2CSAI   + (cAlias)->SUMD3CSAI
+              
+    else
+        oTotal["inflowQuantity"]    := (cAlias)->SUMD1QENT  + (cAlias)->SUMD2QENT   + ((cAlias)->SUMD3QENT  - (cAlias)->RE3D3QENT)
+        oTotal["inflowQuantity2"]   := (cAlias)->SUMD1QENT2 + (cAlias)->SUMD2QENT2  + ((cAlias)->SUMD3QENT2 - (cAlias)->RE3D3QENT2)
+        oTotal["inflowBalance"]     := (cAlias)->SUMD1CENT  + (cAlias)->SUMD2CENT   + ((cAlias)->SUMD3CENT  - (cAlias)->RE3D3CENT)
+        oTotal["outflowQuantity"]   := (cAlias)->SUMD1QSAI  + (cAlias)->SUMD2QSAI   + ((cAlias)->SUMD3QSAI  - (cAlias)->RE3D3QSAI)
+        oTotal["outflowQuantity2"]  := (cAlias)->SUMD1QSAI2 + (cAlias)->SUMD2QSAI2  + ((cAlias)->SUMD3QSAI2 - (cAlias)->RE3D3QSAI2)
+        oTotal["outflowBalance"]    := (cAlias)->SUMD1CSAI  + (cAlias)->SUMD2CSAI   + ((cAlias)->SUMD3CSAI  - (cAlias)->RE3D3CSAI)
+    Endif
+
+    (cAlias)->(DBCLOSEAREA())
+
+return oTotal
+
+/*/{Protheus.doc} version
+    Metodo responsavel por indicar a versao da classe
+    @type Method
+    @author Adriano Vieira
+    @since  15/02/2024
+    @version 12.1.23.10
+/*/
+Method version() class ESTR900BService
+    Local nVersion := 200
+Return nVersion
