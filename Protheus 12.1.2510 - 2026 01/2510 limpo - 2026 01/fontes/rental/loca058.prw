@@ -1,0 +1,19 @@
+#include "totvs.ch"
+#include "topconn.ch"
+#include "tbiconn.ch"
+
+/*/ LOCA058.PRW 
+ITUP BUSINESS - TOTVS RENTAL
+TELA DE APROVAÇÃO DE CONTRATO/PROJETOS
+@TYPE FUNCTION
+@AUTHOR FRANK ZWARG FUGA
+@SINCE 03/12/2020
+@VERSION P12
+@HISTORY 03/12/2020, FRANK ZWARG FUGA, FONTE PRODUTIZADO.
+fonte removido temporariamente por Frank em 24/02/2023
+/*/
+
+FUNCTION LOCA058()
+Local lRet := .T.
+RETURN lRet
+
