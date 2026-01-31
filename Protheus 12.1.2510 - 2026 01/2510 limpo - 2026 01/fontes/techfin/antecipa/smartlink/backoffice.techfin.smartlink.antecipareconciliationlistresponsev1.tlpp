@@ -1,0 +1,264 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#Include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaReconciliationListResponseV1MessageReader
+	Classe de Reconciliacao do Novo Antecipa
+	Faz transferencias bancarias entre os bancos informados na mensagem
+	@type class
+	@author Ronald Piscioneri
+	@since 21/11/2025
+/*/
+class AntecipaReconciliationListResponseV1MessageReader
+	data aEntries  as array
+	data jMSGData  as json
+	data jMessage  as json
+	data cPayload  as character
+	data cMock     as character
+	data lMock     as logical
+
+	public method new() constructor
+	public method read()
+	public method mock()
+	method formatEntries()
+	method procEntries()
+end class
+
+/*/{Protheus.doc} AntecipaReconciliationListResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Ronald Piscioneri
+	@since 21/11/2025
+/*/
+method New() class AntecipaReconciliationListResponseV1MessageReader
+	::aEntries := {}
+	::jMSGData  := JsonObject():new()
+	::jMessage  := JsonObject():new()
+	::cPayload	:= ""
+	::cMock     := ""
+	::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} AntecipaReconciliationListResponseV1MessageReader::mock
+	Método para mockar a mensagem recebida para testes
+	@type method
+	@author Ronald Piscioneri
+	@since 21/11/2025
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaReconciliationListResponseV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaReconciliationListResponseV1MessageReader::read
+	Responsavel pela leitura e processamento da mensagem
+	@type method
+	@author Ronald Piscioneri
+	@since 21/11/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class AntecipaReconciliationListResponseV1MessageReader
+	local lSuccess  := .F. as logical	
+	local cDecoded  := ""  as character
+
+	::cPayload := if(::lMock, ::cMock, oLinkMessage:RawMessage())
+	cDecoded := DecodeUTF8(::cPayload)	
+	if !Empty(cDecoded)
+		::cPayload := cDecoded
+	endIf
+
+	if ::jMessage:FromJSON(::cPayload) == NIL
+		::jMSGData  := ::jMessage["data"]
+		::formatEntries()
+		::procEntries()
+		lSuccess := .T.
+	endIf
+
+    FwFreeObj(::jMSGData)
+	FwFreeObj(::jMessage)
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} AntecipaReconciliationListResponseV1MessageReader::formatEntries
+	Formata a mensagem que sera' usada na funcao F136MovBan()
+	@type method
+	@author Squad TechFin
+	@since 11/27/2025
+/*/
+method formatEntries() class AntecipaReconciliationListResponseV1MessageReader
+	local aSM0     := FWLoadSM0() 		 as array
+	local nAccount := 0           		 as numeric
+	local nEntry   := 0           		 as numeric
+	local nPosFil  := 0           		 as numeric
+	local nPosCNPJ := 0           		 as numeric	
+	local cBranchCNPJ :="" 				 as character
+	local cBank :="" 					 as character
+	local cBranch :="" 					 as character
+	local cAccount :="" 				 as character
+	local jEntrie  := JsonObject():new() as Json
+	
+	for nAccount := 1 to len(::jMSGData["accounts"])
+		cBank 	:= ::jMSGData["accounts"][nAccount]["bank"]
+		cBranch := ::jMSGData["accounts"][nAccount]["branch"]
+		cAccount := ::jMSGData["accounts"][nAccount]["checkingAccount"]
+		for nEntry := 1 to len(::jMSGData["accounts"][nAccount]["entries"])			
+					
+			//Cria os atributos dentro do jEntrie para carrega-los até a método da conciliação em events.tlpp
+			jEntrie := ::jMSGData["accounts"][nAccount]["entries"][nEntry]
+			jEntrie["bank"]				:= cBank
+			jEntrie["branch"]			:= cBranch
+			jEntrie["checkingAccount"]	:= cAccount
+
+			cBranchCNPJ  := jEntrie["partnerDocumentNumber"]
+			if (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+				if (nPosCNPJ := AScan(::aEntries, { |x| x[1] == cBranchCNPJ})) > 0
+					Aadd( ::aEntries[nPosCNPJ,2], jEntrie )
+				Else
+					Aadd( ::aEntries, Array(4))
+					::aEntries[Len(::aEntries), 1] := cBranchCNPJ
+					::aEntries[Len(::aEntries), 2] := {}
+					::aEntries[Len(::aEntries), 3] := aSM0[nPosFil,1] //Empresa
+					::aEntries[Len(::aEntries), 4] := aSM0[nPosFil,2] //Filial
+					Aadd( ::aEntries[Len(::aEntries),2], jEntrie )								
+				EndIf
+			endIf
+		Next nEntry			
+	next nAccount
+return
+
+/*/{Protheus.doc} AntecipaReconciliationListResponseV1MessageReader::procEntries
+	Inicia o processamento da reconciliacao (transferencia entre contas)
+	@type method
+	@author Ronald Piscioneri
+	@since 8/12/2025
+/*/
+method procEntries() class AntecipaReconciliationListResponseV1MessageReader
+	local nEntries	 := 0              		as numeric
+	local cEnvServer := GetEnvServer() 		as character	
+	local jNewData	 := JsonObject():new() 	as json
+
+	For nEntries:=1 to Len(::aEntries)
+		jNewData["entries"] := aClone(::aEntries[nEntries,2])
+		StartJob("TAReconc", cEnvServer, .T., ::aEntries[nEntries, 3], ::aEntries[nEntries, 4], jNewData:toJson(), ::cPayload)
+	Next nEntries		
+return
+
+/*/{Protheus.doc} TAReconc
+	Executa a regra de negócio da Conciliação
+	@type function
+	@author Squad TechFin
+	@since 11/27/2025
+  	@param cCompany, character, Grupo Empresa
+	@param cBranch , character, Filial
+	@param jData   , json     , dados da organização
+	@param cPayload, character, mensagem recebida
+/*/
+Function TAReconc(cCompany as character, cBranch as character, cData as character, cPayload as character)
+	local nX         := 0                  as numeric
+	local nZ         := 0                  as numeric
+	local nARE_TRANSC:= 0                  as numeric
+	local nARF_IDMOV := 0                  as numeric
+	local cLogModel	 := "" 				   as character
+	local cStatus	 := "" 				   as character
+	local cTransCode := "" 				   as character
+	local cIdEntry 	 := "" 				   as character
+	local oEvent     := Nil                as object
+	local oResult    := Nil                as object
+	local oSmartUtil := nil                as object
+	local jData      := JsonObject():New() as json
+
+	RPCSetType(3) 
+	RPCSetEnv(cCompany, cBranch,,,"FIN") 
+
+	jData:fromJson(cData)
+	oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()		
+	nARE_TRANSC	:= TamSX3("ARE_TRANSC")[1]
+	nARF_IDMOV	:= TamSX3("ARF_IDMOV")[1]
+
+	For nX:=1 to Len( jData["entries"] )	
+		cLogModel 	:= ""
+		cStatus 	:= "2"    // 1=Em processamento;2=Aprovado;3=Reprovado
+		cTransCode  := PadR(jData["entries"][nX]["transactionCode"],nARE_TRANSC)
+		cIdEntry	:= PadR(jData["entries"][nX]["entryId"],nARF_IDMOV)
+
+		dbSelectArea("ARE")
+		dbSetOrder(2)
+		//-- Posiciona no item registro do pós-faturamento
+		IF !msSeek(FwxFilial("ARE") + cTransCode)
+			oSmartUtil:addLogMSG("error", "Reconciliation - transactionCode not found.", "ARE_TRANSC: " + cTransCode)
+			Loop
+		EndIf
+		//-- Verifica a existencia do Id único de movimento
+		dbSelectArea("ARF")
+		dbSetOrder(5)
+		IF msSeek(FwxFilial("ARF") + cIdEntry)
+			oSmartUtil:addLogMSG("error", "Reconciliation - IdEntry already exists.", "ARF_IDMOV: " + cIdEntry)
+			Loop
+		EndIf
+
+		Begin Transaction
+
+			//----------------------------------------------------------------------------
+			// Primeiro cria novo registro na ARF - pegar o ARF_CODIGO para o FK5_DOC
+			totvs.protheus.backoffice.techfin.antecipa.postbilling.SetEventToModelDef(7)//-- Conciliação
+			oModel := FWLoadModel("totvs.protheus.backoffice.techfin.antecipa.postbilling.monitorBilling")
+			oModel:SetOperation(MODEL_OPERATION_INSERT)
+			oModel:Activate()
+			oMdlMaster := oModel:GetModel("ARFMASTER")
+			oMdlMaster:SetValue("ARF_TIPO"  , 'L')//-- Conciliação
+			oMdlMaster:SetValue("ARF_FILIAL", FwxFilial("ARF") )
+			oMdlMaster:SetValue("ARF_NUMSOL", ARE->ARE_NUM)
+			oMdlMaster:SetValue("ARF_ITEM"  , ARE->ARE_ITEM)
+			oMdlMaster:SetValue("ARF_FILTIT", ARE->ARE_FILTIT)
+			oMdlMaster:SetValue("ARF_PREFIX", ARE->ARE_PREFIX)
+			oMdlMaster:SetValue("ARF_NUMTIT", ARE->ARE_NUMTIT)
+			oMdlMaster:SetValue("ARF_PARTIT", ARE->ARE_PARTIT)
+			oMdlMaster:SetValue("ARF_TIPTIT", ARE->ARE_TIPTIT)
+			oMdlMaster:SetValue("ARF_CLITIT", ARE->ARE_CLITIT)
+			oMdlMaster:SetValue("ARF_LOJTIT", ARE->ARE_LOJTIT)
+			oMdlMaster:SetValue("ARF_VLSOL" , jData["entries"][nX]["transactionAmount"])
+			oMdlMaster:SetValue("ARF_RECOMP", "2") //-- Não
+			oMdlMaster:SetValue("ARF_STATUS", "2") //-- Aprovado
+			oMdlMaster:SetValue("ARF_IDMOV" , cIdEntry)//Id unico de lançamento da Supplier
+			If !(oModel:VldData() .and. oModel:CommitData())
+				cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+				cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+				cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+				oSmartUtil:addLogMSG("error", "Model validation (ARE_TRANSC): "+ cTransCode, cLogModel)
+				DisarmTransaction()			
+			EndIf
+			oModel:DeActivate()
+			oModel:Destroy()
+
+			If Empty(cLogModel)
+				//--------------------------------------
+				//-- Executa regra de negócio do evento
+				oEvent := totvs.protheus.backoffice.techfin.smartlink.antecipa.events.AntecipaEvents():new()
+				oEvent:setData(jData["entries"][nX])
+				oEvent:FConciliacao()
+				oResult := oEvent:getResult()
+
+				If Len(oResult["error"]) > 0						
+					oSmartUtil:addLogMSG("error", "Reconciliation", "ARE_TRANSC: " + cTransCode)
+					For nZ := 1 to Len(oResult["error"])
+						oSmartUtil:addLogMSG("error", "Processing failure.", oResult["error"][nZ]["description"])
+					Next nZ
+					dbSelectArea('ARF')
+					RecLock('ARF',.F.)
+					ARF->ARF_STATUS := "3" //-- Negado
+					msUnLock()
+				EndIf			
+			EndIf
+		End Transaction
+	Next nX
+	
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oEvent)
+	FwFreeObj(oResult)
+	FwFreeObj(oSmartUtil)
+	
+	RpcClearEnv()
+
+Return

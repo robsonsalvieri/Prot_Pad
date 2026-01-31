@@ -1,0 +1,354 @@
+#include "TOTVS.ch"
+#include "TBICONN.ch"
+#include "tlpp-core.th"
+
+NAMESPACE totvs.protheus.backoffice.techfin.maisprazo.job
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+
+/*/{Protheus.doc} runExtension
+	Executa as operações de pagamento e/ou geração dos novos titulos no ERP
+	@type  Function
+	@author Vitor Duca
+	@since 04/10/2025
+	@version 1.0
+	@param cCompany, Character, Grupo de empresa que deve ser considerado
+	@param cBranch, Character, Filial pertencente ao grupo de empresa
+	@param cPayload, Character, Mensagem recebida pelo SmartLink
+	@param cUUID, Character, Identificador unico do registro ARG
+	@param cIdMessage, Character, Identificador unico da mensagem
+/*/
+Function runExtension(cCompany as character, cBranch as character, cPayload as character, cUUID as character, cIdMessage as character, cOperation as character) as logical
+	local oEvents := MaisPrazoEvents():new()	as object
+	local jMessage := JsonObject():new()		as json
+	local jResult := JsonObject():new()			as json
+	local lSucess := .T.						as logical
+	local nX := 0								as numeric
+	local aLogs := {}							as array
+	local cLog := ""							as character
+	local cDecodedPayload := ""					as character
+
+	DEFAULT cCompany := cEmpAnt
+	DEFAULT cBranch := cFilAnt
+	DEFAULT cPayload := ""
+	DEFAULT cUUID := ""
+	DEFAULT cIdMessage := ""
+	DEFAULT cOperation := "DueDateExtension"
+
+	RPCSetType(3) 
+	RpcClearEnv()
+	RPCSetEnv(cCompany, cBranch,,,'FIN')
+		BEGIN TRANSACTION
+			Try
+				cDecodedPayload := DecodeUTF8(cPayload)
+
+				If Empty(cDecodedPayload)
+					cDecodedPayload := cPayload
+				Endif
+				
+				jMessage:FromJson(cDecodedPayload)
+				oEvents:setData(jMessage["data"])
+				oEvents:setUUID(cUUID)
+
+				lSucess := oEvents:execute()
+
+				jResult:FromJson(oEvents:getResult())
+
+				if !lSucess
+					For nX := 1 to Len(jResult["error"])
+						aAdd(aLogs, {"error", "Não foi possivel baixar e/ou gerar os novos titulos:", jResult["error"][nX]["description"] })    
+					Next nX
+					DisarmTransaction()
+				endif
+			Catch oError
+				Aadd(aLogs, {"error", "Ocorreu uma não conformidade na execução da rotina", oError:ErrorStack})
+			Endtry
+
+			// Log da integração
+			If Len(aLogs) > 0
+				cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+			EndIf
+
+			totvs.protheus.backoffice.techfin.util.LogSmartLink(cDecodedPayload, "ARG", cUUID, "2", cOperation, "T", cIdMessage, cLog)
+		END TRANSACTION
+	RpcClearEnv()
+Return .T.
+
+/*/{Protheus.doc} MaisPrazoEvents
+	Classe de controle dos eventos que serão executados atraves 
+	das mensagens de retorno, com objetivo de incluir, baixar ou alterar
+	os titulos no ERP
+	@type class
+	@author Vitor Duca
+	@since 02/10/2025
+/*/
+class MaisPrazoEvents
+	private data jData   	as json
+    private data jResult 	as json
+	private data cUUID		as character
+
+	public method new() constructor
+	public method setData(jDataOrigin as json)
+	public method setUUID(cUUID as character)
+    public method getResult() as character
+	public method execute() as logical
+
+	private method paidBills() as array
+	private method generatedBills(aPaidBills as array) as array
+	private method valid() as logical
+	private method getLastError()
+
+end class
+
+/*/{Protheus.doc} MaisPrazoEvents::New
+	Método construtor da classe
+	@type method
+	@author Vitor Duca
+	@since 02/10/2025
+/*/
+method new() class MaisPrazoEvents
+	::jData             := JsonObject():new()
+    ::jResult           := JsonObject():new()
+    ::jResult["error"]  := {}
+	::cUUID				:= ""
+return Self
+
+/*/{Protheus.doc} MaisPrazoEvents::setData
+    Recebe dados para processamento do evento
+    @type method
+    @author Vitor Duca
+    @since 02/10/2025
+/*/
+method setData(jDataOrigin as json) class MaisPrazoEvents
+    ::jData := jDataOrigin
+return
+
+/*/{Protheus.doc} MaisPrazoEvents::setUUID
+    Recebe o UUID da tabela ARG para posicionamento
+    @type method
+    @author Vitor Duca
+    @since 02/10/2025
+/*/
+method setUUID(cUUID as character) class MaisPrazoEvents
+    ::cUUID := cUUID
+return
+
+/*/{Protheus.doc} MaisPrazoEvents::getResult
+    REtorno resultado do processamento do evento
+    @type method
+    @author Vitor Duca
+    @since 02/10/2025
+/*/
+method getResult() as character class MaisPrazoEvents
+return ::jResult:toJson()
+
+/*/{Protheus.doc} execute
+	Executa o processamento dos titulos prorrogados
+	@author Vitor Duca
+	@since 02/10/2025
+	@version 1.0
+/*/
+Method execute() as logical class MaisPrazoEvents
+	local aInstallments := {} 					as array
+	local jInstallments := JsonObject():new()	as json
+	local aAreaARG := ARG->(FwGetArea())		as array
+	local aAreaARH := ARH->(FwGetArea())		as array
+	local nX := 0								as numeric
+	local lSucess := .T.						as logical
+	local nValueTotalPayment := 0				as numeric
+
+	if (lSucess := ::valid())
+		If ::jData:hasProperty("requestStatus") //1=Aguardando Aprovação;2=Em processamento;3=Agendado;4=Finalizado;5=Rejeitado
+			jInstallments["cnpj"] := FWSM0Util():GetSM0Data(cEmpAnt, cFilAnt, {"M0_CGC"})[1][2]
+			jInstallments["boletos"] := JsonObject():new()
+			jInstallments["boletos"]["pagos"] := ::paidBills()
+			jInstallments["boletos"]["gerados"] := ::generatedBills(jInstallments["boletos"]["pagos"])
+			jInstallments["boletos"]["alterados"] := {}
+			Aadd(aInstallments, jInstallments)
+
+			FINA137F(, aInstallments)
+			::getLastError()
+			lSucess := len(::jResult["error"]) == 0
+
+			if lSucess .and. totvs.protheus.backoffice.techfin.util.setPositionByUUID("ARG", ::cUUID)
+				ARH->(DbSetOrder(1))//ARH_FILIAL, ARH_NUM, ARH_IDDOC
+				for nX := 1 to len(::jData["paymentSlips"])
+					if ARH->(MsSeek(FwxFilial("ARH") + ARG->ARG_NUM + ::jData["paymentSlips"][nX]["paymentSlipId"]))
+						RecLock("ARH", .F.)
+							ARH->ARH_STATUS := cValToChar(::jData["paymentSlips"][nX]["paymentStatus"])
+							ARH->ARH_REASON := ::jData["paymentSlips"][nX]["paymentRejectionReasonDesc"]
+						ARH->(MsUnLock())
+
+						If ::jData["paymentSlips"][nX]["paymentStatus"] == 1 //1=Pago;2=Não Pago;3=Em processamento;4=Agendado
+							nValueTotalPayment += ::jData["paymentSlips"][nX]["amount"]
+						Endif
+					Endif
+				next nX
+
+				RecLock("ARG", .F.)
+					ARG->ARG_STATUS := cValToChar(::jData["requestStatus"])
+					ARG->ARG_VLRJUR := ::jData["interestAmount"]
+					ARG->ARG_VLRIOF := ::jData["iofAmount"]
+					ARG->ARG_VLRAPR := ::jData["totalAmountApproved"]
+					ARG->ARG_VLOPER := ::jData["totalAmountApproved"] + ::jData["interestAmount"] + ::jData["iofAmount"]
+					ARG->ARG_CDTRAN := ::jData["transactionCode"]
+					ARG->ARG_VLRFOR := nValueTotalPayment
+				ARG->(MsUnLock())
+
+			endif
+		Endif
+	endif
+
+	FwRestArea(aAreaARG)
+	FwRestArea(aAreaARH)
+Return lSucess
+
+/*/{Protheus.doc} paidBills
+	Realiza a formatação dos dados para conter as informações dos boletos que devem
+	ser baixados na SE2
+	@author Vitor Duca
+	@since 02/10/2025
+	@version 1.0
+	@return aBills, Array, Matriz contendo os titulos que serão baixados no ERP
+/*/
+Method paidBills() as array class MaisPrazoEvents
+	local aBills := {}						as array
+	local nX := 0							as numeric
+	local jBills 							as json
+	local aAreaFK7 := FK7->(FwGetArea())	as array
+
+	FK7->(DbSetOrder(1)) //FK7_FILIAL, FK7_IDDOC
+
+	for nX := 1 to len(::jData["paymentSlips"])
+		If ::jData["paymentSlips"][nX]["paymentStatus"] == 1 //1=Pago;2=Não Pago;3=Em processamento;4=Agendado
+			jBills := JsonObject():new()
+			jBills["platformId"] := "0" //Compatilibidade com o FINA137F utilizado para devolver a resposta
+			jBills["numeroTransacao"] := ::jData["requestId"]
+			jBills["erpId"] := ""
+
+			If FK7->(MsSeek(xFilial("FK7") + ::jData["paymentSlips"][nX]["paymentSlipId"]))
+				jBills["erpId"] := cEmpAnt + "|" + FK7->FK7_CHAVE
+			Endif
+			
+			jBills["dataMovimento"] := ::jData["datePaymentSlips"]
+			jBills["valor"] := ::jData["paymentSlips"][nX]["amount"]
+			jBills["historico"] := "TOTVS Mais Prazo - Contrato " + ::jData["transactionCode"]
+
+			Aadd(aBills, jBills)
+		Endif
+	next nX
+
+	FwRestArea(aAreaFK7)
+Return AClone(aBills)
+
+/*/{Protheus.doc} generatedBills
+	Realiza a formatação dos dados para conter as informações dos boletos que devem
+	ser gerados na SE2
+	@author Vitor Duca
+	@since 02/10/2025
+	@version 1.0
+	@param aPaidBills, Array, Matriz contendo os titulos que serão baixado pelo ERP
+	@return aBills, Array, Matriz dos titulos que serão gerados no ERP
+/*/
+Method generatedBills(aPaidBills as array) as array class MaisPrazoEvents
+	local aBills := {}					as array
+	local nX := 0						as numeric
+	local jBills 						as json
+	local cInstallmentNumber := ""		as character
+	local nInstallmentAmount := 0		as numeric
+	local cInstallmentDueDate := ""		as character
+	local cDigitableLine := ""			as character
+	local cBarCode := ""				as character
+	local cIssueDate := ""				as character
+
+	If len(aPaidBills) > 0
+		cIssueDate := ::jData["datePaymentSlips"]
+
+		jBills := JsonObject():new()
+		jBills["platformId"] := "0" //Compatilibidade com o FINA137F utilizado para devolver a resposta
+		jBills["numeroTransacao"] := ::jData["requestId"]
+		jBills["valorTotal"] := ::jData["totalAmount"]
+		jBills["juros"] := ::jData["interestAmount"]
+		jBills["iof"] := ::jData["iofAmount"]
+		jBills["parcelas"] := {}
+
+		for nX := 1 to Len(::jData["installments"])
+			cInstallmentNumber := cValToChar(::jData["installments"][nX]["installmentNumber"])		
+			nInstallmentAmount := ::jData["installments"][nX]["installmentAmount"]	
+			cInstallmentDueDate := ::jData["installments"][nX]["installmentDueDate"]
+			cDigitableLine := ::jData["installments"][nX]["digitableLine"]
+			cBarCode := ::jData["installments"][nX]["barCode"]
+
+			Aadd(jBills["parcelas"],	{;
+											"numeroParcela": cInstallmentNumber,;
+											"valorParcela": nInstallmentAmount,;
+											"dataVencimento": cInstallmentDueDate,;
+											"dataEmissao": cIssueDate,;
+											"numeroLinhaDigitavel": cDigitableLine,;
+											"numeroCodigoBarras": cBarCode,;
+											"historico": "TOTVS Mais Prazo - Contrato " + ::jData["transactionCode"];
+										})
+		next nX
+
+		jBills["boletoOrigem"] := {}
+		for nX := 1 to len(aPaidBills)
+			Aadd(jBills["boletoOrigem"], {"erpId": aPaidBills[nX]["erpId"]})
+		next nX
+		
+		Aadd(aBills, jBills)
+	Endif
+Return AClone(aBills)
+
+/*/{Protheus.doc} valid
+	Validação dos dados necessarios para continuar o processamento dos titulos
+	@author Vitor Duca
+	@since 02/10/2025
+	@version 1.0
+	@return lValid, logical, Define se o processamento esta valido para ser iniciado
+/*/
+Method valid() as logical class MaisPrazoEvents
+	local aParameters := {}						as array
+	local nX := 0								as numeric
+	local cMessageError := ""					as character
+	local jMessageError := JsonObject():new()	as json
+
+	Aadd(aParameters, "MV_PRETECF")
+	Aadd(aParameters, "MV_TPTECF")
+	Aadd(aParameters, "MV_FNTECF")
+	Aadd(aParameters, "MV_LFTECF")
+	Aadd(aParameters, "MV_NTTECF")
+	Aadd(aParameters, "MV_MBXTECF")
+
+	for nX := 1 to len(aParameters)
+		If Empty(Alltrim(GETMV(aParameters[nX])))
+		 	Aadd(::jResult["error"], {"description": "Os parametros não foram configurados corretamente"})
+			return .F.
+		Endif
+	next nX
+
+	jMessageError["data"] := JsonObject():new()
+	jMessageError["data"]:FromJson(::jData:ToJson())
+	If !Empty(cMessageError := handleMessageError(jMessageError:ToJson()))
+		Aadd(::jResult["error"], {"description": cMessageError})
+		return .F.
+	Endif
+
+Return .T.
+
+/*/{Protheus.doc} getLastError
+    Retorna o ultimo erro encontrado quando o processo é feito por execauto
+    @type  Function
+    @author Vitor Duca
+    @since 04/10/2025
+    @version 1.0
+    @return cErrorContent, Character, Mensagem de erro encontrada
+/*/
+Method getLastError() class MaisPrazoEvents
+    Local cErrorContent := "" as Character
+
+	cErrorContent := FinGetHelp()
+
+	If !Empty(cErrorContent)
+		Aadd(::jResult["error"], {"description": cErrorContent})
+	Endif
+
+Return

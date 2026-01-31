@@ -1,0 +1,168 @@
+#include "TOTVS.ch"
+#include "TBICONN.ch"
+
+/*/{Protheus.doc} MaisPrazoEligibilityRulesListResponseV1MessageReader
+	Classe de Integração Novo MaisPrazo
+	Atualiza regras de elegibilidade dos títulos
+	@type class
+	@author Vitor Duca
+	@since 26/09/2025
+/*/
+class MaisPrazoEligibilityRulesListResponseV1MessageReader
+	data aDataRules as array
+	data jMSGData  as json
+	data jMessage  as json
+    data cMock     as character
+    data lMock     as logical
+
+	public method new() constructor
+	public method read(oLinkMessage as object) as logical
+	public method mock(cData as character)
+	private method formatData()
+	private method procRules()
+end class
+
+/*/{Protheus.doc} MaisPrazoEligibilityRulesListResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Vitor Duca
+	@since 26/09/2025
+/*/
+method New() class MaisPrazoEligibilityRulesListResponseV1MessageReader
+	::aDataRules := {}
+	::jMSGData  := JsonObject():new()
+	::jMessage  := JsonObject():new()
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} MaisPrazoEligibilityRulesListResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Vitor Duca
+    @since 26/09/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class MaisPrazoEligibilityRulesListResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} MaisPrazoEligibilityRulesListResponseV1MessageReader::read
+	esponsável pela leitura e processamento da mensagem.
+	@type method
+	@author Vitor Duca
+	@since 26/09/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as logical class MaisPrazoEligibilityRulesListResponseV1MessageReader
+	local lSuccess := .F.												as logical
+	local cPayload := if(::lMock, ::cMock,  oLinkMessage:RawMessage())	as character
+
+	if ::jMessage:FromJSON(cPayload) == NIL
+		::jMSGData  := ::jMessage["data"]
+		::formatData()
+		::procRules()
+		lSuccess := .T.
+	endIf
+    FwFreeObj(::jMSGData)
+	FwFreeObj(::jMessage)
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} MaisPrazoEligibilityRulesListResponseV1MessageReader::formatData
+	Agrupa os dados por empresa/filial
+	@type method
+	@author Vitor Duca
+	@since26/09/2025
+/*/
+method formatData() class MaisPrazoEligibilityRulesListResponseV1MessageReader
+	local aSM0 := FWLoadSM0()	as array
+	local nX := 0				as numeric
+	local nY := 0				as numeric
+	local nPosFil := 0			as numeric
+	local cBranchCNPJ := ""		as character
+	local jOrgData				as json
+	local cTextRule := ""		as character
+
+	if ::jMSGData:hasProperty('customers')
+		for nX := 1 to len(::jMSGData["customers"])
+			cBranchCNPJ  := ::jMSGData["customers"][nX]["document"]
+			if (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+				jOrgData := JsonObject():new()
+				jOrgData["cCnpj"]	:= cBranchCNPJ				
+				jOrgData["rules"]	:= {}
+				for nY := 1 to len(::jMSGData["rules"])
+					Aadd(jOrgData["rules"], JsonObject():new())
+					jOrgData["rules"][nY]['id']		:= ::jMSGData["rules"][nY]['id']
+					cTextRule := DecodeUTF8(::jMSGData["rules"][nY]['text'])
+
+					If Empty(cTextRule)
+						cTextRule := ::jMSGData["rules"][nY]['text']
+					Endif
+
+					jOrgData["rules"][nY]['text']	:= cTextRule
+					jOrgData["rules"][nY]['rule']	:= ::jMSGData["rules"][nY]['rule']
+				next nY	
+				aAdd(::aDataRules, {aSM0[nPosFil][1], aSM0[nPosFil][2], jOrgData:toJSON()}) //Grupo Empresa, Filial, Dados
+			endIf
+		next nX	
+	endIf
+return
+
+/*/{Protheus.doc} MaisPrazoEligibilityRulesListResponseV1MessageReader::procRules
+	Inicia gravação para cada empresa/filial recebida na mensagem
+	@type method
+	@author Vitor Duca
+	@since 26/09/2025
+/*/
+method procRules() class MaisPrazoEligibilityRulesListResponseV1MessageReader
+	local nX := 0    						as numeric
+	local cPayload := ::jMessage:ToJSON()	as character
+
+	for nX := 1 to len(::aDataRules)
+		StartJob("TMPZGrvRules", GetEnvServer(), .T., ;
+			::aDataRules[nX][1] /*cCompany*/, ::aDataRules[nX][2] /*cBranch*/, ::aDataRules[nX][3], cPayload)
+	next nX
+return
+
+/*/{Protheus.doc} TMPZGrvRules
+	Gravação da tabela ARB-Regras de Elegibilidade
+	@type function
+	@author Vitor Duca
+	@since 26/09/2025
+	@param cCompany	 , character, Grupo Empresa
+	@param cBranch 	 , character, Filial
+	@param cData	 , character, dados da organização
+	@param cPayload	 , character, mensagem recebida
+/*/
+Function TMPZGrvRules(cCompany as character, cBranch as character, cData as character, cPayload as character)
+	local lInsert	as logical
+	local jData		as json
+	local nX		as numeric
+
+	RPCSetType(3) 
+	RpcClearEnv()
+	RPCSetEnv(cCompany, cBranch,,,'FIN') 
+	
+	jData := JsonObject():new()
+	jData:fromJson(cData)
+	dbSelectArea('ARB')
+	dbSetOrder(1)
+	For nX:=1 to Len(jData["rules"])
+		lInsert := !ARB->(dbSeek(FWxFilial('ARB') + jData["cCnpj"] + "2" + jData["rules"][nX]["id"]))
+		RecLock('ARB', lInsert)
+			ARB->ARB_FILIAL := FWxFilial('ARB')
+			ARB->ARB_CNPJ   := jData["cCnpj"]
+			ARB->ARB_PRODTF := "2" // Produto: Totvs MaisPrazo
+			ARB->ARB_COD	:= jData["rules"][nX]["id"]
+			ARB->ARB_DESC	:= jData["rules"][nX]["text"]
+			ARB->ARB_REGRA	:= jData["rules"][nX]["rule"]
+		ARB->(MsUnlock())
+	Next nX
+
+	totvs.protheus.backoffice.techfin.util.LogSmartLink(cPayload, "ARB", "", "2", "EligibilityRules", "T") //cMessage, cAlias, cUUID, cProduct, cOperation, cOrigin
+	RpcClearEnv()
+
+Return

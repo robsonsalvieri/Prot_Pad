@@ -1,0 +1,180 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaReturnExecuteResponseV1MessageReader
+	Classe de Integração Novo Antecipa
+	Leitura do retorno dos eventos de pós faturamento
+	Eventos suportados nessa classe: Baixa, Estorno de baixa, Coobrigação e Divergência Comercial
+
+	@type class
+	@author Squad TechFin
+	@since 10/31/2025
+/*/
+class AntecipaReturnExecuteResponseV1MessageReader from LongNameClass	
+	data jMessage  as json
+    data cMock     as character
+    data lMock     as logical
+	data jMSGData  as json
+	data aDataOrgs as array
+
+	public method new() constructor
+	public method read()
+	public method mock()
+end class
+
+/*/{Protheus.doc} AntecipaReturnExecuteResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 10/31/2025
+/*/
+method New() class AntecipaReturnExecuteResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+	::jMSGData  := JsonObject():new()
+	::aDataOrgs := {}
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} AntecipaReturnExecuteResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 10/31/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaReturnExecuteResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaReturnExecuteResponseV1MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 10/31/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class AntecipaReturnExecuteResponseV1MessageReader
+
+	Local aIdent   :={}   as Array
+	Local cCompany := ""  as Character
+	Local cBranch  := ""  as Character
+	Local cPayload := ""  as Character
+	Local cDecoded := ""  as Character
+
+	cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+	cDecoded := DecodeUTF8(cPayload)
+
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+	if ::jMessage:FromJSON(cPayload) == NIL
+		::jMSGData  := ::jMessage["data"]
+
+		aIdent := StrTOKArr(::jMSGData["erpRequestId"],"|")//"erpRequestId": "cEmpAnt|cFilAnt|UUID|cReqKey" - conforme mensagem de envio				
+		If Len(aIdent) == 4
+			cCompany := aIdent[1]
+			cBranch	 := aIdent[2]			
+			StartJob("AntExecRet", GetEnvServer(), .T., cCompany, cBranch, cPayload)
+		EndIf
+	EndIf
+	FwFreeObj(::jMSGData)
+	FwFreeObj(::jMessage)
+
+Return .T.
+
+/*/{Protheus.doc} AntExecRet
+	Executa o retorno da devolução
+	
+	@type function
+	@author Squad TechFin
+	@since 10/31/2025
+	@param cCompany	 , character, Grupo Empresa
+	@param cBranch 	 , character, Filial
+	@param cData	 , character, dados do evento
+	@param cPayload	 , character, mensagem recebida
+/*/
+Function AntExecRet(cCompany as character, cBranch as character, cPayload as character)
+	local nX         := 0                  as numeric
+	local nZ         := 0                  as numeric
+	local cTransCode := ""                 as character
+	local cStatus    := ""                 as character
+	local oEvent     := Nil                as object
+	local oResult    := Nil                as object
+	local jData      := JsonObject():New() as json
+	local nTam       := 0                  as numeric
+	local oSmartUtil := nil                as object
+	local aItems	 := {}                 as array
+
+	RPCSetType(3) 
+	RPCSetEnv(cCompany, cBranch,,,"FIN") 
+
+	jData:fromJson(cPayload)
+	oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+	nTam       := TamSX3("ARE_TRANSC")[1]
+	aItems 	   := jData["data"]["processingData"]
+
+	For nX:= 1 to Len( aItems )
+		cStatus := "2"    // 1=Em processamento;2=Aprovado;3=Reprovado
+		cTransCode  := aItems[nX]["transactionCode"]//mesmo códiogo recebido na confirmação da Antecipação
+
+		dbSelectArea("ARE")
+		dbSetOrder(2)
+		If !ARE->(msSeek(FwxFilial("ARE") + PadR(cTransCode,nTam)))
+			oSmartUtil:addLogMSG("error", "Return Execute - transactionCode not found.", "ARE_TRANSC: " + cTransCode)
+			Loop
+		EndIf
+
+		If !totvs.protheus.backoffice.techfin.util.setPositionByUUID('ARF', aItems[nX]["erpInstallmentId"] )
+			oSmartUtil:addLogMSG("error", "Return Execute - erpInstallmentId not found.", "erpInstallmentId: " + aItems[nX]["erpInstallmentId"] )
+			Loop
+		EndIf
+
+		If !(ARF->ARF_TIPO == "D" .and. ARF->ARF_STATUS == "1")
+			oSmartUtil:addLogMSG("error", "Return Execute - Invalid.", "The processing status should be 'in processing' and processing type should be 'D'." )
+			Loop
+		EndIf
+
+		Begin Transaction
+
+			If aItems[nX]["requestStatus"] == 1 //1-APROVADA;3-NEGADA;4-REJEITADA.
+				//-------------------------------------------------------------------------------------------
+				//--- Executa regra de negócio do evento
+				oEvent := totvs.protheus.backoffice.techfin.smartlink.antecipa.events.AntecipaEvents():new()
+				oEvent:setData(aItems[nX])
+				oEvent:FDevolucao()
+				oResult := oEvent:getResult()
+
+				If Len(oResult["error"]) > 0
+					cStatus := "3"
+					oSmartUtil:addLogMSG("error", "Return Execute [Devolução]", "ARE_TRANSC: " + cTransCode)
+					For nZ := 1 to Len(oResult["error"])
+						oSmartUtil:addLogMSG("error", "Processing failure.", oResult["error"][nZ]["description"])
+					Next nZ
+				EndIf
+
+			Else
+				cStatus := "3"
+				oSmartUtil:addLogMSG("info", "Processing failure.", aItems[nX]["reason"])
+			EndIf
+
+			//-------------------------------------------------------------------------------------------
+			// Altera registro na ARF
+			RecLock('ARF',.F.)
+				ARF->ARF_STATUS	:= cStatus
+				If cStatus == "2" //Aprovado
+					ARF->ARF_VLDEV  := aItems[nX]["installmentDebitedAmount"]
+				Endif
+			ARF->(msUnLock())
+			
+		End Transaction
+	Next nX
+
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oSmartUtil)
+	RpcClearEnv()
+
+Return .T.

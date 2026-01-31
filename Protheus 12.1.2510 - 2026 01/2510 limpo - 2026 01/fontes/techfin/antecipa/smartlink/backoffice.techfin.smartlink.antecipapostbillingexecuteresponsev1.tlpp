@@ -1,0 +1,201 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader
+	Classe de Integração Novo Antecipa
+	Leitura do retorno dos eventos de pós faturamento
+	@type class
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+class AntecipaPostBillingExecuteResponseV1MessageReader from LongNameClass	
+	data jMessage  as json
+    data cMock     as character
+    data lMock     as logical
+
+	public method new() constructor
+	public method read()
+	public method mock()
+end class
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+method New() class AntecipaPostBillingExecuteResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 9/13/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaPostBillingExecuteResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class AntecipaPostBillingExecuteResponseV1MessageReader
+
+    local lSuccess	:= .F. as logical
+    local cCompany	:= ""  as character
+    local cBranch	:= ""  as character
+    local cPayload	:= ""  as character
+	local cIdReq	:= ""  as character
+    local aIdent	:= {}  as array
+
+	cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+
+	if ::jMessage:FromJSON(cPayload) == NIL		
+		aIdent := StrTOKArr2(::jMessage["data"]["erpRequestId"], "|", .T.)//"erpRequestId": "cEmpAnt|cFilAnt|cIdReq"
+		if Len(aIdent) == 3
+			cCompany := aIdent[1]
+			cBranch  := aIdent[2]
+			cIdReq 	 := aIdent[3]				
+			lSuccess := StartJob("AntPostBill", GetEnvServer(), .T., cCompany, cBranch, ::jMessage["data"]:toJson(), cPayload, cIdReq)
+		EndIF		
+	endIf
+	FwFreeObj(::jMessage)
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+
+/*/{Protheus.doc} AntPostBill
+	Totvs Antecipa Post Billing - executa a regra de negócio da confirmação dos eventos de pós-faturamento
+	@type function
+	@author Squad TechFin
+	@since 9/20/2025
+	@param cCompany	 , character, Grupo Empresa
+	@param cBranch 	 , character, Filial
+	@param cData	 , character, dados do evento
+	@param cPayload	 , character, mensagem recebida
+    @param cIdMsg	 , character, Id da mensagem de original
+/*/
+Function AntPostBill(cCompany as character, cBranch as character, cData as character, cPayload as character, cIdMsg as character)
+		 
+	local nX 		 := 0						as numeric
+	local nZ 		 := 0						as numeric
+	Local nPos 		 := 0 						as numeric
+	local nStatus	 := 0 						as numeric
+	local cLog 		 := '' 						as character
+	local cEvent 	 := '' 						as character
+	local cLogModel	 := '' 						as character
+	local cMSUID	 := '' 						as character
+	local aLogs		 := {} 						as array
+	local aEvents 	 := {} 						as array
+	local aFieldsUpd := {} 						as array
+	local oModel 	 := Nil 					as object
+	local oMdlMaster := Nil						as object
+	local oEvent 	 := Nil						as object
+	local oResult	 := Nil						as object
+	local jData      := JsonObject():New()	    as json    
+
+	RPCSetType(3) 
+	RpcClearEnv()
+	RPCSetEnv(cCompany, cBranch,,,'FIN') 
+
+	//-- Eventos suportados no processamendo dessa fila
+	/*
+	aEvents[n,1] - Identificação do evento vinda da mensagem Techfin
+	aEvents[n,2] - Descrição do Evento
+	aEvents[n,3] - Método a ser executado
+	aEvents[n,4] - Identificação do evento dentro do Model 'monitorBilling'
+	*/
+	Aadd(aEvents,{'0', 'Recompra'	, {|| oEvent:FRecompra() }, 3})
+	Aadd(aEvents,{'1', 'Prorrogação', {|| oEvent:FProrroga() }, 1})
+	Aadd(aEvents,{'2', 'Bonificação', {|| oEvent:FBonifica() }, 2})
+
+	jData:fromJson(cData)
+	If jData["requestType"] == 2 .And. jData["status"] == 1//requestType: 1-Simulação; 2-Confirmação
+
+		For nX:= 1 to Len( jData["processingData"] )
+
+			cEvent	:= cValtoChar(jData["processingData"][nX]["processingType"]) //0-Recompra; 1-Prorrogação; 2-Bonificação
+			nPos	:= AScan(aEvents, {|x| x[1] == cEvent})
+			If nPos == 0 
+	 			aAdd(aLogs, {"error", "Event code not supported", "Json attribute 'processingType': "+ cEvent })
+				Loop
+			EndIF
+			
+			aFieldsUpd	:= {}
+			cMSUID 		:= jData["processingData"][nX]["erpInstallmentId"]
+			nStatus		:= jData["processingData"][nX]["requestStatus"]			
+
+			//-- Posiciona no item registro do pós-faturamento			
+			If !totvs.protheus.backoffice.techfin.util.setPositionByUUID( 'ARF', cMSUID )
+      			aAdd(aLogs, {"error", "Post billing - erpInstallmentId not found.", "ARF_MSUID: " + cMSUID})
+				Loop
+			EndIf
+
+			Begin Transaction
+				If nStatus == 1// Evento aprovado
+					//-------------------------------------------------------------------------------------------
+					//-- Executa regra de negócio do evento
+					oEvent := totvs.protheus.backoffice.techfin.smartlink.antecipa.events.AntecipaEvents():new()
+					oEvent:setData(  jData["processingData"][nX]  )
+					Eval( aEvents[nPos,3] )
+					oResult := oEvent:getResult()
+
+					If Len( oResult['error'] ) == 0
+						Aadd(aFieldsUpd,{'ARF_STATUS','2'})// 1=Em processamento;2=Aprovado;3=Reprovado
+					Else					
+						aAdd(aLogs, {"error", "Post Billing ["+aEvents[nPos,2]+"]", "ARF_MSUID: " + cMSUID})
+						For nZ := 1 to Len(oResult['error'])
+							aAdd(aLogs, {"error", "Processing failure.", oResult['error'][nZ]['description'] })
+						Next nZ
+					EndIf
+				ElseIf nStatus == 3 .or.nStatus == 4// Evento Negado/Rejeitado
+					Aadd(aFieldsUpd,{'ARF_STATUS','3'})
+				EndIF 
+
+				If Len(aFieldsUpd) > 0
+					//-------------------------------------------------------------------------------------------
+					// Atualiza status da ARF
+					totvs.protheus.backoffice.techfin.antecipa.postbilling.SetEventToModelDef( aEvents[nPos,4] )
+					oModel := FWLoadModel("totvs.protheus.backoffice.techfin.antecipa.postbilling.monitorBilling")
+					oModel:SetOperation(MODEL_OPERATION_UPDATE)
+					oModel:Activate()     
+					oMdlMaster := oModel:GetModel('ARFMASTER')  
+
+					For nZ:=1 to Len(aFieldsUpd)
+						oMdlMaster:SetValue(aFieldsUpd[nZ,1], aFieldsUpd[nZ,2]) 
+					Next nZ
+
+					If !(oModel:VldData() .and. oModel:CommitData())
+						cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+						cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+						cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+						aAdd(aLogs, {"error", "Model validation erpRequestId (ARF_MSUID): "+ cMSUID, cLogModel})
+						DisarmTransaction()
+					EndIf
+					oModel:DeActivate()
+					oModel:Destroy()
+				EndIf
+			End Transaction
+		Next nX
+	EndIf
+
+    // Log da integração
+    If Len(aLogs) > 0
+        cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+    EndIf
+
+	totvs.protheus.backoffice.techfin.util.LogSmartLink(cPayload, '', '', "1", "PostBilling", "T", cIdMsg, cLog) //cMessage, cAlias, cUUID, cProduct, cOperation, cOrigin, cIdMsg, cLog
+	RpcClearEnv()
+
+Return .T.

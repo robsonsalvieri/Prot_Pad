@@ -1,0 +1,177 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaApprovalAuthorizationExecuteResponseV1MessageReader
+    Approval Authorization Execute Response V1
+    Classe de Integração Novo Antecipa
+    Retorno da efetivação da pré-autorização - execução da Antecipação.
+
+    @type class
+    @author Squad TechFin
+    @since 9/12/2025
+/*/
+class AntecipaApprovalAuthorizationExecuteResponseV1MessageReader
+
+    data jMessage as json
+    data cMock    as character
+    data lMock    as logical
+
+    public method new()  constructor
+    public method read() as logical
+    public method mock()
+
+end class
+
+/*/{Protheus.doc} AntecipaApprovalAuthorizationExecuteResponseV1MessageReader::New
+    Método construtor da classe
+    @type method
+    @author Squad TechFin
+    @since 9/12/2025
+/*/
+method new() class AntecipaApprovalAuthorizationExecuteResponseV1MessageReader
+    ::jMessage := JsonObject():new()
+    ::cMock    := ""
+    ::lMock    := .F.
+return Self
+/*/{Protheus.doc} AntecipaApprovalAuthorizationExecuteResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 9/12/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaApprovalAuthorizationExecuteResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaApprovalAuthorizationExecuteResponseV1MessageReader::read
+    Responsável pela leitura e processamento da mensagem.
+    @type method
+    @author Squad TechFin
+    @since 9/12/2025
+    @param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+    @return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as logical class AntecipaApprovalAuthorizationExecuteResponseV1MessageReader
+
+    local lSuccess := .F. as logical
+    local cCompany := ""  as character
+    local cBranch  := ""  as character
+    local cPayload := ""  as character
+    local cIdMsg   := ""  as character
+    local cMSUID   := ""  as character
+    local aIdent   := {}  as array
+
+    cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+
+    if ::jMessage:FromJSON(cPayload) == NIL
+        aIdent := StrTOKArr2(::jMessage["data"]["erpRequestId"], "|", .T.)//"erpRequestId": "cEmpAnt|cFilAnt|requestId|ARD_MSUID"
+        if Len(aIdent) == 4
+            cCompany := aIdent[1]
+            cBranch  := aIdent[2]     
+            cIdMsg   := aIdent[3]     
+            cMSUID   := aIdent[4]
+            lSuccess := StartJob("TAAprAuth", GetEnvServer(), .T., cCompany, cBranch, cPayload, ::jMessage["data"]:toJson(), cMSUID, cIdMsg)
+        endIF
+    endIf
+    FwFreeObj(::jMessage)
+
+return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} TAAprAuth
+    Efetiva a pré-autorização - gera a movimentação da Antecipação.
+    @type function
+    @author Squad TechFin
+    @since 8/26/2025
+    @param cCompany, character, Grupo Empresa
+    @param cBranch , character, Filial
+    @param cPayload, character, mensagem recebida
+    @param cMSUID, character, conteudo do ARD_MSUID
+    @param cIdMsg, character, Id da mensagem de original
+    @return logical , indica que processo foi realizado
+/*/
+function TAAprAuth(cCompany as character, cBranch as character, cPayload as character, cData as character, cMSUID as character, cIdMsg as character) as logical
+    
+    local nX                                as numeric
+    local nY                                as numeric
+    local cLog                              as character
+    local cLogModel                         as character
+    local oEvent                            as object
+    local oResult                           as object
+    local oModel                            as object
+    local oMdlMaster                        as object
+    local oMdlDetail                        as object
+    local aLogs     := {}                   as array
+    local jData     := JsonObject():New()   as json
+	local cStatus   := "1"                  as character
+
+    RPCSetType(3)
+    RPCSetEnv(cCompany, cBranch,,,'FIN') 
+
+    //-- Posiciona no registro da pré-autorização
+    If totvs.protheus.backoffice.techfin.util.setPositionByUUID('ARD', cMSUID )
+        //1=Em processamento;2=Cancelado;3=Em Aprovacao;4=Reprovado;5=Finalizado
+        If ARD->ARD_STATUS == "3" //3=Em Aprovacao
+            If Empty(jData:fromJson(cData)) .And. jData["status"] == 1
+                Begin Transaction
+                    cStatus := cValToChar(jData["requestStatus"]) //1 - Aprovada;3 - Rejeitada/Cancelada;4 - Excluída;
+                    oEvent := totvs.protheus.backoffice.techfin.smartlink.antecipa.events.AntecipaEvents():new()
+
+                    oModel := FWLoadModel("totvs.protheus.backoffice.techfin.antecipa.monitor.AntecipaRequests")
+                    oModel:SetOperation(MODEL_OPERATION_UPDATE)
+                    oMdlMaster := oModel:GetModel('ARDMASTER')
+                    oMdlDetail := oModel:GetModel('AREDETAIL')
+                    oModel:Activate()
+                    If cStatus == "1"
+                        oMdlMaster:SetValue("ARD_STATUS", "5") //Finalizado
+					Else
+                        oMdlMaster:SetValue("ARD_STATUS", "4") //Reprovado
+                    EndIf
+                    For nY := 1 To Len(jData["installments"])
+                        If oMdlDetail:SeekLine({{"ARE_ITEM", jData["installments"][nY]["erpInstallmentId"]}})
+                            oMdlDetail:SetValue("ARE_TRANSC", jData["installments"][nY]["transactionCode"])
+                            If cStatus $ "3|4"
+                                oMdlDetail:SetValue("ARE_STATUS", "2") //2=Rejeitado
+                            Else
+                                oMdlDetail:SetValue("ARE_STATUS", "3") //3=Efetivado
+                                oEvent:setData(jData["installments"][nY])
+                                oEvent:FAntecipa()
+                                oResult := oEvent:getResult()
+                                If Len(oResult['error']) > 0
+                                    aAdd(aLogs, {"error", "Approval Authorization", "ARD_MSUID: " + cMSUID})
+                                    For nX := 1 to Len(oResult['error'])
+                                        aAdd(aLogs, {"error", "Approval Authorization item.", oResult['error'][nX]['description'] })
+                                    Next nX
+                                    RollbackDelTran()
+                                EndIf
+                            EndIF
+                        EndIf
+                    Next nY
+                    If !(oModel:VldData() .and. oModel:CommitData())
+                        cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+                        cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+                        cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+                        aAdd(aLogs, {"error", "Model validation erpRequestId (ARD_MSUID): "+ cMSUID, cLogModel})
+                        RollbackDelTran()
+                    EndIf
+                End Transaction
+                oModel:DeActivate()
+                oModel:Destroy()
+            EndIf
+        Else
+            aAdd(aLogs, {"error", "Approval Authorization (ARD_MSUID): "+ cMSUID, "Status não permite Efetivação"})
+        EndIF
+    Else
+        aAdd(aLogs, {"error", "Pre-authorization not found.", "ARD_MSUID: " + cMSUID})
+    EndIf
+
+    // Log da integração
+    If Len(aLogs) > 0
+        cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+    EndIf
+    totvs.protheus.backoffice.techfin.util.LogSmartLink(cPayload, "ARD", cMSUID, "1", "ApprovalAuthorization", "T", cIdMsg, cLog) //cMessage, cAlias, cUUID, cProduct, cOperation, cOrigin, cIdMsg, cLog
+    RpcClearEnv()
+    
+return .T.

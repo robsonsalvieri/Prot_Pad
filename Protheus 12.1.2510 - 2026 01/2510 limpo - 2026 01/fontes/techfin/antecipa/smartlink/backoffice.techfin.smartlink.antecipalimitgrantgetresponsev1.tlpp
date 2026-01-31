@@ -1,0 +1,311 @@
+#include "tlpp-core.th"
+#include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaLimitGrantGetResponseV1MessageReader
+	Classe para leitura da resposta da solicitação de limites do sacado
+	@author Squad TechFin
+	@since 15/09/2025
+/*/
+class AntecipaLimitGrantGetResponseV1MessageReader
+	data cMock     as character
+	data lMock     as logical
+
+	public method new() constructor
+	public method read(oLinkMessage as object) as logical
+	public method mock(cData as character)
+end class
+
+/*/{Protheus.doc} ::new
+	Construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 15/09/2025
+	@return object, Instância da classe
+/*/
+method new() class AntecipaLimitGrantGetResponseV1MessageReader
+	::cMock := ""
+	::lMock := .F.
+return Self
+
+/*/{Protheus.doc} ::mock
+	Método para mockar a mensagem recebida para testes
+	@type method
+	@author Squad TechFin
+	@since 15/09/2025
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaLimitGrantGetResponseV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} ::read
+	Responsável pela leitura e processamento da mensagem recebida do TechFin.
+	Processa a mensagem e inicia um job para atualização dos limites do sacado.
+	@type method
+	@author Squad TechFin
+	@since 15/09/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage contendo a mensagem a ser processada
+	@return logical, .T. se a mensagem foi processada com sucesso e pode ser removida da fila, .F. em caso de falha
+/*/
+method read(oLinkMessage as object) as logical class AntecipaLimitGrantGetResponseV1MessageReader
+	local lSuccess    := .F.                as logical
+	local cPayload    := ""                 as character
+	local cCompany    := ""                 as character
+	local cBranch     := ""                 as character
+	local jMessage    := JsonObject():new() as json
+	local aIdent      := {}                 as array 
+	local aSM0        := {}                 as array
+	local nPosFil     := 0                  as numeric
+	local cBranchCNPJ := ""                 as character
+	local cLog        := ""                 as character
+	local aLogs       := {}                 as array
+
+	cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+
+	if jMessage:FromJSON(cPayload) == NIL
+		if jMessage["data"]:hasProperty("erpRequestId")
+			aIdent := StrTOKArr2(jMessage["data"]["erpRequestId"], "|", .T.) // cEmp/cFil/UUID da MSG/MSUID da ARC
+		else
+			aSM0 := FwLoadSM0()
+			if jMessage["data"]:hasProperty("documentNumber")
+				cBranchCNPJ := jMessage["data"]["documentNumber"]
+			endIf
+			if !Empty(cBranchCNPJ) .and. (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+				aIdent := {aSM0[nPosFil][1], aSM0[nPosFil][2]}
+			else
+				AADD(aLogs, {"error", "TechFin branch", "Filial não localizadas: " + cBranchCNPJ})
+			endIf
+		endIf
+		
+		if Len(aIdent) >= 2
+			cCompany := aIdent[1]
+			cBranch  := aIdent[2]
+			lSuccess := StartJob("TALimSac", GetEnvServer(), .T., cCompany, cBranch, cPayload)
+		endIF
+	endIf
+
+	// Log da integração
+	if Len(aLogs) > 0
+		cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+		totvs.protheus.backoffice.techfin.util.logSmartLink(cPayload, "", "" , "1", "LimitGrant", "T", "", cLog)
+	endIf
+
+	FwFreeObj(jMessage)
+Return lSuccess
+
+/*/{Protheus.doc} TALimSac
+	Atualiza valores e status do limite do sacado com base na resposta da TechFin.
+	Processa a resposta da análise de limite e atualiza o status da solicitação e os limites aprovados.
+	@type function
+	@author Squad TechFin
+	@since 8/26/2025
+	@param cCompany, character, Código do Grupo Empresa
+	@param cBranch , character, Código da Filial
+	@param cPayload, character, Conteúdo da mensagem recebida em formato JSON
+	@return logical, .T. se o processamento foi realizado com sucesso, .F. caso contrário
+/*/
+function TALimSac(cCompany as character, cBranch as character, cPayload as character) as logical
+	local jProcessingData := JsonObject():New() as json
+	local jPayload        := JsonObject():New() as json
+	local nStatusMsg      := 0                  as numeric
+	local cLog            := ""                 as character
+	local cStatus         := "1"                as character
+	local nAnalysisStatus := 0                  as numeric
+	local nAnalysisType   := 0                  as numeric
+	local cReason         := ""                 as character
+	local cLogModel       := ""                 as character
+	local nLimTotal       := 0                  as numeric
+	local nLimAvailable   := 0                  as numeric
+	local nLimUsed        := 0                  as numeric
+	local nLimReserved    := 0                  as numeric
+	local aLogs           := {}                 as array
+	local lRet            := .T.                as logical
+	local oModel          := nil                as object
+	local oMdlARC         := nil                as object
+	local nData           := 0                  as numeric
+	local aIdent          := {}                 as array
+	local cIdMsg          := ""                 as character
+	local cDocNum         := ""                 as character
+	
+	RPCSetType(3)
+	RPCSetEnv(cCompany, cBranch, , ,"FIN")
+	jPayload:fromJson(cPayload)
+	if jPayload["data"]:hasProperty("status")
+		nStatusMsg := jPayload["data"]["status"] //0 - Erro;1 - Sucesso
+	EndIf
+
+	if nStatusMsg == 1
+		// Verifica se é uma resposta de consulta de limite
+		if jPayload["data"]:hasProperty("erpRequestId")
+			aIdent := StrTOKArr2(jPayload["data"]["erpRequestId"], "|", .T.)
+			if Len(aIdent) == 4
+				cIdMsg := aIdent[4]
+			endIf
+		endIf
+		if jPayload["data"]:hasProperty("processingData")
+			for nData := 1 to len(jPayload["data"]["processingData"])
+				jProcessingData := jPayload["data"]["processingData"][nData]
+				nLimTotal       := 0
+				nLimAvailable   := 0
+				nLimUsed        := 0
+				nLimReserved    := 0
+				cDocNum         := jProcessingData["rootDocumentNumber"]
+				nAnalysisType   := 0
+				nAnalysisStatus := 0
+				lRet            := .T.
+				if jProcessingData:hasProperty("limit")
+					if jProcessingData["limit"]:hasProperty("totalCoobligationLimit")      // Limite de coobrigação total
+						nLimTotal := jProcessingData["limit"]["totalCoobligationLimit"]
+					endIf
+					if jProcessingData["limit"]:hasProperty("availableCoobligationLimit")  // Limite de coobrigação disponível
+						nLimAvailable := jProcessingData["limit"]["availableCoobligationLimit"]
+					endIf
+					if jProcessingData["limit"]:hasProperty("usedCoobligationLimit")  // consumido por antecipações realizadas.
+						nLimUsed := jProcessingData["limit"]["usedCoobligationLimit"]
+					endIf
+					if jProcessingData["limit"]:hasProperty("reservedForBatchProcessingLimit") // Limite reservado.
+						nLimReserved := jProcessingData["limit"]["reservedForBatchProcessingLimit"]
+					endIf
+				endIf
+				//0 - Concessão;1 - Solicitação alteração;2 - Atualização
+				if jProcessingData:hasProperty("analysisType")
+					nAnalysisType := jProcessingData["analysisType"]
+				endIf
+
+				if !Empty(cIdMsg)
+					if totvs.protheus.backoffice.techfin.util.setPositionByUUID("ARC", cIdMsg)
+						oModel := FWLoadModel("totvs.protheus.backoffice.techfin.antecipa.limits.AntecipaLimits")
+						oModel:SetOperation(MODEL_OPERATION_UPDATE)
+						oModel:Activate()
+						oMdlARC:= oModel:GetModel("ModelARC")
+
+						//0 - Em processamento;1 - Aprovada;4 - Rejeitada.
+						if jProcessingData:hasProperty("analysisStatus")
+							nAnalysisStatus := jProcessingData["analysisStatus"]
+						endIf
+						Do Case
+							Case nAnalysisStatus == 0
+								cStatus := "1"
+							Case nAnalysisStatus == 1
+								cStatus := "2"
+							Case nAnalysisStatus == 4
+								cStatus := "3"
+						EndCase
+
+						oMdlARC:setValue("ARC_STATUS", cStatus) //1=Solicitado;2=Aprovado;3=Negado 
+						cReason := ""
+						if cStatus <> "2" .And. jProcessingData:hasProperty("analysisReturnReason")
+							cReason := jProcessingData["analysisReturnReason"]
+						else
+							oMdlARC:setValue("ARC_LIMAPR", nLimTotal)
+						endIf
+
+						oMdlARC:setValue("ARC_REASON", cReason)
+
+						BEGIN TRANSACTION
+							if !(oModel:VldData() .and. oModel:CommitData())
+								cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+								cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+								cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+								AADD(aLogs, {"error", "Model validation", cLogModel})
+								lRet := .F.
+							endIf
+							if lRet
+								TAUPDSacado(cDocNum, nLimAvailable, nLimTotal, nLimUsed, nLimReserved)
+							endif
+						END TRANSACTION
+
+						oModel:DeActivate()
+						oModel:Destroy()
+					endIf
+				else
+					BEGIN TRANSACTION
+						TAUPDSacado(cDocNum, nLimAvailable, nLimTotal, nLimUsed, nLimReserved)
+					END TRANSACTION
+				endIf
+			next nData
+		endIf
+	else 
+		AADD(aLogs, {"error", "TechFin response error", jPayload["data"]["message"]})
+	endIf
+	// Log da integração
+	if Len(aLogs) > 0
+		cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+	endIf
+	totvs.protheus.backoffice.techfin.util.logSmartLink(cPayload, "ARC", cIdMsg, "1", "LimitGrant", "T", cIdMsg, cLog) //cMessage, cAlias, cUUID, cProduct, cOperation, cOrigin, cIdMsg, cLog
+	RpcClearEnv()
+return .T.
+
+/*/{Protheus.doc} TAUPDSacado
+	Atualiza o limite do sacado no complemento do cliente (AI0).
+	Para CNPJ, atualiza todos os clientes que compartilham a mesma raiz (8 primeiros dígitos).
+	Para CPF, atualiza apenas o cliente específico.
+	@type function
+	@author Squad TechFin
+	@since 17/09/2025
+	@param cDocNum    , character, Número do documento CPF/CNPJ do sacado
+	@param nAvailable  , numeric  , Valor do limite disponível para o sacado
+	@param nTotal     , numeric  , Valor do limite total concedido ao sacado
+	@param nUsed      , numeric  , Valor do limite já utilizado pelo sacado
+	@param nReserved  , numeric  , Valor do limite reservado para o sacado
+/*/
+Function TAUPDSacado(cDocNum as Character, nAvailable as numeric, nTotal as numeric, nUsed as numeric, nReserved as numeric)
+	local cQuery   := ""               as character
+	local cDoc     := AllTrim(cDocNum) as character
+	local lCPF     := Len(cDoc) == 11  as logical
+	local cAlias   := ""               as character
+	local lInsert  := .F.              as logical
+	local cFilCli  := ""               as character
+	local cCodCli  := ""               as character
+	local cLojaCli := ""               as character
+	local oExecSA1 := nil              as object
+
+	default nAvailable := 0
+	default nTotal     := 0
+	default nUsed      := 0
+	default nReserved  := 0
+
+	cQuery := "SELECT SA1.A1_FILIAL, SA1.A1_COD, SA1.A1_LOJA FROM "
+	cQuery += RetSqlName("SA1") + " SA1 "
+	cQuery += " WHERE "
+	if lCPF
+		cQuery += " SA1.A1_CGC = ?"
+	else
+		cDoc := SubStr(cDoc, 1, 8)
+		cQuery += " SUBSTRING(SA1.A1_CGC, 1, 8) = ? "
+	endIf
+	cQuery += " AND SA1.D_E_L_E_T_ = ?"
+
+	cQuery   := ChangeQuery(cQuery)
+	oExecSA1 := FWExecStatement():new(cQuery)
+	oExecSA1:setString(1, cDoc)
+	oExecSA1:setString(2, " ")
+
+	cAlias := oExecSA1:openAlias()
+	DbSelectArea("AI0")
+	DbSetOrder(1) //AI0_FILIAL, AI0_CODCLI, AI0_LOJA, R_E_C_N_O_, D_E_L_E_T_
+	While (cAlias)->(! Eof() )
+		cFilCli  := FWxFilial('AI0', (cAlias)->A1_FILIAL)
+		cCodCli  := (cAlias)->A1_COD
+		cLojaCli := (cAlias)->A1_LOJA
+		lInsert := !AI0->(dbSeek(cFilCli + cCodCli + cLojaCli))
+
+		RecLock('AI0', lInsert)
+			if lInsert
+				AI0->AI0_FILIAL := cFilCli
+				AI0->AI0_CODCLI := cCodCli
+				AI0->AI0_LOJA   := cLojaCli
+			endIf
+			AI0->AI0_TFLIMD := nAvailable
+			AI0->AI0_TFLIMT := nTotal
+			AI0->AI0_TFLIMU := nUsed
+			AI0->AI0_TFLIMR := nReserved
+		AI0->(MsUnlock())
+		(cAlias)->(DbSkip())
+	EndDo
+
+	(cAlias)->(DbCloseArea())
+	oExecSA1:Destroy()
+	oExecSA1 := Nil
+Return

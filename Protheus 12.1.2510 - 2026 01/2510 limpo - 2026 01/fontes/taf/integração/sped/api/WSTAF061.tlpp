@@ -1,0 +1,1809 @@
+#INCLUDE 'TOTVS.CH'
+#INCLUDE 'WSTAF061.CH'
+#INCLUDE 'tlpp-core.th'
+#INCLUDE 'tlpp-rest.th'
+
+#DEFINE CodeRespCreated 201
+#DEFINE CodeRespBadRequest 400
+
+//status do Periodo V13
+#DEFINE StatusEmAberto		'1'
+#DEFINE StatusApurado  		'2'
+#DEFINE StatusFechado		'3'
+#DEFINE StatusEmApuracao 	'4'
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET TafProcGetStatus
+Rertorna os status dos processos de 
+
+@author	Evandro Italo
+@since	08/04/2024
+-------------------------------------------------------------------*/
+@GET(endpoint='/api/taf/fiscal/v1/calculations/processes/:id', description='Realiza a consulta de um processo de apuração') // STR0001 "Realiza a consulta de um processo de apuração"
+Function TafProcGetStatus()
+
+Local oJsResponse  := Nil                             as json
+Local cIdParam := oRest:getPathParamsRequest()['id']  as character
+Local oJParams  := Nil     as json
+
+oJParams   := oRest:getHeaderRequest()
+
+oJsResponse := GetResponseStatusProcess(cIdParam)
+
+oRest:setResponse(oJsResponse)  
+
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET GetResponseStatusProcess
+Realiza a consulta de um processo de apuração
+
+@Param cId - Recebe o id do processo para busca na query.
+
+@author	Evandro Italo
+@since	08/04/2024
+-------------------------------------------------------------------*/
+Static Function GetResponseStatusProcess(cId as character)
+
+	Local aStatus	:= StrTokArr(GetSx3Cache('V59_STATUS', 'X3_CBOX'), ';')	as array
+	Local aBind		:= {}													as array
+	Local cAlias	:= GetNextAlias()										as character
+	Local cQuery	:= ""													as character
+	Local cBranch	:= xFilial('V59')										as character
+	Local jResponse	:= JsonObject():New()									as json
+
+	cQuery  := " SELECT V59.V59_ID,  "
+	cQuery  += " V59.V59_STATUS,  "
+	cQuery  += " V59.V59_PROGRE, "
+	cQuery  += " V59.V59_PCANCE,  "
+	cQuery  += " V59.V59_CTIME  "
+	cQuery  += " FROM " + RetSqlName('V59') + " V59 "
+	cQuery  += " WHERE V59.D_E_L_E_T_ = ' ' " 
+	cQuery  += " AND V59.V59_FILIAL = ?   "
+	cQuery  += " AND V59.V59_ID = ? "
+
+	Aadd(aBind, cBranch)
+	Aadd(aBind, cId)
+
+	dbUseArea(.T., "TOPCONN", TCGenQry2(,, cQuery, aBind), cAlias, .F., .T.)
+
+	If !(cAlias)->(EOF())
+		jResponse['id'			]                  	:= ALLTRIM((cAlias)->V59_ID)
+		jResponse['status'		]                  	:= JsonObject():New()                
+		jResponse['status'		]['id']            	:= ALLTRIM((cAlias)->V59_STATUS)
+		jResponse['status'		]['description']	:= alltrim(substr( aStatus[ val(AllTrim((cAlias)->V59_STATUS)) ], 3))
+		jResponse['progress'	]					:= (cAlias)->V59_PROGRE
+		jResponse['canCancel'	]					:= (cAlias)->V59_PCANCE == "T"
+		jResponse['createdAt'	]					:= alltrim((cAlias)->V59_CTIME) 
+	EndIf
+
+	If !jResponse:HasProperty("id")
+		jResponse["code"] 			:= 404
+		jResponse["detailMessage"] 	:= ""
+		jResponse["message"] 		:= "Processo de apuração não encontrado!" // "Processo de apuração não encontrado!"
+		
+		oRest:SetStatusCode(404)
+	EndIf
+
+	(cAlias)->(DbCloseArea()) 
+
+Return jResponse
+
+/*{Protheus.doc} Tafcalculations
+@type			function
+@description	Api para apuração do IPI por periodo.
+@author			Carlos Eduardo Boy
+@since			10/04/2024
+@version		1.0
+@return			Nil */
+@POST(endpoint='/api/taf/fiscal/v1/calculations', description='Apuracao de IPI') // STR0002 'Apuracao de IPI'
+Function TafCalculations() 
+Local cIdRegra as character
+Local aPeriods := {} as array
+Local cMsg400 as character
+Local cProfile 		:= "" as character
+Local cBranch 		:= "" as character
+Local cId 			:= "" as character
+Local oJsResponse  := JsonObject():New() as json
+Local oBodyRequest := JsonObject():New() as json
+Local oUpDateV59 := Nil as object
+Local oUpDateV13 := Nil as object
+
+Local oTask      as Object
+Local aIdsprocessos := {} as array
+Local aParamsApura := {} as array
+Local nX         := 0	
+
+oBodyRequest:FromJson(oRest:GetBodyRequest())
+
+if oBodyRequest:hasProperty('rule') 
+    cIdRegra := oBodyRequest['rule']
+endif
+
+if oBodyRequest:hasProperty('periods')     
+    aPeriods := oBodyRequest['periods'] 
+endif  
+
+// Os parâmetro rule e period são obrigatórios
+if empty(cIdRegra)
+    cMsg400 := STR0003 //'O id. da regra relacionada não foi informada!'
+elseif empty(aPeriods)
+    cMsg400 := STR0004 //'Nenhum periodo relacionado não foi informado!'
+endif    
+
+//Valida status do smart schedule
+ValidaSmartSchedule(@cMsg400)
+
+oJsResponse := JsonObject():new()
+
+if !empty(cMsg400)
+    oJsResponse['code'] := CodeRespBadRequest
+    oJsResponse['detailMessage'] := ''
+    oJsResponse['message'] := cMsg400
+    oRest:setStatusCode(CodeRespBadRequest)	
+else
+    // Percorre os periodos desejados apurar para a regra, e cria uma task no smartschedule para cada um ...
+    For nX := 1 To Len(aPeriods)
+		If aPeriods[nX] != Nil
+			cIdProcess 		:= FWUUIDv4(.t.)
+			cProfile   		:= IIf(aPeriods[nX]:HasProperty("profile"), aPeriods[nX]["profile"], "")
+			cBranch   		:= IIf(aPeriods[nX]:HasProperty("branch"), aPeriods[nX]["branch"], "")
+			cId  			:= IIf(aPeriods[nX]:HasProperty("id"), aPeriods[nX]["id"], "")
+			aParamsApura 	:= {cIdRegra, cId, cIdProcess, cBranch, cProfile}
+			
+			//Se for reapuração, faz a limpeza das tabelas antes de apurar novamente
+			TafDesfazApuracao({{cId,.f.}})
+			
+			//Cria task de execucao da apuracao no smart schedule
+			oTask := totvs.framework.schedule.utils.createTask( /*GetEnvServer()*/, /*cEmpAnt*/, cBranch, 'TafApurIpi' , 84, __cUserID, '', aParamsApura, .F.)            
+
+			// Verifica se a tarefa foi criada e qual o ID da mesma (TSK_ITEM na tabela de SCHDTSK)
+			If oTask == Nil; TafStatusProcessoApuracao(cIdProcess, cIdRegra, cId, 100, @oUpDateV59, @oUpDateV13); EndIf
+			
+			If( !empty( oTask ) .and. AttIsMemberOf(oTask , "CID") )
+				TafStatusProcessoApuracao(cIdProcess, cIdRegra, cId, 0, @oUpDateV59, @oUpDateV13)
+
+				oJsItem := JsonObject():new()
+				oJsItem['period'] 	:= cId
+				oJsItem['process'] 	:= cIdProcess
+				oJsItem['href']    	:= "/api/taf/fiscal/v1/calculations/processes/"+cIdProcess  
+				Aadd( aIdsprocessos , oJsItem  )
+				FreeObj( oJsItem )  
+			Endif
+		EndIf
+    Next nX
+
+    if( empty(cMsg400) .and. Len(aPeriods) > 0 )
+        oJsResponse['items'] := aIdsprocessos
+        oJsResponse['total'] := Len(aPeriods)
+        oRest:setStatusCode(CodeRespCreated)
+    Endif
+
+endif     
+
+oRest:setResponse(oJsResponse)  
+FreeObj( oJsResponse )
+oJsResponse := Nil
+
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} POST SubItem
+
+Endpoint responsável por gravar o subitem da apuração.
+@author Evandro Italo
+
+@since 04/07/2024
+-------------------------------------------------------------------*/
+@POST(endpoint='/api/taf/fiscal/v1/calculations/subItem/:idPer', description='Realiza a gravação do subitem da apuração.') // STR0039 "Realiza a gravação do subitem da apuração."
+Function tafPostSubItemCalculations()
+Local cAliasLan	  := ""					as character
+Local cSeqLan     := ""					as character
+Local cLinha	  := ""					as character
+Local cIdPer      := ""					as character
+Local cAdjCod	  						as character
+Local cCznFil	  := ""					as character
+Local cQryLan	  := ""					as character
+Local cDescC1B	  := ""					as character	
+Local dCznDtIni   						as date
+Local dCznDtFin      					as date
+Local lResponse   := .F.				as logical
+Local oLineApur   := Nil                as json 
+Local oJsBody     := JsonObject():new() as Json
+Local oJsResponse := JsonObject():new() as object
+
+oJsBody:fromJson(oRest:GetBodyRequest())
+
+cIdPer    	:= oRest:getPathParamsRequest()['idPer']
+cLinha  	:= oJsBody["item"]
+
+//O item só pode ser incluido com o status 2-Apurado
+if GetAdvFval('V13','V13_STATUS',xFilial('V13')+cIdPer,1) == '2'
+	cQryLan := " SELECT "
+	cQryLan += " 	CZN.CZN_FILIAL, "
+	cQryLan += " 	CZN.CZN_LINHA,  "
+	cQryLan += " 	CZN.CZN_DESCL,  "
+	cQryLan += " 	CZN.CZN_VALOR,  "
+	cQryLan += " 	CZN.CZN_CODLAN, "
+	cQryLan += " 	CZN.CZN_SEQLAN, "
+	cQryLan += " 	CZN.CZN_TIPLAN, "
+	cQryLan += " 	CZN.CZN_DTINIC, " 
+	cQryLan += " 	CZN.CZN_DTFINA  "	
+	cQryLan += " FROM " + RetSqlName('V13') + " V13 "
+	cQryLan += " 	INNER JOIN " + RetSqlName('V11') + " V11 ON V11.D_E_L_E_T_ = ' ' AND V11.V11_FILIAL = ?  AND V11.V11_ID = V13.V13_IDFIL "
+	cQryLan += " 	INNER JOIN " + RetSqlName('CZN') + " CZN ON CZN.D_E_L_E_T_ = ' ' AND CZN.CZN_FILIAL = V11.V11_FILANT  AND CZN.CZN_IDPER = V13.V13_ID "
+	cQryLan += " WHERE V13.D_E_L_E_T_  = ' ' " 
+	cQryLan += " 	AND V13.V13_FILIAL = ? "
+	cQryLan += " 	AND V13.V13_ID     = ? "
+	cQryLan += " 	AND CZN.CZN_LINHA  = ? "
+	cQryLan += " ORDER BY CZN_LINHA, CZN_SEQLAN DESC"
+
+	oLineApur := FwExecStatement():New(cQryLan)
+	oLineApur:SetString(1, xFilial('V11'))
+	oLineApur:SetString(2, xFilial('V13'))
+	oLineApur:SetString(3, cIdPer)
+	oLineApur:SetString(4, cLinha)
+	cAliasLan := oLineApur:OpenAlias()
+
+	Begin Transaction
+		IF (cAliasLan)->(!Eof())
+			cCznFil   := (cAliasLan)->CZN_FILIAL
+			dCznDtIni := STOD((cAliasLan)->CZN_DTINIC)
+			dCznDtFin := STOD((cAliasLan)->CZN_DTFINA)
+			cSeqLan   := Soma1((cAliasLan)->CZN_SEQLAN)
+			cAdjCod	  := oJsBody["subItems"][1]["adjustmentCode"]
+			cDescC1B  := GetAdvFVal("C1B", "C1B_DESCRI", FWxFilial("C1B")+cAdjCod,3)
+
+			If CZN->(RecLock('CZN', .T.))
+				CZN->CZN_FILIAL	:= cCznFil
+				CZN->CZN_DTINIC	:= dCznDtIni
+				CZN->CZN_LINHA	:= cLinha
+				CZN->CZN_DESCL	:= AllTrim(cDescC1B)
+				CZN->CZN_CODLAN	:= cAdjCod
+				CZN->CZN_SEQLAN	:= cSeqLan
+				CZN->CZN_VALOR	:= oJsBody["subItems"][1]["value"]
+				CZN->CZN_TIPLAN	:= "2"
+				CZN->CZN_IDPER	:= cIdPer
+				CZN->CZN_DTFINA	:= dCznDtFin
+				CZN->(MsUnLock())
+				lResponse := .T.
+			EndIf
+
+			if lResponse 
+				//Atualiza total da linha
+				lResponse := AtualizaTotais(oRest:getMethodRequest(), cIdPer, cCznFil, cLinha, oJsBody["subItems"][1]["value"] )
+			endif
+
+			if !lResponse; DisarmTransaction(); endif		
+				
+		EndIf
+	end transaction	
+	(cAliasLan)->(DbCloseArea())
+endif	
+
+If lResponse
+	oJsResponse := TafResponsePostPutSubItem(cIdPer, cLinha, cSeqLan)
+	oRest:setStatusCode(CodeRespCreated)
+Else
+	oJsResponse['code'] := CodeRespBadRequest
+	oJsResponse['detailMessage'] := ''
+	oJsResponse['message'] := "Nenhuma apuração encontrada ou ID invalido informado no parametro id."
+	oRest:setStatusCode(CodeRespBadRequest)
+EndIf
+
+oRest:setResponse( (oJsResponse ) ) 
+
+
+Return
+
+/*-------------------------------------------------------------------
+{Protheus.doc} PUT SubItem
+
+Endpoint responsável por alterar o subitem da apuração.
+@author Evandro Italo
+
+@since 04/07/2024
+-------------------------------------------------------------------*/
+
+@PUT(endpoint='/api/taf/fiscal/v1/calculations/subItem/:idPer', description='Realiza a alteração do subitem da apuração.') // STR0040 "Realiza a alteração do subitem da apuração."
+Function tafPutSubItemCalculations()
+Local lUpdateOk													as logical
+Local cIdPerParam   := oRest:getPathParamsRequest()['idPer']    as character
+Local cLineParam    := ""										as character
+Local cSubItemParam := ""									    as character
+Local cEntCod       := ""                                       as character
+Local cDescSubItem  := ""                                       as character
+Local nValueSubItem := 0                                        as numeric
+Local oJsBody       := JsonObject():new()                       as Json
+Local oJsResponse   := JsonObject():new()                       as json
+Local cValorAnt		as numeric
+Local lPeriodoValido := GetAdvFval('V13','V13_STATUS',xFilial('V13')+cIdPerParam,1) == '2' as logical
+
+//O item só pode ser alterado com o status 2-Apurado
+if lPeriodoValido
+	oJsBody:fromJson( oRest:GetBodyRequest() )
+	cLineParam    := oJsBody['item'          ]
+	cSubItemParam := oJsBody['subItem'       ]
+	cEntCod       := oJsBody["adjustmentCode"]
+	nValueSubItem := oJsBody["value"]
+
+	cDescSubItem  := GetAdvFVal("C1B", "C1B_DESCRI", FWxFilial("C1B")+cEntCod,3)
+
+	V13->(DbSetOrder(1)) //V13_FILIAL+V13_ID
+	V11->(DbSetOrder(2)) //V11_FILIAL+V11_ID
+	CZN->(DbSetOrder(2)) //CZN_FILIAL+CZN_IDPER+CZN_LINHA+CZN_SEQLAN                                                                                                            
+
+	Begin Transaction
+		if V13->(DbSeek( xFilial('V13') + cIdPerParam ))
+			if V11->(DbSeek(xFilial('V11')+ V13->V13_IDFIL ) )
+				if CZN->(DbSeek(V11->V11_FILANT + V13->V13_ID + cLineParam + cSubItemParam ) )
+					cValorAnt := CZN->CZN_VALOR
+					if CZN->(RecLock('CZN',.F.))
+						CZN->CZN_CODLAN := cEntCod
+						CZN->CZN_DESCL  := cDescSubItem 
+						CZN->CZN_VALOR	:= nValueSubItem
+						CZN->(MsUnLock())
+						lUpdateOk := .t.
+					endif	
+				endif
+			endif
+		endif
+
+		if lUpdateOk 
+			//Atualiza total da linha
+			lUpdateOk := AtualizaTotais(oRest:getMethodRequest(), cIdPerParam, V11->V11_FILANT, cLineParam, nValueSubItem, cValorAnt )
+		endif
+
+		if !lUpdateOk; DisarmTransaction(); endif
+
+	end Transaction	
+endif
+
+If lUpdateOk
+	oJsResponse := TafResponsePostPutSubItem(cIdPerParam, cLineParam, cSubItemParam)
+	oRest:setStatusCode(CodeRespCreated)
+else
+	oJsResponse['code'] := CodeRespBadRequest
+	oJsResponse['detailMessage'] := ''
+	oJsResponse['message'] := "Nenhuma apuração encontrada ou ID invalido informado no parametro id."
+	oRest:setStatusCode(CodeRespBadRequest)
+endif     
+
+oRest:setResponse( (oJsResponse ))
+   
+return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} DELETE SubItem
+
+Endpoint responsável por Deletar o subitem da apuração.
+@author Evandro Italo
+
+@since 04/07/2024
+-------------------------------------------------------------------*/
+
+@DELETE(endpoint='/api/taf/fiscal/v1/calculations/subItem/:item/:subItem/:idPer', description='Realiza a deleção do subitem da apuração.') // STR0041 "Realiza a deleção do subitem da apuração."
+Function tafDeleteSubItemCalculations()
+
+Local lDeleteOk 												as logical
+Local oJsResponse   := JsonObject():new()                       as json
+Local cLineParam    := oRest:getPathParamsRequest()['item'] 	as character
+Local cSubItemParam := oRest:getPathParamsRequest()['subItem']  as character
+Local cIdPerParam   := oRest:getPathParamsRequest()['idPer']    as character
+Local nValorItem as numeric
+Local lPeriodoValido := GetAdvFval('V13','V13_STATUS',xFilial('V13')+cIdPerParam,1) == '2' as logical
+
+//O item só pode ser deletado com o status 2-Apurado
+if lPeriodoValido
+	V13->(DbSetOrder(1)) //V13_FILIAL+V13_ID
+	V11->(DbSetOrder(2)) //V11_FILIAL+V11_ID
+	CZN->(DbSetOrder(2)) //CZN_FILIAL+CZN_IDPER+CZN_LINHA+CZN_SEQLAN   
+
+	Begin Transaction
+
+		if V13->(DbSeek( xFilial('V13') + cIdPerParam ))
+			if V11->(DbSeek(xFilial('V11')+ V13->V13_IDFIL ) )
+				if CZN->(DbSeek(V11->V11_FILANT + V13->V13_ID + cLineParam + cSubItemParam ) )
+					nValorItem := CZN->CZN_VALOR	
+					if CZN->(RecLock('CZN',.F.))
+						CZN->(DbDelete())
+						CZN->(MsUnLock())
+						lDeleteOk := .t.
+					endif	
+				endif
+			endif
+		endif	
+
+		if lDeleteOk 
+			//Atualiza total da linha
+			lDeleteOk := AtualizaTotais(oRest:getMethodRequest(), cIdPerParam, V11->V11_FILANT, cLineParam, nValorItem )
+		endif
+
+		if !lDeleteOk; DisarmTransaction(); endif
+
+	end transaction	
+endif
+
+If lDeleteOk
+	oRest:setStatusCode(CodeRespCreated)
+else
+	oJsResponse['code'] := CodeRespBadRequest
+	oJsResponse['detailMessage'] := ''
+	oJsResponse['message'] := "Nenhuma apuração encontrada ou ID invalido informado no parametro id."
+	oRest:setStatusCode(CodeRespBadRequest)
+endif          
+
+oRest:setResponse(oJsResponse) 
+return
+
+/*{Protheus.doc} TafApuraIPI
+@type			Static function
+@description	Faz a apuração do IPI e grava os dados na tabela.
+@author			Carlos Eduardo Boy
+@since			11/04/2024
+@version		1.0
+@return			Nil */
+Function TafApurIpi(aParams as array) 
+
+Local cIdRegra 	 	:= "" as character
+Local cIdPeriodo 	:= "" as character
+Local cIdProcesso	:= "" as character
+Local cFilialReg 	:= "" as character
+Local cIdPerfil  	:= "" as character
+Local cQuery 		 as character
+Local cQueryCount 	 as character
+Local cQuerySelect 	 as character
+Local cQueryFrom 	 as character
+Local cQueryWhere 	 as character
+Local cQueryOrder 	 as character
+Local cAliasQry 	 as character
+Local aTipoPeriodo 	 as array
+Local aDadosPerApu 	 as array
+Local cPerApuracao 	 as character
+Local cDataInicial 	 as character
+Local cDataFinal 	 as character
+Local nPosLinha 	 as integer
+Local cTpOpCFOP 	 as character
+Local aArqApura 	 as array
+Local nQtdRegs 		 as integer
+Local nQtdPercentual as integer
+Local nQtdAcumulada  as integer
+Local oUpDateV59 	 as object
+Local oUpDateV13 	 as object
+Local aFieldsV8W	 as array
+Local oQueryApura as object
+Local oQueryCountApuracao as object
+Local nPosValor   := 3 as integer
+Local oInsertV8W  := FwBulk():New() as object
+Local cErro as character
+Local nPercent	  := 1 as integer
+Local cUltimoDia as character
+Local iCont		   := 1	as integer
+
+Private oError 	  := ErrorClass():New() as object
+
+If !Empty(aParams)
+	cIdRegra	:= aParams[1]
+	cIdPeriodo 	:= aParams[2]
+	cIdProcesso	:= aParams[3]
+	cFilialReg 	:= aParams[4]
+	cIdPerfil  	:= aParams[5]
+
+	RpcSetType(3)
+	RpcSetEnv(aParams[6], cFilialReg,,,"TAF","WSTAF061")  
+
+	//Carrego a variavel apos a abertura do ambiente
+	aDadosPerApu := GetAdvFval('V13',{'V13_PERIOD','V13_IDFIL','V13_FREQUE','V13_STATUS'},xFilial('V13')+cIdPeriodo,1)
+
+	//So faz apuração se o status do periodo for "1=Em aberto"
+	If !Empty(aDadosPerApu)
+		If aDadosPerApu[4] $ '2|4'
+		
+			aTipoPeriodo := GetAdvFval('V8Z',{'V8Z_PERAPU','V8Z_DECAD'} ,xFilial('V8Z')+cIdRegra+cIdPerfil ,1)
+			cPerApuracao := aDadosPerApu[1]
+			cDataInicial := right(cPerApuracao,4) + left(cPerApuracao,2) + '01' 
+			cUltimoDia 	 := strzero(day(lastday(stod(cDataInicial))),2)
+			cDataFinal   := right(cPerApuracao,4) + left(cPerApuracao,2) + cUltimoDia 	
+
+			//Estrutura de gravação da apuração na tabela CZN
+			//colunas 1-Linha, 2-Descricao da linha, 3-Valor, 4-Código ajuste, 5-Sequencia, 6-Tipo Lançamento
+			aArqApura  := {	{'001', STR0017 , 0, '', '','1'},; // 01 #POR ENTRADAS DO MERCADO NACIONAL
+							{'002', STR0018 , 0, '', '','1'},; // 02 #POR ENTRADAS DO MERCADO EXTERNO
+							{'003', STR0019	, 0, '', '','1'},; // 03 #POR SAÍAS DO MERCADO EXTERNO
+							{'004', STR0020 , 0, '', '','1'},; // 04 #ESTORNO DE DÉBITOS - Podem ocorrer linhas sequenciais de ajuste
+							{'005', STR0021 , 0, '', '','1'},; // 05 #OUTROS CRÉDITOS - Podem ocorrer linhas sequenciais de ajuste
+							{'006', STR0022 , 0, '', '','3'},; // 06 #SUBTOTAL
+							{'007', STR0023 , 0, '', '','1'},; // 07 #SALDO CREDOR DO PERÍODO ANTERIOR
+							{'008', STR0024	, 0, '', '','3'},; // 08 #TOTAL
+							{'009', STR0025	, 0, '', '','1'},; // 09 #POR SAÍDAS PARA O MERCADO NACIONAL
+							{'010', STR0026	, 0, '', '','1'},; // 10 #ESTORNO DE CRÉDITOS - Podem ocorrer linhas sequenciais de ajuste
+							{'011', STR0027	, 0, '', '','1'},; // 11 #RESSARCIMENTO DE CRÉDITO - Podem ocorrer linhas sequenciais de ajuste
+							{'012', STR0028	, 0, '', '','1'},; // 12 #OUTROS DÉBITOS - Podem ocorrer linhas sequenciais de ajuste
+							{'013', STR0024	, 0, '', '','3'},; // 13 #TOTAL
+							{'014', STR0029	, 0, '', '','3'},; // 14 #DÉBITO  TOTAL (ITEM 013)
+							{'015', STR0030	, 0, '', '','3'},; // 15 #CRÉDITO TOTAL (ITEM 008)
+							{'016', STR0031	, 0, '', '','1'},; // 16 #SALDO DEVEDOR (ITEM 014-ITEM 015)
+							{'017', STR0032	, 0, '', '','1'} } // 17 #SALDO CREDOR  (ITEM 015-ITEM 014)
+
+
+			//Strutura de campos do bulk -- Obs.: A gravação dos campos deve seguir essa mesma ordem
+			aFieldsV8W := { {'V8W_FILIAL'}, {'V8W_IDPER' }, {'V8W_CHVNF'}, {'V8W_CFOP'}, {'V8W_CST' }, {'V8W_ALIQ '}, {'V8W_VALOR'} }
+			oInsertV8W:SetTable(RetSqlName('V8W'))
+			oInsertV8W:SetFields(aFieldsV8W)
+
+			//Monto a data de filtro de acordo com o tipo do periodo. Mensal ou decendial
+			If !Empty(aTipoPeriodo)
+
+					if aTipoPeriodo[1] == '2' //decendial
+						if aTipoPeriodo[2] == '1 ' //Primeiro decendio
+							cDataFinal := stuff( cDataInicial, 7, 2 , '10')
+						elseif aTipoPeriodo[2] == '2 ' //Segundo decendio
+							cDataInicial := stuff( cDataInicial, 7, 2 , '11')
+							cDataFinal 	 := stuff( cDataFinal  , 7, 2 , '20')
+						else //Terceiro decendio
+							cDataInicial := stuff( cDataInicial, 7, 2 , '21')
+							cDataFinal 	 := stuff( cDataFinal  , 7, 2 , cUltimoDia)
+						endif
+					endif	
+
+				//Count da query
+				cQueryCount := " SELECT COUNT(C20_CHVNF) REGS "
+
+				//Campos que serão usados na consulta
+				cQuerySelect := " SELECT "
+				cQuerySelect += " 	C20.C20_CHVNF,  "
+				cQuerySelect += " 	C20.C20_NUMDOC, "
+				cQuerySelect += " 	C20.C20_SERIE,  "
+				cQuerySelect += " 	C20.C20_INDOPE, "
+				cQuerySelect += " 	C20.C20_TPDOC,  "
+				cQuerySelect += " 	C2F.C2F_CFOP,   "
+				cQuerySelect += " 	C2F.C2F_CST,   "
+				cQuerySelect += " 	C0Y.C0Y_CODIGO, "
+				cQuerySelect += " 	C20.C20_DTES,   " //--FT_ENTRADA
+				cQuerySelect += " 	C2F.C2F_VALOR,  " //--FT_VALIPI
+				cQuerySelect += " 	C2F.C2F_VLOPE,  " //--FT_VALCONT
+				cQuerySelect += " 	C2F.C2F_BASE,   " //--FT_BASEIPI
+				cQuerySelect += " 	C2F.C2F_VLISEN, " //--FT_ISENRET
+				cQuerySelect += " 	C2F.C2F_VLOUTR, " //--FT_OUTRRET
+				cQuerySelect += " 	C2F.C2F_ALIQ    " //--FT_ALIQIPI
+
+				//Tabela principal e joins
+				cQueryFrom := " FROM " + RetSqlName('C20') + " C20 "
+				cQueryFrom += " 	INNER JOIN " + RetSqlName('C2F') + " C2F ON "
+				cQueryFrom += " 		C2F.C2F_FILIAL = ? AND C2F.C2F_CHVNF = C20.C20_CHVNF AND C2F.C2F_CODTRI = ? AND C2F.D_E_L_E_T_ = ? "
+				cQueryFrom += " 	INNER JOIN " + RetSqlName('C0Y') + " C0Y ON "
+				cQueryFrom += " 		C0Y.C0Y_FILIAL = ? AND C0Y.C0Y_ID = C2F.C2F_CFOP AND C0Y.D_E_L_E_T_ = ? "
+
+				//Condicao da query
+				cQueryWhere += " WHERE C20.D_E_L_E_T_ = ? "
+				cQueryWhere += " 	AND C20.C20_FILIAL = ? "
+				cQueryWhere += " 	AND C20.C20_DTES BETWEEN ? and ? "
+				cQueryWhere += " 	AND C20.C20_CODSIT != ? "
+
+				//Ordem de apresentacao da query
+				cQueryOrder += " ORDER BY C20_INDOPE, C20_NUMDOC, C20_SERIE, C0Y_CODIGO "	
+
+				//Monta e seta query para contar os registros
+				cQuery := cQueryCount + cQueryFrom + cQueryWhere
+				cQuery := ChangeQuery(cQuery)
+				oQueryCountApuracao := FwExecStatement():New(cQuery)
+				iCont:= 1
+				
+				oQueryCountApuracao:setString(iCont++, xFilial('C2F') )
+				oQueryCountApuracao:setString(iCont++, '000005' )
+				oQueryCountApuracao:setString(iCont++, ' ' )
+				oQueryCountApuracao:setString(iCont++, xFilial('C0Y') )
+				oQueryCountApuracao:setString(iCont++, ' ' )
+
+				oQueryCountApuracao:setString(iCont++, ' ' )
+				oQueryCountApuracao:setString(iCont++, xFilial('C20') )
+				oQueryCountApuracao:setString(iCont++, cDataInicial )
+				oQueryCountApuracao:setString(iCont++, cDataFinal )
+				oQueryCountApuracao:setString(iCont++, '000003' )
+
+				nQtdRegs := oQueryCountApuracao:ExecScalar('REGS')
+				nQtdPercentual := iif(nQtdRegs > 10, int(nQtdRegs * 0.1), 1) //O percentual do processo de apuracao será gravado a cada 10%
+
+				//Monta e seta a query que retona os dados para apuracao
+				cQuery := cQuerySelect + cQueryFrom + cQueryWhere + cQueryOrder
+				cQuery := ChangeQuery(cQuery)
+
+				oQueryApura := FwExecStatement():New(cQuery)
+				iCont:= 1
+				oQueryApura:setString(iCont++, xFilial('C2F') )
+				oQueryApura:setString(iCont++, '000005' )
+				oQueryApura:setString(iCont++, ' ' )
+				oQueryApura:setString(iCont++, xFilial('C0Y') )
+				oQueryApura:setString(iCont++, ' ' )
+
+				oQueryApura:setString(iCont++, ' ' )
+				oQueryApura:setString(iCont++, xFilial('C20') )
+				oQueryApura:setString(iCont++, cDataInicial )
+				oQueryApura:setString(iCont++, cDataFinal )
+				oQueryApura:setString(iCont++, '000003' )
+
+
+				cAliasQry := oQueryApura:OpenAlias()
+
+				Begin transaction
+
+					try
+					
+						//Função para gravação e consulta do andamento do processo de apuração.
+						TafStatusProcessoApuracao(cIdProcesso, cIdRegra, cIdPeriodo, nPercent, @oUpDateV59, @oUpDateV13)
+
+						while (cAliasQry)->(!eof())
+
+							cTpOpCfop 	 := left( (cAliasQry)->C0Y_CODIGO, 1 )
+							nValorAjuste := (cAliasQry)->C2F_VALOR
+
+							//Separação das linhas de apuração
+							do case
+								case cTpOpCfop $ '12'
+									nPosLinha := 1
+								
+								case cTpOpCfop == '3' 
+									nPosLinha	:=	2
+								
+								case cTpOpCfop == '7'
+									nPosLinha	:=	3
+									if (cAliasQry)->C20_TPDOC == '000002'
+										nValorAjuste := 0
+									endif
+
+								case cTpOpCfop $ '56'
+									nPosLinha	:=	9			
+								otherwise
+									nPosLinha := iif( cTpOpCfop < '5', 1, 7 )
+							endCase
+
+							//Valor por linha e/ou ajuste
+							aArqApura[nPosLinha][nPosValor] += nValorAjuste
+
+							if nPosLinha < 8 
+								//Demonstrativo de Créditos
+								aArqApura[06][nPosValor] += nValorAjuste //Subtotal Creditos (Soma de todas as linhas anteriores a 006)
+							else
+								//Demostrativo de Débitos
+								aArqApura[13][nPosValor] += nValorAjuste	//Total debito
+							endif
+
+							//Função para gravação e consulta do andamento do processo de apuração.
+							nQtdAcumulada++
+							if nQtdAcumulada = nQtdPercentual
+								nPercent := ((cAliasQry)->(recno()) / nQtdRegs) * 100
+								TafStatusProcessoApuracao( cIdProcesso, cIdRegra, cIdPeriodo, nPercent, @oUpDateV59, @oUpDateV13 )
+								nQtdAcumulada := 0
+							endif
+
+							//Carrega os dados que serão gravados via FwBulk na tabela V8W
+							oInsertV8W:AddData( {xFilial('V8W') , cIdPeriodo, (cAliasQry)->C20_CHVNF, (cAliasQry)->C2F_CFOP, (cAliasQry)->C2F_CST , (cAliasQry)->C2F_ALIQ, (cAliasQry)->C2F_VALOR} )
+							
+							(cAliasQry)->(DbSkip())
+
+						enddo
+
+						//Fecha query e mata o objeto 
+						(cAliasQry)->(DbCloseArea())
+						oQueryApura:destroy()
+						oQueryApura := nil
+
+						//Inclui na apuração os ajustes do IPI
+						AjustesIPI(@aArqApura, cDataInicial, cDataFinal)
+
+						//Inclui na apuracao o saldo credor do periodo anterior
+						SaldoCredorAnterior(cIdRegra, aDadosPerApu, @aArqApura )
+
+						/*---------------------------------------
+						|			Totalizadores				|
+						---------------------------------------*/
+						//Total de Creditos ( Soma das linhas 006 e 007 )
+						aArqApura[08][nPosValor] := aArqApura[06][nPosValor] + aArqApura[07][nPosValor]
+
+						//Apuração do saldo
+						aArqApura[14][nPosValor] := aArqApura[13][nPosValor] //Débito total
+						aArqApura[15][nPosValor] := aArqApura[08][nPosValor] //Crédito total
+						if aArqApura[14][nPosValor] > aArqApura[15][nPosValor] 
+							aArqApura[16][nPosValor] := aArqApura[14][nPosValor] - aArqApura[15][nPosValor] //Saldo devedor
+						elseif aArqApura[14][nPosValor] < aArqApura[15][nPosValor] 
+							aArqApura[17][nPosValor] := aArqApura[15][nPosValor] - aArqApura[14][nPosValor] //Saldo credor
+						endif	
+
+						//Ordena o array antes da gravação da apuração.
+						aSort(aArqApura,,, {|x,y| x[1] + x[5] < y[1]+y[5]} )
+
+						//Grava os dados de movimento considerados na apuração do IPI para o periodo.
+						if !oInsertV8W:Close(); ErroApuracao(STR0007); endif //Erro na gravação dos movimentos que compõem a apuração
+						oInsertV8W:Destroy()
+						oInsertV8W := nil
+
+						//Função para gravação e consulta do andamento do processo de apuração.
+						TafStatusProcessoApuracao(cIdProcesso, cIdRegra, cIdPeriodo, 100, @oUpDateV59, @oUpDateV13)
+
+						//Grava os dados apos finalizar a apuração.
+						GravaApuracao(cIdRegra, cIdPeriodo, aArqApura, cDataInicial, cDataFinal)
+
+						TAFConout('***** ' + STR0008 + ' *****', 2) //Apuracao de IPI finalizada com sucesso
+
+					catch oError
+
+						//Monta mensagem de erro
+						cErro := CRLF + STR0009 + cFilialReg + CRLF //'Filial: '
+						cErro += STR0010 + iif( aTipoPeriodo[1] == '1', STR0011, STR0012) + ' - ' + stuff(cPerApuracao, 3, 0, '/') + CRLF //#Tipo Periodo: #Mensal #Decendial
+						if !empty(aTipoPeriodo[2])
+							cErro += 'Decendio: ' + aTipoPeriodo[2] + CRLF
+						endif	
+						TafConout(cErro + oError:Description, 3,, STR0002) //Apuracao de IPI
+
+						DisarmTransaction()
+
+					endtry
+
+				end transaction
+			endif
+		EndIf	
+
+		If aDadosPerApu[4] != "1"; TafStatusProcessoApuracao(cIdProcesso, cIdRegra, cIdPeriodo, 100, @oUpDateV59, @oUpDateV13); EndIf
+
+	EndIf
+
+	RpcClearEnv() //Fecha o ambiente atual
+EndIf
+
+return
+
+/*{Protheus.doc} AjustesIPI
+@type			Static function
+@description	Inclui na apuração do ipi as informações adicionais dos ajustes da apuração 
+@author			Carlos Eduardo Boy
+@since			18/05/2024
+@version		1.0
+@return			Nil */
+Static Function AjustesIPI(aApuracao as array, cDtIni as character, cDtFim as character)
+Local cQuery as character
+Local oQryAjuste as object
+Local cAliasQry as character
+Local cLinha as character
+Local nPosLinha as integer
+Local nSequencia as integer
+Local nPosLinha006 := aScan(aApuracao, {|x| x[1] == '006'} )
+Local nPosLinha013 := aScan(aApuracao, {|x| x[1] == '013'} )
+Local cQueryCase as character
+Local iCont		   := 1	as integer
+
+cQueryCase := " 	CASE "
+cQueryCase += " 		WHEN C1B.C1B_CODIGO = '001' THEN '004' "
+cQueryCase += " 		WHEN C1B.C1B_CODIGO IN ('002','010','011','012','013','019','098','099') THEN '005' "
+cQueryCase += " 		WHEN C1B.C1B_CODIGO IN ('101','102') THEN '010' "
+cQueryCase += " 		WHEN C1B.C1B_CODIGO = '103' THEN '011' "
+cQueryCase += " 		WHEN C1B.C1B_CODIGO = '199' THEN '012' "
+cQueryCase += " 	END "
+
+cQuery := " SELECT "
+cQuery += " 	CWW.CWW_CODAJU, "
+cQuery += " 	C1B.C1B_DESCRI, "
+cQuery += cQueryCase + " LINHA, "
+cQuery += " 	SUM(CWW.CWW_VALOR) CWW_VALOR"
+cQuery += " FROM " + RetSqlname('CWW') + " CWW "
+cQuery += " 	INNER JOIN " + RetSqlName('C20') + " C20 ON C20.C20_FILIAL = ? AND C20.C20_CHVNF = CWW.CWW_CHVNF AND C20.C20_DTES BETWEEN ? and ? AND C20.C20_CODSIT != ? AND C20.D_E_L_E_T_ = ? "
+cQuery += " 	INNER JOIN " + RetSqlName('C1B') + " C1B ON C1B.C1B_FILIAL = ? AND C1B.C1B_ID = CWW.CWW_CODAJU AND C1B.D_E_L_E_T_ = ? "
+cQuery += " WHERE CWW.D_E_L_E_T_ = ? "
+cQuery += " 	AND CWW.CWW_FILIAL = ? "
+cQuery += " GROUP BY CWW.CWW_CODAJU, C1B.C1B_DESCRI, "
+cQuery += cQueryCase
+cQuery += " ORDER BY LINHA, CWW.CWW_CODAJU "
+cQuery := ChangeQuery(cQuery)
+
+oQryAjuste := FwExecStatement():New(cQuery)
+
+oQryAjuste:setString(iCont++, xFilial('C20') )
+oQryAjuste:setString(iCont++, cDtIni )
+oQryAjuste:setString(iCont++, cDtFim )
+oQryAjuste:setString(iCont++, '000003' )
+oQryAjuste:setString(iCont++, ' ' )
+oQryAjuste:setString(iCont++, xFilial('C1B') )
+oQryAjuste:setString(iCont++, ' ' )
+oQryAjuste:setString(iCont++, ' ' )
+oQryAjuste:setString(iCont++, xFilial('CWW') )
+	
+
+cAliasQry := oQryAjuste:OpenAlias()
+
+while (cAliasQry)->(!eof())
+
+	if alltrim((cAliasQry)->LINHA) != cLinha
+		cLinha := alltrim((cAliasQry)->LINHA)
+		nSequencia := 0
+	endif
+
+	nSequencia++
+
+	nPosLinha := aScan(aApuracao, {|x| x[1] == cLinha .and. x[5] = '' } )
+	aApuracao[nPosLinha][3] += (cAliasQry)->CWW_VALOR
+
+	if val(cLinha) < 8
+		aApuracao[nPosLinha006][3] += (cAliasQry)->CWW_VALOR
+	else
+		aApuracao[nPosLinha013][3] += (cAliasQry)->CWW_VALOR
+	endif	
+	
+	aadd(aApuracao, {alltrim((cAliasQry)->LINHA), (cAliasQry)->C1B_DESCRI, (cAliasQry)->CWW_VALOR, alltrim((cAliasQry)->CWW_CODAJU),  strzero(nSequencia,3), '1' } )
+
+	(cAliasQry)->(DbSkip())
+enddo
+
+//Fecha query e mata o objeto 
+(cAliasQry)->(DbCloseArea())
+oQryAjuste:destroy()
+oQryAjuste := nil
+
+return
+
+/*{Protheus.doc} GravaApuracao
+@type			Static function
+@description	Grava os dados da apuração na tabela CZN
+@author			Carlos Eduardo Boy
+@since			20/05/2024
+@version		1.0
+@return			Nil */
+Static Function GravaApuracao(cIdRegra as character, cIdPeriodo as character,  aArqDados as array, cDtIni as character, cDtFim as character)
+Local i as integer
+Local oInsertCZN := FwBulk():New() as object
+Local aFieldsBulk as array
+
+//Strutura de campos do bulk -- Obs.: A gravação dos campos deve seguir essa mesma ordem
+aFieldsBulk := { {'CZN_FILIAL'}, {'CZN_IDPER' }, {'CZN_DTINIC'}, {'CZN_DTFINA'}, {'CZN_LINHA' },;
+  				 {'CZN_DESCL '}, {'CZN_CODLAN'}, {'CZN_SEQLAN'}, {'CZN_VALOR' }, {'CZN_TIPLAN'} }
+
+oInsertCZN:SetTable(RetSqlName('CZN'))
+oInsertCZN:SetFields(aFieldsBulk)
+
+//inclui os dados no objeto Bulk
+for i := 1 to len(aArqDados) 
+	oInsertCZN:AddData( {xFilial('CZN')  , cIdPeriodo      , cDtIni    		 , cDtFim      	   , aArqDados[i][01],;
+						 aArqDados[i][02], aArqDados[i][04], aArqDados[i][05], aArqDados[i][03], aArqDados[i][06] } )
+next
+
+//Persiste os dados e fecha o objeto.
+if !oInsertCZN:Close(); ErroApuracao(STR0013); endif //Erro na gravação da apuração
+oInsertCZN:Destroy()
+oInsertCZN :=  nil
+
+return
+
+/*{Protheus.doc} TafStatusProcessoApuracao
+@type			Static function
+@description	Consulta / grava dados do status do processo de apuracao.
+@author			Carlos Eduardo Boy
+@since			21/05/2024
+@version		1.0
+@return			Nil */
+Function TafStatusProcessoApuracao( cIdProcesso as character, cIdRegra as character, cIdPeriodo as character, nPercent as integer, oUpDateV59 as object, oUpDateV13 as object) 
+Local cSqlExec   as character
+Local cSqlInsert as character
+Local cUpDateV59 as character
+Local oInsertV59 as object
+Local cUpDateV13 as character
+Local cStatusV13 := StatusEmApuracao as character
+Local cStatusV59 := '1' as character
+Local cErro as character
+Local iCont		   := 1	as integer
+
+Default nPercent := 0
+
+if oUpDateV59 == nil
+
+	cUpDateV59 := " UPDATE " + RetSqlname('V59') + " SET "
+	cUpDateV59 += "		V59_STATUS = ?, "
+	cUpDateV59 += "		V59_PROGRE = ? "
+	cUpDateV59 += " WHERE D_E_L_E_T_ = ' ' "
+	cUpDateV59 += " 	AND V59_FILIAL = ? "
+	cUpDateV59 += " 	AND V59_ID = ? "
+	oUpDateV59 := FwExecStatement():New(cUpDateV59)
+
+endif
+
+if oUpDateV13 == nil
+	cUpDateV13 := " UPDATE " + RetSqlname('V13') + " SET "
+	cUpDateV13 += "		V13_PROCID = ?, "
+	cUpDateV13 += "		V13_STATUS = ?  "
+	cUpDateV13 += " WHERE D_E_L_E_T_ = ' ' "
+	cUpDateV13 += " 	AND V13_FILIAL = ? "
+	cUpDateV13 += " 	AND V13_ID = ? "
+	oUpDateV13 := FwExecStatement():New(cUpDateV13)	
+endif
+
+if nPercent == 0
+	//Caso seja inclusão, cria o registro na base
+	cSqlInsert := " INSERT INTO " + RetSqlname('V59')
+	cSqlInsert += "	( V59_FILIAL, V59_ID, V59_CTIME, V59_STATUS, V59_PROGRE ) 
+	cSqlInsert += " VALUES ( ?, ?, ?, ?, ? )"
+
+	oInsertV59 := FwExecStatement():New(cSqlInsert)
+
+	oInsertV59:SetString(iCont++, xFilial("V59"))
+	oInsertV59:SetString(iCont++, cIdProcesso)
+	oInsertV59:SetString(iCont++, FWTimeStamp(6))
+	oInsertV59:SetString(iCont++, '1')
+	oInsertV59:SetString(iCont++, cValToChar(Ceiling(nPercent)))
+	
+	cSqlInsert := oInsertV59:GetFixQuery()
+	
+	if TcSqlExec(cSqlInsert) < 0; cErro := STR0015; endif //Erro na criação do processo de apuração (V59)
+else
+	//Caso o percentual seja 100%, seta o status para concluído
+	if nPercent == 100; cStatusV59 := '2'; endif
+
+	oUpDateV59:SetString(1, cStatusV59)
+	oUpDateV59:SetNumeric(2, Ceiling(nPercent))
+	oUpDateV59:SetString(3, xFilial("V59"))
+	oUpDateV59:SetString(4, cIdProcesso)
+
+	cSqlExec := oUpDateV59:GetFixQuery()
+
+	If TcSqlExec(cSqlExec) < 0; cErro := STR0014; EndIf //Erro na atualização do percentual do processo de apuração (V59)
+endif
+
+//Caso tenha ocorrido erro na inclusão/atualização dos dados
+if len(cErro) > 0; ErroApuracao(cErro); endif
+
+//Altera o status do periodo de apuração
+if nPercent == 0 .or. nPercent == 100
+	
+	//Caso o nPercent = 0, o valores das variaveis já estão setados na declaracao das variaveis
+	if nPercent == 100
+		cStatusV13 := StatusApurado	
+	endif
+
+	oUpDateV13:SetString(1, cIdProcesso)
+	oUpDateV13:SetString(2, cStatusV13)
+	oUpDateV13:SetString(3, xFilial("V13"))
+	oUpDateV13:SetString(4, cIdPeriodo)
+
+	cSqlExec := oUpDateV13:GetFixQuery()
+
+	If TcSqlExec(cSqlExec) < 0; ErroApuracao(STR0016); EndIf //Erro na atualização do periodo de apuração (V13)
+endif	
+
+return 
+
+/*{Protheus.doc} SaldoCredorAnterior
+@type			Static function
+@description	Busca no periodo anterior ao apurado se teve saldo credor
+@author			Carlos Eduardo Boy
+@since			27/05/2024
+@version		1.0
+@return			Nil */
+Static Function SaldoCredorAnterior(cIdRegra as character, aDadosPerApura as array, aApuracao as array )
+Local cPerApura  := aDadosPerApura[1] as character
+Local cFilPer    := aDadosPerApura[2] as character
+Local cFreqApura := aDadosPerApura[3] as character
+
+Local cPerAnt as character
+Local cFreqAnt := '1' as character
+Local cDataAnterior as character
+Local cIdPeriodoAnt as character
+
+//Posiciono no periodo atual para montar dados do periodo anterior
+if cFreqApura $ '1|2'
+	cDataAnterior := dtoc(monthSub(ctod('01/' + stuff(cPerApura,3,0,'/')),1))
+	cPerAnt := substr(cDataAnterior,4,2) + right(cDataAnterior,4)
+	if cFreqApura == '2'
+		cFreqAnt := '4'
+	endif	
+else
+	cPerAnt := aDadosPerApura[1]
+	cFreqAnt := str(val(aDadosPerApura[3]) - 1, 1)
+endif
+
+//Posiciona no periodo anterior ao apurado, e caso encontre retorna o ID.
+V13->(DbSetOrder(2))
+if V13->(DbSeek( xFilial('V13') + cIdRegra + cFilPer + cPerAnt + cFreqAnt ))
+	cIdPeriodoAnt := V13->V13_ID
+endif	
+
+//Busca na apuracao do periodo anterior se teve saldo credor e leva para apuracao atual.
+CZN->(DBSetOrder(2))
+if CZN->(DbSeek( xFilial('CZN') + cIdPeriodoAnt + '017'))
+	aApuracao[7][3] := CZN->CZN_VALOR
+endif	
+
+return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} ErroApuracao
+@type			static function
+@description	Realiza o tratamento dos erros
+@author			Carlos Eduardo Boy
+@since			31/05/2024
+@version		1.0
+@return			Nil
+/*/
+//---------------------------------------------------------------------
+Static Function ErroApuracao(cError as character)
+Default cError := ''
+
+oError:Description := cError
+throw oError
+
+Return
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET TafGetLineApur
+Rertorna as linhas da apuração de IPI
+
+@author	Adilson Roberto
+@since	28/06/2024
+-------------------------------------------------------------------*/
+@GET(endpoint='/api/taf/fiscal/v1/calculations/:id', description="Linhas da apuração") 
+Function TafGetLineApur()
+
+Local cIdPer     := oRest:getPathParamsRequest()['id']  as character
+Local cQryLin    := ""                      as character
+Local oLineApur  := Nil                     as json 
+Local cAliasLine := ""                      as character
+Local oJsonResp  := JsonObject():New()      as object
+Local nItem		 := 0						as numeric
+Local nSitem	 := 0						as numeric
+
+If oLineApur = Nil
+	cQryLin := " SELECT "
+	cQryLin += " CZN.CZN_LINHA, CZN.CZN_DESCL, CZN.CZN_VALOR, "
+	cQryLin += " CZN.CZN_CODLAN, CZN.CZN_SEQLAN, CZN.CZN_TIPLAN, "
+	cQryLin += " COALESCE(C1B.C1B_CODIGO, ' ') C1B_CODIGO, COALESCE(C1B.C1B_DESCRI, ' ') C1B_DESCRI, "	
+	cQryLin += " CASE "
+	cQryLin += " WHEN CZN.CZN_TIPLAN = '1' THEN 'Automático' "
+	cQryLin += " WHEN CZN.CZN_TIPLAN = '2' THEN 'Manual' "
+	cQryLin += " ELSE 'Totalizador' "
+	cQryLin += " END DESTPLAN "   
+	cQryLin += " FROM ? V13 "
+	cQryLin += " INNER JOIN ? V11 "
+	cQryLin += " ON V11.D_E_L_E_T_ = ' ' AND V11.V11_FILIAL = ? AND V11.V11_ID = V13.V13_IDFIL "
+	cQryLin += " INNER JOIN ? CZN "
+	cQryLin += " ON CZN.D_E_L_E_T_ = ' ' AND CZN.CZN_FILIAL = V11.V11_FILANT AND CZN.CZN_IDPER = V13.V13_ID " 
+	cQryLin += " LEFT JOIN ? C1B "
+	cQryLin += " ON C1B.D_E_L_E_T_ = ' ' AND C1B.C1B_FILIAL = ? AND C1B.C1B_ID = CZN.CZN_CODLAN " 
+	cQryLin += " WHERE V13.D_E_L_E_T_ = ' ' "
+	cQryLin += " AND V13.V13_FILIAL = ? "
+	cQryLin += " AND V13.V13_ID = ? "
+	cQryLin += " ORDER BY CZN_LINHA, CZN_SEQLAN "
+	
+	oLineApur := FwExecStatement():New(cQryLin)
+Endif
+
+oLineApur:SetUnsafe(1, RetSqlName("V13"))
+oLineApur:SetUnsafe(2, RetSqlName("V11"))
+oLineApur:SetString(3, xFilial("V11"))
+oLineApur:SetUnsafe(4, RetSqlName("CZN"))
+oLineApur:SetUnsafe(5, RetSqlName("C1B"))
+oLineApur:SetString(6, xFilial("C1B"))
+oLineApur:SetString(7, xFilial("V13"))
+oLineApur:SetString(8, cIdPer)
+cAliasLine := oLineApur:OpenAlias()
+
+oJsonResp["calculations"] := {}
+oRest:setStatusCode(200)
+
+While (cAliasLine)->(!Eof())
+	If Empty((cAliasLine)->CZN_CODLAN)
+		aAdd( oJsonResp["calculations"], JsonObject():New() )
+
+		nItem++
+		oJsonResp["calculations"][nItem]["item"]   							:= (cAliasLine)->CZN_LINHA
+		oJsonResp["calculations"][nItem]["description"]						:= Alltrim((cAliasLine)->CZN_DESCL)
+		oJsonResp["calculations"][nItem]["calculatedValue"]					:= (cAliasLine)->CZN_VALOR
+		oJsonResp["calculations"][nItem]["inclusionType"]					:=  JsonObject():New() 
+		oJsonResp["calculations"][nItem]["inclusionType"]["id"] 			:= (cAliasLine)->CZN_TIPLAN
+		oJsonResp["calculations"][nItem]["inclusionType"]["description"]	:= (cAliasLine)->DESTPLAN
+		oJsonResp["calculations"][nItem]["subitems"] := {}
+	Else
+		aAdd( oJsonResp["calculations"][nItem]["subitems"], JsonObject():New() )
+
+		nSitem := len(oJsonResp["calculations"][nItem]["subitems"])
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["subitem"]   						:= (cAliasLine)->CZN_SEQLAN
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["adjustmentCode"]					:= JsonObject():New()
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["adjustmentCode"]["id"]			:= Alltrim((cAliasLine)->CZN_CODLAN)
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["adjustmentCode"]["description"]	:= Alltrim((cAliasLine)->C1B_CODIGO) + " - " + Alltrim((cAliasLine)->C1B_DESCRI)
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["value"] 							:= (cAliasLine)->CZN_VALOR
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["inclusionType"]					:=  JsonObject():New() 
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["inclusionType"]["id"] 			:= (cAliasLine)->CZN_TIPLAN
+		oJsonResp["calculations"][nItem]["subitems"][nSitem]["inclusionType"]["description"]	:= (cAliasLine)->DESTPLAN
+	Endif	
+
+	(cAliasLine)->(DbSkip())
+Enddo
+
+oRest:setResponse(oJsonResp)  
+(cAliasLine)->(DBCloseArea())
+
+FWFreeObj(oJsonResp)
+
+Return
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} TafClosePeriod
+@type			function
+@description	Api para fechar um periodo de apuracao
+@author			Carlos Eduardo Boy
+@since			19/06/2024
+@version		1.0
+@return			Nil */
+//---------------------------------------------------------------------
+@POST(endpoint='/api/taf/fiscal/v1/calculations/closePeriod', description='Apuracao de IPI') // STR0002 'Apuracao de IPI'
+Function TafClosePeriod()
+Local cIdPeriodo   as character
+Local cMsgResponse as character
+Local nCodeResponse := CodeRespBadRequest as integer
+Local oJsResponse  := JsonObject():New() as json
+Local oBodyRequest := JsonObject():New() as json
+Local cFilPeriodo as character
+
+//Atribui ao objeto(oBodyRequest) o body da requisição rest
+oBodyRequest:FromJson(oRest:GetBodyRequest())
+
+//Se existe a propriedade no json ou se foi informarda com valor válido
+if oBodyRequest:hasProperty('idPeriod') .and. !empty(oBodyRequest['idPeriod'])
+	cIdPeriodo := oBodyRequest['idPeriod']
+
+	//Valida periodo passado para fechamento
+	V13->(DbSetOrder(1)) //V13_FILIAL+V13_ID
+	if V13->(DbSeek( xFilial('V13') + cIdPeriodo ))
+
+		//Consulto a filial da regra que esta sendo passada via api
+		cFilPeriodo := GetAdvFval('V11', 'V11_FILANT', xFilial('V11')+V13->V13_IDFIL, 2)
+
+		if V13->V13_STATUS != StatusApurado
+			cMsgResponse := STR0033 //#O período deve estar com status 'Apurado' para que possa ser feito o fechamento! 
+		endif
+	else
+		cMsgResponse := STR0034 //#'Período não encontrado!'
+	endif
+else
+	cMsgResponse := STR0003 
+endif
+
+//Valida status do smart schedule
+ValidaSmartSchedule(@cMsgResponse)
+
+//Se não foram encontrados erros nas validações! 
+if empty(cMsgResponse)
+	if FechaPeriodo(cIdPeriodo, cFilPeriodo, @cMsgResponse)
+		nCodeResponse := CodeRespCreated
+	endif	
+endif
+
+if nCodeResponse = CodeRespBadRequest
+	//Mensagem de erro
+	oJsResponse['code'] 		 := nCodeResponse
+	oJsResponse['detailMessage'] := ''
+	oJsResponse['message'] 		 := cMsgResponse
+else
+	oJsResponse['statusPeriod'] := '3'
+endif
+
+oRest:setStatusCode(nCodeResponse)	
+oRest:setResponse(oJsResponse)
+
+FreeObj( oJsResponse )
+oJsResponse := Nil
+
+return
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} TafOpenPeriod
+@type			function
+@description	Api para fechar um periodo de apuracao
+@author			Carlos Eduardo Boy
+@since			19/06/2024
+@version		1.0
+@return			Nil */
+//---------------------------------------------------------------------
+@POST(endpoint='/api/taf/fiscal/v1/calculations/openPeriod', description='Apuracao de IPI') // STR0002 'Apuracao de IPI'
+Function TafOpenPeriod()
+Local cIdPeriodo   as character
+Local cMsgResponse as character
+Local nCodeResponse := CodeRespBadRequest as integer
+Local oJsResponse  := JsonObject():New() as json
+Local oBodyRequest := JsonObject():New() as json
+Local cFilPeriodo as character
+
+//Atribui ao objeto(oBodyRequest) o body da requisição rest
+oBodyRequest:FromJson(oRest:GetBodyRequest())
+
+//Se existe a propriedade no json ou se foi informarda com valor válido
+if oBodyRequest:hasProperty('idPeriod') .and. !empty(oBodyRequest['idPeriod'])
+	cIdPeriodo := oBodyRequest['idPeriod']
+
+	//Valida periodo passado para fechamento
+	V13->(DbSetOrder(1)) //V13_FILIAL+V13_ID
+	if V13->(DbSeek( xFilial('V13') + cIdPeriodo ))
+
+		//Consulto a filial da regra que esta sendo passada via api
+		cFilPeriodo := GetAdvFval('V11', 'V11_FILANT', xFilial('V11')+V13->V13_IDFIL, 2)	
+
+		if V13->V13_STATUS != StatusFechado
+			cMsgResponse := STR0035 //#"o período deve estar com status 'Fechado\Processado' para que possa ser reaberto! "
+		endif
+	else
+		cMsgResponse := STR0034 //#'Período não encontrado!'
+	endif
+else
+	cMsgResponse := STR0003 
+endif
+
+//Valida status do smart schedule
+ValidaSmartSchedule(@cMsgResponse)
+
+//Se não foram encontrados erros nas validações! 
+if empty(cMsgResponse)
+	if AbrePeriodo(cIdPeriodo, cFilPeriodo, @cMsgResponse)
+		nCodeResponse := CodeRespCreated
+	endif	
+endif
+
+if nCodeResponse = CodeRespBadRequest
+	//Mensagem de erro
+	oJsResponse['code'] 		 := nCodeResponse
+	oJsResponse['detailMessage'] := ''
+	oJsResponse['message'] 		 := cMsgResponse
+else
+	oJsResponse['statusPeriod'] := '2'
+endif
+
+oRest:setStatusCode(nCodeResponse)	
+oRest:setResponse(oJsResponse)
+
+FreeObj( oJsResponse )
+oJsResponse := Nil
+
+return
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} FechaPeriodo
+@type			function
+@description	Executa o fechamanto do periodo
+@author			Carlos Eduardo Boy
+@since			21/06/2024
+@version		1.0
+@return			Nil */
+//---------------------------------------------------------------------
+Static Function FechaPeriodo(cIdPeriodo as character, cFilPeriodo as character, cMsgResponse as character) as logical
+Local lFechaOk := .t. as logical
+Local aExecAuto as array
+Local aDescricaoTabGenIPI := {} as array
+Local cPrefixo := 'IPI' as character
+Local cNaturezaIPI := SuperGetMv('MV_IPI',,'') as character //Natureza de Titulos de Pagamento de IPI
+Local cCodigoUniao := SuperGetMv('MV_UNIAO',,'') as character //Código de cadastro da receita federal
+Local cNumTitulo as character
+Local nTamTitulo  := GetSX3Cache('F2_DOC', 'X3_TAMANHO') as integer 
+Local nValorTitulo as numeric
+Local cTipo := 'TX' as character
+Local cHistorico as character
+Local cFilialSE2 := xFilial('SE2',cFilPeriodo) as character
+Local cFilialLogada := cFilAnt as character
+Local aErroAuto as array
+Local dDataVecto as date
+Local dDataReal as date
+
+Private lMsErroAuto as logical
+Private lAutoErrNoFile := .t. as logical
+
+//Posiciono no perfil para calcular as datas de vencimento e pagamento
+V8Z->(DbSetOrder(1)) //V8Z_FILIAL+V8Z_CODREG+V8Z_CODIGO
+V8Z->(DbSeek(xFilial('V8Z')+V13->V13_REGID+V13->V13_PERFIL) )
+
+//Data de Vencimento
+//Mensal ou decendial terceiro periodo
+if alltrim(V8Z->V8Z_PERAPU) == '1' .or. ( alltrim(V8Z->V8Z_PERAPU) == '2' .and. alltrim(V8Z->V8Z_DECAD) == '3' )
+	dDataVecto := MonthSum(ctod(V8Z->V8Z_DTVENC + '/' + left(V13->V13_PERIOD,2) + '/' + right(V13->V13_PERIOD,4)),1)
+else
+	dDataVecto := ctod(V8Z->V8Z_DTVENC + '/' + left(V13->V13_PERIOD,2) + '/' + right(V13->V13_PERIOD,4))
+endif	
+
+//Data real para pagamento
+if alltrim(V8Z->V8Z_TPVENC) == '1'
+	dDataReal  := DataValida(dDataVecto) //Dia Util
+else
+	dDataReal := dDataVecto
+endif		
+
+//Verifica se o periodo teve saldo devedor e gera o titulo
+CZN->(DbSetOrder(2)) //CZN_FILIAL+CZN_IDPER+CZN_LINHA+CZN_CODLAN+CZN_SEQLAN
+if CZN->(DbSeek( cFilPeriodo+cIdPeriodo+'016'))
+	cHistorico := 'IPI: ' + dtoc( CZN->CZN_DTINIC ) + ' a ' + dtoc( CZN->CZN_DTFINA )
+	nValorTitulo := CZN->CZN_VALOR
+endif
+
+Begin transaction
+
+	if nValorTitulo > 0
+
+		//Manipulo a variavel para gerar o titulo na filial correta
+		cFilAnt := cFilialSE2
+
+		//Busca array contando [X5_Filial], [X5_TABELA], [X5_CHAVE], [X5_DESCRI]
+		aDescricaoTabGenIPI := FWGetSX5("53", "IPI")
+
+		//Busca ultimo titulo gerado para IPI
+		if len(aDescricaoTabGenIPI) > 0
+			cNumTitulo := soma1(left(aDescricaoTabGenIPI[1][4],nTamTitulo))
+		endif	
+
+		aExecAuto := { 	{ 'E2_PREFIXO'  , cPrefixo          , NIL },;					
+						{ 'E2_NUM'      , cNumTitulo        , NIL },;
+						{ 'E2_TIPO'     , cTipo             , NIL },; 
+						{ 'E2_NATUREZ'  , cNaturezaIPI      , NIL },;
+						{ 'E2_FORNECE'  , cCodigoUniao	   	, NIL },; 
+						{ 'E2_EMISSAO'  , dDataBase			, NIL },; 
+						{ 'E2_VENCTO '  , dDataVecto		, NIL },; 
+						{ 'E2_VENCREA'  , dDataReal			, NIL },; 
+						{ 'E2_VALOR  '  , nValorTitulo		, NIL },; 
+						{ 'E2_HIST   '  , cHistorico		, NIL },; 
+						{ 'E2_ORIGEM '  , 'WSTAF061'		, NIL } } 
+
+		MsExecAuto( { |x,y,z| FINA050(x,y,z)}, aExecAuto,, 3)  // 3 - Inclusao, 4 - Alteração, 5 - Exclusão	
+
+		If lMsErroAuto
+
+			aErroAuto := GetAutoGRLog()
+			cMsgResponse := iif(len(aErroAuto) > 0, strtran(aErroAuto[1], 'AJUDA:', STR0036), STR0037)
+			lFechaOk := .f.
+
+		Else
+
+			//Grava o id do titulo gerado para o periodo
+			lFechaOk := V12->(RecLock('V12',.t.))
+			if lFechaOk
+				V12->V12_FILIAL := xFilial('V12')
+				V12->V12_ID 	:= cIdPeriodo
+				V12->V12_PREFIX := cPrefixo
+				V12->V12_TITULO := cNumTitulo
+				V12->V12_PARCEL := ' '
+				V12->V12_TIPO 	:= cTipo
+				V12->V12_FORNEC := cCodigoUniao
+				V12->V12_LOJA 	:= '00' 
+				V12->V12_GECONT := .F.		
+				V12->(MsUnLock())
+			endif	
+
+			//Gravacao do Numero do Titulo no SX5
+			if lFechaOk
+				if len(aDescricaoTabGenIPI) > 0
+					FwPutSX5(, "53", "IPI", cNumTitulo, cNumTitulo, cNumTitulo)
+				endif	
+			endif
+		endif
+		//Retorno a variavel para seu conteudo de origem
+		cFilAnt := cFilialLogada
+	endif	
+
+	if lFechaOk 
+		if nValorTitulo = 0 .or. !lMsErroAuto
+			//Altera o Status da apuração para fechado/processado
+			lFechaOk := V13->(RecLock('V13',.f.))
+			if lFechaOk 
+				V13->V13_STATUS := StatusFechado
+				V13->(MsUnLock())
+			endif	
+		endif
+	endif		
+
+	if !lFechaOk
+		DisarmTransaction()
+		//if feito em linha porque não conseguimos simular um retorno .f. do reclock()
+		if empty(cMsgResponse); cMsgResponse := 'Não foi possível fechar o período, tente novamente mais tarde!'; endif	
+	endif	
+
+end transaction	
+
+return lFechaOk
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} AbrePeriodo
+@type			function
+@description	Executa a reabertura do periodo
+@author			Carlos Eduardo Boy
+@since			26/06/2024
+@version		1.0
+@return			Nil */
+//---------------------------------------------------------------------
+Static Function AbrePeriodo(cIdPeriodo as character, cFilPeriodo as character, cMsgResponse as character) as logical
+Local lAbreOk := .t. as logical
+Local aExecAuto as array
+Local aErroAuto as array
+Local cFilialSE2 := xFilial('SE2',cFilPeriodo) as character
+Local cFilialLogada := cFilAnt as character
+Private lMsErroAuto as logical
+Private lAutoErrNoFile := .t. as logical
+
+Begin Transaction
+
+	//Manipulo a variavel para excluir o titulo na filial correta
+	cFilAnt := cFilPeriodo
+
+	V12->(DbSetOrder(1))
+	if V12->(DbSeek( xFilial('V12')+cIdPeriodo ))
+		
+		//Execauto de exclusão deve ter o registro SE2 posicionado 
+		SE2->(DbSetOrder(1)) //"E2_FILIAL+E2_PREFIXO+E2_NUM+E2_PARCELA+E2_TIPO+E2_FORNECE+E2_LOJA
+		SE2->(DbSeek( cFilialSE2 + V12->(V12_PREFIX + V12_TITULO + V12_PARCEL + V12_TIPO + V12_FORNEC + V12_LOJA )))
+
+		// Efetua o estorno do lançamento Contábil
+		If V12->V12_GECONT
+			TafLanCtb('2', V12->V12_TITULO)
+		Endif
+		
+		aExecAuto := {	{ 'E2_PREFIXO'	, V12->V12_PREFIX	, NIL },;
+						{ 'E2_NUM'      , V12->V12_TITULO	, NIL },;
+						{ 'E2_PARCELA'  , V12->V12_PARCEL	, NIL },;
+						{ 'E2_TIPO'     , V12->V12_TIPO     , NIL },; //Verificar
+						{ 'E2_FORNECE'  , V12->V12_FORNEC	, NIL },; //Verificar
+						{ 'E2_LOJA'     , V12->V12_LOJA		, NIL },; //Verificar					
+						{ 'E2_ORIGEM '  , 'WSTAF061'		, NIL } }
+
+		MsExecAuto( { |x,y,z| FINA050(x,y,z)}, aExecAuto,, 5)  // 3 - Inclusao, 4 - Alteração, 5 - Exclusão
+
+		//Retorno a variavel para seu conteudo de origem
+		cFilAnt := cFilialLogada
+
+		If lMsErroAuto
+			aErroAuto := GetAutoGRLog()
+			cMsgResponse := iif( len(aErroAuto) > 0, strtran(aErroAuto[1], 'AJUDA:', STR0036 ), STR0038 ) //#'PROBLEMA NA EXCLUSÃO DO TÍTULO: ' #"Não foi possivel deletar o título gerado para o periodo!"
+			lAbreOk := .f.
+		Else
+			//Deleta o registro que vincula o periodo ao titulo
+			lAbreOk := V12->(RecLock('V12',.f.))
+			if lAbreOk
+				V12->(dbDelete())
+				V12->(MsUnLock())
+			endif		
+
+		endif
+
+	endif
+
+	//Altera o Status da apuração para APURADO
+	if lAbreOk
+		lAbreOk := V13->(RecLock('V13',.f.))
+		if lAbreOk
+			V13->V13_STATUS := StatusApurado
+			V13->(MsUnLock())
+		endif
+	endif	
+
+	if !lAbreOk	
+		DisarmTransaction()
+		//if feito em linha porque não conseguimos simular um retorno .f. do reclock()
+		if empty(cMsgResponse); cMsgResponse := 'Não foi possível abrir o período, tente novamente mais tarde!'; endif
+	endif
+
+end transaction	
+
+return lAbreOk
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} ValidaSmartSchedule
+@type			function
+@description	Valida o status do smart schedule
+@author			Carlos Eduardo Boy
+@since			19/06/2024
+@version		1.0
+@return			Nil */
+//---------------------------------------------------------------------
+Static Function ValidaSmartSchedule(cMessageSchedule as character)
+
+Local cAmbiente:= "" as character
+Default cMessageSchedule := ''
+
+//Só faz a validação se não existir erros anteriores
+if empty(cMessageSchedule)
+	cAmbiente:= TafContScd()
+	If Empty(cAmbiente)
+		cMessageSchedule := STR0005 //'SmartSchedule não está ativo ou habilitado! Contate o administrador para ativar o mesmo.'
+	EndIf
+
+endif	
+
+return 
+
+//---------------------------------------------------------------------
+/*{Protheus.doc} DesfazApuracao
+@type			function
+@description	Apaga as tabelas relacionadas a apuracao do peeriodo
+@author			Carlos Eduardo Boy
+@since			27/06/2024
+@version		1.0
+@return			Nil */
+//---------------------------------------------------------------------
+Function TafDesfazApuracao(aIdPeriodos as array) as logical
+Local lDesfazOk := .t. as logical
+Local cUpdate as character
+Local cFilPeriodo as character
+Local iPeriodos as integer
+Local cIdPeriodo as character
+Local lDelPeriodo as logical
+Local oUpDateV59 as object
+Local oUpDateV8W as object
+Local oUpDateCZN as object
+Local iCont := 1	as integer
+
+Begin transaction
+
+	for iPeriodos := 1 to len(aIdPeriodos)
+
+		cUpdate := ''
+		cIdPeriodo 	:= aIdPeriodos[iPeriodos][1]
+		lDelPeriodo := aIdPeriodos[iPeriodos][2]
+
+		V13->(DbSetOrder(1)) //V13_FILIAL+V13_ID
+		if V13->(DbSeek( xFilial('V13') + cIdPeriodo )) .and. V13->V13_STATUS $ (StatusApurado+'|'+StatusEmAberto)
+			
+			cFilPeriodo := GetAdvFval('V11', 'V11_FILANT', xFilial('V11')+V13->V13_IDFIL, 2)
+
+			cUpdate += " UPDATE " + RetSqlname('V59') + " SET "
+			cUpdate += " 	D_E_L_E_T_ = ?,"
+			cUpdate += " 	R_E_C_D_E_L_ = R_E_C_N_O_"
+			cUpdate += " WHERE D_E_L_E_T_ = ? "
+			cUpdate += " 	AND V59_FILIAL = ?"
+			cUpdate += " 	AND V59_ID = ? "
+
+			oUpDateV59 := FwExecStatement():New(cUpdate)
+			iCont := 1
+			oUpDateV59:SetString(iCont++, '*')
+			oUpDateV59:SetString(iCont++, ' ')
+			oUpDateV59:SetString(iCont++, xFilial('V59'))
+			oUpDateV59:SetString(iCont++, V13->V13_PROCID)
+			
+			cUpdate := oUpDateV59:GetFixQuery()
+			lDesfazOk := TcSqlExec(cUpdate) >= 0
+
+			if lDesfazOk
+				cUpdate := ''
+				cUpdate += " UPDATE " + RetSqlname('V8W') + " SET "
+				cUpdate += " 	D_E_L_E_T_ = ?,"
+				cUpdate += " 	R_E_C_D_E_L_ = R_E_C_N_O_"
+				cUpdate += " WHERE D_E_L_E_T_ = ? "
+				cUpdate += " 	AND V8W_FILIAL = ?"
+				cUpdate += " 	AND V8W_IDPER = ? "
+				
+				oUpDateV8W := FwExecStatement():New(cUpdate)
+				iCont := 1
+				oUpDateV8W:SetString(iCont++, '*')
+				oUpDateV8W:SetString(iCont++, ' ')
+				oUpDateV8W:SetString(iCont++, cFilPeriodo)
+				oUpDateV8W:SetString(iCont++, cIdPeriodo)
+				
+				cUpdate := oUpDateV8W:GetFixQuery()
+				lDesfazOk := TcSqlExec(cUpdate) >= 0
+			endif	
+
+			if lDesfazOk
+				cUpdate := ''
+				cUpdate += " UPDATE " + RetSqlname('CZN') + " SET "
+				cUpdate += " 	D_E_L_E_T_ = ?, "
+				cUpdate += " 	R_E_C_D_E_L_ = R_E_C_N_O_ "
+				cUpdate += " WHERE D_E_L_E_T_ = ? "
+				cUpdate += " 	AND CZN_FILIAL = ? "
+				cUpdate += " 	AND CZN_IDPER = ? "
+
+				oUpDateCZN := FwExecStatement():New(cUpdate)
+				iCont := 1
+				oUpDateCZN:SetString(iCont++, '*')
+				oUpDateCZN:SetString(iCont++, ' ')
+				oUpDateCZN:SetString(iCont++, cFilPeriodo)
+				oUpDateCZN:SetString(iCont++, cIdPeriodo)
+				
+				cUpdate := oUpDateCZN:GetFixQuery()
+
+				lDesfazOk := TcSqlExec(cUpdate) >= 0
+			endif	
+
+			if lDesfazOk 
+				//Altera o Status da apuração para "Em Aberto"
+				lDesfazOk := V13->(RecLock('V13',.f.))
+				if lDesfazOk
+					//Se estiver excluindo a regra, exclui também o periodo
+					if lDelPeriodo
+						V13->(DbDelete())
+					else
+						V13->V13_STATUS := StatusEmAberto
+						V13->V13_PROCID := ''					
+					endif		
+					V13->(MsUnLock())
+				endif	
+			endif
+
+			if !lDesfazOk
+				DisarmTransaction() 
+				exit
+			endif
+
+		endif
+	next
+end transaction	
+	
+return lDesfazOk
+
+/*-------------------------------------------------------------------
+{Protheus.doc} TafResponsePostPutSubItem
+
+Função responsável por montar o responsa das requisições do subitem
+@author Evandro Italo
+
+@since 04/07/2024
+-------------------------------------------------------------------*/
+
+Static Function TafResponsePostPutSubItem(cIdPerParam as character, cLineparam as character, cSubLinParam as character)
+
+	Local cQry           := ""                       as character
+	Local cAlias         := ""                       as character
+	Local cMetodoRequest := oRest:getMethodRequest() as character
+	Local jSubItems      := Nil  					 as json
+	Local aSubItems		 := {}						 as array
+	Local oJsonResp      := JsonObject():New()       as json
+
+	cQry := " SELECT "
+	cQry += " CZN.CZN_FILIAL, CZN.CZN_LINHA, CZN.CZN_DESCL, CZN.CZN_VALOR, "
+	cQry += " CZN.CZN_CODLAN, CZN.CZN_SEQLAN, CZN.CZN_TIPLAN, CZN.CZN_DTINIC , CZN.CZN_DTFINA "	  
+	cQry += " FROM " + RetSqlName('V13') + " V13 "
+	cQry += " INNER JOIN " + RetSqlName('V11') + " V11 ON V11.D_E_L_E_T_ = '' AND V11.V11_FILIAL = ?  AND V11.V11_ID = V13.V13_IDFIL "
+	cQry += " INNER JOIN " + RetSqlName('CZN') + " CZN ON CZN.D_E_L_E_T_ = '' AND CZN.CZN_FILIAL = V11.V11_FILANT  AND CZN.CZN_IDPER = V13.V13_ID "
+	cQry += " WHERE V13.D_E_L_E_T_ = ' ' " 
+	cQry += " AND V13.V13_FILIAL = ? "
+	cQry += " AND V13.V13_ID     = ? "
+	cQry += " AND CZN.CZN_LINHA  = ? "
+	cQry += " AND CZN.CZN_SEQLAN  = ? "
+	cQry += " ORDER BY CZN_LINHA, CZN_SEQLAN "
+
+	oLineApur := FwExecStatement():New(cQry)
+	oLineApur:SetString(1, xFilial('V11'))
+	oLineApur:SetString(2, xFilial('V13'))
+	oLineApur:SetString(3, cIdPerParam)
+	oLineApur:SetString(4, cLineparam)
+	oLineApur:SetString(5, cSubLinParam)
+	cAlias := oLineApur:OpenAlias()
+
+	IF cMetodoRequest == 'POST'
+		If (cAlias)->(!EOF())
+			oJsonResp["item"  ]   := AllTrim((cAlias)->CZN_LINHA)
+			jSubItems := JsonObject():New()
+			jSubItems["subItem"        ] := AllTrim((cAlias)->CZN_SEQLAN)
+			jSubItems["adjustmentCode" ] := AllTrim((cAlias)->CZN_CODLAN)
+			jSubItems["Value"          ] := (cAlias)->CZN_VALOR	
+			aAdd(aSubItems, jSubItems)
+			oJsonResp["subItems"] := aSubItems
+		EndIf
+	ElseIf cMetodoRequest == 'PUT'
+		oJsonResp["subItem"        ] := AllTrim((cAlias)->CZN_SEQLAN)
+		oJsonResp["adjustmentCode" ] := AllTrim((cAlias)->CZN_CODLAN)
+		oJsonResp["Value"          ] := (cAlias)->CZN_VALOR	
+	EndIf
+
+Return oJsonResp
+
+
+/*{Protheus.doc} GravaApuracao
+@type			Static function
+@description	Corrigie os totis da apuração quando a inclusão\alteração\delecao 
+				nos itens de ajuste
+@author			Carlos Eduardo Boy
+@since			01/08/2024
+@version		1.0
+@return			Nil */
+Static Function AtualizaTotais(cMetodoReq as character, cIdPeriodo as character, cCznFilial as character, cCznLinha as character, cCznValor as numeric, cCznValorAnt as numeric ) as logical
+Local lRetorno as logical
+Local cLinhaTotal as character
+Local nDebitoTotal as numeric
+Local nCreditoTotal as numeric
+Local nSaldoDevedor as numeric
+Local nSaldoCredor as numeric
+Local cValorGrv	:= cCznValor as numeric
+Local nTamSeqLan  := FWSX3Util():GetFieldStruct( 'CZN_SEQLAN' )[3]
+Default cCznValorAnt := 0
+
+CZN->(DbSetOrder(2)) //CZN_FILIAL+CZN_IDPER+CZN_LINHA+CZN_SEQLAN                                                                                                                       
+
+//Grava total da linha editada
+if CZN->(MsSeek(cCznFilial + cIdPeriodo + cCznLinha + space(nTamSeqLan) ))
+	
+	if cMetodoReq == 'PUT'
+		cValorGrv := cCznValor - cCznValorAnt
+	elseif cMetodoReq == 'DELETE'
+		cValorGrv := cCznValor *(-1)
+	endif	
+			
+	if CZN->(RecLock('CZN', .f.))
+		CZN->CZN_VALOR += cValorGrv
+		CZN->(MsUnLock())
+		lRetorno := .t.
+	endif
+
+	if val(cCznLinha) < 8
+		cLinhaTotal := '006'
+	else
+		cLinhaTotal := '013'
+	endif
+endif	
+
+//Grava Subtotal e total de creditos 
+if lRetorno 
+	if  val(cCznLinha) < 7
+		//SubTotal
+		if CZN->(MsSeek(cCznFilial + cIdPeriodo + '006' + space(nTamSeqLan) ))
+			lRetorno := CZN->(RecLock('CZN', .f.))
+			if lRetorno 
+				CZN->CZN_VALOR += cValorGrv
+				CZN->(MsUnLock())
+			endif
+		endif
+		if lRetorno .and. CZN->(MsSeek(cCznFilial + cIdPeriodo + '008' + space(nTamSeqLan) ))
+			lRetorno := CZN->(RecLock('CZN', .f.))
+			if lRetorno 
+				CZN->CZN_VALOR += cValorGrv
+				CZN->(MsUnLock())
+			endif
+		endif
+	else
+		if CZN->(MsSeek(cCznFilial + cIdPeriodo + '013' + space(nTamSeqLan) ))
+			if CZN->(RecLock('CZN', .f.)) 
+				CZN->CZN_VALOR += cValorGrv
+				CZN->(MsUnLock())
+			endif
+		endif	
+	endif
+endif	
+
+if lRetorno .and. CZN->(MsSeek(cCznFilial + cIdPeriodo + '015' + space(nTamSeqLan) ))
+	if val(cCznLinha) < 7
+		lRetorno := CZN->(RecLock('CZN', .f.))
+		if lRetorno
+			CZN->CZN_VALOR += cValorGrv
+			CZN->(MsUnLock())
+		endif	
+		nCreditoTotal := CZN->CZN_VALOR
+	else
+		nCreditoTotal := CZN->CZN_VALOR
+	endif	
+endif
+
+if CZN->(MsSeek(cCznFilial + cIdPeriodo + '014' + space(nTamSeqLan) ))		
+	if val(cCznLinha) > 7
+		lRetorno := CZN->(RecLock('CZN', .f.))
+		if lRetorno
+			CZN->CZN_VALOR += cValorGrv
+			CZN->(MsUnLock())
+		endif
+		nDebitoTotal := CZN->CZN_VALOR
+	else	
+		nDebitoTotal := CZN->CZN_VALOR
+	endif
+endif	
+
+if lRetorno
+	if nDebitoTotal > nCreditoTotal
+		nSaldoDevedor :=  nDebitoTotal - nCreditoTotal
+	elseif nDebitoTotal < nCreditoTotal
+		nSaldoCredor :=  nCreditoTotal - nDebitoTotal
+	endif	
+
+	//Grava saldo devedor
+	if CZN->(MsSeek(cCznFilial + cIdPeriodo + '016' + space(nTamSeqLan) ))
+		
+		lRetorno := CZN->(RecLock('CZN', .f.))
+		if lRetorno
+			CZN->CZN_VALOR := nSaldoDevedor
+			CZN->(MsUnLock())
+		endif
+	endif	
+
+	//Grava saldo Credor
+	if lRetorno .and. CZN->(MsSeek(cCznFilial + cIdPeriodo + '017' + space(nTamSeqLan) ))
+		lRetorno := CZN->(RecLock('CZN', .f.))
+		if lRetorno
+			CZN->CZN_VALOR := nSaldoCredor
+			CZN->(MsUnLock())
+		endif
+	endif	
+endif	
+
+return lRetorno

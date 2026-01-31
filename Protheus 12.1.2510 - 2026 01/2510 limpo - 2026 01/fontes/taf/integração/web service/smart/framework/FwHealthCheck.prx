@@ -1,0 +1,443 @@
+#INCLUDE "totvs.ch"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HealthCheck
+Função de analise da saúde do application server. Os itens avaliados são:
+    - Conexão com o DbAccess
+    - Conexão com o License Server
+    - Novas Conexões
+    - Lock Server ( Somente Linux )
+
+@author Eduardo Riera
+@since May 02, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+
+Main Function HealthCheck()
+
+Local aEnv     AS ARRAY
+Local aJobWeb  AS ARRAY
+Local oAppSrv  AS OBJECT
+Local nX       AS NUMERIC
+Local nSeconds AS NUMERIC
+Local cJSon    AS CHARACTER
+Local cAux     AS CHARACTER
+Local cStart   AS CHARACTER
+
+Begin Sequence
+    nSeconds := Seconds()
+    cJSon := "{"
+
+	//-------------------------------------------------------------------
+	// Health Check do Environment
+    //-------------------------------------------------------------------
+    oAppSrv := MpAppSrvIni():New()
+    //oAppSrv:Load()
+
+    aEnv    := oAppSrv:GetEnvironments()
+    aJobWeb := oAppSrv:JOBSWEB
+
+    cJSon += '"environments" : ['
+    cAux := ""
+
+    For nX := 1 To Len(aEnv)
+        cAux += ",{"
+        cAux += '"environment" : '+FWJsonSerialize(aEnv[nX],.F.)+","
+        cStart := StartJob("HCEnvironment",aEnv[nX],.T.)
+        If cStart == Nil .Or. '"fault"' $ cStart
+            cStart := '"'+aEnv[nX]+'" : '+FWJsonSerialize("fault",.F.)
+        Else
+            cStart += ',"'+aEnv[nX]+'" : '+FWJsonSerialize("health",.F.)
+        EndIf
+        cAux += cStart
+        cAux += ',"elapsed" : '+FWJsonSerialize(Seconds()-nSeconds,.F.)
+        cAux += '}'
+    Next nX
+
+    cJSon += SubStr(cAux,2)+']'
+
+    
+    //-------------------------------------------------------------------
+    // HealthCheck - EndPoint do Protheus está ativo
+    //-------------------------------------------------------------------
+    If Len(aJobWeb) > 0
+        cAux := ""
+        cJSon += ',"AppServerEndPoint" : ['
+        For nX := 1 To Len(aJobWeb)
+            cAux += ",{"
+            cAux += '"EndPoint" : ' + FWJsonSerialize(aJobWeb[nX],.F.)+","
+
+            If HCHttpPort(aJobWeb[nX])
+                cAux += FWJsonSerialize("health",.F.)
+            Else
+                cAux += FWJsonSerialize("fault",.F.)
+            EndIf
+
+            cAux += '}'
+        Next nX
+
+        cJSon += SubStr(cAux,2)
+        cJSon += ']'
+    Endif
+    
+    FwFreeObj(oAppSrv)
+
+	//-------------------------------------------------------------------
+	// Health Check do LS
+    //-------------------------------------------------------------------
+    cJSon += ',"licenseServer" : '
+    If LS_GetTotal(7005)>=0
+        cJSon += FWJsonSerialize("health",.F.)
+    Else
+        cJSon += FWJsonSerialize("fault",.F.)
+    EndIf
+
+    //-------------------------------------------------------------------
+	// Health Check do LockServer
+    //-------------------------------------------------------------------
+    nX := StartJob("HCLockServer",GetEnvServer(),.T.)
+    cJSon += ',"lockServer" : '
+    If nX == Nil .Or. nX < 0
+        cJSon += FWJsonSerialize("fault",.F.)
+    Else
+        cJSon += FWJsonSerialize("health",.F.)
+    EndIf
+
+    //-------------------------------------------------------------------
+	// Health Check do AppSrv
+    //-------------------------------------------------------------------
+    cJSon += ',"AppServer" : '
+    If '"fault"' $ cJSon
+        cJSon += FWJsonSerialize("fault",.F.)
+        HttpSrCode(500,"Internal Server Error")
+    Else
+        cJSon += FWJsonSerialize("health",.F.)
+    EndIf
+
+	
+    //-------------------------------------------------------------------
+	// Health Check do webapp
+    //-------------------------------------------------------------------
+    aWebApp := GetdWebApp()
+
+    If aWebApp[1]
+        cJSon += ',"webapp" : '
+        If HCHttpPort("localhost",aWebApp[2])
+            cJSon += FWJsonSerialize("health",.F.)
+        Else
+            cJSon += FWJsonSerialize("fault",.F.)
+            HttpSrCode(500,"Internal Server Error")
+        EndIf
+    EndIf
+   
+    cJSon += ',"elapsed" : '+FWJsonSerialize(Seconds()-nSeconds,.F.)
+    cJSon += "}"
+End Sequence
+
+Return(cJSon)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HCEnvironment
+Função de analise da saúde do application server. Os itens avaliados são:
+    - Conexão com o DbAccess
+
+@author Eduardo Riera
+@since May 02, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Main Function HCEnvironment()
+
+Local oDbConn  AS OBJECT
+Local nConnect AS NUMERIC
+Local cJSon    AS CHARACTER
+    cJSon := ""
+	//-------------------------------------------------------------------
+	// Realiza o teste de conexão com o DbAccess
+	//-------------------------------------------------------------------
+    oDbConn := FWDbConnect():New()
+    oDbConn:SetNoCount(.T.)
+    nConnect := oDbConn:Connect()
+    cJSon += '"dbAccess": '
+    If nConnect >= 0 .Or. nConnect == -1000 //Conectado ou não configurado.
+        cJSon +=  FWJsonSerialize("health",.F.)
+    Else
+        cJSon +=  FWJsonSerialize("fault",.F.)
+         HttpSrCode(500,"Internal Server Error")
+    EndIf
+    oDbConn:DisConnect()
+    FwFreeObj(oDbConn)
+Return(cJSon)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HCLockServer
+Função de analise da saúde do application server. Os itens avaliados são:
+    - Lock Server
+
+@author Eduardo Riera
+@obs Colocado em uma chamada separada por que a thread pode ser derrubada se o lockserver falhar.
+@since May 02, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Main Function HCLockServer()
+
+Local nHandle AS NUMERIC
+Local cFile   AS CHARACTER
+    cFile := "health"+StrZero(Randomize(0,32767)+ThreadId(),6)
+	//-------------------------------------------------------------------
+	// Realiza o teste de criacao de um arquivo
+	//-------------------------------------------------------------------
+    nHandle := FCreate(cFile+".check")
+    FClose(nHandle)
+    FErase(cFile+".check")
+ Return(nHandle)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HCDbAccess
+Função de analise da saúde do DbAccess. 
+
+@author Eduardo Riera
+@since May 02, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Main Function HCDbAccess()
+
+Local aEnv     AS ARRAY
+Local oAppSrv  AS OBJECT
+Local nX       AS NUMERIC
+Local cJSon    AS CHARACTER
+Local cAux     AS CHARACTER
+Local cStart   AS CHARACTER
+
+    cJSon := "{"
+	//-------------------------------------------------------------------
+	// Health Check do Environment
+    //-------------------------------------------------------------------
+    oAppSrv := MpAppSrvIni():New()
+    oAppSrv:Load()
+    aEnv := oAppSrv:GetEnvironments()
+    cJSon += '"environments" : ['
+    cAux := ""
+    For nX := 1 To Len(aEnv)
+        cAux += ",{"
+        cAux += '"environment" : '+FWJsonSerialize(aEnv[nX],.F.)+","
+        cStart := StartJob("HCEnvironment",aEnv[nX],.T.)
+        cAux += cStart
+        cAux += '}'
+    Next nX
+    FwFreeObj(oAppSrv)
+    cJSon += SubStr(cAux,2)+']'
+    //-------------------------------------------------------------------
+	// Health Check do AppSrv
+    //-------------------------------------------------------------------
+    cJSon += ',"dbAccess" : '
+    If '"fault"' $ cJSon
+        cJSon += FWJsonSerialize("fault",.F.)
+        HttpSrCode(500,"Internal Server Error")
+    Else
+        cJSon += FWJsonSerialize("health",.F.)
+    EndIf
+    cJSon += "}"
+Return(cJSon)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HCLicenseServer
+Função de analise da saúde do License Server. 
+
+@author Eduardo Riera
+@since May 02, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Main Function HCLicenseServer()
+
+Local aEnv     AS ARRAY
+Local oAppSrv  AS OBJECT
+Local nX       AS NUMERIC
+Local cJSon    AS CHARACTER
+Local cAux     AS CHARACTER
+Local cStart   AS CHARACTER
+
+    cJSon := "{"
+    //-------------------------------------------------------------------
+	// Health Check do LS
+    //-------------------------------------------------------------------
+    cJSon += '"licenseServer" : '
+    If LS_GetTotal(7005)>=0
+        cJSon += FWJsonSerialize("health",.F.)
+    Else
+        cJSon += FWJsonSerialize("fault",.F.)
+    EndIf
+    cJSon += "}"
+    If '"fault"' $ cJSon
+        HttpSrCode(500,"Internal Server Error")
+    EndIf
+Return(cJSon)
+ 
+ //-------------------------------------------------------------------
+/*/{Protheus.doc} HCHttpPort
+Função de analise da porta HTTP
+
+@author Renato Campos
+@since SET 25, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Function HCHttpPort(cEndPoint, cPort)
+Local lRet  AS LOGICAL
+Local cErro AS CHARACTER
+
+Default cEndPoint := "localhost"
+
+lRet := .F.
+
+// Verificação sem SSL
+HttpGet( "http://" + cEndPoint + iif( !Empty(cPort), ":" + cPort, "" ) )
+
+If HTTPGetStatus(@cErro) == 200
+    lRet := .T.
+EndIf
+
+If !lRet 
+    // Verificação com SSL
+    HttpGet( "https://" + cEndPoint + iif( !Empty(cPort), ":" + cPort, "" ) )
+
+    If (HTTPGetStatus(@cErro) == 200 .OR. HTTPGetStatus(@cErro) == 403)
+        lRet := .T.
+    EndIf
+Endif
+
+Return lRet
+
+ //-------------------------------------------------------------------
+/*/{Protheus.doc} GetdWebApp
+Função de retorno da configuração do WebApp
+
+@author Renato Campos
+@since AUG 25, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Static Function GetdWebApp()
+
+Local cServerIni AS CHARACTER
+Local cClientIni AS CHARACTER
+Local cWebAPP 	 AS CHARACTER
+Local aRet	   	 AS ARRAY
+
+aRet := {.F.,""}
+
+cServerIni := GetAdv97()
+cClientIni := GetSrvIniName()
+
+// Busca a seção WEBAPP no ini do server
+cWebAPP	:= GetPvProfString( "WEBAPP" , "PORT", "", cClientIni )
+
+If !Empty(cWebAPP)
+    aRet[1] := .T.
+    aRet[2] := cWebAPP
+EndIf
+
+Return ( aRet )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HCTSS
+Função de analise da saúde do TSS
+
+@author Renato Campos
+@since AUG 25, 2018
+@version $version
+/*/
+//-------------------------------------------------------------------
+Main Function HCTSS()
+
+Local aEnv     AS ARRAY
+Local aJobWeb  AS ARRAY
+Local oAppSrv  AS OBJECT
+Local nX       AS NUMERIC
+Local nSeconds AS NUMERIC
+Local cJSon    AS CHARACTER
+Local cAux     AS CHARACTER
+Local cStart   AS CHARACTER
+Local lRet     AS LOGICAL
+
+nSeconds := Seconds()
+cJSon := "{"
+cAux := ""
+
+//-------------------------------------------------------------------
+// Health Check do Environment
+//-------------------------------------------------------------------
+oAppSrv := MpAppSrvIni():New()
+oAppSrv:Load()
+aEnv := oAppSrv:GetEnvironments()
+aJobWeb := oAppSrv:JOBSWEB
+
+cJSon += '"environments" : ['
+For nX := 1 To Len(aEnv)
+    cAux += ",{"
+    cAux += '"environment" : '+FWJsonSerialize(aEnv[nX],.F.)+","
+    cStart := StartJob("HCEnvironment",aEnv[nX],.T.)
+    If cStart == Nil .Or. '"fault"' $ cStart
+        cStart := '"'+aEnv[nX]+'" : '+FWJsonSerialize("fault",.F.)
+    Else
+        cStart += ',"'+aEnv[nX]+'" : '+FWJsonSerialize("health",.F.)
+    EndIf
+    cAux += cStart
+    cAux += '}'
+Next nX
+
+cJSon += SubStr(cAux,2)
+cJSon += ']'
+
+/*
+//-------------------------------------------------------------------
+// HealthCheck - EndPoint do TSS está ativo
+//-------------------------------------------------------------------
+cAux := ""
+cJSon += ',"tssEndPoint" : ['
+If Len(aJobWeb) > 0
+    For nX := 1 To Len(aJobWeb)
+        cAux += ",{"
+        cAux += '"EndPoint" : ' + FWJsonSerialize(aJobWeb[nX],.F.)+","
+
+        If HCHttpPort(aJobWeb[nX])
+            cAux += FWJsonSerialize("health",.F.)
+        Else
+            cAux += FWJsonSerialize("fault",.F.)
+        EndIf
+
+        cAux += '}'
+    Next nX
+    cJSon += SubStr(cAux,2)
+Else
+    cJSon += '{"EndPoint" : localhost:8080,'
+
+    If HCHttpPort("localhost","8080")
+        cJSon += FWJsonSerialize("health",.F.)
+    Else
+        cJSon += FWJsonSerialize("fault",.F.)
+    EndIf
+    cJSon +='}'
+Endif
+cJSon += ']'
+*/
+
+cJSon += ',"tss" : '
+If '"fault"' $ cJSon
+    cJSon += FWJsonSerialize("fault",.F.)
+    HttpSrCode(500,"Internal Server Error")
+Else
+    cJSon += FWJsonSerialize("health",.F.)
+EndIf
+
+cJSon += ',"elapsed" : ' + FWJsonSerialize(Seconds()-nSeconds,.F.)
+cJSon += "}"
+
+FwFreeObj(oAppSrv)
+
+Return(cJSon)
+
