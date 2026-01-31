@@ -1,0 +1,191 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+
+Static oGetColletISS := Nil
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTCollectedISSFilter
+API de valor recolhido de ISS por município - TOP 10.
+@author Gabriela Luche
+@parâmetros de entrada do endpoint
+@since 20/03/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/iss/amount-collected-per-municipality', description='API de valor recolhido de ISS por municipio')
+Function MTCollectedISSFilter() 
+      
+Local oJsResponse         as json
+Local cbranches        := oRest:getQueryRequest()['branches'] as character
+Local cperiodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cperiodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+
+If valtype(cbranches) != 'U' .and. !empty(cbranches) .and. valtype(cperiodStart) != 'U' .and. !empty(cperiodStart) .and. valtype(cperiodEnd) != 'U' .and. !empty(cperiodEnd)
+    oJsResponse := CollectedISSFilter(cbranches, cperiodStart, cperiodEnd)
+Endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET CollectedISSFilter
+Função responsável por preencher o Json com com informações referentes ao valor recolhido de ISS por município - TOP 10
+@author Gabriela Luche
+@parâmetros de entrada do endpoint
+@since 20/03/2025
+-------------------------------------------------------------------*/
+Static Function CollectedISSFilter(cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local nPos         := 0                         as numeric
+Local nPageAux     := 0                         as numeric
+Local nPageSize    := 10                        as numeric
+Local lHasNext     := .F.                       as logical
+Local nPage        := 1                         as numeric
+Local oJsonResp    := JsonObject():New()        as object
+Local cAlias       := getNextAlias()            as character
+//--------------------------------
+// Executa a query que retorna os dados para a API
+//--------------------------------	 
+GetCollectedIssSQL(@cAlias,nPage,nPageSize,cbranches, cperiodStart, cperiodEnd)
+//--------------------------------
+// Alimenta o json com os dados retornado pela query
+//--------------------------------	
+If (cAlias)->(!Eof())
+    While (cAlias)->(!Eof())
+        nPageAux++
+        If nPageAux == 1
+            oJsonResp["items"] := {}
+        Endif
+        If nPageAux <= nPageSize
+            aAdd( oJsonResp["items"], JsonObject():New() )
+            nPos++
+            oJsonResp["items"][nPos]["municipality"]                :=   AllTrim((cAlias)->MUNICIPIO) + " / " + AllTrim((cAlias)->EST)
+            oJsonResp["items"][nPos]["payable"]                     :=   (cAlias)->ISS_DEVIDO  
+            oJsonResp["items"][nPos]["withheldFromThirdParties"]    :=   (cAlias)->ISS_RET_TERC  
+        EndIf
+        (cAlias)->(DbSkip())
+    EndDo
+    oJsonResp["hasNext"]    := lHasNext
+//--------------------------------
+// Se não há dados, retorna o erro 400 para a API
+//--------------------------------	
+Else
+    oJsonResp['code'] := 400
+    oJsonResp['detailedMessage'] := 'value not found'
+    oJsonResp['message'] := "Dados não encontrados para o período e/ou filial informados."
+EndIf    
+  
+(cAlias)->(DBCloseArea())
+
+Return oJsonResp:toJson()
+
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetCollectedIssSQL()
+(Responsável por executar a consulta aos campos da tabela )
+@author Gabriela Luche
+@since 20/03/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetCollectedIssSQL(cAlias as character, nPage as numeric, nPageSize as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local cQuery    := ''  as character
+Local cDBMS     := Upper(TCGetDB())
+//--------------------------------
+// Montagem da query
+//--------------------------------
+If oGetColletISS == Nil
+    cQuery += "SELECT "
+    //--------------------------------
+    // Tratamento para o banco MSSQL trazer somente 10 registros
+    //-------------------------------- 
+    If cDBMS == 'MSSQL'
+        cQuery += " TOP 10 "
+    EndIf
+    cQuery += "COALESCE(a.A2_MUN,b.A1_MUN) AS MUNICIPIO, COALESCE(a.CJY_ESTADO,b.CJY_ESTADO) AS EST, "
+    cQuery += "COALESCE(b.ISS_DEVIDO, 0)   AS ISS_DEVIDO, "
+    cQuery += "COALESCE(a.ISS_RET_TERC, 0) AS ISS_RET_TERC "
+    cQuery += "FROM ( " 
+    cQuery += "SELECT SUM(CJY_VALICM) AS ISS_RET_TERC , A2_MUN, CJY_ESTADO "
+    cQuery += "FROM "+ FIS319SqlName("CJY")+" CJY "
+    cQuery += "LEFT JOIN "+RetSQLName("SA2")+" SA2 ON "+FWJoinFilial("SA2", "CJY")+" AND CJY_TIPOMO = ? AND A2_COD = CJY_CLIEFO AND A2_LOJA = CJY_LOJA "
+    cQuery += "AND SA2.D_E_L_E_T_ = ? "
+    cQuery += "WHERE "
+    cQuery += "CJY_FILIAL IN ( ? ) "
+    cQuery += "AND CJY_TIPOMO = ? "
+    cQuery += "AND CJY_EMISSA BETWEEN ? AND ? "
+    cQuery += "AND CJY_TIPO = ? "
+    cQuery += "AND CJY_RECISS = ? "
+    cQuery += "AND CJY_VALICM > ? "
+    cQuery += "AND CJY.D_E_L_E_T_ = ? "
+    //--------------------------------
+    // Tratamento o banco Oracle trazer somente 10 registros
+    //--------------------------------
+    if cDBMS == "ORACLE"
+        cQuery += " AND ROWNUM <= 10 "
+    endif  
+    cQuery += "GROUP BY A2_MUN, CJY_ESTADO "
+    cQuery += ") a "
+    cQuery += "FULL OUTER JOIN ( " 
+    cQuery += "SELECT SUM(CJY_VALICM) AS ISS_DEVIDO, A1_MUN, CJY_ESTADO "
+    cQuery += "FROM "+ FIS319SqlName("CJY")+" CJY "
+    cQuery += "LEFT JOIN "+RetSQLName("SA1")+" SA1 ON "+FWJoinFilial("SA1", "CJY")+" AND CJY_TIPOMO = ? AND A1_COD = CJY_CLIEFO AND A1_LOJA = CJY_LOJA "
+    cQuery += "AND SA1.D_E_L_E_T_ = ? "
+    cQuery += "WHERE "
+    cQuery += "CJY_FILIAL IN ( ? ) "
+    cQuery += "AND CJY_TIPOMO = ? "
+    cQuery += "AND CJY_EMISSA BETWEEN ? AND ? "
+    cQuery += "AND CJY_TIPO = ? "
+    cQuery += "AND CJY_RECISS = ? "
+    cQuery += "AND CJY_VALICM > ? "
+    cQuery += "AND CJY.D_E_L_E_T_ = ? "
+    //--------------------------------
+    // Tratamento o banco Oracle trazer somente 10 registros
+    //--------------------------------
+    if cDBMS == "ORACLE"
+        cQuery += " AND ROWNUM <= 10 "
+    endif      
+    cQuery += "GROUP BY A1_MUN, CJY_ESTADO "
+    cQuery += ") b "
+    cQuery += "ON a.A2_MUN = b.A1_MUN "
+    cQuery += "ORDER BY ISS_DEVIDO DESC, ISS_RET_TERC DESC , MUNICIPIO " 
+    //--------------------------------
+    // Tratamento o banco PostgreSQL trazer somente 10 registros
+    //--------------------------------        
+    If cDBMS == 'POSTGRES'        
+        cQuery += " LIMIT 10 "
+    endif 
+//--------------------------------
+// Realiza o cache da query
+//--------------------------------    
+    oGetColletISS := FwExecStatement():New()
+    oGetColletISS:SetQuery(cQuery)
+Endif
+//--------------------------------
+// Montagem dos binds
+//--------------------------------
+If oGetColletISS != Nil
+    oGetColletISS:setString(1, "E")
+    oGetColletISS:setString(2, " ")
+    oGetColletISS:SetIn(3, StrTokArr(cbranches, "," ))
+    oGetColletISS:setString(4, "E")
+    oGetColletISS:setString(5, StrTran(cperiodStart, "-", ""))
+    oGetColletISS:setString(6, StrTran(cperiodEnd, "-", ""))
+    oGetColletISS:setString(7, "S")
+    oGetColletISS:setString(8, "2")
+    oGetColletISS:setNumeric(9, 0)
+    oGetColletISS:setString(10, " ")
+    oGetColletISS:setString(11, "S")
+    oGetColletISS:setString(12, " ")    
+    oGetColletISS:SetIn(13,StrTokArr(cbranches, "," ))
+    oGetColletISS:setString(14,"S")
+    oGetColletISS:setString(15, StrTran(cperiodStart, "-", ""))
+    oGetColletISS:setString(16, StrTran(cperiodEnd, "-", ""))
+    oGetColletISS:setString(17, "S")
+    oGetColletISS:setString(18, "1")
+    oGetColletISS:setNumeric(19, 0)
+    oGetColletISS:setString(20," ")
+    cAlias := oGetColletISS:OpenAlias()
+Endif
+//--------------------------------
+// Libera o objeto da memoria
+//--------------------------------
+FWFreeObj(oGetColletISS)
+
+Return

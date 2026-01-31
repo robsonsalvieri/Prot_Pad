@@ -1,0 +1,941 @@
+#INCLUDE "TOTVS.CH"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "TLPP-CORE.TH"
+
+using namespace totvs.protheus.backoffice.fiscal.reprocessing
+using namespace totvs.protheus.backoffice.fiscal.simulator.utils
+using namespace totvs.protheus.backoffice.fiscal.simulator.dao
+
+
+namespace totvs.protheus.backoffice.fiscal.simulator
+
+/*/{Protheus.doc} SimulatorOperationController
+
+    Controller que responde ao endpoint data-compare.
+
+    @author anedino.santos
+    @since 24/03/2025
+    @version 12.1.2410
+/*/
+Class SimulatorOperationController
+
+    private data jRequestBody as json
+    private data jResponseBody as json
+    private data jInvoiceFilter as json
+    private data jHeader as json
+    private data cSFTAlias as character
+    private data nInvoiceTotalItems as numeric
+    private data oSimulation as object
+    private data aM930Perg as array
+
+    public method new() Constructor
+
+    @Post(endpoint="/api/fiscal/v1/simulator/operation/data-compare")
+    public method dataToCompare()
+
+    private method getDataToCompare() // método principal que obtém os dados a serem comparados
+    private method createRequestJson(cBody) // avalia o corpo da requisição e monta obj json
+
+    private method setHeader() // define o cabeçalho do retorno
+    private method getSimulationData(jSimulation) // pega apenas os dados referente ao consolidado da simulação
+    private method getInvoiceData(jInvoice) // pega os dados referentes ao consolidado da nota fiscal
+    private method getItemData(jSimulation, jInvoice) // pega os dados dos itens tanto da simulação quanto da nota fiscal para retornar conforme contrato
+
+    // simulação
+    private method prepareSimulation() // prepara o necessário para a simulação pelo reprocessamento (MATA930)
+    private method setSimulationData() // define os dados a serem retornados como resposta da simulação.
+    private method setSimulationDataItems(jDataItems) // define os dados que serão retornados referente aos tributos por item.
+
+    // nota
+    private method findInvoice() // verifica se encontra dados nos itens dos livros ficais (SFT)
+    private method setInvoiceData() // define os dados a serem retornados como resposta da busca da NF.
+    private method loadInvoiceTaxesPerItem() // carrega os tributos calculados por item da NF.
+    private method organizeItemTaxes() // cria json de todos os possíveis tributos
+    private method createTaxJson(cCod, cDescr, nBC, nAliq, nVal, cCST, nVlTrib, nVlIsento, nVlOutros, nVlNaoTributado, nVlDiferido, nVlMajorado) // cria o json com os dados do tributo
+    private method setTaxes(jTaxes) // define quais tributos foram de fato calculados
+    private method loadInvoiceTaxes() // carrega os tributos calculados na NF.
+    //private method loadAdjustmentsPerItem(jFilter) // carrega e define os dados referente aos códigos de ajustes e valores declaratórios.
+
+    private method getTotvsIdTaxes() // retorna o de/para dos tributos com id totvs.
+
+    private method finish() // encerra o processamento liberando os objetos da classe
+endclass
+
+
+/*/{Protheus.doc} new
+
+    Método construtor da classe. Inicializa a propriedade `jResponseBody`.
+
+    @author anedino.santos
+    @since 20/03/2025
+    @version 12.1.2410
+    @return Self, object, retorna o objeto instanciado da classe.
+/*/
+method new() class SimulatorOperationController
+    self:jResponseBody := JsonObject():New()
+    self:jInvoiceFilter := JsonObject():New()
+    self:jHeader:= JsonObject():New()
+    self:oSimulation := SimulatorReprocessingManager():New()
+    self:aM930Perg := {}
+return self
+
+
+/*/{Protheus.doc} dataToCompare
+
+    Recepciona a requisição efetuada na URL do endpoint e faz o processamento
+    para devolver a resposta.
+
+    @author anedino.santos
+    @since 20/03/2025
+    @version 12.1.2410
+    @return Nil, Nil, sem retorno.
+/*/
+method dataToCompare() class SimulatorOperationController
+    local oTools := SimulatorTools():New() as object
+    try
+        // prepara o objeto json da requisição
+        self:jRequestBody := self:createRequestJson(oRest:getBodyRequest())
+        if self:jRequestBody <> nil
+            // prepara o ambiente para o processamento
+            oTools:setBranch(self:jRequestBody["configuracao"]["filial"])
+            oTools:setSystemDate(CtoD(self:jRequestBody["configuracao"]["dataoperacao"]))
+            // executa o processamento e retorna o resultado
+            self:jResponseBody := self:getDataToCompare()
+            // caso o resultado seja de erro definimos o status code 404 Not Found
+            if self:jResponseBody:hasProperty("code")
+                oRest:SetStatusCode(404)
+            else// caso o resultado seja de sucesso definimos status code 200
+                oRest:SetStatusCode(200)
+            endif
+            // definimos a reposta do endpoint
+            oRest:SetResponse(self:jResponseBody)
+        endif
+    catch oError
+        if oError:genCode == 100 .OR. oError:genCode == 101
+            oRest:setStatusCode(400)
+            oRest:setResponse(self:jResponseBody)
+        else
+            self:jResponseBody["code"] := oError:genCode
+            self:jResponseBody["message"]:= "Internal Server Error"
+            self:jResponseBody["detailedMessage"]:= oError:description
+            oRest:setStatusCode(500)
+            oRest:setResponse(self:jResponseBody)
+        endif
+    finally
+        self:finish()
+        oTools:restBranch()
+        oTools:restSystemDate()
+        //Telemetria
+        FWLsPutAsyncInfo("LS006",RetCodUsr(),'09',"SimuladorComparativo")
+    endtry
+    FwFreeObj(oTools)
+    oTools := Nil
+    MafisEnd()
+return
+
+
+/*/{Protheus.doc} createRequestJson
+
+    Avalia o corpo da requisição verificando se é possível criar um objeto json
+    que possa ser manipulado. Caso o corpo da requisição esteja fora do padrão
+    esperado, lança erro correspondente. Caso o corpo da requisição esteja dentro
+    do padrão, será retornado um objeto json baseado no corpo da requisição.
+
+    @author anedino.santos
+    @since 20/03/2025
+    @version 12.1.2410
+    @param cBody, character, string com o corpo da requisição.
+    @return jRet, json, objeto json criado a partir do corpo da requição.
+/*/
+method createRequestJson(cBody) class SimulatorOperationController
+    local jRet as json
+    local xErro as variant
+    local oErro as object
+
+    if !Empty(cBody)
+        jRet := JsonObject():New()
+        xErro := jRet:fromJson(cBody)
+        if xErro <> Nil .Or. len(jRet:getNames()) == 0
+            FwFreeObj(jRet)
+            jRet := Nil
+            oErro := ErrorClass():New()
+            oErro:genCode := 100
+            oErro:description := "Formato da requisição inválido."
+            self:jResponseBody["code"] := oErro:genCode
+            self:jResponseBody["message"] := oErro:description
+            self:jResponseBody["detailedMessage"] := "Formato do corpo da requisição inválido. Formato aceito: JSON."
+            throw oErro
+        endif
+    else
+        oErro := ErrorClass():New()
+        oErro:genCode := 101
+        oErro:description := "Formato da requisição inválido."
+        self:jResponseBody["code"] := oErro:genCode
+        self:jResponseBody["message"] := oErro:description
+        self:jResponseBody["detailedMessage"] := "Corpo da requisição em branco. Deve ser enviado corpo em formato JSON conforme contrato da API."
+        throw oErro
+    endif
+return jRet
+
+
+/*/{Protheus.doc} findInvoice
+
+    Consulta os livros fiscais (SFT) procurando pelos dados dos itens conforme
+    o filtro para consulta. Caso encontre, preenche o atributo `cSFTAlias`
+    e retorna .T.. Caso não encontre retorna .F.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return lRet, logical, define se encontrou os dados nos livros fiscais.
+    True (.T.) encontrou, false (.F.) não encontrou.
+/*/
+Method findInvoice() class SimulatorOperationController
+    local oInvoice := SimulatorInvoiceDAO():New() as object
+    local lRet := .F. as logical
+
+    self:jInvoiceFilter["filial"] := self:jRequestBody["configuracao"]["filial"]
+    self:jInvoiceFilter["movimento"] := self:jRequestBody["configuracao"]["tipomovimento"]
+    self:jInvoiceFilter["emissao"] := CtoD(self:jRequestBody["nota"]["emissao"])
+    self:jInvoiceFilter["serie"] := self:jRequestBody["nota"]["serie"]
+    self:jInvoiceFilter["numero"] := self:jRequestBody["nota"]["numero"]
+    self:jInvoiceFilter["participante"] := self:jRequestBody["participante"]["codigo"]
+    self:jInvoiceFilter["loja"] := self:jRequestBody["participante"]["loja"]
+
+    self:cSFTAlias := oInvoice:getTaxesPerItem(self:jInvoiceFilter)
+    FwFreeObj(oInvoice)
+    oInvoice := Nil
+
+    lRet := (self:cSFTAlias)->(!EOF())
+
+    if !lRet
+        (self:cSFTAlias)->(DbCloseArea())
+    endif
+
+Return lRet
+
+
+/*/{Protheus.doc} prepareSimulation
+
+    Prepara o processamento da simulação definindo o pergunte da rotina Mata930.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return Nil, Nil, sem retorno.
+/*/
+Method prepareSimulation() class SimulatorOperationController
+    // pergunte da rotina MATA930
+    aAdd(self:aM930Perg, self:jRequestBody["nota"]["emissao"])//Data Inicial ?
+    aAdd(self:aM930Perg, self:jRequestBody["nota"]["emissao"])//Data Final ?
+    if self:jRequestBody["configuracao"]["tipomovimento"] == "S"
+        aAdd(self:aM930Perg, 2)//Livro de ?
+    else
+        aAdd(self:aM930Perg, 1)//Livro de ?
+    endif
+    aAdd(self:aM930Perg, self:jRequestBody["nota"]["numero"])//da Nota Fiscal ?
+    aAdd(self:aM930Perg, self:jRequestBody["nota"]["numero"])//Ate a Nota Fiscal ?
+    aAdd(self:aM930Perg, self:jRequestBody["nota"]["serie"])//Serie de ?
+    aAdd(self:aM930Perg, self:jRequestBody["nota"]["serie"])//Serie Ate ?
+    aAdd(self:aM930Perg, self:jRequestBody["participante"]["codigo"])//Do Cliente/Forn. ?
+    aAdd(self:aM930Perg, self:jRequestBody["participante"]["codigo"])//Ate o Cliente/Forn. ?
+    aAdd(self:aM930Perg, self:jRequestBody["participante"]["loja"])//Da Loja ?
+    aAdd(self:aM930Perg, self:jRequestBody["participante"]["loja"])//Ate a Loja ?
+    aAdd(self:aM930Perg, self:jRequestBody["configuracao"]["filial"])//filial de ?
+    aAdd(self:aM930Perg, self:jRequestBody["configuracao"]["filial"])//filial Ate ?
+
+    if self:jRequestBody["configuracao"]["considerateste"] == "S"
+        self:oSimulation:setF2BTeste(.T.)
+    endif
+Return
+
+
+/*/{Protheus.doc} getDataToCompare
+
+    Obtém os dados do processamento. Caso encontre os dados da NF nos livros
+    fiscais dos itens retorna os dados dos tributos da simulação e os dados dos
+    tributos da NF enviada na requisição. Caso não encontre a NF retorna erro
+    103 "A nota fiscal informada não foi encontrada!".
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return cJson, character, string em formato json com o resultado do processamento.
+/*/
+method getDataToCompare() class SimulatorOperationController
+    local jProcessResult := JsonObject():New() as json
+    local jSimulationdata as json
+    local jInvoiceData as json
+
+    if self:findInvoice()
+        // chamada do reprocessamento (mata930)
+        self:prepareSimulation()
+        self:oSimulation:runReprocessing(self:aM930Perg)
+        // dados processados
+        jSimulationdata := self:setSimulationData()
+        jInvoiceData := self:setInvoiceData()
+        // se não houver simulação retorno erro 404
+        if len(jSimulationdata["tributos"]:getNames()) == 0
+            jProcessResult["code"] := 104
+            jProcessResult["message"] := "Os dados da nota fiscal escolhida não enquadraram regras tributárias do configurador não gerando dados para comparação. Verifique suas regras tributárias e as altere se for necessário."
+            jProcessResult["detailedMessage"] := "Os dados da nota fiscal escolhida não enquadraram regras tributárias do configurador não gerando simulação e dados para comparação."
+        else
+            jProcessResult["cabecalho"] := self:jHeader
+            jProcessResult["simulacao"] := self:getSimulationData(jSimulationdata)
+            jProcessResult["nota"] := self:getInvoiceData(jInvoiceData)
+            jProcessResult["itens"] := self:getItemData(jSimulationdata, jInvoiceData)
+        endif
+    else
+        jProcessResult["code"] := 103
+        jProcessResult["message"] := "A nota fiscal informada não foi encontrada!"
+        jProcessResult["detailedMessage"] := "Não foram encontrados dados nos livros ficais (SFT) referente à nota fiscal informada!"
+    endif
+
+    FwFreeObj(jSimulationdata)
+    FwFreeObj(jInvoiceData)
+    jSimulationdata := Nil
+    jInvoiceData := Nil
+
+return jProcessResult
+
+
+/*/{Protheus.doc} setHeader
+
+    Define o cabeçalho de retorno
+
+    @author anedino.santos
+    @since 24/04/2025
+    @version 12.1.2510
+/*/
+Method setHeader() class SimulatorOperationController
+    (self:cSFTAlias)->(DbGoTop())
+
+    self:jHeader["especie"] := (self:cSFTAlias)->FT_ESPECIE
+    self:jHeader["participante"] := (self:cSFTAlias)->FT_CLIEFOR
+    self:jHeader["serie"] := (self:cSFTAlias)->FT_SERIE
+    self:jHeader["numero"] := (self:cSFTAlias)->FT_NFISCAL
+Return
+
+
+/*/{Protheus.doc} getSimulationData
+
+    Pega apenas os dados referente ao consolidado da simulação.
+
+    @author anedino.santos
+    @since 24/04/2025
+    @version 12.1.2510
+    @param jSimulation, json, objeto json com todos os dados da simulação
+    @return jRet, json, objeto json com apenas os dados consolidados da simulação
+/*/
+Method getSimulationData(jSimulation) class SimulatorOperationController
+    local jRet := JsonObject():New()
+    jRet["tributos"] := jSimulation["tributos"]
+Return jRet
+
+
+/*/{Protheus.doc} getInvoiceData
+
+    Pega os dados referentes ao consolidado da nota fiscal.
+
+    @author anedino.santos
+    @since 24/04/2025
+    @version 12.1.2510
+    @param jInvoice, json, objeto json com todos os dados da nota fiscal
+    @return jRet, json, objeto json com apenas os dados consolidados da simulação
+/*/
+Method getInvoiceData(jInvoice) class SimulatorOperationController
+    local jRet := JsonObject():New()
+    jRet["tributos"] := jInvoice["tributos"]
+Return jRet
+
+
+/*/{Protheus.doc} getItemData
+
+    Pega os dados referentes ao consolidado da nota fiscal.
+
+    @author anedino.santos
+    @since 24/04/2025
+    @version 12.1.2510
+    @param jSimulation, json, objeto json com todos os dados da simulação
+    @param jInvoice, json, objeto json com todos os dados da nota fiscal
+    @return jRet, json, objeto json com apenas os dados dos itens da simulação e da nota fiscal
+/*/
+Method getItemData(jSimulation, jInvoice) class SimulatorOperationController
+    local aItems as array
+    local aSimuItemTaxes as array
+    local aInvoiceItemTaxes as array
+    local aMatching as array
+    local aNonMatching as array
+    local nI as numeric
+    local nX as numeric
+    local nLenItems as numeric
+    local cItem as character
+    local cIdTax as character
+    local cCodReg as character
+    local jMatching as json
+    local jNonMatching as json
+    local jSimulationItems := jSimulation["tributos_por_item"] as json
+    local jInvoiceItems := jInvoice["tributos_por_item"] as json
+    local jItems := JsonObject():New() as json
+    local jDataItem as json
+
+
+    aItems := jInvoiceItems:getNames()
+    nLenItems := len(aItems)
+
+    if nLenItems > 0
+        for nI := 1 to nLenItems
+            // preciso pegar os tributos de cada item de ambos os json e separar em
+            // tributos correspondentes e não correspondentes, além disso, preciso
+            // definir a coluna tributo e a coluna origem
+
+            cItem := aItems[nI]
+            aSimuItemTaxes := jSimulationItems[cItem]:getNames()
+            aInvoiceItemTaxes := jInvoiceItems[cItem]:getNames()
+
+            aMatching := {}
+            aNonMatching := {}
+
+            if !jSimulationItems[cItem]:hasProperty("Aviso")
+
+                for nX := 1 to len(aSimuItemTaxes)
+                    if aScan(aInvoiceItemTaxes, aSimuItemTaxes[nX]) > 0
+                        aAdd(aMatching, aSimuItemTaxes[nX])
+                    else
+                        aAdd(aNonMatching, aSimuItemTaxes[nX])
+                    endif
+                next nX
+
+                for nX := 1 to len(aInvoiceItemTaxes)
+                    if aScan(aMatching, aInvoiceItemTaxes[nX]) == 0 .and. isDigit(aInvoiceItemTaxes[nX])
+                        aAdd(aNonMatching, aInvoiceItemTaxes[nX])
+                    endif
+                next nX
+            else
+                for nX := 1 to len(aInvoiceItemTaxes)
+                    if isDigit(aInvoiceItemTaxes[nX])
+                        aAdd(aNonMatching, aInvoiceItemTaxes[nX])
+                    endif
+                next nX
+            endif
+
+            jDataItem := JsonObject():New()
+            jMatching := JsonObject():New()
+            jNonMatching := JsonObject():New()
+
+            jDataItem["codigo"] := jInvoiceItems[cItem]["codigo"]
+            jDataItem["descricao"] := jInvoiceItems[cItem]["descricao"]
+            jDataItem["NCM"] := jInvoiceItems[cItem]["NCM"]
+
+            for nX := 1 to len(aMatching)
+                cIdTax := aMatching[nX]
+
+                if jSimulationItems[cItem]:hasProperty(cIdTax)
+                    cCodReg := jSimulationItems[cItem][cIdTax]["cod_regra"]
+                    jMatching[cCodReg] := jSimulationItems[cItem][cIdTax]
+                endif
+
+                if jInvoiceItems[cItem]:hasProperty(cIdTax)
+                    cCodReg := jInvoiceItems[cItem][cIdTax]["cod_regra"]
+                    jMatching[cCodReg] := jInvoiceItems[cItem][cIdTax]
+                endif
+            next nX
+
+            jDataItem["tributos"] := jMatching
+
+            for nX := 1 to len(aNonMatching)
+                cIdTax := aNonMatching[nX]
+
+                if jSimulationItems[cItem]:hasProperty(cIdTax)
+                    cCodReg := jSimulationItems[cItem][cIdTax]["cod_regra"]
+                    jNonMatching[cCodReg] := jSimulationItems[cItem][cIdTax]
+                endif
+                if jInvoiceItems[cItem]:hasProperty(cIdTax)
+                    cCodReg := jInvoiceItems[cItem][cIdTax]["cod_regra"]
+                    jNonMatching[cCodReg] := jInvoiceItems[cItem][cIdTax]
+                endif
+            next nX
+
+            jDataItem["outros_tributos"] := jNonMatching
+
+            cItem := StrZero(Val(aItems[nI]), 4)
+
+            jItems[cItem] := jDataItem
+
+        next nI
+    endif
+
+    aSize(aItems, 0)
+    aSize(aSimuItemTaxes, 0)
+    aSize(aInvoiceItemTaxes, 0)
+    aSize(aMatching, 0)
+    aSize(aNonMatching, 0)
+
+    aItems := Nil
+    aSimuItemTaxes := Nil
+    aInvoiceItemTaxes := Nil
+    aMatching := Nil
+    aNonMatching := Nil
+
+    FwFreeObj(jSimulationItems)
+    FwFreeObj(jInvoiceItems)
+
+    jSimulationItems := Nil
+    jInvoiceItems := Nil
+
+Return jItems
+
+
+/*/{Protheus.doc} setSimulationData
+
+    Define os dados que serão retornados da simulação.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return jSimulationResult, json, objeto json com resultado da simulação.
+/*/
+method setSimulationData() class SimulatorOperationController
+    local jTributes as json
+    local jSimulationResult as json
+
+    jSimulationResult := JsonObject():New()
+    jSimulationResult["tributos"] := JsonObject():New()
+    jSimulationResult["tributos_por_item"] := JsonObject():New()
+
+    jTributes := self:oSimulation:getTaxesAndAdjustments()
+
+    if jTributes["tributos"]:hasProperty("planilha_financeira")
+        jSimulationResult["tributos"] := jTributes["tributos"]["planilha_financeira"]
+    endif
+
+    if jTributes["itens"]:hasProperty("dados_itens")
+        jSimulationResult["tributos_por_item"] := self:setSimulationDataItems(jTributes["itens"])
+    endif
+
+return jSimulationResult
+
+
+/*/{Protheus.doc} setSimulationDataItems
+
+    Define os dados que serão retornados para os tributos filtrando o retorno da 
+    TCI.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @param jDataItems, json, objeto json com os dados dos itens retornados pela TCI.
+    @return jItens, json, objeto json com os dados relevantes dos itens para o retorno.
+/*/
+method setSimulationDataItems(jDataItems) class SimulatorOperationController
+    local jItens as json // será o json principal de retorno
+    local jTrib as json // será o json que guardara os tributos do item
+    local jDetTrib as json // será o json que vai guardar os dados do tributo calculado
+    local jAux as json // objeto json auxiliar
+    local jTax as json
+
+    local aNItem as array // guardará os numeros dos itens para podermos percorrer o json
+    local aTrib as array // guardará as chaves dos tributos para podermos acessar seus dados
+
+    local nI as numeric // contador primário
+    local nX as numeric // contador secundário
+
+    aNItem := jDataItems["dados_itens"]:getNames()
+    jTax := self:getTotvsIdTaxes()
+    jItens := JsonObject():New()
+    for nI := 1 to len(aNItem)
+        jTrib := JsonObject():New()
+        aTrib := jDataItems["dados_itens"][aNItem[nI]]:getnames()
+        for nX := 1 to len(aTrib)
+            jDetTrib := JsonObject():New()
+            if aTrib[nX] <> "Aviso"
+                jAux := jDataItems["dados_itens"][aNItem[nI]][aTrib[nX]]
+                jDetTrib["origem"]             := "Configurador"
+                jDetTrib["tributo"]            := jTax[jAux["ident_trib"]]
+                jDetTrib["cod_regra"]          := jAux["cod_regra"]
+                jDetTrib["desc_regra"]         := jAux["desc_regra"]
+                jDetTrib["base_trib"]          := jAux["base_trib"]
+                jDetTrib["aliq_trib"]          := jAux["aliq_trib"]
+                jDetTrib["val_trib"]           := jAux["val_trib"]
+                jDetTrib["cst"]                := jAux["detalhe_livro"]["cst"]
+                jDetTrib["valor_tributado"]    := jAux["detalhe_livro"]["valor_tributado"]
+                jDetTrib["valor_isento"]       := jAux["detalhe_livro"]["valor_isento"]
+                jDetTrib["valor_outros"]       := jAux["detalhe_livro"]["valor_outros"]
+                jDetTrib["valor_nao_tribut"]   := jAux["detalhe_livro"]["valor_nao_tribut"]
+                jDetTrib["valor_diferido"]     := jAux["detalhe_livro"]["valor_diferido"]
+                jDetTrib["valor_majorado"]     := jAux["detalhe_livro"]["valor_majorado"]
+                if jAux["status"] == "1"
+                    jDetTrib["status"]         := "Em teste"
+                else
+                    jDetTrib["status"]         := "Aprovada"
+                endif
+                // defino a chave com o id totvs
+                if !Empty(jAux["ident_trib"])
+                    jTrib[jAux["ident_trib"]] := jDetTrib
+                else
+                    jTrib[jAux["cod_regra"]] := jDetTrib
+                endif
+            else
+                jTrib[aTrib[nX]] := jDataItems["dados_itens"][aNItem[nI]][aTrib[nX]]
+            endif
+        next nX
+        jItens[aNItem[nI]] := jTrib
+    next nI
+
+    asize(aNItem, 0)
+    asize(aTrib, 0)
+    FwFreeObj(jAux)
+    FwFreeObj(jTax)
+    jAux := Nil
+    jTax := Nil
+
+Return jItens
+
+
+/*/{Protheus.doc} setInvoiceData
+
+    Define os dados tributários da nota fiscal que serão retornados pelo endpoint.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return jInvoiceTaxes, json, objeto json com os dados tributários do retorno da NF.
+/*/
+method setInvoiceData() class SimulatorOperationController
+    local jInvoiceTaxesPerItem as json
+    local jInvoiceTaxes as json
+
+    jInvoiceTaxesPerItem := self:loadInvoiceTaxesPerItem()
+
+    jInvoiceTaxes := JsonObject():new()
+    jInvoiceTaxes["tributos"] := self:loadInvoiceTaxes(jInvoiceTaxesPerItem)
+    jInvoiceTaxes["tributos_por_item"] := jInvoiceTaxesPerItem
+
+    self:setHeader()
+
+    (self:cSFTAlias)->(DbCloseArea())
+return jInvoiceTaxes
+
+
+/*/{Protheus.doc} loadInvoiceTaxesPerItem
+
+    Carrega os dados dos tributários de cada item da NF para retorno.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return jTaxesPerItem, json, objeto json com os dados dos tributos por item.
+/*/
+method loadInvoiceTaxesPerItem() class SimulatorOperationController
+    local jTaxesPerItem := JsonObject():New() as json
+    local jTaxesFound as json
+    local jTaxes as json
+    local cItem as character
+
+    while (self:cSFTAlias)->(!EOF())
+        cItem := cValToChar(Val((self:cSFTAlias)->FT_ITEM))
+        jTaxesFound := self:organizeItemTaxes()
+        // recupero oas tributos que realmente foram calculados
+        jTaxes := self:setTaxes(jTaxesFound)
+        // defino os dados do item da nota fiscal
+        jTaxes["codigo"] := (self:cSFTAlias)->B1_COD
+        jTaxes["descricao"] := AllTrim((self:cSFTAlias)->B1_DESC)
+        jTaxes["NCM"] := (self:cSFTAlias)->B1_POSIPI
+
+        jTaxesPerItem[cItem] := jTaxes
+        (self:cSFTAlias)->(DbSkip())
+        self:nInvoiceTotalItems += 1
+    EndDo
+return jTaxesPerItem
+
+
+/*/{Protheus.doc} organizeItemTaxes
+
+    Organiza os tributos do item em um objeto json conforme código tributário
+    do legado. É preciso que o Alias esteja devidamente posicionado no item.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return jTaxes, json, objeto json com os dados tributários do item organizados.
+/*/
+method organizeItemTaxes() class SimulatorOperationController
+    local jTaxes := JsonObject():New() as json
+    local cAlias := self:cSFTAlias
+    local jTax := self:getTotvsIdTaxes()
+
+    if (cAlias)->FT_TIPO == 'S'
+        jTaxes['000020'] := self:createTaxJson(jTax['000020'],"ISS", "ISS", (cAlias)->FT_BASEICM, (cAlias)->FT_ALIQICM, (cAlias)->FT_VALICM, (cAlias)->FT_CSTISS, (cAlias)->FT_VALICM, (cAlias)->FT_ISENICM, (cAlias)->FT_OUTRICM)
+    else
+        jTaxes["000021"] := self:createTaxJson(jTax['000021'],"ICM", "ICMS", (cAlias)->FT_BASEICM, (cAlias)->FT_ALIQICM, (cAlias)->FT_VALICM, SubStr((cAlias)->FT_CLASFIS, 2, 2), (cAlias)->FT_VALICM, (cAlias)->FT_ISENICM, (cAlias)->FT_OUTRICM,,(cAlias)->FT_ICMSDIF, (cAlias)->FT_VALFECP)
+    endif
+                                        //cCod, cDescr, nBC, nAliq, nVal, cCST, nVlTrib, nVlIsento, nVlOutros, nVlNaoTributado, nVlDiferido, nVlMajorado
+    jTaxes["000056"] := self:createTaxJson(jTax['000056'],"ICR", "ICMS Retido", (cAlias)->FT_BASERET, (cAlias)->FT_ALIQSOL, (cAlias)->FT_ICMSRET, , (cAlias)->FT_ICMSRET, (cAlias)->FT_ISENRET, (cAlias)->FT_OUTRRET)
+    jTaxes["000038"] := self:createTaxJson(jTax['000038'],"ICC", "ICMS Complementar",,, (cAlias)->FT_ICMSCOM)
+    jTaxes["000037"] := self:createTaxJson(jTax['000037'],"DIF", "ICMS Complemenatar Dest.", (cAlias)->FT_BASEDES,,(cAlias)->FT_DIFAL)
+    jTaxes["000022"] := self:createTaxJson(jTax['000022'],"IPI", "IPI", (cAlias)->FT_BASEIPI, (cAlias)->FT_ALIQIPI, (cAlias)->FT_VALIPI, (cAlias)->FT_CTIPI, (cAlias)->FT_VALIPI, (cAlias)->FT_ISENIPI, (cAlias)->FT_OUTRIPI)
+    jTaxes["000045"] := self:createTaxJson(jTax['000045'],"PIS", "PIS - Via retenção", (cAlias)->FT_BRETPIS, (cAlias)->FT_ARETPIS, (cAlias)->FT_VRETPIS, (cAlias)->FT_CSTPIS, (cAlias)->FT_VRETPIS)
+    jTaxes["000015"] := self:createTaxJson(jTax['000015'],"PS2", "PIS - Via apuração", (cAlias)->FT_BASEPIS, (cAlias)->FT_ALIQPIS, (cAlias)->FT_VALPIS, (cAlias)->FT_CSTPIS, (cAlias)->FT_VALPIS)
+    jTaxes["000046"] := self:createTaxJson(jTax['000046'],"PS3", "PIS - Subst. Tributaria", (cAlias)->FT_BASEPS3, (cAlias)->FT_ALIQPS3, (cAlias)->FT_VALPS3, (cAlias)->FT_CSTPIS, (cAlias)->FT_VALPS3)
+    jTaxes["000043"] := self:createTaxJson(jTax['000043'],"COF", "COF - Via retenção", (cAlias)->FT_BRETCOF, (cAlias)->FT_ARETCOF, (cAlias)->FT_VRETCOF, (cAlias)->FT_CSTCOF, (cAlias)->FT_VRETCOF)
+    jTaxes["000016"] := self:createTaxJson(jTax['000016'],"CF2", "COF - Via apuração", (cAlias)->FT_BASECOF, (cAlias)->FT_ALIQCOF, (cAlias)->FT_VALCOF, (cAlias)->FT_CSTCOF, (cAlias)->FT_VALCOF)
+    jTaxes["000044"] := self:createTaxJson(jTax['000044'],"CF3", "COF - Subst. Tributaria", (cAlias)->FT_BASECF3, (cAlias)->FT_ALIQCF3, (cAlias)->FT_VALCF3, (cAlias)->FT_CSTCOF, (cAlias)->FT_VALCF3)
+    jTaxes["000026"] := self:createTaxJson(jTax['000026'],"CSL", "CSLL - Via Retençao", (cAlias)->FT_BRETCSL, (cAlias)->FT_ARETCSL, (cAlias)->FT_VRETCSL)
+    jTaxes["000018"] := self:createTaxJson(jTax['000018'],"IRR", "IRRF Imposto de Renda", (cAlias)->FT_BASEIRR, (cAlias)->FT_ALIQIRR, (cAlias)->FT_VALIRR)
+    jTaxes["000019"] := self:createTaxJson(jTax['000019'],"INS", "INSS", (cAlias)->FT_BASEINS, (cAlias)->FT_ALIQINS, (cAlias)->FT_VALINS)
+    jTaxes["000036"] := self:createTaxJson(jTax['000036'],"INP", "INSS-Patronal", (cAlias)->FT_BASEINP, (cAlias)->FT_PERCINP, (cAlias)->FT_VALINP)
+    jTaxes["000024"] := self:createTaxJson(jTax['000024'],"CPB", "CPRB", (cAlias)->FT_BASECPB, (cAlias)->FT_ALIQCPB, (cAlias)->FT_VALCPB)
+    jTaxes["000023"] := self:createTaxJson(jTax['000023'],"CID", "CIDE", (cAlias)->FT_BASECID, (cAlias)->FT_ALQCIDE, (cAlias)->FT_VLCIDE)
+    jTaxes["000040"] := self:createTaxJson(jTax['000040'],"FCP", "FECP", (cAlias)->FT_BASFECP, (cAlias)->FT_ALQFECP, (cAlias)->FT_VALFECP)
+    jTaxes["000041"] := self:createTaxJson(jTax['000041'],"FST", "FECP ST", (cAlias)->FT_BSFCPST, (cAlias)->FT_ALFCPST, (cAlias)->FT_VFECPST)
+    jTaxes["000042"] := self:createTaxJson(jTax['000042'],"FCM", "FCP Complementar", (cAlias)->FT_BSFCCMP, (cAlias)->FT_ALFCCMP, (cAlias)->FT_VFCPDIF)
+    jTaxes["000010"] := self:createTaxJson(jTax['000010'],"FDS", "FUNDERSUL",,,(cAlias)->FT_VALFDS)
+    jTaxes["000008"] := self:createTaxJson(jTax['000008'],"FAS", "FASE-MT", (cAlias)->FT_BASFASE, (cAlias)->FT_ALIFASE, (cAlias)->FT_VALFASE)
+    jTaxes["000012"] := self:createTaxJson(jTax['000012'],"IMA", "IMA-MT", (cAlias)->FT_BASIMA, (cAlias)->FT_ALIIMA, (cAlias)->FT_VALIMA)
+    jTaxes["000009"] := self:createTaxJson(jTax['000009'],"FET", "FETHAB", (cAlias)->FT_BSEFET, (cAlias)->FT_ALQFET, (cAlias)->FT_VALFET)
+    jTaxes["000006"] := self:createTaxJson(jTax['000006'],"FAC", "FACS", (cAlias)->FT_BSEFAC, (cAlias)->FT_ALQFAC, (cAlias)->FT_VALFAC)
+    jTaxes["000011"] := self:createTaxJson(jTax['000011'],"FUN", "FUNDESA", (cAlias)->FT_BASFUND, (cAlias)->FT_ALIFUND, (cAlias)->FT_VALFUND)
+    jTaxes["000027"] := self:createTaxJson(jTax['000027'],"PTG", "PROTEGE-GO", (cAlias)->FT_BASEPRO, (cAlias)->FT_ALIQPRO, (cAlias)->FT_VALPRO)
+    jTaxes["000005"] := self:createTaxJson(jTax['000005'],"FAB", "FABOV", (cAlias)->FT_BSEFAB, (cAlias)->FT_ALQFAB, (cAlias)->FT_VALFAB)
+    jTaxes["000007"] := self:createTaxJson(jTax['000007'],"FMD", "FAMAD", (cAlias)->FT_BASEFMD, (cAlias)->FT_ALQFMD, (cAlias)->FT_VALFMD)
+    jTaxes["000003"] := self:createTaxJson(jTax['000003'],"SENAR", "SENAR", (cAlias)->FT_BSSENAR, (cAlias)->FT_ALSENAR, (cAlias)->FT_VLSENAR)
+    jTaxes["000028"] := self:createTaxJson(jTax['000028'],"FMP", "FUMIPEQ", (cAlias)->FT_BASEFMP, (cAlias)->FT_ALQFMP, (cAlias)->FT_VALFMP)
+    jTaxes["000025"] := self:createTaxJson(jTax['000025'],"FEEF", "FEEF-RJ", (cAlias)->FT_BASFEEF, (cAlias)->FT_ALQFEEF, (cAlias)->FT_VALFEEF)
+    jTaxes["000002"] := self:createTaxJson(jTax['000002'],"FRU", "FUNRURAL", (cAlias)->FT_BASEFUN, (cAlias)->FT_ALIQFUN, (cAlias)->FT_VALFUN)
+
+    FwFreeObj(jTax)
+    jTax := Nil
+return jTaxes
+
+
+/*/{Protheus.doc} createTaxJson
+
+    Cria json com dados do tributo.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @param cCod, character, código legado do tributo.
+    @param cDescr, character, descrição do tributo.
+    @param nBC, numeric, base de cálculo do tributo.
+    @param nAliq, numeric, alíquota do tributo
+    @param nVal, numeric, valor do tributo
+    @param cCST, character, código de situação tributária
+    @param nVlTrib, numeric, valor tributado
+    @param nVlIsento, numeric, valor insento
+    @param nVlOutros, numeric, valor outros
+    @param nVlNaoTributado, numeric, valor não tributado
+    @param nVlDiferido, numeric, valor diferido
+    @param nVlMajorado, numeric, valor majorado
+    @return jTax, json, objeto json com os dados do tributo
+/*/
+method createTaxJson(cTax, cCod, cDescr, nBC, nAliq, nVal, cCST, nVlTrib, nVlIsento, nVlOutros, nVlNaoTributado, nVlDiferido, nVlMajorado) class SimulatorOperationController
+    local jTax := JsonObject():New()
+
+    default nBC := 0
+    default nAliq := 0
+    default nVal := 0
+    default cCST := ""
+    default nVlTrib := 0
+    default nVlIsento := 0
+    default nVlOutros := 0
+    default nVlNaoTributado := 0
+    default nVlDiferido := 0
+    default nVlMajorado := 0
+
+    jTax["origem"]              := "Nota"
+    jTax["tributo"]             := cTax
+    jTax["cod_regra"]           := cCod
+    jTax["desc_regra"]          := cDescr
+    jTax["base_trib"]           := nBC
+    jTax["aliq_trib"]           := nAliq
+    jTax["val_trib"]            := nVal
+    jTax["cst"]                 := cCST
+    jTax["valor_tributado"]     := nVlTrib
+    jTax["valor_isento"]        := nVlIsento
+    jTax["valor_outros"]        := nVlOutros
+    jTax["valor_nao_tribut"]    := nVlNaoTributado
+    jTax["valor_diferido"]      := nVlDiferido
+    jTax["valor_majorado"]      := nVlMajorado
+    jTax["status"]              := ""
+return jTax
+
+
+/*/{Protheus.doc} setTaxes
+
+    Define quais tributos foram realmente calculados para o item.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @param param_name, param_type, param_descr
+    @return jTaxesCalculated, json, objeto json com os tributos calculados.
+/*/
+method setTaxes(jTaxes) class SimulatorOperationController
+    local jTaxesCalculated := JsonObject():New() as json
+    local aTaxes := jTaxes:getNames() as array
+    local nI as numeric
+
+    for nI := 1 to len(aTaxes)
+        if (jTaxes[aTaxes[nI]]["base_trib"] +;
+            jTaxes[aTaxes[nI]]["val_trib"] +;
+            jTaxes[aTaxes[nI]]["valor_tributado"] +;
+            jTaxes[aTaxes[nI]]["valor_isento"] +;
+            jTaxes[aTaxes[nI]]["valor_outros"]) > 0
+            jTaxesCalculated[aTaxes[nI]] := jTaxes[aTaxes[nI]]
+        endif
+    next
+return jTaxesCalculated
+
+
+/*/{Protheus.doc} loadInvoiceTaxes
+
+    Aglutina os tributos de todos os itens da NF.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @param jTaxesPerItem, json, objeto json com os dados dos tributos calculados de cada item.
+    @return jInvoiceTaxes, json, objeto json com os tributos aglutinados.
+/*/
+method loadInvoiceTaxes(jTaxesPerItem) class SimulatorOperationController
+    local jInvoiceTaxes := JsonObject():New() as json
+    local jTax as json
+    local aItems := jTaxesPerItem:getNames() as array
+    local aItemsTaxes as array
+    local nI as numeric
+    local nX as numeric
+    local cItem as character
+    local cTax as character
+    local cRule as character
+
+    for nI := 1 to len(aItems)
+        aItemsTaxes := jTaxesPerItem[aItems[nI]]:getNames()
+        for nX := 1 to len(aItemsTaxes)
+            cItem := aItems[nI]
+            cTax := aItemsTaxes[nX]
+            // Pode acontecer de um tributo legado ter alíquotas diferentes entre os itens. É raro mas pode acontecer.
+            // Desta forma, o ideal seria definir uma `ID` no json abaixo para diferenciar esses tributos.
+            // Porém, neste primeiro momento. não irei trabalhar com essa hipótese.
+            if isDigit(cTax)
+                cRule := jTaxesPerItem[cItem][cTax]["cod_regra"]
+                if jInvoiceTaxes:hasProperty(cRule)
+                    jInvoiceTaxes[cRule]["base"] += jTaxesPerItem[cItem][cTax]["base_trib"]
+                    jInvoiceTaxes[cRule]["valor"] += jTaxesPerItem[cItem][cTax]["val_trib"]
+                else
+                    jTax := JsonObject():New()
+                    jTax["codigo"] := cRule
+                    jTax["descricao"] := jTaxesPerItem[cItem][cTax]["desc_regra"]
+                    jTax["base"] := jTaxesPerItem[cItem][cTax]["base_trib"]
+                    jTax["aliquota"] := jTaxesPerItem[cItem][cTax]["aliq_trib"]
+                    jTax["valor"] := jTaxesPerItem[cItem][cTax]["val_trib"]
+                    jTax["nome"] := jTaxesPerItem[cItem][cTax]["cod_regra"]
+
+                    jInvoiceTaxes[cRule] := jTax
+                endif
+            endif
+        next
+    next
+return jInvoiceTaxes
+
+
+/*/{Protheus.doc} getTotvsIdTaxes
+
+    Retorna um json com o de/para do id totvs e seu tributo respectivo por extenso
+
+    @author anedino.santos
+    @since 25/04/2025
+    @version 12.1.2510
+    @return jTax, json, objeto json cuja chave é o id totvs e o valor é o tributo correspondente
+/*/
+Method getTotvsIdTaxes() class SimulatorOperationController
+    local jTax := JsonObject():New()
+
+    jTax['000001']:= "INSS - prod. rural"//'INSS DO PRODUTOR RURAL - FUNRURAL'
+    jTax['000002']:= "GILRAT - FUNRURAL"//'GILRAT - FUNRURAL'
+    jTax['000003']:= "SENAR"//'SENAR - SERVIÇO NACIONAL DE APRENDIZAGEM RURAL'
+    jTax['000004']:= "AFRMM"//'AFRMM - Adicional ao Frete para Renovação da Marinha Mercante'
+    jTax['000005']:= "FABOV"//'FABOV - Fundo de Apoio a Bovinocultura de Corte'
+    jTax['000006']:= "FACS"//'FACS - Fundo de Apoio à Cultura da Soja'
+    jTax['000007']:= "FAMAD"//'FAMAD - Fundo de Apoio à Madeira'
+    jTax['000008']:= "FASE/MT"//'FASE/MT - Fundo Mato-Grossense de Apoio à Cultura da Semente'
+    jTax['000009']:= "FETHAB"//'FETHAB - Fundo Estadual de Transporte e Habitação'
+    jTax['000010']:= "FUNDERSUL"//'FUNDERSUL - Fundo de Desenvolvimento do Sistema Rodoviário do Estado de Mato Grosso do Sul'
+    jTax['000011']:= "FUNDESA"//'FUNDESA - Fundo de Desenvolvimento e Defesa Sanitária Animal'
+    jTax['000012']:= "IMA/MT"//'IMA/MT - Instituto Mato-Grossense do Algodão'
+    jTax['000013']:= "SEST/SENAT"//'SEST/SENAT - Serviço Social do Transporte/Serviço Nacional de Aprendizagem do Transporte'
+    jTax['000014']:= "TPDP"//'TPDP - Taxa de Processamento de Despesa Pública do Estado da Paraíba'
+    jTax['000015']:= "PIS - apuração"//'PROGRAMA DE INTEGRAÇÃO SOCIAL'
+    jTax['000016']:= "COFINS - apuração"//'CONTRIBUIÇÃO PARA FINANCIAMENTO DA SEGURIDADE SOCIAL'
+    jTax['000017']:= "II"//"IMPOSTO DE IMPORTAÇÃO"
+    jTax['000018']:= "IRRF"//'IMPOSTO DE RENDA RETIDO NA FONTE'
+    jTax['000019']:= "INSS"//'INSS'
+    jTax['000020']:= "ISS"//'IMPOSTO SOBRE SERVIÇO'
+    jTax['000021']:= "ICMS"//"ICMS - Imposto sobre Circulação de Mercadorias e Serviços"
+    jTax['000022']:= "IPI"//"IPI - Imposto sobre Produtos Industrializados"
+    jTax['000023']:= "CIDE"//'CONTRIBUIÇÃO DE INTERVENÇÃO NO DOMÍNIO ECONÔMICO'
+    jTax['000024']:= "CPRB"//"CONTRIBUIÇÃO PREVIDENCIÁRIA SOBRE A RECEITA BRUTA"
+    jTax['000025']:= "FEEF"//"FUNDO ESTADUAL DE EQUILÍBRIO FISCAL"
+    jTax['000026']:= "CSLL"//"CONTRIBUIÇÃO SOCIAL SOBRE O LUCRO LÍQUIDO"
+    jTax['000027']:= "PROTEGE-GO"//"FUNDO DE PROTEÇÃO SOCIAL DO ESTADO DE GOIÁS"
+    jTax['000028']:= "FUMIPQ"//"FUNDO MUNICIPAL DE FOMENTO À MICRO E PEQUENA EMPRESA"
+    jTax['000029']:= "CRED. PRE. ICMS"//"CRÉDITO PRESUMIDO PARA ICMS"
+    jTax['000030']:= "CRED. PRE. Prest. Serv."//"CREDITO PRESUMIDO SOBRE PRESTACAO SERVICO DE TRANSPORTE COM ICMS/ST"
+    jTax['000031']:= "PRODEPE"//"PRODEPE - PROGRAMA DE DESENVOLVIMENTO DO ESTADO DE PERNAMBUCO"
+    jTax['000032']:= "CRED. PRE. Carga Tribu."//"CRÉDITO PRESUMIDO PELA CARGA TRIBUTÁRIA"
+    jTax['000036']:= "INSS-Patronal"//"INSS PATRONAL"
+    jTax['000037']:= "DIFAL"//"DIFAL - DIFERENCIAL DE ALIQUOTA"
+    jTax['000038']:= "ICMS complem."//"ICMS COMPLEMENTAR"
+    jTax['000039']:= "Antecip. ICMS"//"ANTECIPAÇÃO DE ICMS"
+    jTax['000040']:= "FECP"//"FECP ICMS - FUNDO DE COMBATE À POBREZA"
+    jTax['000041']:= "FECP ST"//"FECP ICMS ST - FUNDO DE COMBATE À POBREZA"
+    jTax['000042']:= "FECP complem."//"FECP ICMS COMPLEMENTAR- FUNDO DE COMBATE À POBREZA"
+    jTax['000043']:= "COFINS - retenção"//"COFINS RETENÇÃO - CONTRIBUIÇÃO PARA FINANCIAMENTO DA SEGURIDADE SOCIAL"
+    jTax['000044']:= "COFINS ST"//"COFINS SUBSTITUIÇÃO TRIBUTARIA - CONTRIBUIÇÃO PARA FINANCIAMENTO DA SEGURIDADE SOCIAL"                    
+    jTax['000045']:= "PIS - retenção"//"PIS RETENÇÃO - PROGRAMA DE INTEGRAÇÃO SOCIAL"
+    jTax['000046']:= "PIS ST"//"PIS SUBSTITUIÇÃO TRIBUTARIA - PROGRAMA DE INTEGRAÇÃO SOCIAL"
+    jTax['000047']:= "ISS BiTributado"//"ISS BITRIBUTADO - CPOM"
+    jTax['000048']:= "PIS - majoração"//"MAJORAÇÃO DAS ALÍQUOTAS DO PIS/PASEP-IMPORTAÇÃO"
+    jTax['000049']:= "COFINS - majoração"//"MAJORAÇÃO DAS ALÍQUOTAS DO COFINS-IMPORTAÇÃO"
+    jTax['000051']:= "Frete Auton."//"FRETE AUTONOMO"
+    jTax['000052']:= "ICMS ZFM"//"DESONERAÇÃO DE ICMS POR ISENÇÃO DE IMPOSTO PARA ZONA FRANCA DE MANAUS"
+    jTax['000053']:= "PIS ZFM"//"DESONERAÇÃO DE PIS POR ISENÇÃO DE IMPOSTO PARA ZONA FRANCA DE MANAUS"
+    jTax['000054']:= "COFINS ZFM"//"DESONERAÇÃO DE COFINS POR ISENÇÃO DE IMPOSTO PARA ZONA FRANCA DE MANAUS"                    
+    jTax['000056']:= "ICMS ST"//"ICMS SUBSTITUIÇÃO TRIBUTÁRIA"
+    jTax['000057']:= "Frete Embarcador"//"FRETE EMBARCADOR"
+    jTax['000058']:= "CRED. Outorgado"//"CREDITO OUTORGADO"
+    jTax['000059']:= "ICMS MONO"//"TRIBUTAÇÃO MONOFÁSICA DE COMBUSTÍVEIS COBRADA ANTERIORMENTE"
+    jTax['000060']:= "IBS UF"//"IBS ESTADUAL"
+    jTax['000061']:= "IBS MUN"//"IBS MUNICIPAL"
+    jTax['000062']:= "CBS"//"CBS FEDERAL"
+    jTax['000063']:= "IS"//"IS FEDERAL"
+
+Return jTax
+
+
+/*/{Protheus.doc} finish
+
+    Finaliza o processamento liberando os objetos e arrays da classe.
+
+    @author anedino.santos
+    @since 21/03/2025
+    @version 12.1.2410
+    @return Nil, Nil, sem retorno.
+/*/
+method finish() class SimulatorOperationController
+    FwFreeObj(self:jRequestBody)
+    FwFreeObj(self:jResponseBody)
+    FwFreeObj(self:jInvoiceFilter)
+    FwFreeObj(self:jHeader)
+    self:oSimulation:destroy()
+    FwFreeObj(self:oSimulation)
+
+    self:jRequestBody := Nil
+    self:jResponseBody := Nil
+    self:jInvoiceFilter := Nil
+    self:jHeader := Nil
+    self:oSimulation := Nil
+
+    aSize(self:aM930Perg, 0)
+    self:aM930Perg := Nil
+return

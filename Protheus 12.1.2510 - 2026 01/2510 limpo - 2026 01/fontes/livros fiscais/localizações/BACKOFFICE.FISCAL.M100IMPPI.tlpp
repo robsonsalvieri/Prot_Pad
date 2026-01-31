@@ -1,0 +1,274 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TLPP-CORE.TH"
+
+Static lB1_PEGR  :=  SB1->(ColumnPos("B1_PEGR"))  > 0
+Static lB1_EXAR5 :=  SB1->(ColumnPos("B1_EXAR5")) > 0
+
+Static nTARIMPP  :=  SuperGetMV("MV_TARIMPP" , .F., 0.00005)
+Static nVALUVT   :=  SuperGetMV("MV_VALUVT"  , .F., 0)
+Static lCERIMPP  :=  SuperGetMV("MV_CERIMPP" , .F., .F.)
+
+Static oJProd :=  JsonObject():New()  // Para guardar productos previamente consultados y no volver a realizar la búsqueda.
+Static oJTES  :=  JsonObject():New()  // Para guardar TES previamente consultados y no volver a realizar la búsqueda.
+Static oJIMP  :=  JsonObject():New()  // Para guardar fórmula del impuesto plástico por si existe más de una configuración previamente consultada.
+
+#DEFINE FORMSAL "M100IMPPI" //Fórmula de salida para impuesto plástico.
+
+/*/{Protheus.doc} M100IMPPI
+    Cálculo del impuesto plastico por item.
+    @type function
+    @version 12.1.2410
+    @author luis.samaniego
+    @since 11/26/2025
+    @param cCalculo, Character, Valor a calcular (A=Alícuota, B=Base, V=Valor)
+    @param nItem, Numeric, Número de ítem.
+    @param aInfo, Array, Información de impuestos (Código impuesto, Campo libro fiscal).
+    @return Numeric, Valor, base imponible o alícuota de impuesto.
+/*/
+Function M100IMPPI(cCalculo, nItem, aInfo)
+Local cB1_EXAR5  := ""
+Local nB1_PEGR   := 0
+Local cCodPro    := ""
+Local cCpoLivro  := ""
+Local cImpuesto  := ""
+Local cTES       := ""
+Local lCalcItem  := .F.
+Local lRet       := .F.
+Local lXfis      := .T.
+Local nAliq      := 0
+Local nBase      := 0
+Local nCant      := 0
+Local nDecs      := 0
+Local nMoeda     := 1
+Local nTaxaMoed  := 1
+Local xRet       := 0
+
+Default cCalculo := ""
+Default nItem    := 0
+Default aInfo    := {}
+
+    lRet := lB1_PEGR .And. lB1_EXAR5  .And. nTARIMPP > 0 .And. nVALUVT > 0 
+  
+    lXfis := (MaFisFound() .And. ProcName(1) <> "EXECBLOCK")
+
+    If lRet
+        If Len(aInfo) >= 2
+            cImpuesto := aInfo[01] //Impuesto configurado
+            cCpoLivro := aInfo[02] //campo libro
+        EndIf
+
+        cTES      := MaFisRet(nItem,"IT_TES")
+        cCodPro   := MaFisRet(nItem,"IT_PRODUTO")
+        lCalcItem := VldImpxTES(cImpuesto,cTES) //Siempre y cuando el cálculo sea por ítem.
+
+        If lCalcItem .And. !Empty(cCodPro)
+
+            nMoeda    := MaFisRet( , "NF_MOEDA")
+            nTaxaMoed := MaFisRet( , "NF_TXMOEDA")
+            nCant     := MaFisRet(nItem, "IT_QUANT")
+            nDecs     := MsDecimais(nMoeda)
+
+            If !oJProd:HasProperty(cCodPro)
+                fGetDatPro(cCodPro)
+            EndIf
+            nB1_PEGR := oJProd[cCodPro]['B1_PEGR']
+            cB1_EXAR5 := oJProd[cCodPro]['B1_EXAR5']
+
+            Do Case
+
+                Case cCalculo == "B"
+
+                    xRet := (nCant * nB1_PEGR)
+
+                Case cCalculo == "A"
+
+                    nAliq := Round(nTARIMPP * nVALUVT, nDecs)
+                    If !(nMoeda == 1)
+                        nAliq := Round(xMoeda(nAliq, 1, nMoeda, Nil, nDecs+1, nTaxaMoed), nDecs) //La alícuota es la tasa por el UVT y el UVT está en moneda 1; se debe convertir a la moneda del título, donde la moneda origen es moneda 1.
+                    EndIf
+                
+                    xRet := nAliq
+                    
+                Case cCalculo == "V"
+                    
+                    nAliq := MaFisRet(nItem, "IT_ALIQIV"+cCpoLivro) // La alícuota ya está guardada en la moneda del título. 
+                    nBase := MaFisRet(nItem, "IT_BASEIV"+cCpoLivro) 
+                
+                    If oJProd:HasProperty(cCodPro) // Se valida si se tiene el valor del campo Art. 5(B1_EXAR5).
+                        xRet:= CalVIPlast(nBase, nAliq, nDecs, cB1_EXAR5) //Valor del impuesto (nAliq * nBase), pero primero se evalúa el parámetro del certificado y campo del Art. 5(B1_EXAR5).
+                    EndIf
+
+            EndCase
+        EndIf
+    EndIf
+
+Return( xRet )
+
+/*/{Protheus.doc} fGetDatPro
+    Se utiliza para obtener los datos de los campos B1_PEGR y B1_EXAR5 en la tabla SB1.
+    @type function
+    @version 12.1.2410
+    @author luis.samaniego
+    @since 11/26/2025
+    @param cCodPro, Character, Código del producto
+/*/
+Static Function fGetDatPro(cCodPro)
+Local cQuery    := ""
+Local nOrd      := 1
+Local oQryExec  := Nil
+
+Default cCodPro := ""
+
+    cQuery := " SELECT B1_PEGR, B1_EXAR5 "
+    cQuery += " FROM " + RetSqlName("SB1")
+    cQuery += " WHERE B1_FILIAL = ? "
+    cQuery += " AND B1_COD = ? "
+    cQuery += " AND D_E_L_E_T_ = ? "
+
+    cQuery := ChangeQuery(cQuery)
+    oQryExec := FwExecStatement():New(cQuery)
+    oQryExec:SetString(nOrd++, xFilial("SB1")) // Filial
+    oQryExec:SetString(nOrd++, cCodPro) // Código de producto
+    oQryExec:SetString(nOrd++, ' ' ) // No eliminado
+
+    oJProd[cCodPro] := JsonObject():New()
+    oJProd[cCodPro]['B1_PEGR']  := oQryExec:ExecScalar("B1_PEGR")
+    oJProd[cCodPro]['B1_EXAR5'] := oQryExec:ExecScalar("B1_EXAR5")
+
+    oQryExec:Destroy()
+    fwFreeobj(oQryExec)
+ 
+Return
+
+/*/{Protheus.doc} CalVIPlast
+    Determina si realiza el cálculo del impuesto de acuerdo a los parámetros lCERIMPP (MV_CERIMPP) y cEXAR5 (Artículo 5(B1_EXAR5)).
+    @type function
+    @version 12.1.2410
+    @author luis.samaniego
+    @since 11/26/2025
+    @param nBase, Numeric, Monto base sobre el cual se aplica la alícuota del impuesto.
+    @param nAliq, Numeric, Alícuota del impuesto (nTARIMPP * nVALUVT).
+    @param nDecs, Numeric, Cantidad de decimales para redondear el resultado del cálculo.
+    @param cB1_EXAR5, character, Indicador de exención según el Artículo 5 (B1_EXAR5): 2=No exento; 1=Exento
+    @return Numeric, Impuesto calculado
+/*/
+Static Function CalVIPlast(nBase, nAliq, nDecs, cB1_EXAR5)
+Local nImp        := 0
+
+Default nBase     := 0
+Default nAliq     := 0
+Default nDecs     := 2
+Default cB1_EXAR5 := ""
+
+    If nAliq > 0 .And. !lCERIMPP .And. cB1_EXAR5 == "2"
+        nImp := Round(nBase * nAliq, nDecs)
+    EndIf
+
+Return nImp
+
+/*/{Protheus.doc} VldImpxTES
+    Verificar la configuración del impuesto en la TES.
+    @type function
+    @version 12.1.2410
+    @author luis.samaniego
+    @since 11/26/2025
+    @param cNomImp, Character, Nombre del impuesto que se desea consultar.
+    @param cTES, Character, Código de la TES (Tipo de Entrada/Salida) que se está evaluando.
+    @return Logical, Indica si el cálculo es por ítem (.T. por ítem, .F. no es por ítem)
+/*/
+Static Function VldImpxTES(cNomImp, cTES)
+Local aAreaSFC  := {}
+Local lCalcItem := .F.
+
+Default cNomImp := ""
+Default cTES    := ""
+
+    If !oJTES:HasProperty(cTES)
+        aAreaSFC := SFC->(GetArea())
+        dbSelectArea("SFC")
+        SFC->(DbSetOrder(2)) //FC_FILIAL+FC_TES+FC_IMPOSTO
+        If (SFC->(MsSeek(xFilial("SFC") + cTES + cNomImp))) 
+            lCalcItem := SFC->FC_CALCULO == "I"
+        EndIf
+        RestArea(aAreaSFC)
+
+        oJTES[cTES] := JsonObject():New()
+        oJTES[cTES]['FC_CALCULO'] := lCalcItem
+    Else
+        lCalcItem := oJTES[cTES]['FC_CALCULO']
+    EndIf
+
+    fwFreeArray(aAreaSFC)
+
+Return lCalcItem
+
+/*/{Protheus.doc} M100VFormI
+    Consulta si el impuesto usa la fórmula de salida M100IMPPI, lo cual indica que es un impuesto de plásticos.
+    @type function
+    @version 12.1.2410
+    @author luis.samaniego
+    @since 11/26/2025
+    @param cNomImp, Character, Código del impuesto que se desea consultar en la tabla SFB.
+    @param nCamLvro, Numeric, Número que representa el campo del libro fiscal relacionado.
+    @param nAliqOri, Numeric, Alícuota original del impuesto (porcentaje sin convertir) si la moneda es diferente de 1.
+    @param nMoedaAux, Numeric, Código de moneda auxiliar para realizar la conversión monetaria.
+    @param dEmision, Date, Fecha de emisión del documento, utilizada para cálculos de conversión.
+    @param nDecs, Numeric, Cantidad de decimales que se deben considerar en los cálculos.
+    @param nTaxa, Numeric, Tasa de conversión monetaria (si aplica).
+    @return Array, Indica si el impuesto es de plástico, devolviendo los valores de base y alícuota.
+/*/
+Function M100VFormI(cNomImp, nCamLvro, nAliqOri, nMoedaAux, dEmision, nDecs, nTaxa)
+Local cFormula    := ""
+Local cQuery      := ""
+Local lRet        := .F.
+Local nAliq       := 0
+Local nOrd        := 1
+Local oQryExec    := Nil
+
+Default cNomImp   := ""
+Default nCamLvro  := 0
+Default nAliqOri  := 0
+Default nMoedaAux := 0
+Default dEmision  := dDataBase
+Default nDecs     := 0
+DEFAULT nTaxa     := 0
+
+    nAliq := nAliqOri
+	
+    IF !oJIMP:HasProperty(cNomImp) 
+        cQuery := " SELECT FB_FORMENT "
+        cQuery += " FROM " + RetSqlName("SFB")
+        cQuery += " WHERE FB_FILIAL = ? "
+        cQuery += " AND FB_CODIGO = ? "
+        cQuery += " AND FB_CPOLVRO = ? "
+        cQuery += " AND D_E_L_E_T_  = ? "
+
+        cQuery := ChangeQuery(cQuery)
+        oQryExec := FwExecStatement():New(cQuery)
+
+        // Asignación de parámetros
+        oQryExec:SetString(nOrd++, xFilial("SFB")) //Filial
+        oQryExec:SetString(nOrd++, cNomImp) //Código impuesto
+        oQryExec:SetString(nOrd++, nCamLvro) //Campo libro
+        oQryExec:SetString(nOrd++, " ") //No eliminado
+
+        cFormula := Alltrim(oQryExec:ExecScalar("FB_FORMENT"))
+        oJIMP[cNomImp] := JsonObject():New()
+        oJIMP[cNomImp]['FORMULA'] := cFormula
+
+        oQryExec:Destroy()
+        fwFreeObj(oQryExec)
+
+        If cFormula == FORMSAL
+            nAliq := Round(xMoeda(nAliq, nMoedaAux, 1, Nil, nDecs, nTaxa), nDecs)//La alícuota es la tasa por el UVT y el UVT está en moneda 1; se debe convertir a la moneda del título, donde la moneda origen es moneda 1.
+            oJIMP[cNomImp]['ALIQUOTA'] := nAliq
+            lRet  :=.T.
+        EndIf
+    Else
+        If oJIMP[cNomImp]['FORMULA'] == FORMSAL 
+            nAliq:=oJIMP[cNomImp]['ALIQUOTA'] 
+            lRet  :=.T.
+        EndIf
+    EndIf
+
+Return {lRet, nAliq}
