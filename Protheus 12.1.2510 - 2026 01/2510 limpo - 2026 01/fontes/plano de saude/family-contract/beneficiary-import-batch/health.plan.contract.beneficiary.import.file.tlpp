@@ -1,0 +1,327 @@
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+#include "fileio.ch"
+#include "health.plan.contract.beneficiary.import.file.ch"
+
+#define STATUS_BATCH_RECEIVED "1"
+#define STATUS_BATCH_PROCESSING "2"
+#define STATUS_BATCH_IMPORTED_WITH_ERROR "3"
+#define STATUS_BATCH_IMPORTED_SUCCESSFULLY "4"
+#define STATUS_BATCH_CANCELED "5"
+
+#define STATUS_BENEF_RECEIVED "1"
+#define STATUS_BENEF_IMPORTED_WITH_ERROR "2"
+#define STATUS_BENEF_IMPORTED_SUCCESSFULLY "3"
+#define STATUS_BENEF_CANCELED "4"
+
+namespace totvs.protheus.health.plan.contract.beneficiary.import
+
+/*{Protheus.doc} ImportBatchFile
+Classe responsável pela manipulação e leitura dos arquivos CSV dos lotes de importação de beneficiários.
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+*/
+class ImportBatchFile from ImportBatchBase
+
+	private data cFileDir as character
+	private data aBeneficiaries as array
+
+	public method new() constructor
+	public method destroy()
+	public method loadBeneficiariesFromFile() as logical
+
+	private method getKnowledgeBankFile() as logical
+	private method fileReader() as logical
+	private method addBeneficiariesBatch() as logical
+	private method getBeneficiaryData(aBeneficiaryData as array) as character
+
+endclass
+
+/*{Protheus.doc} new
+Constrói uma instância da classe ImportBatchFile para manipular o arquivo do lote identificado pelo número do lote.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@param cBatchCode, caracter, Número identificador do lote cujo arquivo será manipulado.
+*/
+method new() class ImportBatchFile
+	
+	_Super:new()
+
+return self
+
+/*{Protheus.doc} destroy
+Libera os recursos utilizados pela instância da classe ImportBatchFile.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+*/
+method destroy() class ImportBatchFile
+
+	_Super:destroy()
+
+	fwFreeArray(self:aBeneficiaries)
+
+return
+
+/*{Protheus.doc} loadBeneficiariesFromFile
+Carrega os beneficiários a partir do arquivo CSV e os vincula ao lote de importação.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@return logical, Indica verdadeiro se os beneficiários foram carregados com sucesso, falso caso contrário.
+*/
+method loadBeneficiariesFromFile() as logical class ImportBatchFile
+
+	local lSuccess := .F. as logical
+
+	if !empty(self:cBatchCode)
+		self:loadModel()
+		
+		if self:getKnowledgeBankFile() .and. self:fileReader()
+			lSuccess := self:addBeneficiariesBatch()
+		endif
+	endif
+
+return lSuccess
+
+/*{Protheus.doc} getKnowledgeBankFile
+Obtém o arquivo do banco de conhecimento relacionado ao lote de importação.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@return logical, Indica verdadeiro se o arquivo foi obtido com sucesso, falso caso contrário.
+*/
+method getKnowledgeBankFile() as logical class ImportBatchFile
+
+	local oExecStmt as object
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local cFile as character
+	local lOk := .F. as logical
+	
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? AC9 "
+	cQuery += " INNER JOIN ? ACB ON "
+	cQuery += "		ACB.ACB_FILIAL = ? AND "
+	cQuery += "		ACB.ACB_CODOBJ = AC9.AC9_CODOBJ AND "
+	cQuery += "		ACB.D_E_L_E_T_ = ? "
+	cQuery += " WHERE "
+	cQuery += " 	AC9.AC9_FILIAL = ? AND "
+	cQuery += " 	AC9.AC9_ENTIDA = ? AND "
+	cQuery += " 	AC9.AC9_FILENT = ? AND "
+	cQuery += " 	AC9.AC9_CODENT = ? AND "
+	cQuery += " 	AC9.D_E_L_E_T_ = ? "
+	cQuery += " ORDER BY AC9_CODOBJ DESC"
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "ACB.ACB_OBJETO")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("AC9"))
+	oExecStmt:setUnsafe(nOrder++, retSqlName("ACB"))
+	oExecStmt:setString(nOrder++, xFilial("ACB"))
+	oExecStmt:setString(nOrder++, " ")
+	oExecStmt:setString(nOrder++, xFilial("AC9"))
+	oExecStmt:setString(nOrder++, "BJ5")
+	oExecStmt:setString(nOrder++, xFilial("BJ5"))
+	oExecStmt:setString(nOrder++, xFilial("BJ5") + self:cBatchCode)
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	if !(cAlias)->(eof())
+		cFile := alltrim((cAlias)->ACB_OBJETO)
+		self:cFileDir := iif(msMultDir(), msRetPath(cFile), msDocPath()) + "/" + cFile
+
+		lOk := .T.
+	else
+		// "Não foi possível localizar o arquivo do lote informado no banco de conhecimento."
+		self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, STR0001)
+	endif
+
+	(cAlias)->(dbCloseArea())
+
+	oExecStmt:destroy()
+	freeObj(oExecStmt)
+
+return lOk
+
+/*{Protheus.doc} fileReader
+Realiza a leitura e processamento do arquivo CSV do lote de importação.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@return logical, Indica verdadeiro se a leitura e processamento foram realizados com sucesso, falso caso contrário.
+*/
+method fileReader() as logical class ImportBatchFile
+
+	local lOk := .F. as logical
+	local oFile as object
+	local aLines as array
+	local nSizeLines as numeric
+
+	oFile := FWFileReader():new(self:cFileDir)
+
+	if oFile:Open()
+		aLines := oFile:getAllLines()
+		nSizeLines := len(aLines)
+
+		if nSizeLines > 0
+			if nSizeLines > 1
+				self:loadFormFields()
+
+				aDel(aLines, 1) 
+				aSize(aLines, nSizeLines - 1)
+
+				self:aBeneficiaries := aClone(aLines)
+				lOk := .T.
+			else
+				// "O arquivo CSV contém apenas o cabeçalho e não possui nenhum dado de beneficiário para processamento."
+				self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, STR0004)
+			endif
+		else
+			// "O arquivo CSV do lote está vazio e não contém dados de beneficiários para processar."
+			self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, STR0003)
+		endif
+	else
+		// "Ocorreu um erro ao tentar abrir o arquivo do lote informado."
+		self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, STR0002)
+	endif
+
+	oFile:close()
+
+	freeObj(oFile)
+	fwFreeArray(aLines)
+
+return lOk
+
+/*{Protheus.doc} addBeneficiariesBatch
+Adiciona os beneficiários do arquivo no lote.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 25/05/2025
+@return logical, Indica verdadeiro se os beneficiários foram adicionados com sucesso, falso caso contrário.
+*/
+method addBeneficiariesBatch() as logical class ImportBatchFile
+
+	local nCount as numeric
+	local nBeneficiaryTotal as numeric
+	local nFldPosFamily as numeric
+	local nFldPosCpf as numeric
+	local nFldPosName as numeric
+	local nFldPosKinship as numeric
+	local aBeneficiaryData as array
+	local cFamilyId as character
+	local cBeneficiaryCpf as character
+	local nFldSizeFamily := tamSX3("BJ6_CODFAM")[1] as numeric
+	local nLine as numeric
+	local lError := .F. as logical
+	local lSuccess := .F. as logical
+	local cErrorMessage as character
+	local lIsReprocess as logical
+
+	nFldPosFamily := aScan(self:aFormFields, {|x| x["property"] == "B2N_CODSEQ"})
+	nFldPosCpf := aScan(self:aFormFields, {|x| x["property"] == "B2N_CPFUSR"})
+	nFldPosName := aScan(self:aFormFields, {|x| x["property"] == "B2N_NOMUSR"})
+	nFldPosKinship := aScan(self:aFormFields, {|x| x["property"] == "B2N_GRAUPA"})
+
+	self:oModelBatch:activate()
+
+	lIsReprocess := !self:oModelBJ6:isEmpty()
+
+	nBeneficiaryTotal := len(self:aBeneficiaries)
+
+	for nCount := 1 to nBeneficiaryTotal
+		aBeneficiaryData := strTokArr2(self:aBeneficiaries[nCount], ";", .T.)
+		cFamilyId := strZero(val(alltrim(aBeneficiaryData[nFldPosFamily])), nFldSizeFamily)
+		cBeneficiaryCpf := alltrim(aBeneficiaryData[nFldPosCpf])
+
+		if !self:oModelBJ6:seekLine({{"BJ6_CODFAM", cFamilyId}, {"BJ6_CPFBEN", cBeneficiaryCpf}}) .and. !self:oModelBJ6:isEmpty()
+			if lIsReprocess
+				loop
+			endif
+
+			nLine := self:oModelBJ6:getLine()
+	
+			if self:oModelBJ6:addLine() == nLine
+				lError := .T.
+				exit
+			endif
+		endif
+
+		if lIsReprocess .and. (self:oModelBJ6:getValue("BJ6_STATUS") == STATUS_BENEF_IMPORTED_SUCCESSFULLY .or. self:oModelBJ6:getValue("BJ6_STATUS") == STATUS_BENEF_CANCELED)
+			loop
+		endif
+
+		self:oModelBJ6:setValue("BJ6_CODFAM", cFamilyId)
+		self:oModelBJ6:setValue("BJ6_CPFBEN", cBeneficiaryCpf)
+		self:oModelBJ6:setValue("BJ6_NOMBEN", upper(alltrim(aBeneficiaryData[nFldPosName])))
+		self:oModelBJ6:setValue("BJ6_GRAUPA", alltrim(posicione("BRP", 1, xFilial("BRP") + alltrim(aBeneficiaryData[nFldPosKinship]), "BRP_DESCRI")))
+		self:oModelBJ6:setValue("BJ6_JSNBEN", self:getBeneficiaryData(aBeneficiaryData))
+	next nCount
+
+	if !lError
+		self:oModelBJ5:setValue("BJ5_QTDTOT", self:oModelBJ6:length())
+	endif
+
+	if self:oModelBatch:vldData()
+		self:oModelBatch:commitData()
+		lSuccess := .T.
+	else
+		// "Não foi possível adicionar os beneficiários ao lote. Crítica encontrada: "
+		cErrorMessage := STR0005 + self:oModelBatch:getErrorMessage()[6]	
+	endif
+
+	self:oModelBatch:deActivate()
+
+	fwFreeArray(aBeneficiaryData)
+
+	if !lSuccess
+		self:setImportBatchStatus(STATUS_BATCH_IMPORTED_WITH_ERROR, cErrorMessage)
+	endif
+
+return lSuccess
+
+/*/{Protheus.doc} getBeneficiaryData
+Retorna os dados do beneficiário em formato JSON com base nos campos informados
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 27/05/2025
+@param aBeneficiaryData, array, dados do beneficiário extraídos do arquivo de importação
+@return character, dados do beneficiário em formato JSON
+/*/
+method getBeneficiaryData(aBeneficiaryData as array) as character class ImportBatchFile
+
+	local jBeneficiaryData as json
+	local nCount as numeric
+	local nLenFormFields as numeric
+	local cField as character
+	local cValue as character
+	local cBeneficiaryData as character	
+
+	if len(aBeneficiaryData) == len(self:aFormFields)
+		jBeneficiaryData := JsonObject():new()
+
+		nLenFormFields := len(self:aFormFields)
+		for nCount := 1 to nLenFormFields
+			cField := self:aFormFields[nCount]["property"]
+			cValue := upper(alltrim(aBeneficiaryData[self:aFormFields[nCount]["order"]]))
+		
+			jBeneficiaryData[cField] := cValue
+		next nLenFormFields
+
+		cBeneficiaryData := jBeneficiaryData:toJson()
+
+		freeObj(jBeneficiaryData)
+	endif
+
+return cBeneficiaryData

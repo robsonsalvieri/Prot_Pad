@@ -1,0 +1,301 @@
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+#include "health.plan.unimed.cadbenef.contracts.send.ch"
+
+#define CRLF CHR(13) + CHR(10)
+#define SEND_COMPLETED "1" // Cadastrado com Sucesso 
+#define PENDING_SEND "2" // Pendente de envio
+#define SEND_ERROR "3" // Erro de envio
+#define IN_ANALYSIS "4" // Em análise
+
+#define INCLUSION_TYPE "0" // Inclusão 
+#define UPDATE_TYPE "1" // Encerramento
+
+namespace totvs.protheus.health.plan.unimed
+
+using namespace totvs.protheus.health.plan.api.util
+
+/*/{Protheus.doc} cadBenefSendContracts
+Realiza a comunicação com o servidor do CadBenef para envio do contrato
+@type function
+@version 12.1.2510
+@author giovanna.charlo
+@since 20/03/2025
+@param lShowMessage, logical, exibir mensagem do status do envio
+@return json, objeto com os dados do status do envio
+/*/
+function cadBenefSendContracts(cOperation as character, cAlias as character, cKey as character) as json
+
+    local oCadBenefContract as object
+    local jContractData as json
+    local jStatus as json
+    local aArea := getArea() as array
+
+    jStatus := {"status": "",;
+                "sendMessage": "",;
+                "responseMessage": "",;
+                "showMessage": "",;
+                "transactionCode": "",;
+                "sendDate": "",;
+                "sendTime": "",;
+                "protocolNumber": "",;
+                "responseTime": "";
+               }
+ 
+    (cAlias)->(dbSetOrder(1))
+    if !(cAlias)->(msSeek(xFilial(cAlias) + &(cAlias+"->(" + cKey + ")")))
+        jStatus["status"] := SEND_ERROR
+        jStatus["showMessage"] := STR0005 //"Não foi encontrado nenhum contrato com essa chave."
+        return jStatus
+    else
+        if cAlias == "BA1"
+            BA3->(dbSetOrder(1))
+            if BA3->(msSeek(alltrim(xFilial("BA3") + BA1->(BA1_CODINT+BA1_CODEMP+BA1_MATRIC+BA1_CONEMP+BA1_VERCON+BA1_SUBCON+BA1_VERSUB))))
+                cAlias := "BA3"
+                cKey := BA3->(BA3_CODINT+BA3_CODEMP+BA3_MATRIC+BA3_CONEMP+BA3_VERCON+BA3_SUBCON+BA3_VERSUB)                                                               
+            endif
+        endif
+        jContractData := getContractData(cAlias, cKey)
+        jStatus := contractValidation(jContractData, jStatus)
+
+        if jStatus["status"] == SEND_ERROR
+            return jStatus
+        else    
+
+            oCadBenefContract := CadBenefApiContracts():new(jContractData["healthInsurerCode"])
+            jStatus["transactionCode"] := getNewTransactionCode(jContractData)
+                                                                                        
+            if oCadBenefContract:addContracts(cKey, cOperation, jStatus["transactionCode"], jContractData)
+                jStatus["responseTime"] := time()
+
+                if oCadBenefContract:send()
+                    jStatus["status"] := SEND_COMPLETED            
+                else
+                    jStatus["status"] := SEND_ERROR
+                endif  
+
+                jStatus["responseTime"] := elapTime(jStatus["responseTime"], time())
+            else
+                jStatus["status"] := SEND_ERROR 
+            endif
+
+            jStatus["showMessage"] := oCadBenefContract:getMessage()
+            jStatus["sendMessage"] := oCadBenefContract:getRequest():toJson()
+            jStatus["responseMessage"] := oCadBenefContract:getResponse():toJson()
+            jStatus["transactionCode"] := jStatus["transactionCode"]
+            jStatus["sendDate"] := dDataBase
+            jStatus["sendTime"] := time()    
+
+            if jContractData["sendingOperation"] == "1" .and. !empty(jContractData["protocolNumber"])
+                jStatus["protocolNumber"] := jContractData["protocolNumber"]
+            else
+                jStatus["protocolNumber"] := oCadBenefContract:getProtocolNumber()
+            endif
+      
+            RecLock(cAlias,.F.)
+            &(cAlias+"->"+cAlias+"_STSVC") := jStatus["status"]
+            &(cAlias+"->"+cAlias+"_NPROVC") := jStatus["protocolNumber"]
+            &(cAlias+"->"+cAlias+"_CDTRVC") := jStatus["transactionCode"]
+            &(cAlias+"->"+cAlias+"_MSGRVC")  := jStatus["responseMessage"]
+            &(cAlias+"->( MsUnlock())")
+
+            restArea(aArea)
+            oCadBenefContract:destroy()
+
+            freeObj(jContractData)
+            freeObj(oCadBenefContract)
+            
+        endif
+    endif
+
+return jStatus
+
+/*/{Protheus.doc} sendContracts
+Envia o contrato vinculado ao SubContrato
+@type function
+@version 12.1.2510
+@author giovanna.charlo
+@since 20/03/2025
+/*/
+function sendContracts(cOperation as character, cAlias as character, cKey as character)
+
+    local cAlertMsg := "" as character
+
+    if FWAlertNoYes("Deseja enviar este Contrato para Unimed da Brasil?", "") // "Deseja enviar todos os beneficiários do lote para o CadBenef?"
+
+        jStatus := cadBenefSendContracts(cOperation, cAlias, cKey)
+
+        if empty(jStatus["showMessage"])
+            if jStatus["status"] == SEND_COMPLETED
+                cAlertMsg := STR0006 // "Operação concluída com sucesso, porém a API não retornou detalhes adicionais."
+            else
+                cAlertMsg := STR0007 // "Não foi possível concluir a operação e a API não retornou detalhes sobre o erro."
+            endif
+        else
+            cAlertMsg := jStatus["showMessage"]
+        endif
+
+        do case
+            case jStatus["status"] == SEND_COMPLETED
+                fwAlertSuccess(cAlertMsg, "")
+            otherWise
+                fwAlertError(cAlertMsg, "")
+        endcase
+    endif
+return
+
+/*/{Protheus.doc} getNewTransactionCode
+Obter o proximo código de transação a ser utilizado para comunicar com o validador comercial unimed.
+@type function
+@version 12.1.2510
+@author giovanna.charlo
+@since 20/03/2025
+@param cTransactionCode, character, código de transacao
+@return character, código da transação gerado
+/*/
+static function getNewTransactionCode(jContractData as json) as character
+
+    local cAlias := jContractData["alias"] as character
+    local aArea := (cAlias)->(GetArea()) as array
+    local nSequen := 1 as numeric
+    local cTransactionCode as character
+    local cMonth as character
+    local cYear as character
+
+    if cAlias == "BA3"
+        cMonth := month2Str(&((cAlias)+"->"+ (cAlias + "_DATBAS")))
+        cYear := year2Str(&((cAlias)+"->"+ (cAlias + "_DATBAS")))
+    else
+        cMonth := month2Str(&((cAlias)->(cAlias + "_DATCON")))
+        cYear := year2Str(&((cAlias)->(cAlias + "_DATCON")))
+    endif
+
+    nSequen := getNextBatchSequence(cAlias)
+
+    if cAlias == "BA3"
+        cTransactionCode :=  cYear + cMonth +  &(cAlias+"->("+cAlias+"_CODINT+" + cAlias+"_CODEMP)" )+ strZero(nSequen, 6)
+    else
+        cTransactionCode :=  cYear + cMonth + &((cAlias)->((cAlias + "_CODIGO"))) + strZero(nSequen, 6)
+    endif
+
+    restArea(aArea)
+
+return cTransactionCode
+
+/*/{Protheus.doc} getNextBatchSequence
+Obter o ultimo código sequencial da transação gerado para o VCOM
+@type function
+@version 12.1.2510  
+@author giovanna.charlo
+@since 11/11/2025
+@param cAlias, character, alias da tabela
+@return numeric, sequencial a ser utilizado na transação
+/*/
+static function getNextBatchSequence(cAlias as character) as numeric
+
+    local nSequen := 1 as numeric
+    local cTransactionCode as character
+    local oExecStmt as object
+    local nOrder := 1 as numeric
+    local cQuery as character
+    local cAliasQuery := iif(cAlias == "BA3", "BA3", "BQC") as character
+
+    cQuery := " SELECT MAX(?) CODE "
+	cQuery += " FROM ? " + cAliasQuery
+	cQuery += " WHERE "
+
+    if cAlias == "BA3"
+        cQuery += "  BA3.BA3_FILIAL = ? AND "
+        cQuery += "  BA3.BA3_CODINT = ? AND "
+        cQuery += "  BA3.BA3_CODEMP = ? AND "
+        cQuery += "  BA3.D_E_L_E_T_ = ? "
+    else
+        cQuery += "  BQC.BQC_FILIAL = ? AND "
+        cQuery += "  BQC.BQC_CODIGO = ? AND "
+        cQuery += "  BQC.D_E_L_E_T_ = ? "
+    endif
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+    if cAlias == "BA3"
+	    oExecStmt:setUnsafe(nOrder++, "BA3_CDTRVC")
+	    oExecStmt:setUnsafe(nOrder++, retSqlName("BA3"))
+	    oExecStmt:setString(nOrder++, xFilial("BA3"))
+	    oExecStmt:setString(nOrder++, &((cAlias)+"->"+ (cAlias + "_CODINT")))
+        oExecStmt:setString(nOrder++, &((cAlias)+"->"+ (cAlias + "_CODEMP")))
+	    oExecStmt:setString(nOrder++, " ")
+    else
+        oExecStmt:setUnsafe(nOrder++, "BQC_CDTRVC")
+	    oExecStmt:setUnsafe(nOrder++, retSqlName("BQC"))
+	    oExecStmt:setString(nOrder++, xFilial("BQC"))
+	    oExecStmt:setString(nOrder++, &((cAlias)+"->"+ (cAlias + "_CODIGO")))
+	    oExecStmt:setString(nOrder++, " ")
+    endif
+
+    cTransactionCode := oExecStmt:execScalar("CODE")
+
+    if !empty(cTransactionCode)
+        nSequen := val(substr(cTransactionCode, 15)) + 1
+    endif
+
+    oExecStmt:destroy()
+    freeObj(oExecStmt)
+
+return nSequen
+
+
+/*/{Protheus.doc} getContractData
+Captura os daodos do contrato para envio
+@type function
+@version 12.1.2510
+@author giovanna.charlo
+@since 02/06/2025
+@param cAlias, tabela posicionada
+@param cKey, chave da tabela posicionada
+@return json, dados do contrato
+/*/
+static function getContractData(cAlias as character, cKey as character)
+
+    local jContractData := JsonObject():new() as json
+
+    jContractData["sendContract"] := &((cAlias)+"->"+ (cAlias + "_ENVVC"))
+    jContractData["sendingOperation"] := &((cAlias)+"->"+ (cAlias + "_OPEVC"))
+    jContractData["beneficiaryQuantity"] := &((cAlias)+"->"+ (cAlias + "_QTBVC"))
+    jContractData["agreementFile"] := &((cAlias)+"->"+ (cAlias + "_ACDVC"))
+    jContractData["contractStatus"] := &((cAlias)+"->"+ (cAlias + "_STSVC"))
+    jContractData["protocolNumber"] := &((cAlias)+"->"+ (cAlias + "_NPROVC"))
+    jContractData["healthInsurerCode"] := &((cAlias)+"->"+ (cAlias + "_CODINT"))
+    jContractData["alias"] := cAlias
+    jContractData["key"] := cKey
+
+return jContractData
+
+/*/{Protheus.doc} contractValidation
+Chamada da base de conhecimento para abertura do anexo
+@type function
+@version 12.1.2510
+@author giovanna.charlo
+@since 02/05/2025
+@param cAlias, tabela da rotina sendo utilizada
+@param cSearchKey, chave de busca para gravação do arquivo
+@return logical, situação do retorno
+/*/
+static function contractValidation(jContractData as json, jStatus as json)
+
+    if jContractData["contractStatus"] == SEND_COMPLETED .and. !empty(jContractData["protocolNumber"])
+
+        if jContractData["sendingOperation"] == INCLUSION_TYPE
+            jStatus["status"] := SEND_ERROR
+            jStatus["showMessage"] := STR0001 // "O contrato já enviado no VCOM."
+        endif
+    else
+        if jContractData["sendContract"] == "1"
+            do case
+                case jContractData["sendingOperation"] == "1" .and. empty(jContractData["protocolNumber"])
+                    jStatus["status"] := SEND_ERROR 
+                    jStatus["showMessage"] := STR0003 //"Não é possível realizar o encerramento, pois esse contrato não foi cadastrado!"
+            endcase
+        endif
+    endif
+
+return jStatus

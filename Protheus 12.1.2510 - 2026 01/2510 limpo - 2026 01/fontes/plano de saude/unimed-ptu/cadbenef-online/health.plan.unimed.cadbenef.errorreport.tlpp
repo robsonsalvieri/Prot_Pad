@@ -1,0 +1,245 @@
+#include "tlpp-core.th"
+#include "health.plan.unimed.cadbenef.errorreport.ch"
+
+#define PENDING_SEND "1" // Pendente de envio
+#define SEND_COMPLETED "2" // Envio finalizado
+#define SEND_ERROR "3" // Erro de envio
+
+namespace totvs.protheus.health.plan.unimed
+
+/*/{Protheus.doc} cadBenefErrorsReport
+Impressão do relatório (TReport) dos erros do lote posicionado.
+@type function
+@version 12.1.2410 
+@author vinicius.queiros
+@since 21/05/2024
+/*/
+function cadBenefErrorsReport()
+
+    local oReport as object
+
+    if getTotalBeneficiariesByStatusCadBenef(BPW->BPW_CODIGO, SEND_ERROR) > 0
+        oReport := reportDef()
+        oReport:printDialog()
+        
+        freeObj(oReport)
+    else
+        fwAlertWarning(STR0001, "") // "Nenhum beneficiário foi encontrado com erro de envio."
+    endif
+
+return
+
+/*/{Protheus.doc} reportDef
+Estrutura padrão do relatório
+@type function
+@version 12.1.2410 
+@author vinicius.queiros
+@since 21/05/2024
+@return object, objeto da instância da classe TReport
+/*/
+static function reportDef() as object
+
+    local oReport as object
+    local oSection1 as object
+    local cTitle := STR0002 as character // "Lista de Erros do Lote (CadBenef)"
+    local nSizeSubscriberId as numeric
+
+    nSizeSubscriberId := tamSX3("BPY_CODINT")[1] + tamSX3("BPY_CODEMP")[1] + tamSX3("BPY_MATRIC")[1] + tamSX3("BPY_TIPREG")[1] + tamSX3("BPY_DIGITO")[1]
+
+    oReport := TReport():new("CADBENEF-ERROS", cTitle, nil, {|oReport| printReport(oReport)})
+    oReport:setDevice(4) // Planilha
+    oReport:setLandscape()
+
+    oSection1 := TRSection():new(oReport, "errorMessages")
+
+    TRCell():new(oSection1, "LOTE", nil, STR0003, "", tamSX3("BPY_CODLOT")[1]) // "Lote"
+    TRCell():new(oSection1, "CARTEIRINHA", nil, STR0004, "", nSizeSubscriberId) // "Carteirinha"
+    TRCell():new(oSection1, "NOME", nil, STR0005, "", 50) // "Nome"
+    TRCell():new(oSection1, "TRANSACAO", nil, STR0006, "", tamSX3("BPY_CODTRA")[1]) // "Cd. Transac."
+    TRCell():new(oSection1, "SEQ", nil, STR0007, "", 6) // "Seq."
+    TRCell():new(oSection1, "CODIGO", nil, STR0008, "", 7) // "Código"
+    TRCell():new(oSection1, "MENSAGEM", nil, STR0009, "", 110) // "Mensagem"
+    
+return oReport
+
+/*/{Protheus.doc} printReport
+Impressão dos dados do relatório
+@type function
+@version 12.1.2410  
+@author vinicius.queiros
+@since 21/05/2024
+@param oReport, object, objeto TReport
+/*/
+static function printReport(oReport as object)
+
+    local oSection1 := oReport:section(1) as object
+    local oStatement as object
+    local cAlias as character
+    local aListErrors as array
+    local nCount as numeric
+    local aFields as array
+    local aPDFields as array
+    local lObfuscated as logical
+    local jObfuscated := JsonObject():new()
+    local cBeneficiaryName as character
+    local cSubscriberId as character
+
+    aFields := {"BPY_NOMBEN"}
+
+    oStatement = loadStatement()
+    cAlias := oStatement:openAlias()
+
+    if !(cAlias)->(eof())
+        BPY->(dbSetOrder(1))
+
+        aPDFields := FwProtectedDataUtil():usrAccessPDField(__cUserID, aFields)
+        lObfuscated := len(aPDFields) <> len(aFields)
+
+        jObfuscated["BPY_NOMBEN"] := lObfuscated .and. aScan(aPDFields, "BPY_NOMBEN") == 0
+
+        while !(cAlias)->(eof())
+            cSubscriberId := (cAlias)->(BPY_CODINT + BPY_CODEMP + BPY_MATRIC + BPY_TIPREG + BPY_DIGITO)
+            
+            if BPY->(msSeek(xFilial("BPY") + (cAlias)->BPY_CODLOT + cSubscriberId))
+                aListErrors := getListErrors(BPY->BPY_MSGRES)
+
+                if len(aListErrors) > 0
+                    for nCount := 1 to len(aListErrors)
+                        cBeneficiaryName := alltrim(posicione("BA1", 2, xFilial("BA1") + cSubscriberId, "BA1_NOMUSR"))
+
+                        oSection1:init()
+
+                        oSection1:cell("LOTE"):setValue(BPY->BPY_CODLOT)
+                        oSection1:cell("CARTEIRINHA"):setValue(cSubscriberId)
+                        
+                        oSection1:cell("NOME"):setValue(iif(jObfuscated["BPY_NOMBEN"],;
+                                                            FwProtectedDataUtil():valueAsteriskToAnonymize(cBeneficiaryName),;
+                                                            cBeneficiaryName))
+            
+                        oSection1:cell("TRANSACAO"):setValue(BPY->BPY_CODTRA)
+                        oSection1:cell("SEQ"):setValue(aListErrors[nCount]["sequential"])
+                        oSection1:cell("CODIGO"):setValue(aListErrors[nCount]["code"])
+                        oSection1:cell("MENSAGEM"):setValue(aListErrors[nCount]["message"])
+                        
+                        oSection1:printLine()
+                    next nCount
+                endif
+            endif
+
+            (cAlias)->(dbSkip())
+        endDo
+
+        oSection1:finish()
+    endif
+
+    (cAlias)->(dbCloseArea())
+
+    freeObj(oStatement)
+    fwFreeArray(aFields)
+    fwFreeArray(aPDFields)
+
+return
+
+/*/{Protheus.doc} loadStatement
+Consulta a banco para obter os dados do relatório
+@type function
+@version 12.1.2410  
+@author vinicius.queiros
+@since 21/05/2024
+@return object, objeto da instância da classe FwExecStatement
+/*/
+static function loadStatement() as object
+
+    local oStatement as object
+    local cQuery as character
+    local nOrder := 1 as numeric
+
+    cQuery := "SELECT ? "
+	cQuery += " FROM ? BPY "
+    cQuery += " WHERE BPY.BPY_FILIAL = ? AND "
+    cQuery += " 	  BPY.BPY_CODLOT = ? AND "
+    cQuery += " 	  BPY.BPY_STATUS = ? AND "
+	cQuery += " 	  BPY.D_E_L_E_T_ = ? "
+
+	oStatement := FWExecStatement():new(cQuery)
+
+    oStatement:setUnsafe(nOrder++, "BPY.BPY_CODLOT, BPY.BPY_CODINT, BPY.BPY_CODEMP, BPY.BPY_MATRIC, BPY.BPY_TIPREG, BPY.BPY_DIGITO")
+	oStatement:setUnsafe(nOrder++, retSqlName("BPY"))
+    oStatement:setString(nOrder++, xFilial("BPY"))
+    oStatement:setString(nOrder++, BPW->BPW_CODIGO)
+    oStatement:setUnsafe(nOrder++, SEND_ERROR)
+    oStatement:setString(nOrder++, " ")
+
+return oStatement
+
+/*/{Protheus.doc} getListErrors
+Obter a lista de erros de acordo com o json de resposta do CadBenef
+@type function
+@version 12.1.2410 
+@author vinicius.queiros
+@since 21/05/2024
+@param cResponseData, character, json de resposta com os erros de comunicação.
+@return array, lista de erros para impressão
+/*/
+static function getListErrors(cResponseData as character) as array
+
+    local aListErrors := {} as array
+    local jItem as json
+    local oErrorData := JsonObject():new() as object
+    local cRet as character
+    local nSequential := 1 as numeric
+    local nCount as numeric
+
+    cRet := oErrorData:fromJson(cResponseData)
+
+    if valType(cRet) == "U"
+        do case
+            case oErrorData:hasProperty("details") .and. valType(oErrorData["details"]) == "A"
+                for nCount := 1 to len(oErrorData["details"])
+                    jItem := JsonObject():new()
+
+                    jItem["sequential"] := strZero(nSequential++, 3)
+                    jItem["code"] := oErrorData["details"][nCount]["code"]
+                    jItem["message"] := oErrorData["details"][nCount]["message"]
+
+                    aAdd(aListErrors, jItem)
+                next nCount
+            
+            case oErrorData:hasProperty("code") .and. oErrorData:hasProperty("message") .and. oErrorData:hasProperty("detailedMessage")
+                jItem := JsonObject():new()
+
+                jItem["sequential"] := strZero(nSequential++, 3)
+                jItem["code"] := oErrorData["code"]
+                jItem["message"] := oErrorData["message"]
+
+                aAdd(aListErrors, jItem)
+            
+            case oErrorData:hasProperty("errors") .and. valType(oErrorData["errors"]) == "A"
+                for nCount := 1 to len(oErrorData["errors"])
+                    jItem := JsonObject():new()
+
+                    jItem["sequential"] := strZero(nSequential++, 3)
+                    jItem["code"] := cValToChar(oErrorData["status"])
+                    jItem["message"] := decodeUtf8(oErrorData["errors"][nCount]["message"])
+
+                    aAdd(aListErrors, jItem)
+                next nCount
+            
+            case oErrorData:hasProperty("dadosBeneficiario") .and. oErrorData["dadosBeneficiario"]:hasProperty("statusProcessamento") .and.;
+                 valType(oErrorData["dadosBeneficiario"]["statusProcessamento"]) == "A"
+                
+                for nCount := 1 to len(oErrorData["dadosBeneficiario"]["statusProcessamento"])
+                    if oErrorData["dadosBeneficiario"]["statusProcessamento"][nCount]["status"] == "E"
+                        jItem := JsonObject():new()
+
+                        jItem["sequential"] := strZero(nSequential++, 3)
+                        jItem["code"] := oErrorData["dadosBeneficiario"]["statusProcessamento"][nCount]["codigoMensagem"]
+                        jItem["message"] := decodeUtf8(oErrorData["dadosBeneficiario"]["statusProcessamento"][nCount]["descricaoMensagem"])
+
+                        aAdd(aListErrors, jItem)
+                    endif
+                next nCount
+        endcase
+    endif
+
+return aListErrors
