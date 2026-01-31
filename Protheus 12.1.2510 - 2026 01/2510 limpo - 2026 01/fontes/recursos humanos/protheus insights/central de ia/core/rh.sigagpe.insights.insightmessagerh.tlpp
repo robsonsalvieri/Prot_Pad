@@ -1,0 +1,337 @@
+#Include "tlpp-core.th"
+#include 'totvs.ch'
+#include "rh.sigagpe.insights.insightmessagerh.ch"
+
+NAMESPACE totvs.protheus.rh.sigagpe.insights
+
+Static aSM0 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh
+Classe de inserção da mensagem - Auditoria de Folha de Pagamento
+
+@author	Bruno Costa
+@since	20/10/2025
+-------------------------------------------------------------------*/
+Class InsightMessageRh
+    
+    Public Data oJsBody As Json
+
+    Public Method New() Constructor
+    Public Method getError()
+    Public Method InsertMessageRh() as logical
+    Public Method fFormatCNPJ() as character
+    Private Method getFilial() as character
+    Private Method getFuncionario() as logical
+    Private Method ValidRegra() as character 
+    Private Method InputRules()
+
+EndClass
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::New
+Construtor da classe {Protheus.doc} InsightMessageRh::New
+
+@return	Self, objeto do tipo {Protheus.doc} InsightMessageRh::New
+@author	Bruno Costa
+@since	20/10/2025
+-------------------------------------------------------------------*/
+Method New() Class InsightMessageRh
+Return Self
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::InsertMessageRh
+Método responsável pela inserção da mensagem na tabela RUI
+
+@return	logical
+@author	Bruno Costa
+@since	20/10/2025
+-------------------------------------------------------------------*/
+Method InsertMessageRh() as logical Class InsightMessageRh
+    
+    Local aArea                := GetArea() as array
+    Local cCodMsn              as character
+    Local cChave               as character
+    Local cCodFil              as character
+    Local cNrInscOld           as character
+    Local cNrInsc              as character
+    Local cMes                 as character
+    Local cEnvepole            as character
+    Local cTimeStamp           as character
+    Local lRet                 as logical
+    Local nI                   as numeric
+    Local nRecno               as numeric
+    Local lSolved              as logical
+
+    lSolved := .F.
+
+    If Valtype(::oJsBody["content"]) == "A"
+        dbSelectArea("RUI")
+        RUI->(dbSetOrder(1)) //RUI_FILIAL+RUI_MAT+RUI_COMPET+RUI_PD+RUI_IDREGR
+
+        BEGIN TRANSACTION
+            For nI := 1 To Len(::oJsBody["content"])
+                //cCodMsn := self:ValidRegra(decodeUtf8(::oJsBody["content"][nI]["exceptionDescription"]))
+                cCodMsn := self:ValidRegra(::oJsBody["content"][nI]["exceptionClass"])
+                cNrInsc := self:fFormatCNPJ(::oJsBody["content"][nI]["employerTaxCode"])
+
+                If cNrInscOld != cNrInsc 
+                    cCodFil    := self:getFilial(cNrInsc, cCodFil)
+                    cNrInscOld := cNrInsc
+                EndIF
+
+                If !Empty(cCodFil) 
+                    lRet := self:getFuncionario(cCodFil, ::oJsBody["content"][nI]["employeeRegistration"]) 
+                EndIf 
+
+                If lRet .And. !Empty(cCodFil) 
+
+                    If ::oJsBody["content"][nI]["periodMonth"] <= 9
+                        cMes := '0' + cValToChar(::oJsBody["content"][nI]["periodMonth"]) 
+                    Else
+                        cMes := cValToChar(::oJsBody["content"][nI]["periodMonth"]) 
+                    EndIf 
+
+                    cChave := ::oJsBody["content"][nI]["employeeRegistration"] + cMes + cValToChar(::oJsBody["content"][nI]["periodYear"]) + ::oJsBody["content"][nI]["rubricCode"] + cCodMsn
+                    
+                    If !RUI->(MsSeek(cCodFil + cChave))
+
+                        cTimeStamp := AllTrim(::oJsBody["content"][nI]["computedAt"])
+
+                        RUI->(RecLock("RUI", .T.))
+                        RUI->RUI_FILIAL := cCodFil
+                        RUI->RUI_MAT    := ::oJsBody["content"][nI]["employeeRegistration"] 
+                        RUI->RUI_CPF    := SRA->RA_CIC
+                        RUI->RUI_NRINSC := ::oJsBody["content"][nI]["employerTaxCode"] 
+                        RUI->RUI_COMPET := cMes + cValToChar(::oJsBody["content"][nI]["periodYear"])
+                        RUI->RUI_CODPER := ::oJsBody["content"][nI]["periodCode"]
+                        RUI->RUI_PD     := ::oJsBody["content"][nI]["rubricCode"]
+                        
+                        cEnvepole := ""
+                        If !Empty(::oJsBody["content"][nI]["periodLabel"])
+                            cEnvepole := Upper(SubStr(AllTrim(::oJsBody["content"][nI]["periodLabel"]),1,3))
+                            cEnvepole := IIf(Substr(cEnvepole,1,2) == "13","13",cEnvepole)
+                        EndIf 
+
+                        RUI->RUI_ROTEIR := cEnvepole
+                        RUI->RUI_PREDIC := ::oJsBody["content"][nI]["exception"]
+                        RUI->RUI_IDREGR := cCodMsn
+                        RUI->RUI_STAMP  := Substr(cTimeStamp,1,10) + " " + Substr(cTimeStamp,12,8)
+                        RUI->RUI_UIDMSG := ::oJsBody["content"][nI]["mdmid"]
+                        RUI->RUI_PRODUT := ::oJsBody["product"]
+                        RUI->RUI_TENANT := ::oJsBody["tenantId"]
+                        RUI->RUI_INSIGT := ::oJsBody["messageType"]
+                        RUI->RUI_FEEDBK := "0" 
+                        RUI->RUI_TIPO   := "0" 
+                        RUI->RUI_MSGRET := decodeUtf8(::oJsBody["content"][nI]["exceptionDescription"])
+                        RUI->(MsUnlock())
+
+                    Else    
+                        //LOGICA DO HISTORICO
+                        nRecno := RUI->(Recno())
+
+                        If nRecno > 0 .And. (RUI->RUI_PREDIC != ::oJsBody["content"][nI]["exception"])
+
+                            RUI->( DBGoTo(nRecno))
+                            dbSelectArea("RUU")
+                            RUU->(RecLock("RUU", .T.))
+                                RUU->RUU_FILIAL :=  RUI->RUI_FILIAL 
+                                RUU->RUU_MAT    :=  RUI->RUI_MAT      
+                                RUU->RUU_CPF    :=  RUI->RUI_CPF    
+                                RUU->RUU_NRINSC :=  RUI->RUI_NRINSC 
+                                RUU->RUU_COMPET :=  RUI->RUI_COMPET 
+                                RUU->RUU_CODPER :=  RUI->RUI_CODPER 
+                                RUU->RUU_PD     :=  RUI->RUI_PD     
+                                RUU->RUU_ROTEIR :=  RUI->RUI_ROTEIR 
+                                RUU->RUU_PREDIC :=  RUI->RUI_PREDIC 
+                                RUU->RUU_IDREGR :=  RUI->RUI_IDREGR 
+                                RUU->RUU_STAMP  :=  RUI->RUI_STAMP  
+                                RUU->RUU_UIDMSG :=  RUI->RUI_UIDMSG 
+                                RUU->RUU_PRODUT :=  RUI->RUI_PRODUT 
+                                RUU->RUU_TENANT :=  RUI->RUI_TENANT 
+                                RUU->RUU_INSIGT :=  RUI->RUI_INSIGT 
+                                RUU->RUU_MSGRET :=  RUI->RUI_MSGRET
+
+                                If RUI->RUI_PREDIC == .T. .and. ::oJsBody["content"][nI]["exception"] == .F.
+                                    RUU->RUU_TIPO :=  '1' // resolvido via sistema
+
+                                    lSolved := .T.
+                                Else
+                                    RUU->RUU_TIPO := ''
+                                EndIf 
+                              
+                                RUU->RUU_STHIST := StrZero(Year(Date()),4)+"-"+StrZero(Month(Date()),2)+"-"+StrZero(Day(Date()),2)+" "+SubStr(Time(),1,8)
+
+                            RUU->(MsUnlock())
+                        EndIf 
+
+                        RUI->(RecLock("RUI", .F.))
+                        RUI->RUI_STAMP  := ::oJsBody["content"][nI]["computedAt"]
+                        RUI->RUI_UIDMSG := ::oJsBody["id"]
+                        RUI->RUI_PRODUT := ::oJsBody["prooduct"]
+                        RUI->RUI_PREDIC := ::oJsBody["content"][nI]["exception"] // testar
+                        RUI->RUI_TENANT := ::oJsBody["tenantId"]
+                        RUI->RUI_INSIGT := ::oJsBody["messageType"]
+                        If lSolved
+                            RUI->RUI_TIPO := '1'
+                        EndIf 
+                        RUI->(MsUnlock())
+                        
+                    EndIf 
+
+                EndIf
+            Next nI
+        END TRANSACTION
+
+        RUI->(DBCloseArea())
+        RestArea(aArea)
+
+    EndIf
+
+Return lRet
+
+Method InputRules(cId) Class InsightMessageRh
+
+    Local cDescRegra as character
+    Local cIdRUP     as character
+
+    Do CASE
+        Case cId == "001"
+            cDescRegra := "Evento duplicado"
+        Case cId == "002"
+            cDescRegra := "Desconto/Provento indevido"
+        Case cId == "003"
+            cDescRegra := "Valor fora do padrão histórico"
+        Case cId == "004"
+            cDescRegra := "Ausência de pagamento/descontos"
+    End Case
+    
+    dbSelectArea("RUP")
+    RUP->(dbSetOrder(2)) //RUP_FILIAL+RUP_DESCRI
+    If RecLock("RUP", .T.)
+        RUP->RUP_FILIAL := xFilial("RUP")
+        RUP->RUP_ID     := GETSX8NUM("RUP", "RUP_ID")
+        RUP->RUP_CODIGO := cId
+        RUP->RUP_DESCRI := AllTrim(cDescRegra)
+        cIdRUP := RUP->RUP_ID
+        RUP->(MsUnlock())
+        ConfirmSx8()
+    EndIf 
+
+Return cIdRUP
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::ValidRegra
+Método responsável pela inserção/busca da regra na tabela RUP
+
+@param	cDescRegra character
+@return	character
+@author	Bruno Costa
+@since	20/10/2025
+-------------------------------------------------------------------*/
+Method ValidRegra(cCodigo as character) as character Class InsightMessageRh
+
+    Local cId as character
+
+
+    dbSelectArea("RUP")
+    //RUP->(dbSetOrder(2)) //RUP_FILIAL+RUP_DESCRI
+    RUP->(dbSetOrder(3)) // RUP_FILIAL+RUP_CODIGO
+    
+    If RUP->(MsSeek(xFilial("RUP") + AllTrim(cCodigo)))
+        cId := AllTrim(RUP->RUP_ID)
+    Else
+        cId := self:InputRules(cCodigo)
+    EndIf 
+
+Return cId
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::getFilial
+Método responsável pela busca da filial enviada no content da mensagem
+
+@param	cNrInsc character, cCodFil character
+@return	logical
+@author	Bruno Costa
+@since	20/10/2025
+-------------------------------------------------------------------*/
+method getFilial(cNrInsc as character, cCodFil as character) as character class InsightMessageRh
+
+    local nPos as numeric
+
+    DEFAULT aSM0 := FwLoadSM0()
+
+    dbSelectArea("SRA")
+    SRA->(dbSetOrder(1)) //RA_FILIAL+RA_MAT
+
+    If (nPos := aScan(aSM0, {|x| x[18] == cNrInsc})) > 0
+       cCodFil := aSM0[nPos][SM0_CODFIL]
+    EndIf
+
+return cCodFil
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::getFuncionario
+Método responsável pela busca do funcionário enviado no content da mensagem
+
+@param	cCodfil character, cMat character
+@return	logical
+@author	Bruno Costa
+@since	30/10/2025
+-------------------------------------------------------------------*/
+method getFuncionario(cCodFil as character, cMat as character) as logical class InsightMessageRh
+
+    dbSelectArea("SRA")
+    SRA->(dbSetOrder(1)) //RA_FILIAL+RA_MAT
+
+return SRA->(MsSeek(cCodFil + cMat))
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::fFormatCNPJ
+Método responsável pela formatação do CNPJ
+
+@param	cJsCnpj character
+@return	character
+@Version 1
+@author	Bruno Costa
+@since	20/10/2025
+@Version 2
+@author	lucas.passos @since	15/11/2025
+-------------------------------------------------------------------*/
+method fFormatCNPJ(cJsCnpj as character) as character class InsightMessageRh
+
+    Local cFormatCnpj	:= ""
+
+	cFormatCnpj := StrTran(cJsCnpj, ".", "")
+	cFormatCnpj := StrTran(cFormatCnpj, "/", "")
+	cFormatCnpj := StrTran(cFormatCnpj, "-", "")
+
+return cFormatCnpj
+
+/*-------------------------------------------------------------------
+{Protheus.doc} InsightMessageRh::getError
+Método responsável pela geração de erros personalizados
+
+@param	nCode numeric, cTitle character, aDescription array
+@author	Bruno Costa
+@since	20/10/2025
+-------------------------------------------------------------------*/
+method getError(nCode as numeric, cTitle as character, aDescription as array) class InsightMessageRh
+	
+    Public oException as object
+
+	Default nCode := -1
+	Default cTitle := ""
+	Default aDescription := {}
+
+	oException         := ErrorClass():New()
+	oException:genCode := nCode
+
+	If Len(aDescription) > 1
+		oException:description := cTitle + ": " + I18N(aDescription[1], aDescription[2])   
+	Else
+		oException:description := cTitle + ": " + aDescription[1]
+	EndIf
+	Throw oException
+
+Return 
