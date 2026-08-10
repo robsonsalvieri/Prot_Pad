@@ -1,0 +1,64 @@
+-- Procedure creation 
+CREATE PROCEDURE PCOA300_4 (
+    @IN_FILIAL Char( 'AKG_FILIAL' ) , 
+    @IN_CONFIG Char( 'AKT_CONFIG' ) , 
+    @IN_DATAI Char( 'AK2_DATAI' ) , 
+    @IN_DATAF Char( 'AK2_DATAI' ) , 
+    @IN_FK Char( 'AK1_TPPERI' ) , 
+    @OUT_RESULT Char( 'AK1_TPPERI' )  output ) AS
+ 
+-- Declaration of variables
+DECLARE @cAux Char( 'AK0_VERSAO' )
+DECLARE @cFil_AKD Char( 'AKG_FILIAL' )
+DECLARE @cFil_ALA Char( 'AKG_FILIAL' )
+DECLARE @cFilial Char( 'AKG_FILIAL' )
+DECLARE @cFilAnt Char( 'AKG_FILIAL' )
+DECLARE @cAKD_TIPO Char( 'AKD_TIPO' )
+DECLARE @cAKD_DATA Char( 'AK2_DATAI' )
+DECLARE @cDataAnt Char( 'AK2_DATAI' )
+DECLARE @cAKD_CO Char( 'AKD_CO' )
+DECLARE @cAKD_COAnt Char( 'AKD_CO' )
+DECLARE @cAKD_CLASSE Char( 'AKD_CLVLR' )
+DECLARE @cAKD_CLASSEAnt Char( 'AKD_CLVLR' )
+DECLARE @cAKD_CC Char( 'AKD_CC' )
+DECLARE @cAKD_CCAnt Char( 'AKD_CC' )
+DECLARE @cAKD_UNIORC Char( 'AKD_UNIORC' )
+DECLARE @cAKD_UNIORCAnt Char( 'AKD_UNIORC' )
+DECLARE @cAKD_TPSALD Char( 'AKD_TPSALD' )
+DECLARE @cAKD_TPSALDAnt Char( 'AKD_TPSALD' )
+DECLARE @nAKD_VALOR1 Float
+DECLARE @nAKD_VALOR2 Float
+DECLARE @nAKD_VALOR3 Float
+DECLARE @nAKD_VALOR4 Float
+DECLARE @nAKD_VALOR5 Float
+DECLARE @nTotDEB1 Float
+DECLARE @nTotDEB2 Float
+DECLARE @nTotDEB3 Float
+DECLARE @nTotDEB4 Float
+DECLARE @nTotDEB5 Float
+DECLARE @nTotCRD1 Float
+DECLARE @nTotCRD2 Float
+DECLARE @nTotCRD3 Float
+DECLARE @nTotCRD4 Float
+DECLARE @nTotCRD5 Float
+DECLARE @nValorD1 Float
+DECLARE @nValorD2 Float
+DECLARE @nValorD3 Float
+DECLARE @nValorD4 Float
+DECLARE @nValorD5 Float
+DECLARE @nValorC1 Float
+DECLARE @nValorC2 Float
+DECLARE @nValorC3 Float
+DECLARE @nValorC4 Float
+DECLARE @nValorC5 Float
+DECLARE @cDataDiario VarChar( 'AK2_DATAI' )
+DECLARE @cChaveAKT Char( 'AKT_CHAVE' )
+DECLARE @cChaveR Char( 'AKT_CHAVE' )
+DECLARE @cChave Char( 'AKT_CHAVE' )
+DECLARE @cChave1 Char( 'AKT_CHAVE' )
+DECLARE @lAtuAKT Char( 'AK1_TPPERI' )
+DECLARE @lAtlAKT Char( 'AK1_TPPERI' )
+DECLARE @lPrim Char( 'AK1_TPPERI' )
+BEGIN
+   SELECT @OUT_RESULT  = '0' 
+END 

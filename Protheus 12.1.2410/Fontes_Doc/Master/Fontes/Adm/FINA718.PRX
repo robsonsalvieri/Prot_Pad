@@ -1,0 +1,401 @@
+#INCLUDE "TOTVS.ch"
+#INCLUDE "PROTHEUS.ch"
+#Include "FWLIBVERSION.CH"
+
+Static __oF79Cod As Object
+Static __lExecSt := NIL
+Static __cHora := ""
+Static __cDate := ""
+
+/*/{Protheus.doc} FINA718
+    Job para consulta do estado do titulo no banco e baixa no Protheus
+    @type function
+    @version 1.0
+    @author Vitor Duca
+    @since 01/01/2023
+/*/
+Function FINA718()
+    Local cLockName As Character
+    cLockName := cEmpAnt + ' - FINA718'
+    If F718VldUso()
+        If LockByName(cLockName, .T./*lEmpresa*/, .F./*lFilial*/ ) // uma execução por vez
+            F718Processa()      // Consulta status
+            UnLockByName(cLockName, .T./*lEmpresa*/, .F./*lFilial*/ )
+        EndIf
+    EndIf
+Return
+
+/*/{Protheus.doc} F718Processa
+    Processa os titulos a pagar registrados no banco, para realizar a baixa no ERP
+    @type  Function
+    @author Vitor Duca
+    @since 17/01/2023
+    @version 1.0
+/*/
+Function F718Processa(aRecnos As Array, lAutomato As Logical, jRespMock As Json)
+    Local cBolAlias  As Character
+    Local cApiMsg    As Character
+    Local cApiLog    As Character
+    Local oLayout    As Object
+    Local oBills     As Object
+    Local cBancoAtu  As Character
+    Local lRet       As Logical
+    Local oError     As Object
+    Local jBaixou    As Json
+    Local jApiMsg    As Json
+
+    DEFAULT aRecnos := {}
+    DEFAULT lAutomato := .F.
+    DEFAULT jRespMock := JsonObject():new()
+
+    DbSelectArea('SA6')
+	DbSetOrder(1)   // A6_FILIAL, A6_COD, A6_AGENCIA, A6_NUMCON, R_E_C_N_O_, D_E_L_E_T_
+    DbSelectArea('SEA')
+	DbSetOrder(2)   //EA_FILIAL, EA_NUMBOR, EA_CART, EA_PREFIXO, EA_NUM, EA_PARCELA, EA_TIPO, EA_FORNECE, EA_LOJA, R_E_C_N_O_, D_E_L_E_T_
+	DbSelectArea('SE2')
+	DbSetOrder(1)   // E2_FILIAL, E2_PREFIXO, E2_NUM, E2_PARCELA, E2_TIPO, R_E_C_N_O_, D_E_L_E_T_
+    DbSelectArea('F79')
+	DbSetOrder(2) //F79_FILIAL, F79_DTPROC, F79_HRPROC, F79_BANCO, F79_AGENCI, F79_CONTA, R_E_C_N_O_, D_E_L_E_T_
+
+    cBancoAtu := ""
+
+    cBolAlias := MpSysOpenQuery(F718QryRet(aRecnos))
+    (cBolAlias)->(DbGoTop())
+    oBills  := totvs.protheus.backoffice.ngf.bills.payments.payments():new()
+    oBills:setAutomato(lAutomato, jRespMock) //Configura a classe para automação caso necessario
+
+    If (cBolAlias)->(EOF())
+        FwLogMsg('INFO',, "FINA718", "FINA718", "", "TITULOS", "Não foram encontrados títulos para baixa" )
+    Endif
+
+    While (cBolAlias)->(!EOF())
+        oError := ErrorBlock( { |e| F718Err(e, 'baixaPagar', @cApiMsg, @lRet) } )
+
+        lRet        := .T.
+        Begin Sequence
+            cApiMsg     := ""
+            cApiLog     := ""
+            cResult     := ''
+            cStatus     := 'S'
+            jBaixou     := JsonObject():new()
+            jApiMsg     := JsonObject():new()
+
+            SA6->(DbGoto((cBolAlias)->RECNOSA6))
+            SEA->(DbGoto((cBolAlias)->RECNOSEA))
+            SE2->(DbGoto((cBolAlias)->RECNOSE2))
+
+            //Posiciona no banco somente se for diferente na SEA que esta sendo percorrida
+            If cBancoAtu <> SA6->(A6_FILIAL+A6_COD+A6_AGENCIA+A6_NUMCON)
+                cBancoAtu := SA6->(A6_FILIAL+A6_COD+A6_AGENCIA+A6_NUMCON)
+                oLayout     := JsonObject():new()
+                If !Empty(oLayout:FromJson(SA6->A6_CFGBOLP))
+                    cApiLog  := "Problema na configuração do layout na conta (A6_CFGBOLP)."
+                    lRet := .F.
+                else
+                    If oLayout:Hasproperty('credentials') .And. !oBills:setCredentials(oLayout['credentials']:ToJSON(), SA6->A6_BCOOFI)
+                        lRet := .F.
+                        cApiMsg := 'Não foi possível obter as credenciais do layout.' + SA6->A6_FILIAL +"|"+ SA6->A6_COD +"|"+ SA6->A6_AGENCIA +"|"+ SA6->A6_NUMCON //"Não foi possíver obter as credenciais do layout. "
+                        FwLogMsg('ERROR',, "FINA718", "FINA718", "", "CREDENTIALS", cApiMsg )
+                    EndIf
+                Endif
+
+                __cHora := Time()
+                __cDate := Dtos(dDataBase)
+            Endif
+
+            If lRet
+                CreateF79()
+                jBaixou:FromJson(oBills:writeOff(oLayout["retornoBancario"]:toJSON()))
+
+                If jBaixou:hasProperty("gravaf79") .and. jBaixou["gravaf79"]
+                
+                    RecLock("F79", .F.)
+                        F79->F79_QTDTIT := cValToChar(Val(F79->F79_QTDTIT) + 1)
+                        F79->F79_QTPROC := F79->F79_QTDTIT
+
+                        If jBaixou:hasProperty("baixa") .and. !jBaixou["baixa"]
+                            F79->F79_NBAIXA := cValToChar(Val(F79->F79_NBAIXA) + 1)
+                        Endif
+                    F79->(MsUnlock())
+
+                    //Atualiza EA_APIMSG apenas se conseguiu baixar o titulo, pois no caso dos agendados
+                    //precisamos atualizar o estadoPagamento para que o titulo apareça na aba Efetivados
+                    If jBaixou:hasProperty("baixa") .and. jBaixou["baixa"]
+                        jApiMsg["bank"]    := SA6->A6_BCOOFI
+                        jApiMsg["log"]     := oBills:getResult()
+
+                        // Atualiza a SEA
+                        RecLock('SEA', .F.)
+                            SEA->EA_APIMSG  := jApiMsg:ToJSON()
+                        SEA->(MsUnlock())
+                    Endif
+                Endif
+            EndIf
+
+        Recover
+            CreateF79()
+
+            RecLock("F79", .F.)
+                F79->F79_QTDTIT := cValToChar(Val(F79->F79_QTDTIT) + 1)
+                F79->F79_QTPROC := F79->F79_QTDTIT
+                F79->F79_NBAIXA := cValToChar(Val(F79->F79_NBAIXA) + 1)
+            F79->(MsUnlock())
+
+            RecLock('F7A', .T.)
+                F7A->F7A_FILIAL := F79->F79_FILIAL
+                F7A->F7A_CODIGO := F79->F79_CODIGO
+                F7A->F7A_PREFIX := SE2->E2_PREFIXO
+                F7A->F7A_NUMERO := SE2->E2_NUM
+                F7A->F7A_PARCEL := SE2->E2_PARCELA
+                F7A->F7A_TIPO   := SE2->E2_TIPO
+                F7A->F7A_FORNEC := SE2->E2_FORNECE
+                F7A->F7A_LOJA   := SE2->E2_LOJA
+                F7A->F7A_BORDER := SEA->EA_NUMBOR
+                F7A->F7A_STATUS := "1"
+                F7A->F7A_ERREXE := cApiMsg
+                F7A->F7A_JSON := cApiMsg //Gravação do campo para exportação do error.log
+                F7A->F7A_FILORI := SE2->E2_FILORIG
+                F7A->F7A_EMISSA := SE2->E2_EMISSAO
+                F7A->F7A_VALOR  := SE2->E2_VALOR
+            F7A->(MsUnLock())
+
+        End Sequence
+        ErrorBlock(oError)
+
+        jBaixou := NIL
+        jApiMsg := NIL
+        (cBolAlias)->(DbSkip())
+    EndDo
+
+    FreeObj(oLayout)
+    FreeObj(oBills)
+    FreeObj(__oF79Cod)
+
+    (cBolAlias)->(DbCloseArea())
+
+    __cHora := ""
+    __cDate := ""
+Return
+
+/*/{Protheus.doc} F718QryRet
+    Monta query para filtro das informações
+    @type  Function
+    @author Vitor Duca
+    @since 29/12/2022
+    @version 1.0
+    @return cQuery, Character, Query para busca das informações que serão utilizadas no JOB
+/*/
+Function F718QryRet(aRecnos As Array) As Character
+    Local cQuery As Character
+    Local nLenRecno As Numeric
+
+    DEFAULT aRecnos := {}
+
+    cQuery := ""
+    nLenRecno := Len(aRecnos)
+
+    cQuery += " SELECT SEA.R_E_C_N_O_ RECNOSEA, SA6.R_E_C_N_O_ RECNOSA6, SE2.R_E_C_N_O_ RECNOSE2 "
+    cQuery += " FROM " + RetSqlName("SEA") + " SEA "
+    cQuery += " INNER JOIN " + RetSqlName("SA6") + " SA6 ON "
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SEA","EA_FILIAL","SEA"}, {"SA6","A6_FILIAL","SA6"} )
+    cQuery += " AND SEA.EA_PORTADO = SA6.A6_COD "
+    cQuery += " AND SEA.EA_AGEDEP = SA6.A6_AGENCIA "
+    cQuery += " AND SEA.EA_NUMCON = SA6.A6_NUMCON "
+
+    If SA6->(ColumnPos("A6_MSBLQL")) > 0
+        cQuery += " AND SA6.A6_MSBLQL <> '1' "
+    EndIf
+
+    cQuery += " AND ( SA6.A6_BLOCKED <> '1' "
+    cQuery += " OR ( SA6.A6_BLOCKED = '1' AND SA6.A6_DTBLOQ > '" + DtoS(dDataBase) + "' ) )"
+
+    cQuery += " AND SA6.A6_BCOOFI = '001' "
+    cQuery += " AND SA6.A6_CFGAPIP = '3' "
+    cQuery += " AND SA6.A6_CFGBOLP IS NOT NULL "
+    cQuery += " AND SA6.D_E_L_E_T_ = ' ' "
+    cQuery += " INNER JOIN " + RetSqlName("SE2") + " SE2 ON "
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SEA","EA_FILORIG","SEA"}, {"SE2","E2_FILIAL","SE2"} )
+    cQuery += " AND SE2.E2_PREFIXO = SEA.EA_PREFIXO "
+    cQuery += " AND SE2.E2_NUM = SEA.EA_NUM "
+    cQuery += " AND SE2.E2_PARCELA = SEA.EA_PARCELA "
+    cQuery += " AND SE2.E2_TIPO = SEA.EA_TIPO "
+    cQuery += " AND SE2.E2_FORNECE = SEA.EA_FORNECE "
+    cQuery += " AND SE2.E2_LOJA = SEA.EA_LOJA "
+    cQuery += " AND SE2.E2_NUMBOR = SEA.EA_NUMBOR "
+    cQuery += " AND SE2.D_E_L_E_T_ = ' ' "
+    cQuery += " WHERE "
+	cQuery += " SEA.EA_CART = 'P' "
+	cQuery += " AND SEA.EA_BORAPI = 'S' "
+	cQuery += " AND SEA.EA_TRANSF = 'S' "
+    cQuery += " AND SEA.D_E_L_E_T_ = ' ' "
+    cQuery += " AND E2_SALDO > 0 "
+    cQuery += " AND 0 = ( SELECT COUNT(FK7_IDDOC) "
+    cQuery +=             " FROM " + RetSqlName("FK7") + " FK7 "
+    cQuery +=             " INNER JOIN " + RetSqlName("FK5") + " FK5 ON "
+    cQuery +=             " FK7.FK7_FILIAL = FK5.FK5_FILIAL "
+    cQuery +=             " AND FK7.FK7_IDDOC = FK5.FK5_IDDOC "
+    cQuery +=             " AND FK5.FK5_RECPAG = 'P' "
+    cQuery +=             " AND FK5.FK5_TPDOC = 'PA' "
+    cQuery +=             " AND FK5.D_E_L_E_T_ = ' ' "
+    cQuery +=             " WHERE "
+    cQuery +=             " FK7.FK7_ALIAS = 'SE2' "
+    cQuery +=             " AND FK7.FK7_FILTIT = SE2.E2_FILIAL "
+    cQuery +=             " AND FK7.FK7_PREFIX = SE2.E2_PREFIXO "
+    cQuery +=             " AND FK7.FK7_NUM = SE2.E2_NUM "
+    cQuery +=             " AND FK7.FK7_PARCEL = SE2.E2_PARCELA "
+    cQuery +=             " AND FK7.FK7_TIPO = 'PA ' "
+    cQuery +=             " AND FK7.FK7_CLIFOR = SE2.E2_FORNECE "
+    cQuery +=             " AND FK7.FK7_LOJA = SE2.E2_LOJA "
+    cQuery +=             " AND FK7.D_E_L_E_T_ = ' ' "
+    cQuery +=           ")"
+
+    If nLenRecno > 0
+		cQuery += " AND SEA.R_E_C_N_O_ IN " + FormatIn(ArrTokStr(aRecnos, "|"), "|")
+	Endif
+
+Return ChangeQuery(cQuery)
+
+/*/{Protheus.doc} F718VldUso
+    Validá se o ambiente esta preparado para executar o JOB
+    @type  Static Function
+    @author Vitor Duca
+    @since 03/01/2023
+    @version 1.0
+    @return lRet, Logical, Se o ambiente esta pronto para uso
+/*/
+Static Function F718VldUso() As Logical
+    Local lRet As Logical
+    Local cCodSch As Character
+
+    lRet := .T.
+    cCodSch := "FINA718('" + cEmpAnt + "')"
+
+    If cPaisloc == 'BRA' .And. AliasInDic("F79") .and. AliasInDic("F7A")
+		If FWModeAccess("F79",1) == FWModeAccess("F7A",1) .AND. FWModeAccess("F79",2) == FWModeAccess("F7A",2) .AND. FWModeAccess("F79",3) == FWModeAccess("F7A",3)
+            If !(gfin.util.schedule.validBranchesSchedule(cCodSch))
+                lRet := .F.
+                FwLogMsg('ERROR',, "FINA718", "FINA718", "", "Schedule", "Scheduling with more than one branch registered, or unspecified branch. Adjust the schedule to run only one branch." )
+            Endif
+        Else
+            lRet := .F.
+            FwLogMsg('ERROR',, "FINA718", "FINA718", "", "Share", "F79 and F7A tables must have the same share. Check the fields X2_MODO, X2_MODOUN and X2_MODOEMP." )
+        Endif
+    Else
+        lRet := .F.
+        FwLogMsg('ERROR',, "FINA718", "FINA718", "", "Dictionary", "Tables F79 and F7A do not exist" )
+    Endif
+Return lRet
+
+/*/{Protheus.doc} SchedDef
+	Execucao da rotina via Schedule.
+	@return  aParam
+/*/
+Static Function SchedDef()
+	Local aParam := {}
+
+	aParam := {"P",; //Tipo R para relatorio P para processo
+			"",;     //Nome do grupo de perguntas (SX1)
+			Nil,;    //cAlias (para Relatorio)
+			Nil,;    //aArray (para Relatorio)
+			Nil}     //Titulo (para Relatorio)
+Return aParam
+
+
+/*/{Protheus.doc} F718Err
+	Carrega o erro da macroexecução do layout
+	@type function
+	@author renato.ito
+	@since 18/05/2021
+	@param e   , Object   , objeto do erro
+	@param cErr, Character, mensagem de erro
+/*/
+Static Function F718Err(e As Object, cErr As Character, cMsg as Character, lRet as Logical)
+	cMsg := (e:errorStack + ' - ' + cErr)
+	FwLogMsg("ERROR",, "FINA718", "FINA718", "", e:description , e:errorStack )
+	lRet := .F.
+	BREAK
+Return
+
+/*/{Protheus.doc} CreateF79
+    Cria a tabela F79
+    @type  Static Function
+    @author Vitor Duca
+    @since 16/01/2023
+    @version 1.0
+/*/
+Static Function CreateF79()
+
+    If !F79->(MsSeek(xFilial("F79") + __cDate + __cHora + SA6->(A6_BCOOFI+A6_AGENCIA+A6_NUMCON)))
+        RecLock('F79', .T.)
+            F79->F79_FILIAL := xFilial('F79')
+            F79->F79_CODIGO := NextF79(xFilial('F79'))
+            F79->F79_ESTCOB	:= ''
+            F79->F79_BANCO  := SA6->A6_BCOOFI
+            F79->F79_AGENCI := SA6->A6_AGENCIA
+            F79->F79_CONTA  := SA6->A6_NUMCON
+            F79->F79_DTPROC := Stod(__cDate)
+            F79->F79_HRPROC := __cHora
+            F79->F79_QTDTIT := '0'
+            F79->F79_NBAIXA := '0'
+            F79->F79_QTPROC := '0'
+            F79->F79_RECPAG := SEA->EA_CART
+        F79->(MsUnLock())
+    Endif
+
+Return
+
+/*/{Protheus.doc} NextF79
+	Busca próximo F79_CODIGO para a filial informada
+	@type function
+	@version 1.0
+	@author Vitor Duca
+	@since 16/01/2023
+	@param cFilF79 , character, código da filial
+	@return cCodigo, character, Próximo F79_CODIGO
+/*/
+Static Function NextF79(cFilF79 As Character ) As Character
+	Local cCodigo   As Character
+	Local cQuery    As Character
+    Local lAchou    As Logical
+
+    cCodigo	:= ""
+    cQuery	:= ""
+    lAchou    :=  .T.
+
+    If __lExecSt == NIL
+        __lExecSt := FwLibVersion() >= "20211116"
+    Endif
+
+    If __oF79Cod == NIL
+	    cQuery := " SELECT COUNT(F79_CODIGO) F79COD FROM " + RetSqlName("F79")
+	    cQuery += " WHERE D_E_L_E_T_ = ' ' "
+	    cQuery += " AND F79_FILIAL = ? "
+        cQuery += " AND F79_CODIGO = ? "
+
+	    cQuery := ChangeQuery(cQuery)
+
+        If __lExecSt
+	        __oF79Cod := FwExecStatement():New(cQuery)
+        Else
+            __oF79Cod := FWPreparedStatement():New(cQuery)
+        Endif
+    Endif
+
+	While .T.
+		cCodigo := GetSxENum("F79", "F79_CODIGO",,3)
+		ConfirmSX8()
+        __oF79Cod:SetString(1, cFilF79)
+        __oF79Cod:SetString(2, cCodigo)
+
+        If __lExecSt
+			lAchou := __oF79Cod:ExecScalar('F79COD') > 0
+		Else
+			lAchou := MPSysExecScalar(__oF79Cod:GetFixQuery(), "F79COD") > 0
+		Endif
+
+		If !(lAchou)
+			Exit
+		EndIf
+	EndDo
+
+Return cCodigo

@@ -1,0 +1,394 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+
+Static oGetIPI    := Nil
+Static oGetIPIAux := Nil
+
+/*-------------------------------------------------------------
+API de Valor de Crédito de IPI (Documentos de Entrada)
+@author eduardo.cirqueira
+@parâmetros de entrada do endpoint
+cbranches = filiais a serem consideradas (ex.: 'XIFIS26, DM1MG') )
+cperiodStart = data inicial do período a ser filtrado
+cperiodEnd = data final do período a ser filtrado
+@since 13/01/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/ipi/credits', description='API de Créditos do IPI')
+Function MTValCredIPI()
+Local oJsResponse            as json
+Local cbranches        := oRest:getQueryRequest()['branches'] as character
+Local cperiodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cperiodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+
+//Todos os parâmetros são obrigatórios
+if valtype(cbranches) != 'U' .and. !empty(cbranches) .and. valtype(cperiodStart) != 'U' .and. !empty(cperiodStart) .and. valtype(cperiodEnd) != 'U' .and. !empty(cperiodEnd)
+   oJsResponse := CredDebIPIFilter(1, cbranches, cperiodStart, cperiodEnd)
+endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------
+API de Valor de Débito de IPI (Documentos de Saída)
+@author eduardo.cirqueira
+@parâmetros de entrada do endpoint
+cbranches = filiais a serem consideradas (ex.: 'XIFIS26, DM1MG') )
+cperiodStart = data inicial do período a ser filtrado.
+cperiodEnd = data final do período a ser filtrado.
+@since 13/01/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/ipi/debts', description='API de Débitos do IPI')
+Function MTValDebIPI()
+Local oJsResponse            as json
+Local cbranches        := oRest:getQueryRequest()['branches'] as character
+Local cperiodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cperiodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+
+//Todos os parâmetros são obrigatórios
+if valtype(cbranches) != 'U' .and. !empty(cbranches) .and. valtype(cperiodStart) != 'U' .and. !empty(cperiodStart) .and. valtype(cperiodEnd) != 'U' .and. !empty(cperiodEnd)
+   oJsResponse := CredDebIPIFilter(2, cbranches, cperiodStart, cperiodEnd)
+endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET CredDebIPIFilter
+Função responsável por preencher o Json com com informações referentes a Operações de Crédito e Débito do IPI
+@author eduardo.cirqueira
+@parâmetros de entrada
+nCard = 1-Card Créditos do IPI; 2-Card Débitos do IPI; 
+cbranches = filiais a serem consideradas (ex.: 'XIFIS26, DM1MG') )
+cperiodStart = data inicial do período a ser filtrado
+cperiodEnd = data final do período a ser filtrado
+@since 13/01/2025
+-------------------------------------------------------------------*/
+Static Function CredDebIPIFilter(nCard as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local nPosMesAno   := 0                         as numeric
+Local nPosFil      := 0                         as numeric
+Local nPosCFOP     := 0                         as numeric
+Local nPageAux     := 0                         as numeric
+Local nPageSize    := 10                        as numeric
+Local lHasNext     := .f.                       as logical
+Local nPage        := 1                         as numeric
+Local oJsonResp    := JsonObject():New()        as object
+Local cAlias       := getNextAlias()            as character
+Local oJParams     := oRest:getQueryRequest()   as json //Json com os parâmetros (query param)    
+Local cMesAno      := ''                        as character
+Local cFilialIPI   := ''                        as character
+Local cCFOP        := ''                        as character
+Local aPeriodo     := {}                        as array
+
+if valtype(oJParams) == 'J'
+    if valtype( oJParams['page'] ) != 'U' .and. Val(oJParams['page']) > 0
+        nPage := Val(oJParams['page'])
+    endif
+    if valtype( oJParams['pageSize'] ) != 'U' .and. Val(oJParams['pageSize']) > 0
+        nPageSize := Val(oJParams['pageSize'])
+    endif
+endif
+
+aPeriodo := FiltraPagina(nCard,nPage,nPageSize,cbranches,cperiodStart,cperiodEnd)
+If aPeriodo[1] < cperiodStart .Or. Empty(aPeriodo[1])
+    aPeriodo[1] := cperiodStart
+EndIf
+If aPeriodo[2] > cperiodEnd .Or. Empty(aPeriodo[2])
+    aPeriodo[2] := cperiodEnd
+EndIf
+
+GetCredDebTIPI(nCard,@cAlias,cbranches,aPeriodo[1],aPeriodo[2])
+
+// Iniciando o While
+While (cAlias)->(!Eof())
+
+    nPosFil := 0
+    cMesAno := (cAlias)->MESANO
+    nPageAux++
+
+    if nPageAux == 1
+        oJsonResp["items"] := {}
+    endif
+        
+    While (cAlias)->(!Eof()) .And. ! lHasNext .And. (cAlias)->MESANO == cMesAno
+
+        if nPageAux <= nPageSize
+            
+            If Empty((cAlias)->CJX_FILIAL)
+                aAdd( oJsonResp["items"], JsonObject():New() )
+                nPosMesAno++
+                oJsonResp["items"][nPosMesAno]["levelDescription"] := MesNome(Val(RIGHT(cMesAno,2))) + ' / ' + Left(cMesAno,4)
+                oJsonResp["items"][nPosMesAno]["value"]            := (cAlias)->TOTAL_CJX_VALIPI
+                oJsonResp["items"][nPosMesAno]["detail"]           := {}
+                (cAlias)->(DbSkip())
+            EndIf
+
+            nPosCFOP := 0
+            cFilialIPI := (cAlias)->CJX_FILIAL
+        
+            While (cAlias)->(!Eof()) .And. ! lHasNext .And. (cAlias)->MESANO == cMesAno .And. (cAlias)->CJX_FILIAL == cFilialIPI
+        
+                If Empty((cAlias)->CJX_CFOP)
+                    aAdd( oJsonResp["items"][nPosMesAno]["detail"], JsonObject():New() )
+                    nPosFil++
+                    oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["levelDescription"] := (cAlias)->CJX_FILIAL
+                    oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["value"]            := (cAlias)->TOTAL_CJX_VALIPI
+                    oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"]           := {}
+                    (cAlias)->(DbSkip())
+                EndIf
+
+                cCFOP := (cAlias)->CJX_CFOP
+
+                While (cAlias)->(!Eof()) .And. ! lHasNext .And. (cAlias)->MESANO == cMesAno .And. (cAlias)->CJX_FILIAL == cFilialIPI .And. (cAlias)->CJX_CFOP = cCFOP
+
+                    If Empty((cAlias)->CJX_PRODUT)
+                        aAdd( oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"], JsonObject():New() )
+                        nPosCFOP++
+                        oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"][nPosCFOP]["levelDescription"] := (cAlias)->CJX_CFOP
+                        oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"][nPosCFOP]["value"]            := (cAlias)->TOTAL_CJX_VALIPI
+                        oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"][nPosCFOP]["detail"]           := {}
+                        nPosProd := 0
+                    Else
+                        aAdd( oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"][nPosCFOP]["detail"], JsonObject():New() )
+                        nPosProd++
+                        oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"][nPosCFOP]["detail"][nPosProd]["levelDescription"] := (cAlias)->CJX_PRODUT
+                        oJsonResp["items"][nPosMesAno]["detail"][nPosFil]["detail"][nPosCFOP]["detail"][nPosProd]["value"]            := (cAlias)->TOTAL_CJX_VALIPI
+                    EndIf            
+
+                    (cAlias)->(DbSkip())
+                EndDo
+                        
+            EndDo
+
+        Else
+            lHasNext := .T.
+            Exit
+        EndIf
+
+    EndDo
+
+    If lHasNext
+        Exit
+    EndIf
+EndDo
+
+If nPageAux == 0
+    oJsonResp['code'] := 400
+    oJsonResp['detailMessage'] := 'value not found'
+    oJsonResp['message'] := "Dados não encontrados para o período e/ou filial informados."
+EndIf
+
+oJsonResp["hasNext"] := lHasNext
+(cAlias)->(DBCloseArea())
+
+Return oJsonResp:toJson()
+
+
+
+/*---------------------------------------------------------------------
+{Protheus.doc} GetCredDebTIPI()
+(Responsável por executar a consulta aos campos da tabela CJX)
+@author eduardo.cirqueira
+@parâmetros de entrada
+nCard = 1-Card Créditos do IPI; 2-Card Débitos do IPI
+cAlias = tabela temporaria para a query
+cbranches = filiais a serem consideradas (ex.: 'XIFIS26, DM1MG') )
+cperiodStart = data inicial do período a ser filtrado
+cperiodEnd = data final do período a ser filtrado
+@since 13/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetCredDebTIPI(nCard as numeric, cAlias as character, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local cQuery    := ''  as character
+Local cEntSai   := 'E' as character
+
+If nCard == 2 
+   cEntSai := 'S'
+EndIf
+
+If oGetIPI == Nil
+    cQuery := "SELECT SUBSTRING(CJX_ENTRAD,1,6) AS MESANO, "
+    cQuery +=       " '' AS CJX_FILIAL, "
+    cQuery +=       " '' AS CJX_CFOP, "
+    cQuery +=       " '' AS CJX_PRODUT, "
+    cQuery +=       " SUM(CJX.CJX_VALIPI) AS TOTAL_CJX_VALIPI "
+    cQuery +=  " FROM " + FIS319SqlName('CJX') + " CJX "
+    cQuery += " WHERE CJX.CJX_FILIAL IN (?) "
+    cQuery +=   " AND CJX.CJX_ENTRAD BETWEEN ? AND ? "
+    cQuery +=   " AND CJX.CJX_TIPMOV = ? "
+    cQuery +=   " AND CJX.CJX_VALIPI > ? "
+    cQuery +=   " AND CJX.D_E_L_E_T_ = ? "
+    cQuery += " GROUP BY SUBSTRING(CJX_ENTRAD,1,6) "
+
+    cQuery += " UNION ALL "
+
+    cQuery += "SELECT SUBSTRING(CJX_ENTRAD,1,6) AS MESANO, "
+    cQuery +=       " CJX_FILIAL, "
+    cQuery +=       " '' AS CJX_CFOP, "
+    cQuery +=       " '' AS CJX_PRODUT, "
+    cQuery +=       " SUM(CJX.CJX_VALIPI) AS TOTAL_CJX_VALIPI "
+    cQuery +=  " FROM " + FIS319SqlName('CJX') + " CJX "
+    cQuery += " WHERE CJX.CJX_FILIAL IN (?) "
+    cQuery +=   " AND CJX.CJX_ENTRAD BETWEEN ? AND ? "
+    cQuery +=   " AND CJX.CJX_TIPMOV = ? "
+    cQuery +=   " AND CJX.CJX_VALIPI > ? "
+    cQuery +=   " AND CJX.D_E_L_E_T_ = ? "
+    cQuery += " GROUP BY SUBSTRING(CJX_ENTRAD,1,6), CJX_FILIAL "
+
+    cQuery += " UNION ALL "
+
+    cQuery += "SELECT SUBSTRING(CJX_ENTRAD,1,6) AS MESANO, "
+    cQuery +=       " CJX_FILIAL, "
+    cQuery +=       " CJX_CFOP, "
+    cQuery +=       " '' AS CJX_PRODUT, "
+    cQuery +=       " SUM(CJX.CJX_VALIPI) AS TOTAL_CJX_VALIPI "
+    cQuery +=  " FROM " + FIS319SqlName('CJX') + " CJX "
+    cQuery += " WHERE CJX.CJX_FILIAL IN (?) "
+    cQuery +=   " AND CJX.CJX_ENTRAD BETWEEN ? AND ? "
+    cQuery +=   " AND CJX.CJX_TIPMOV = ? "
+    cQuery +=   " AND CJX.CJX_VALIPI > ? "
+    cQuery +=   " AND CJX.D_E_L_E_T_ = ? "
+    cQuery += " GROUP BY SUBSTRING(CJX_ENTRAD,1,6), CJX_FILIAL, CJX_CFOP "
+
+    cQuery += " UNION ALL "
+
+    cQuery += "SELECT SUBSTRING(CJX_ENTRAD,1,6) AS MESANO, "
+    cQuery +=       " CJX_FILIAL, "
+    cQuery +=       " CJX_CFOP, "
+    cQuery +=       " CJX_PRODUT, "
+    cQuery +=       " SUM(CJX.CJX_VALIPI) AS TOTAL_CJX_VALIPI "
+    cQuery +=  " FROM " + FIS319SqlName('CJX') + " CJX "
+    cQuery += " WHERE CJX.CJX_FILIAL IN (?) "
+    cQuery +=   " AND CJX.CJX_ENTRAD BETWEEN ? AND ? "
+    cQuery +=   " AND CJX.CJX_TIPMOV = ? "
+    cQuery +=   " AND CJX.CJX_VALIPI > ? "
+    cQuery +=   " AND CJX.D_E_L_E_T_ = ? "
+    cQuery += " GROUP BY SUBSTRING(CJX_ENTRAD,1,6), CJX_FILIAL, CJX_CFOP, CJX_PRODUT "
+
+    cQuery += " ORDER BY MESANO, "
+    cQuery +=          " CJX_FILIAL, "
+    cQuery +=          " CJX_CFOP, "
+    cQuery +=          " CJX_PRODUT "
+
+    oGetIPI := FWExecStatement():New()
+    oGetIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetIPI != Nil
+    oGetIPI:SetIn(1, StrTokArr(cbranches, "," ))
+    oGetIPI:SetString(2, StrTran(cperiodStart, "-", ""))
+    oGetIPI:SetString(3, StrTran(cperiodEnd, "-", ""))
+    oGetIPI:SetString(4, cEntSai)
+    oGetIPI:SetNumeric(5, 0)
+    oGetIPI:SetString(6, " ")
+
+    oGetIPI:SetIn(7, StrTokArr(cbranches, "," ))
+    oGetIPI:SetString(8, StrTran(cperiodStart, "-", ""))
+    oGetIPI:SetString(9, StrTran(cperiodEnd, "-", ""))
+    oGetIPI:SetString(10, cEntSai)
+    oGetIPI:SetNumeric(11, 0)
+    oGetIPI:SetString(12, " ")
+    
+    oGetIPI:SetIn(13, StrTokArr(cbranches, "," ))
+    oGetIPI:SetString(14, StrTran(cperiodStart, "-", ""))
+    oGetIPI:SetString(15, StrTran(cperiodEnd, "-", ""))
+    oGetIPI:SetString(16, cEntSai)
+    oGetIPI:SetNumeric(17, 0)
+    oGetIPI:SetString(18, " ")
+    
+    oGetIPI:SetIn(19, StrTokArr(cbranches, "," ))
+    oGetIPI:SetString(20, StrTran(cperiodStart, "-", ""))
+    oGetIPI:SetString(21, StrTran(cperiodEnd, "-", ""))
+    oGetIPI:SetString(22, cEntSai)
+    oGetIPI:SetNumeric(23, 0)
+    oGetIPI:SetString(24, " ")
+
+    cAlias := oGetIPI:OpenAlias()
+Endif
+
+FWFreeObj(oGetIPI)
+Return 
+
+/*---------------------------------------------------------------------
+{Protheus.doc} Mesnome()
+(Retornar o mês por extenso)
+@author eduardo.cirqueira
+@parâmetros de entrada
+nMes = Mês em formato numérico
+@since 13/01/2025
+@return Mês por extenso
+//-------------------------------------------------------------------*/
+Static Function Mesnome(nMes)
+Local aMeses := {'Janeiro','Fevereiro','Março'   ,'Abril'   ,'Maio'     ,'Junho',;
+                 'Julho'  ,'Agosto'   ,'Setembro', 'Outubro', 'Novembro', 'Dezembro'} as array
+
+Return aMeses[ nMes ]
+
+/*---------------------------------------------------------------------
+{Protheus.doc} FiltraPagina()
+Encontrar a página atual para filtrar os dados
+@author eduardo.cirqueira
+@parâmetros de entrada
+nCard = 1-Card Créditos do IPI; 2-Card Débitos do IPI
+nPage = Número da página atual
+nPageSize = qtd de registros por página
+cbranches = filiais a serem consideradas (ex.: 'XIFIS26, DM1MG') )
+cperiodStart = data inicial do período a ser filtrado
+cperiodEnd = data final do período a ser filtrado
+@since 13/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function FiltraPagina(nCard as numeric, nPage as numeric, nPageSize as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local cQuery   := ''  as character
+Local cEntSai  := 'E' as character
+Local cAlias   := getNextAlias() as character
+Local aRet     := {'',''} as array
+
+If nCard == 2 
+   cEntSai := 'S'
+EndIf
+
+If oGetIPIAux == Nil
+    cQuery := "SELECT COALESCE(MIN(PER.MESANO),' ') AS MENOR_MESANO, "
+    cQuery +=       " COALESCE(MAX(PER.MESANO),' ') AS MAIOR_MESANO "
+    cQuery +=  " FROM ( "
+    cQuery +=           "SELECT DISTINCT SUBSTRING(CJX_ENTRAD,1,6) AS MESANO "
+    cQuery +=            " FROM " + FIS319SqlName('CJX') + " CJX "
+    cQuery +=           " WHERE CJX.CJX_FILIAL IN (?) "
+    cQuery +=             " AND CJX.CJX_ENTRAD BETWEEN ? AND ? "
+    cQuery +=             " AND CJX.CJX_TIPMOV = ? "
+    cQuery +=             " AND CJX.CJX_VALIPI > ? "
+    cQuery +=             " AND CJX.D_E_L_E_T_ = ? "
+    cQuery +=           " ORDER BY MESANO "
+    cQuery +=          " OFFSET (? * ? ) ROWS "
+    cQuery +=           " FETCH NEXT ? ROWS ONLY "
+    cQuery +=        " ) PER "
+
+    oGetIPIAux := FWExecStatement():New()
+    oGetIPIAux:SetQuery(ChangeQuery(cQuery))
+EndIf
+
+If oGetIPIAux != Nil
+    oGetIPIAux:SetIn(1, StrTokArr(cbranches, "," ))
+    oGetIPIAux:SetString(2, StrTran(cperiodStart, "-", ""))
+    oGetIPIAux:SetString(3, StrTran(cperiodEnd, "-", ""))
+    oGetIPIAux:SetString(4, cEntSai)
+    oGetIPIAux:SetNumeric(5, 0)
+    oGetIPIAux:SetString(6, " ")
+    oGetIPIAux:SetUnsafe(7, cValToChar(nPage-1))
+    oGetIPIAux:SetUnsafe(8, cValToChar(nPageSize))
+    oGetIPIAux:SetUnsafe(9, cValToChar(nPageSize+1))
+
+    cAlias := oGetIPIAux:OpenAlias()
+Endif
+
+FWFreeObj(oGetIPIAux)
+
+If (cAlias)->(!Eof()) .And. ! Empty((cAlias)->MENOR_MESANO) .And. ! Empty((cAlias)->MAIOR_MESANO) 
+    aRet[1] := ((cAlias)->MENOR_MESANO + '01')
+    aRet[2] := ((cAlias)->MAIOR_MESANO + '31')
+EndIf
+
+(cAlias)->(DBCloseArea())
+
+Return aRet

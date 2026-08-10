@@ -1,0 +1,301 @@
+#INCLUDE "TOTVS.ch"
+#Include "FWLIBVERSION.CH"
+
+Static __lPosSE1 	:= ExistBlock("NGFPOSE1")
+Static __oConsMov  	As Object
+Static __lExecSt	:= FwLibVersion() >= "20211116"			As Logical
+
+/*/{Protheus.doc} FINA715
+	Função para busca na SA6 dos bancos que estão configurados como retorno de baixa. Executado como JOB
+	@type function JOB
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 29/03/2022
+	@return logical
+/*/
+
+Function FINA715(isJob As Logical) As Logical
+	Local lRet       As Logical
+	Local cBancos    As Character
+	Local cSelect    As Character
+	Local cFrom      As Character
+	Local cWhere     As Character
+	Local cAlsTMP    As Character
+	Local cLayoutBco As Character
+	Local cParametr  As Character
+	Local cParamAux  As Character
+	Local jLayout    As Json
+	Local cLockName	 As Character
+	Local lRetAut4	 As Logical		// Tem opção 4 - Recebimento on-line no campo EE_RETAUT para determinar que esse EE é considerado para Retorno por API
+	Local nRecSEE    As Numeric
+	Local cCodSch    As Character
+	Local cJobTime   As Character
+
+	Default isJob := .T.
+
+	cLockName := cEmpAnt + " - FINA715"
+	cCodSch := "FINA715('" + cEmpAnt + "')"
+
+	lRet	:= .F.
+
+	If cPaisloc == 'BRA' .And. GetRPORelease() >= '12.1.033' .And. (AliasInDic("F79") .and. AliasInDic("F7A"))
+		If FWModeAccess("F79",1) == FWModeAccess("F7A",1) .AND. FWModeAccess("F79",2) == FWModeAccess("F7A",2) .AND. FWModeAccess("F79",3) == FWModeAccess("F7A",3)
+			If !isJob .or. (isJob .and. &("gfin.util.schedule.validBranchesSchedule(cCodSch)"))
+				If LockByName( cLockName, .T./*lEmpresa*/, .F./*lFilial*/ )				
+					cBancos    := '001' // separar bancos por |  exemplo 001|237
+					cAlsTMP    := GetNextAlias()
+
+					cParametr := SUPERGETMV( 'MV_FNGDTBX', .F., '' )
+
+					If cParametr == 'NEX' .Or. Empty(cParametr)
+						cParamAux := Dtos(Date()) 
+					Else
+						cParamAux := SubStr(StrTran(cParametr, "-", ""), 1, 8)
+					EndIf
+					cParamAux :=  DtoS(DaySub(StoD(cParamAux), 1))
+
+					DbSelectArea('SA6')
+					DbSelectArea('SEE')
+
+					If '4' $ GetSX3Cache('EE_RETAUT', 'X3_CBOX') // Tem opção 4 - Recebimento on-line (Usada para setar a EE a ser utilizada para retorno por API)
+						lRetAut4 := .T.
+						cSelect := "%  SA6.R_E_C_N_O_ AS RECNOA6 %"
+
+						cFrom := "%" + RetSqlName("SA6") + " SA6  %"
+
+						cWhere := "% SA6.D_E_L_E_T_  = ' ' "
+						cWhere += " AND A6_BCOOFI IN " + FormatIn(cBancos, '|') 
+						cWhere += " AND A6_CFGAPI = '3' "
+						If SA6->(ColumnPos("A6_MSBLQL")) > 0
+							cWhere += " AND A6_MSBLQL <> '1' "
+						EndIf
+						cWhere += " AND (	SA6.A6_BLOCKED <> '1' "
+						cWhere += " 		OR (SA6.A6_BLOCKED = '1' AND SA6.A6_DTBLOQ > '" + DtoS(dDataBase) + "')
+						cWhere += " 	) %"
+					Else
+						lRetAut4 := .F.
+
+						cSelect := "% SA6.A6_FILIAL, SA6.A6_COD,    SA6.A6_AGENCIA, SA6.A6_DVAGE,
+						cSelect += "  SA6.A6_NUMCON, SA6.A6_CFGAPI, SA6.A6_DVCTA,   SA6.A6_NOME, SA6.A6_CGC,  "
+						cSelect += "  SA6.A6_BCOOFI, SA6.A6_CFGBOL, SA6. A6_BLOCKED, "
+						cSelect += "  SEE.EE_AGEOFI, SEE.EE_CTAOFI, SEE.EE_SUBCTA, "
+						cSelect += "  SEE.R_E_C_N_O_ AS RECNOEE, SA6.R_E_C_N_O_ AS RECNOA6 %"
+
+						cFrom := "%" + RetSqlName("SA6") + " SA6  "
+						cFrom += " INNER JOIN  " + RetSqlName("SEE") + " SEE ON "
+						cFrom += " SA6.A6_COD = SEE.EE_CODIGO AND "
+						cFrom += " SA6.A6_AGENCIA = SEE.EE_AGENCIA AND "
+						cFrom += " SA6.A6_NUMCON = SEE.EE_CONTA %"
+
+						cWhere := "% SA6.D_E_L_E_T_  = ' '  AND "
+						cWhere += "  SEE.D_E_L_E_T_  = ' '  AND "
+						cWhere += " A6_BCOOFI IN " + FormatIn(cBancos, '|') + " AND "
+						cWhere += " A6_CFGAPI = '3' AND "
+						cWhere += " A6_BLOCKED = '2' %"
+					EndIf
+
+					BeginSQL Alias cAlsTMP
+
+					SELECT
+						%Exp:cSelect%
+					FROM
+						%Exp:cFrom%
+					WHERE
+						%Exp:cWhere%
+					EndSQL
+
+					jLayout	:= JsonObject():new()
+
+					If (cAlsTMP)->(EOF())
+						FwLogMsg('ERROR',, "FINA715", "FINA715", "", 'SA6NotFound', "SA6 not found: " + GetLastQuery()[2] )
+					EndIf
+
+					While !(cAlsTMP)->(EOF())
+						SA6->(DbGoTo((cAlsTMP)->RECNOA6))
+						If lRetAut4
+							nRecSEE := RetRecSEE(SA6->A6_COD , SA6->A6_AGENCIA , SA6->A6_NUMCON)
+						Else
+							nRecSEE := (cAlsTMP)->RECNOEE						
+						EndIf
+						If nRecSEE > 0
+							SEE->(DbGoTo(nRecSEE))
+							cLayoutBco := SA6->A6_CFGBOL
+							jLayout:FromJson(cLayoutBco)
+							lRet := .T.
+							If SA6->A6_BCOOFI == '001'
+								lRet := &('totvs.protheus.backoffice.ngf.bills.recurrence.bb.LoadBx001(jLayout, cParamAux)')
+							Endif
+						Else
+							FwLogMsg('ERROR',, "FINA715", "FINA715", "", 'SEENotFound', "SEE not found with EE_RETAUT = 4 for bank: A6_COD:" + SA6->A6_COD + ", A6_AGENCIA: " + SA6->A6_AGENCIA + ", A6_NUMCON: " + SA6->A6_NUMCON)
+						EndIf
+						(cAlsTMP)->(DBSkip())
+					Enddo
+
+					If lRet
+						cJobTime := FWTimeStamp(5, DATE(), TIME())
+						cJobTime := StrTran(cJobTime, 'T', ' ')
+						cJobTime := StrTran(cJobTime, 'Z', '')
+						PUTMV('MV_FNGDTBX', cJobTime)
+					Endif
+
+					// Tratamento para Boleto Híbrido Techfin
+					If FindClass("totvs.protheus.backoffice.gfin.billstechfin.BillsTechfin")
+						BillsTechF()
+					EndIf
+					UnLockByName(cLockName, .T./*lEmpresa*/, .F./*lFilial*/ )
+					
+				Else
+					FwLogMsg('INFO',, "FINA715", "FINA715", "", 'cLockName', "["+ cLockName + "] Running on another thread" )
+				EndIf
+			Else
+				FwLogMsg('ERROR',, "FINA715", "FINA715", "", 'Schedule', "Scheduling with more than one branch registered, or unspecified branch. Adjust the schedule to run only one branch." )
+			EndIf
+		Else
+			FwLogMsg('ERROR',, "FINA715", "FINA715", "", 'Share', "F79 and F7A tables must have the same share. Check the fields X2_MODO, X2_MODOUN and X2_MODOEMP." )
+		EndIf			
+	EndIf
+
+Return lRet
+
+/*/{Protheus.doc} SchedDef
+	Execucao da rotina via Schedule.
+	@return  aParam
+/*/
+Static Function SchedDef()
+	Local aParam := {}
+
+	aParam := {"P",; //Tipo R para relatorio P para processo
+			"",;     //Nome do grupo de perguntas (SX1)
+			Nil,;    //cAlias (para Relatorio)
+			Nil,;    //aArray (para Relatorio)
+			Nil}     //Titulo (para Relatorio)
+Return aParam
+
+
+/*/{Protheus.doc} FINA715
+	Função para busca na SA6 dos bancos que estão configurados como retorno de baixa. Executado como JOB
+	@type function JOB
+	@param 		cBank		, Character		, Codigo banco
+	@param 		cAgency		, Character		, Codigo Agencia
+	@param 		cAccount	, Character		, Codigo Conta
+	@version 12.1.33
+	@author rafael.rondon
+	@since 29/03/2022
+	@return 	nRecSEE		numeric - recno da SEE configurada para retorno 
+/*/
+Static Function RetRecSEE(cBank As Character , cAgency AS Character , cAccount As Character) As Numeric
+
+	Local cQuery 	As Character
+	Local nRecSEE	As Numeric
+	Local cAlias	As Character
+
+	nRecSEE := 0
+	cAlias 	:= GetNextAlias()
+
+	cQuery := " SELECT SEE.R_E_C_N_O_ AS RECNOSEE FROM " + RetSqlName("SEE") + " SEE "
+	cQuery += " WHERE SEE.D_E_L_E_T_  = ' ' "
+	cQuery += " AND SEE.EE_CODIGO = '" + cBank + "' "
+	cQuery += " AND SEE.EE_AGENCIA = '" + cAgency + "' "
+	cQuery += " AND SEE.EE_CONTA = '" + cAccount + "' "
+	cQuery += " AND EE_RETAUT = '4' "
+
+	cQuery := ChangeQuery(cQuery)
+	MPSysOpenQuery(cQuery, cAlias)
+ 
+	If (cAlias)->(!EOF())
+		nRecSEE := (cAlias)->RECNOSEE
+	EndIf
+	(cAlias)->(DbCloseArea())
+
+Return nRecSEE
+
+
+/*/{Protheus.doc} FINA715SE1()
+	Função para query com retorno do registro SE1 para baixa
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 05/04/2022
+	@return json jRetProc
+/*/
+
+Function FINA715SE1(cIdCnab As Character) As Logical
+
+	Local cQuery	:= '' 				As Character	
+	Local lRet		:=.F.				As Logical
+	Local nRecnoSE1	:= 0				As Numeric
+
+	If __lPosSE1 // PE para posicionar SE1
+
+		DbSelectArea("SE1")
+		SE1->(DbSetOrder(1))
+		SE1->(DbGoBottom())
+		SE1->(DbSkip())	//	Posiciona final de arquivo EOF
+
+		Execblock("NGFPOSE1", .F., .F., {cIdCnab})
+
+		If !SE1->(EOF()) .AND. SE1->(Found()) // Se o PE posicionou no registro com DbSeek/MsSeek
+			lRet := .T.
+		EndIf
+
+	Else
+
+		If __oConsMov == NIl
+
+			cQuery := " SELECT R_E_C_N_O_ AS RECSE1 "
+			cQuery += "FROM "  + RetSqlName("SE1") + " SE1 "
+			cQuery += "WHERE "
+			cQuery += "E1_IDCNAB  = ? AND "
+			cQuery += "D_E_L_E_T_  = ' ' "
+
+			cQuery	:= ChangeQuery(cQuery)
+
+			If __lExecSt
+				__oConsMov := FwExecStatement():new(cQuery)
+			Else
+				__oConsMov := FWPreparedStatement():New(cQuery)
+			Endif
+
+		Endif
+
+		__oConsMov:SetString(1,cIdCnab)
+
+		If __lExecSt
+			nRecnoSE1 := __oConsMov:ExecScalar('RECSE1')
+		Else
+			nRecnoSE1 := MPSysExecScalar(__oConsMov:GetFixQuery(), "RECSE1")
+		Endif	
+
+		If nRecnoSE1 > 0
+
+			lRet := .T.
+			SE1->(DbGoTo(nRecnoSE1)) 		
+
+		EndIf	
+
+	EndIf
+
+Return lRet
+
+/*/{Protheus.doc} BillsTechF()
+	Função que realiza o tratamento para as baixas do Boleto TechFin
+	@type function
+	@version 12.1.2410
+	@author daniel.moda
+	@since 19/03/2025
+/*/
+Static Function BillsTechF()
+
+	Local oConfigTF As Object
+	Local oResult   As Object
+
+	oResult  := JsonObject():new()
+    oConfigTF:= &("totvs.protheus.backoffice.gfin.billstechfin.BillsTechfin():New()")
+	oConfigTF:loadConfig()
+	oConfigTF:getSettlement()
+
+	oResult:FromJSON( "{}" )
+	FwFreeObj( oResult )
+	FwFreeObj( oConfigTF )
+
+Return

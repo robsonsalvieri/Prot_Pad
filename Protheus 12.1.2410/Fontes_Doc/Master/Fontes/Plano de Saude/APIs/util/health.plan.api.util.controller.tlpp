@@ -1,0 +1,619 @@
+#include "tlpp-core.th"
+#include "health.plan.api.util.controller.ch"
+
+#define STATUS_CODE_OK 200
+#define STATUS_CODE_BAD_REQUEST 400
+#define STATUS_CODE_UNAUTHORIZED 401
+#define STATUS_CODE_FORBIDDEN 403
+#define STATUS_CODE_NOT_FOUND 404
+#define STATUS_CODE_NOT_ACCEPTABLE 406
+
+namespace totvs.protheus.health.plan.api.util
+
+/*/{Protheus.doc} BaseService
+Classe responsável por gerenciar os acessos das apis do plano de saúde
+@type class
+@version 12.1.2510  
+@author vinicius.queiros
+@since 01/04/2025
+/*/
+class BaseController
+
+	protected data nStatusCode as numeric
+	protected data jResult as json
+	protected data jBodyRequest as json
+	protected data jFormData as json
+
+	public method new() constructor
+	public method destroy()
+
+	protected method validatePortalUserAccess() as logical
+	protected method hasAccessToBeneficiary(cSubscriberId as character) as logical
+	protected method hasAccessToContract(jContract as json) as logical
+	protected method validateRequiredParams(jRequestData as json, aRequiredParams as array) as logical
+	protected method getStatusCode() as numeric
+	protected method setBodyRequest(cBody as character) as logical
+	protected method getBodyRequest() as json
+	protected method setResponseData()
+	protected method validateRequiredFormData(jFormData as json, aRequiredData as array) as logical
+	protected method isFormData() as logical
+	protected method setFormData(cFormData as character) as logical
+	protected method getFormData() as json
+
+	private method checkPortalUserExists(cLogin as character, cCode as character) as logical
+	private method setRequiredErrors(aErrors as array)
+
+endclass
+
+/*/{Protheus.doc} new
+Construtor da classe BaseController.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@return self, instancia da classe BaseController.
+*/
+method new() class BaseController
+
+	self:nStatusCode := STATUS_CODE_BAD_REQUEST
+	self:jResult := JsonObject():new()
+
+return self
+
+/*/{Protheus.doc} destroy
+Libera os recursos utilizados pela classe BaseController.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+*/
+method destroy() class BaseController
+
+	freeObj(self:jResult)
+	freeObj(self:jBodyRequest)
+	freeObj(self:jFormData)
+
+return
+
+/*/{Protheus.doc} validatePortalUserAccess
+Valida o acesso do usuário ao portal, verificando permissões e credenciais.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@return logical, verdadeiro se o usuário tiver acesso, falso caso contrário
+*/
+method validatePortalUserAccess() as logical class BaseController
+
+	local lValid := .F. as logical
+	local cError as character
+	local jLoginUser as json
+	local cPropertyLogin := "x-totvshealthplans-loginuser" as character
+	local cHeaderEncrypted as character
+	local cHeaderDecrypted as character
+	local cKey := "x13PHfTZZ7T0rxiW" as character
+
+	self:jResult := JsonObject():new()
+
+	if oRest:getHeaderRequest():hasProperty(cPropertyLogin)
+		jLoginUser := JsonObject():new()
+
+		cHeaderEncrypted := oRest:getHeaderRequest()[cPropertyLogin]
+		cHeaderDecrypted := oemToAnsi(FWAES_Decrypt(decode64(cHeaderEncrypted), cKey))
+		
+		cError := jLoginUser:fromJson(cHeaderDecrypted)
+
+		if empty(cError)
+			if jLoginUser:hasProperty("login") .and. jLoginUser:hasProperty("code")
+				if valType(jLoginUser["login"]) == "C" .and. valType(jLoginUser["code"]) == "C"
+					oRest:getQueryRequest()["loginUser"] := jLoginUser["login"]
+
+					if self:checkPortalUserExists(jLoginUser["login"], jLoginUser["code"])
+						lValid := .T.
+					else
+						self:nStatusCode := STATUS_CODE_NOT_FOUND
+						self:jResult["code"] := self:nStatusCode
+						self:jResult["message"] := STR0001 // "Usuário não encontrado."
+						self:jResult["detailedMessage"] := STR0002 // "Os dados informados no cabeçalho 'x-totvshealthplans-loginuser' não correspondem a um usuário cadastrado no sistema."
+					endif
+				else
+					self:nStatusCode := STATUS_CODE_BAD_REQUEST
+					self:jResult["code"] := self:nStatusCode
+					self:jResult["message"] := STR0003 // "Formato inválido dos dados de autenticação."
+					self:jResult["detailedMessage"] := STR0004 // "Os campos 'login' e 'code' devem ser do tipo string no cabeçalho 'x-totvshealthplans-loginuser'."
+				endif
+			else
+				self:nStatusCode := STATUS_CODE_BAD_REQUEST
+				self:jResult["code"] := self:nStatusCode
+				self:jResult["message"] := STR0005 // "Dados de autenticação ausentes."
+				self:jResult["detailedMessage"] := STR0006 // "O cabeçalho 'x-totvshealthplans-loginuser' foi enviado, mas os campos 'login' e 'code' não foram informados."
+			endif
+		else
+			self:nStatusCode := STATUS_CODE_BAD_REQUEST
+			self:jResult["code"] := self:nStatusCode
+			self:jResult["message"] := STR0007 // "Cabeçalho de autenticação inválido."
+			self:jResult["detailedMessage"] := STR0008 // "O valor informado no cabeçalho 'x-totvshealthplans-loginuser' está criptografado em um formato inválido ou não pôde ser processado corretamente. Verifique se os dados foram criptografados corretamente antes de enviar a requisição."
+		endif
+	else
+		self:nStatusCode := STATUS_CODE_UNAUTHORIZED
+		self:jResult["code"] := self:nStatusCode
+		self:jResult["message"] := STR0009 // "Cabeçalho de autenticação ausente."
+		self:jResult["detailedMessage"] := STR0010 // "O cabeçalho 'x-totvshealthplans-loginuser' não foi informado na requisição."
+	endif
+
+	if !lValid
+		self:setResponseData()
+	endif
+
+	freeObj(jLoginUser)
+
+return lValid
+
+/*/{Protheus.doc} hasAccessToBeneficiary
+Verifica se o usuário tem acesso ao beneficiário informado.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@param cSubscriberId, character, código do beneficiário a ser verificado
+@return logical, verdadeiro se o usuário tiver acesso, falso caso contrário
+*/
+method hasAccessToBeneficiary(cSubscriberId as character) as logical class BaseController
+
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local oStatement as object
+	local nCount as numeric
+	local lHasAccess := .F. as logical
+	local nSubscriberIdSize as numeric
+	local jContractData as json
+
+	self:jResult := JsonObject():new()
+
+	cQuery += "SELECT COUNT(?) CNT "
+	cQuery += " FROM ? BSW "
+	cQuery += " INNER JOIN ? B49 ON "
+	cQuery += "		B49.B49_FILIAL = ? AND "
+	cQuery += " 	B49.B49_CODUSR = BSW.BSW_CODUSR AND "
+	cQuery += "		B49.B49_BENEFI = ? AND "
+	cQuery += "		B49.D_E_L_E_T_ = ? "
+	cQuery += " WHERE BSW.BSW_FILIAL = ? AND "
+	cQuery += "		BSW.BSW_LOGUSR = ? AND "
+	cQuery += "		BSW.D_E_L_E_T_ = ? "
+
+	oStatement := FwExecStatement():new(cQuery)
+
+	oStatement:setUnsafe(nOrder++, "BSW.BSW_CODUSR")
+	oStatement:setUnsafe(nOrder++, retSqlName("BSW"))
+
+	oStatement:setUnsafe(nOrder++, retSqlName("B49"))
+	oStatement:setString(nOrder++, xFilial("B49"))
+	oStatement:setString(nOrder++, cSubscriberId)
+	oStatement:setString(nOrder++, " ")
+
+	oStatement:setString(nOrder++, xFilial("BSW"))
+	oStatement:setString(nOrder++, oRest:getQueryRequest()["loginUser"])
+	oStatement:setString(nOrder++, " ")
+
+	nCount := oStatement:execScalar("CNT")
+
+	if nCount > 0
+		lHasAccess := .T.
+	else
+		nSubscriberIdSize := tamSX3("BA1_CODINT")[1] + tamSX3("BA1_CODEMP")[1] + tamSX3("BA1_MATRIC")[1] + tamSX3("BA1_TIPREG")[1] + tamSX3("BA1_DIGITO")[1]
+		cSubscriberId := padr(cSubscriberId, nSubscriberIdSize)
+
+		BA1->(dbSetOrder(2))
+		if BA1->(msSeek(xFilial("BA1") + cSubscriberId))
+			jContractData := JsonObject():new()
+			jContractData["healthInsurerCode"] := BA1->BA1_CODINT
+			jContractData["companyCode"] := BA1->BA1_CODEMP
+			jContractData["contractCode"] := BA1->BA1_CONEMP
+			jContractData["contractVersion"] := BA1->BA1_VERCON
+			jContractData["subcontractCode"] := BA1->BA1_SUBCON
+			jContractData["subcontractVersion"] := BA1->BA1_VERSUB
+
+			if self:hasAccessToContract(jContractData)
+				lHasAccess := .T.
+			endif
+		else
+			self:nStatusCode := STATUS_CODE_NOT_FOUND
+			self:jResult["code"] := self:nStatusCode
+			self:jResult["message"] := STR0011 // "Beneficiário não encontrado." 
+			self:jResult["detailedMessage"] := STR0012 // "O beneficiário informado não existe na base de dados (Tabela BA1). Verifique se o número de carteirinha está correto." 
+
+			self:setResponseData()
+		endif
+	endif
+
+	freeObj(oStatement)
+	freeObj(jContractData)
+
+return lHasAccess
+
+/*/{Protheus.doc} hasAccessToContract
+Verifica se o usuário tem acesso ao contrato informado.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@param jContract, json, contrato a ser verificado
+@return logical, verdadeiro se o usuário tiver acesso, falso caso contrário
+*/
+method hasAccessToContract(jContract as json) as logical class BaseController
+
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local oStatement as object
+	local nCount as numeric
+	local lHasAccess := .F. as logical
+
+	self:jResult := JsonObject():new()
+
+	cQuery += "SELECT COUNT(?) CNT "
+	cQuery += " FROM ? BSW "
+	cQuery += " INNER JOIN ? B40 ON "
+	cQuery += "		B40.B40_FILIAL = ? AND "
+	cQuery += " 	B40.B40_CODUSR = BSW.BSW_CODUSR AND "
+	cQuery += "		B40.B40_CODINT = ? AND "
+	cQuery += "		B40.B40_CODEMP = ? AND "
+	cQuery += "		B40.B40_NUMCON = ? AND "
+	cQuery += "		B40.B40_VERCON = ? AND "
+	cQuery += "		B40.B40_SUBCON = ? AND "
+	cQuery += "		B40.B40_VERSUB = ? AND "
+	cQuery += "		B40.D_E_L_E_T_ = ? "
+	cQuery += " WHERE BSW.BSW_FILIAL = ? AND "
+	cQuery += "		BSW.BSW_LOGUSR = ? AND "
+	cQuery += "		BSW.D_E_L_E_T_ = ? "
+
+	oStatement := FwExecStatement():new(cQuery)
+
+	oStatement:setUnsafe(nOrder++, "BSW.BSW_CODUSR")
+	oStatement:setUnsafe(nOrder++, retSqlName("BSW"))
+
+	oStatement:setUnsafe(nOrder++, retSqlName("B40"))
+	oStatement:setString(nOrder++, xFilial("B40"))
+
+	oStatement:setString(nOrder++, jContract["healthInsurerCode"])
+	oStatement:setString(nOrder++, jContract["companyCode"])
+	oStatement:setString(nOrder++, jContract["contractCode"])
+	oStatement:setString(nOrder++, jContract["contractVersion"])
+	oStatement:setString(nOrder++, jContract["subcontractCode"])
+	oStatement:setString(nOrder++, jContract["subcontractVersion"])
+	oStatement:setString(nOrder++, " ")
+
+	oStatement:setString(nOrder++, xFilial("BSW"))
+	oStatement:setString(nOrder++, oRest:getQueryRequest()["loginUser"])
+	oStatement:setString(nOrder++, " ")
+
+	nCount := oStatement:execScalar("CNT")
+
+	if nCount > 0
+		lHasAccess := .T.
+	else
+		self:nStatusCode := STATUS_CODE_FORBIDDEN
+		self:jResult["code"] := self:nStatusCode
+		self:jResult["message"] := STR0013 // "Acesso negado ao contrato/subcontrato ou beneficiário." 
+		self:jResult["detailedMessage"] := STR0014 // "O usuário informado não possui permissão para acessar os dados deste contrato, subcontrato ou beneficiário."
+
+		self:setResponseData()
+	endif
+
+	freeObj(oStatement)
+
+return lHasAccess
+
+/*/{Protheus.doc} validateRequiredParams
+Valida se os parâmetros obrigatórios estão presentes na requisição.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@param jRequestData, json, dados da requisição a serem validados
+@param aRequiredParams, array, lista de parâmetros obrigatórios
+@return logical, verdadeiro se todos os parâmetros obrigatórios estiverem presentes, falso caso contrário
+*/
+method validateRequiredParams(jRequestData as json, aRequiredParams as array) as logical class BaseController
+
+	local nCount as numeric
+	local lValid := .T. as logical
+	local aErrors := {} as array
+	local nSizeArray as numeric
+
+	default aRequiredParams := {}
+
+	nSizeArray := len(aRequiredParams)
+
+	if nSizeArray > 0
+		for nCount := 1 to nSizeArray
+			if !(jRequestData:hasProperty(aRequiredParams[nCount]) .and. !empty(jRequestData[aRequiredParams[nCount]]))
+				aAdd(aErrors, {"code": STATUS_CODE_BAD_REQUEST, "message": STR0015 + aRequiredParams[nCount] + STR0016, "detailedMessage": STR0017}) // "O parâmetro '"; "' não foi informado." ; "O parâmetro obrigatório deve ser enviado na requisição."  
+			endif
+		next nCount
+
+		if len(aErrors) > 0
+			self:setRequiredErrors(aErrors)
+
+			lValid := .F.
+		endif
+	endif
+
+	fwFreeArray(aErrors)
+	fwFreeArray(aRequiredParams)
+	freeObj(jRequestData)
+
+return lValid
+
+/*/{Protheus.doc} getStatusCode
+Obtém o código de status da resposta.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@return numeric, código de status da resposta
+*/
+method getStatusCode() as numeric class BaseController
+return self:nStatusCode
+
+/*/{Protheus.doc} setBodyRequest
+Define o corpo da requisição.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@param cBody, character, corpo da requisição em formato de string
+@return logical, verdadeiro se o corpo for definido com sucesso
+*/
+method setBodyRequest(cBody as character) as logical class BaseController
+
+	local lOk := .T. as logical
+    local cError as character
+
+	self:jBodyRequest := JsonObject():new()
+
+    cError := self:jBodyRequest:fromJson(cBody)
+
+    if !empty(cError)     
+		self:nStatusCode := STATUS_CODE_BAD_REQUEST
+		self:jResult["code"] := self:nStatusCode
+		self:jResult["message"] := STR0020 // "Formato de JSON inválido."
+		self:jResult["detailedMessage"] := STR0021 // "O corpo da requisição não está em um formato JSON válido. Verifique a estrutura e tente novamente." 
+
+		self:setResponseData()
+
+		lOk := .F.
+    endif
+
+return lOk
+
+/*/{Protheus.doc} getBodyRequest
+Obtém o corpo da requisição em formato JSON.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@return json, corpo da requisição
+*/
+method getBodyRequest() as json class BaseController
+return self:jBodyRequest
+
+/*/{Protheus.doc} setResponseData
+Define os dados da resposta da API REST, incluindo o conteúdo JSON, o status HTTP e o content-type.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 18/05/2025
+/*/
+method setResponseData() class BaseController
+
+	oRest:setFault(self:jResult:toJson())
+	oRest:setKeyHeaderResponse("Content-Type", "application/json")
+	oRest:setStatusCode(self:nStatusCode)
+
+return
+
+/*/{Protheus.doc} validateRequiredFormData
+Valida se os campos obrigatórios estão presentes no conteúdo recebido via form-data.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/05/2025
+@param jFormData, json, conteúdo recebido no form-data
+@param aRequiredData, array, lista de campos obrigatórios a serem validados
+@return logical, indica se todos os campos obrigatórios estão presentes
+/*/
+method validateRequiredFormData(jFormData as json, aRequiredData as array) as logical class BaseController
+
+	local nCount as numeric
+	local lValid := .T. as logical
+	local aErrors := {} as array
+	local nSizeArray as numeric
+	local cKey as character
+	local cType as character
+
+	nSizeArray := len(aRequiredData)
+
+	if nSizeArray > 0
+		for nCount := 1 to nSizeArray
+			cKey := aRequiredData[nCount]["key"]
+			cType := aRequiredData[nCount]["type"]
+
+			if !(jFormData:hasProperty(cKey) .and. iif(cType == "text", !empty(jFormData[cKey]["value"]), len(jFormData[cKey]["value"]) > 0))
+				aAdd(aErrors, {"code": STATUS_CODE_BAD_REQUEST, "message": STR0015 + aRequiredData[nCount]["key"] + STR0016, "detailedMessage": STR0017}) // "O parâmetro '"; "' não foi informado." ; "O parâmetro obrigatório deve ser enviado na requisição."
+			endif		
+		next nCount
+
+		if len(aErrors) > 0
+			self:setRequiredErrors(aErrors)
+
+			lValid := .F.
+		endif
+	endif
+
+	fwFreeArray(aErrors)
+	fwFreeArray(aRequiredData)
+	freeObj(jFormData)
+
+return lValid
+
+/*/{Protheus.doc} isFormData
+Verifica se os dados estão sendo enviados no formato form-data.
+@type method
+@version 12.1.2510
+@autor vinicius.queiros
+@since 28/07/2025
+@return logical, indica se os dados são do tipo form-data
+/*/
+method isFormData() as logical class BaseController
+
+	local cContentType as character
+
+	do case 
+		case oRest:getHeaderRequest():hasProperty("Content-Type")
+			cContentType := oRest:getHeaderRequest()["Content-Type"]
+		
+		case oRest:getHeaderRequest():hasProperty("content-type")
+			cContentType := oRest:getHeaderRequest()["content-type"]
+	endcase
+
+return "multipart/form-data" $ lower(cContentType)
+
+/*/{Protheus.doc} setFormData
+Define o conteúdo do form-data que será utilizado nas requisições realizadas pela classe BaseController.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/05/2025
+@param cFormData, character, conteúdo em formato form-data a ser armazenado
+@return logical, indica se o form-data foi definido com sucesso
+/*/
+method setFormData(cFormData as character) as logical class BaseController
+
+	local lOk := .F. as logical
+	local jFormData := JsonObject():new() as json
+	local nCount as numeric
+	local nElementSize as numeric
+	local cKey as character
+	local jElement as json
+
+	jFormData:fromJson(cFormData)
+
+	if jFormData:hasProperty("Success") .and. jFormData:hasProperty("Elements")
+		nElementSize := len(jFormData["Elements"])
+
+		for nCount := 1 to nElementSize
+			jElement := jFormData["Elements"][nCount]
+
+			if jElement["Success"]
+				cKey := jElement["Name"]
+
+				if jElement["InputType"] == 0
+					self:jFormData[cKey] := JsonObject():new()
+					self:jFormData[cKey]["type"] := "text"
+					self:jFormData[cKey]["value"] := jElement["Value"]
+				else
+					if !self:jFormData:hasProperty(cKey)
+						self:jFormData[cKey] := JsonObject():new()
+						self:jFormData[cKey]["type"] := "file"
+						self:jFormData[cKey]["value"] := {}
+					endif
+
+					aAdd(self:jFormData[cKey]["value"], {"fileName": jElement["FileName"], "uploadName": jElement["UploadName"], "uploadDir": jElement["UploadDir"]})
+				endif
+				
+				lOk := .T.
+			endif
+		next nCount
+	else
+		self:nStatusCode := STATUS_CODE_NOT_ACCEPTABLE
+		self:jResult["code"] := self:nStatusCode
+		self:jResult["message"] := STR0022 // "Formato de dados inválido."
+		self:jResult["detailedMessage"] := STR0023 // "Os dados enviados não estão no formato form-data. Verifique se o Content-Type da requisição está definido como multipart/form-data e se os campos foram corretamente estruturados."
+
+		self:setResponseData()
+	endif
+
+	freeObj(jFormData)
+	freeObj(jElement)
+
+return lOk
+
+/*/{Protheus.doc} getFormData
+Retorna o conteúdo do form-data armazenado para uso nas requisições da classe BaseController.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 28/07/2025
+@return json, conteúdo atual do form-data armazenado
+/*/
+method getFormData() as json class BaseController
+return self:jFormData
+
+/*/{Protheus.doc} checkPortalUserExists
+Verifica se um usuário do portal existe com base no login e código fornecidos.
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 03/04/2025
+@param cLogin, character, login do usuário do portal
+@param cCode, character, código associado ao usuário
+@return logical, verdadeiro se o usuário existir, falso caso contrário
+*/
+method checkPortalUserExists(cLogin as character, cCode as character) as logical class BaseController
+
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local oStatement as object
+	local nCount as numeric
+
+	cQuery += "SELECT COUNT(?) CNT "
+	cQuery += " FROM ? BSW "
+	cQuery += " WHERE BSW.BSW_FILIAL = ? AND "
+	cQuery += " 	  BSW.BSW_LOGUSR = ? AND "
+	cQuery += " 	  BSW.BSW_CODUSR = ? AND "
+	cQuery += " 	  BSW.D_E_L_E_T_ = ? "
+
+	oStatement := FwExecStatement():new(cQuery)
+
+	oStatement:setUnsafe(nOrder++, "BSW.BSW_CODUSR")
+	oStatement:setUnsafe(nOrder++, retSqlName("BSW"))
+	oStatement:setString(nOrder++, xFilial("BSW"))
+	oStatement:setString(nOrder++, cLogin)
+	oStatement:setString(nOrder++, cCode)
+	oStatement:setString(nOrder++, " ")
+
+	nCount := oStatement:execScalar("CNT")
+
+	freeObj(oStatement)
+
+return iif(nCount > 0, .T., .F.)
+
+/*/{Protheus.doc} setRequiredErrors
+Define os erros de parâmetros/dados obrigatórios que serão utilizados nas respostas
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 13/05/2025
+@param aErrors, array, lista de erros relacionados a parâmetros obrigatórios
+/*/
+method setRequiredErrors(aErrors as array) class BaseController
+
+	self:jResult := JsonObject():new()
+
+	if len(aErrors) == 1
+		self:jResult["code"] := aErrors[1]["code"]
+		self:jResult["message"] := aErrors[1]["message"]
+		self:jResult["detailedMessage"] := aErrors[1]["detailedMessage"]
+	else
+		self:jResult["code"] := STATUS_CODE_BAD_REQUEST
+		self:jResult["message"] := STR0018 // "Parâmetros obrigatórios não informado." 
+		self:jResult["detailedMessage"] := STR0019 // "Os seguintes parâmetros obrigatórios não foram informados:"
+		self:jResult["details"] := aClone(aErrors)
+	endif
+
+	self:nStatusCode := STATUS_CODE_BAD_REQUEST
+	self:setResponseData()
+
+	fwFreeArray(aErrors)
+
+return

@@ -1,0 +1,418 @@
+#include "tlpp-core.th"
+#include "backoffice.reconciliation.matchdelete.data.protheus.ch"
+
+namespace totvs.protheus.backoffice.reconciliation.matchdelete
+using namespace totvs.protheus.backoffice.reconciliation.util
+
+Static __oPrepQry := NIL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MatchDeleteProtheusData
+Classe responsavel pela consulta de dados
+
+@author Totvs
+/*/
+//-------------------------------------------------------------------
+class MatchDeleteProtheusData
+Public  method new()
+Public  method postByBody()
+Public  method getData() as Object
+Private method procMatches()
+Private method delMatches()
+Private method updateReconciliation()
+private method updatePosReconciliate()
+private method GetUUIDT() as character
+endclass
+
+/*/{Protheus.doc} MatchDeleteProtheusData
+Metodo construtor
+
+@author Totvs
+/*/
+method new() class MatchDeleteProtheusData
+return
+
+/*/{Protheus.doc} getData
+Metodo para chamada e validacao do tratamento de dados
+
+@author Totvs
+/*/
+method getData() class MatchDeleteProtheusData as Object
+static __oActiveData as Object
+
+If ValType(__oActiveData) == "U"
+    __oActiveData := MatchDeleteProtheusData():new()
+EndIf
+return __oActiveData
+
+/*/{Protheus.doc} postByBody
+Metodo responsavel pela busca e gravacao das delecoes de matches
+
+@author Totvs
+/*/
+method postByBody(jBody as Json) class MatchDeleteProtheusData
+Local aResponse := {} as Array
+Local lContinue := .T. as Logical
+Local cError    := "" as Character
+
+lContinue := ::procMatches(jBody,@cError) 
+
+If lContinue
+    aAdd(aResponse, lContinue)
+    aAdd(aResponse, '{}')
+Else
+    aAdd(aResponse, lContinue)
+    aAdd(aResponse, cError)
+EndIf
+
+return aResponse
+
+/*/{Protheus.doc} getMatches
+Metodo responsavel pela busca dos matches
+
+@author Totvs
+/*/
+method procMatches(jBody as Json, cError as Character) class MatchDeleteProtheusData
+Local aItems           as Array
+Local cCodcon          as Character
+Local cIdMatch         as Character
+Local cUuid            as Character
+Local cTabFin          as Character
+Local lContinue := .T. as Logical
+
+DEFAULT cError := ""
+
+If ValType(jBody["tabori"]) == "C" .And. ValType(jBody["tabdes"]) == "C" .And.; 
+   ValType(jBody["items"])=="A"
+
+    cTabOri := jBody["tabori"]
+    cTabDes := jBody["tabdes"]
+    aItems  := jBody["items"]
+
+    If Len(aItems) > 0
+
+        /* Esta função foi desenvolvida inicialmente para receber em jBody["items"] 1 ou mais items para deleção 
+        porém foi realizada uma alteração na passagem de parâmetros, no momento só é enviado um código de conciliação e 
+        idmatch a serem cancelados, e os items a serem deletados são buscados na função delMatches() */
+
+        cIdMatch := aItems[1]["idmatch"]
+        If aItems[1]:hasProperty("iguuid") .and. !Empty(aItems[1]["iguuid"])
+            cUuid := aItems[1]["iguuid"]
+            cTabFin := 'SIG'
+        ElseIf aItems[1]:hasProperty("fkuuid") .and. !Empty(aItems[1]["fkuuid"])
+            cUuid := aItems[1]["fkuuid"]
+            cTabFin := 'FK5'
+        Endif
+
+        cCodcon := If(!Empty(aItems[1]["codcon"]), aItems[1]["codcon"], Space(TamSx3("QLD_CODCON")[1]))
+
+        If !Empty(cIdMatch)
+            lContinue := ::delMatches(cCodcon, cIdMatch, cTabOri, cTabDes, @cError,@cUuid,cTabFin)
+            If lContinue
+                lContinue := ::updateReconciliation(cCodcon, cIdMatch, jBody["codcfg"], @cError, cTabOri,cUuid)
+            EndIf
+        EndIf
+    Else
+        cError := STR0001 //"Não foram enviados itens para exclusão."
+        lContinue := .F.
+    EndIf
+Else
+    cError := STR0002 //"Conteúdo do corpo inválido."
+    lContinue := .F.
+EndIf
+
+return lContinue 
+
+/*/{Protheus.doc} DelMatches
+    Executa os updates nas tabelas de origem e destino para 
+    desmarcar os matches
+    @author user
+/*/
+Method delMatches(cCodCon as Character, cIdMatch as Character, cTabOri as Character,;
+                    cTabDes as Character, cError as Character, cUuid  as Character, cTabFin  as Character) class MatchDeleteProtheusData
+Local cQryUpdOri as Character
+Local cQryUpdDes as Character
+Local cCondUPD as Character
+Local lContinue := .T. as Logical
+Local cTipMatSpc := Space(2) As Character
+Local lCpoTipMat := QLD->(FieldPos("QLD_TIPMAT")) > 0
+Local cWhere := '' as Character
+
+DEFAULT cError := ""
+
+If lCpoTipMat
+    cTipMatSpc := Space(TamSx3("QLD_TIPMAT")[1])
+Endif
+
+If cTabFin == 'FK5'
+    cCampo := "IG_MSUIDT"
+    cWhere := "IDMATCH = '"+ cIdMatch + "' "
+    cUuid := ::GetUUIDT(cTabOri,cIdMatch,cWhere,cCampo)
+Endif
+
+cQryUpdOri := "UPDATE "+cTabOri+" SET "
+cQryUpdDes := "UPDATE "+cTabDes+" SET "
+
+cError := STR0003 //"matchDelete Error: Nao foi possivel atualizar a tabela temporaria. Para mais detalhes, verificar arquivo console.log. "
+
+//Atualizando os matchs que ainda não foram gravados na QLD
+cCondUPD := " REGMATCH = '" +Space(TamSx3("QLD_REGMAT")[1])+ "',"
+cCondUPD += " DESMATCH = '" +Space(TamSx3("QLD_DESMAT")[1])+ "',"
+cCondUPD += " SEQMATCH = '" +Space(TamSx3("QLD_SEQMAT")[1])+ "',"
+cCondUPD += " IDMATCH  = '" +Space(TamSx3("QLD_SEQMAT")[1])+ "',"
+If QLD->(FieldPos("QLD_COMPAR")) > 0
+    cCondUPD += " COMPARISON  = 'N',"  //Valor padrão para campo comparison antes de realizar o match
+EndIf
+cCondUPD += " TYPEMATCH  = '" + cTipMatSpc + "'"
+cCondUPD += " WHERE CODCON = '" + cCodCon + "' "          
+cCondUPD += " AND IDMATCH = '" + cIdMatch + "' "          
+cCondUPD += " AND RECONCILED = 'N' "          
+cCondUPD += " AND D_E_L_E_T_ = ' ' "
+
+If TcSqlExec(cQryUpdOri+cCondUPD) <> 0
+    Conout(TCSqlError())
+    cError += STR0004+cTabOri //"Tabela: "
+    lContinue := .F.
+EndIf
+If lContinue
+    If TcSqlExec(cQryUpdDes+cCondUPD) <> 0
+        Conout(TCSqlError())
+        cError += STR0004+cTabDes //"Tabela: "
+        lContinue := .F.
+    EndIf
+EndIf
+
+If lContinue
+    //Atualizando os matchs que já foram gravados na QLD
+    cCondUPD := " IDDELETE = IDMATCH,"    
+    cCondUPD += " RECONCILED = 'N',"
+    cCondUPD += " REGMATCH = '" +Space(TamSx3("QLD_REGMAT")[1])+"',"
+    cCondUPD += " DESMATCH = '" +Space(TamSx3("QLD_DESMAT")[1])+"',"
+    cCondUPD += " SEQMATCH = '" +Space(TamSx3("QLD_SEQMAT")[1])+"',"
+    cCondUPD += " IDMATCH = '" + Space(TamSx3("QLD_REGMAT")[1]) + Space(TamSx3("QLD_SEQMAT")[1]) + "', "
+    If QLD->(FieldPos("QLD_COMPAR")) > 0
+        cCondUPD += " COMPARISON  = 'N',"  //Valor padrão para campo comparison antes de realizar o match
+    EndIf
+    cCondUPD += " TYPEMATCH  = '" + cTipMatSpc + "'"
+    cCondUPD += " WHERE CODCON = '" + cCodCon + "' "
+    cCondUPD += " AND IDMATCH = '" + cIdMatch + "' "
+    cCondUPD += " AND RECONCILED = 'S' "
+    cCondUPD += " AND D_E_L_E_T_ = ' ' "
+
+    If TcSqlExec(cQryUpdOri+cCondUPD) <> 0
+        Conout(TCSqlError())
+        cError += STR0004+cTabOri //"Tabela: "
+        lContinue := .F.
+    EndIf
+    If lContinue
+        If TcSqlExec(cQryUpdDes+cCondUPD) <> 0
+            Conout(TCSqlError())
+            cError += STR0004+cTabDes //"Tabela: "
+            lContinue := .F.
+        EndIf
+    EndIf
+EndIf
+
+If lContinue
+    cError := ""
+EndIf
+
+TCRefresh(cTabOri) // Resetar tempo de timeout
+TCRefresh(cTabDes) // Resetar tempo de timeout
+
+Return lContinue
+
+/*/{Protheus.doc} updateReconciliation
+    Metodo que deleta da tabela QLD os matchs cancelados. Também deleta cabeçalhos de conciliação na tabela QLC caso 
+    não exista mais items.
+    @author user
+    @since 07/10/2022
+    @version 12.1.2210
+    @param cCodCon, character, Código de conciliação
+    @param cIdMatch, character, Id do match a ser deletado
+    @param cCodCfg, character, Codigo de configuração utilizado
+    @param cError, character, Variavel que guarda o erro a ser retornado ao front-end em caso de erro inesperado
+    @param cTabOri, character, Tabela Origem da conciliação
+    @param cUuid, character, UUID do registro para cancelamento match (0024)
+    @return lContinua, logical , Indica o sucesso ou falha no processo de deleção
+
+    /*/
+Method updateReconciliation(cCodCon as character, cIdMatch as character, cCodCfg as character, cError as character, cTabOri as character, cUuid as character)  class MatchDeleteProtheusData
+    
+    Local cQueryUpd   := "" as character
+    Local cRegMatch   := "" as character
+    Local cSeqMatch   := "" as character
+    Local cIdConc     := cCodCon + cIdMatch as character
+    Local cBranchesCondition := "" as Character
+
+    Local lContinua := .T. as Logical
+
+    DbSelectArea("QLD")
+    //Procurar o Cod. de Conciliação nesta configuração para saber se há necessidade de atualizar a QLD e QLC
+    If DbSeek(FWxFilial("QLD") + cCodCon + cCodCfg) 
+
+        If(Len(cIdMatch)==11)
+            cRegMatch := SubStr(cIdMatch, 1, 1) //tratativa para regra de match alterado no setup campo regmatch ficava apenas com 1 casa
+            cSeqMatch := SubStr(cIdMatch, 2, 10)
+        Else
+            cRegMatch := SubStr(cIdMatch, 1, 3)
+            cSeqMatch := SubStr(cIdMatch, 4, 10)
+        EndIf
+        
+        //Gravação complementar
+        ::updatePosReconciliate(cCodCon, cCodCfg, cRegMatch, cSeqMatch, cTabOri, cUuid, @cError) 
+
+        cQueryUpd :=  " UPDATE "+RetSQLName("QLD")+" " 
+        cQueryUpd +=  " SET D_E_L_E_T_ = '*' , " 
+        cQueryUpd +=    " R_E_C_D_E_L_ = R_E_C_N_O_ "  
+        cQueryUpd +=  " WHERE QLD_FILIAL = '" +xFilial("QLD")+ "' "  
+        cQueryUpd +=  " AND QLD_CODCON = '"+ cCodCon+ "' " 
+        cQueryUpd +=  " AND QLD_CODCFG = '"+ cCodCfg + "' " 
+        cQueryUpd +=  " AND QLD_REGMAT = '"+ cRegMatch+ "' " 
+        cQueryUpd +=  " AND QLD_SEQMAT = '"+ cSeqMatch +"'"  
+        cQueryUpd +=  " AND D_E_L_E_T_ = ' ' "
+
+        IIf(TcSqlExec(cQueryUpd) <> 0,; 
+            (conout(TCSqlError()),;
+            cError := STR0005),;   //"Ocorreu um erro inesperado ao excluir o match"
+            cError := "")
+        If( CT2->(FieldPos("CT2_IDCONC")) > 0 ) .And. !(cCodCfg $ '0023|0024' .Or. ((QLB->(FieldPos("QLB_CFGORI")) > 0) .And. (QLB->QLB_CFGORI $ '0023|0024')))
+
+            // Se houver mais de uma filial selecionada no profile, a CT2 pode estar em 
+            // uma filial diferente da filial do login
+            cBranchesCondition := GetBranchiesForConditional("CT2")
+        
+            cQueryUpd :=  " UPDATE "+RetSQLName("CT2")+" " 
+            cQueryUpd +=  " SET CT2_IDCONC = ' ' " 
+            cQueryUpd +=  " WHERE "+ cBranchesCondition +" AND "
+            cQueryUpd +=  " CT2_IDCONC ='"+cIdConc+"' " 
+            cQueryUpd +=  " AND D_E_L_E_T_ = ' ' "
+
+            IIf(TcSqlExec(cQueryUpd) <> 0,; 
+                (conout(TCSqlError()),;
+                cError := STR0005),;   //"Ocorreu um erro inesperado ao excluir o match"
+            cError := "")
+        EndIf
+ 
+        If lContinua
+            /*  Deleção no cabeçalho de conciliação em caso do cabeçalho sobrar sem matchs 
+                É feito um subselect na clausula WHERE contando o número de items sob o cabeçalho da conciliação utilizado, caso seja menor que 1, significa que não há mais
+                items sob o cabeçalho do código de conciliação, portanto o cabeçalho deve ser deletado */
+
+            cQueryUpd :=  " UPDATE "+RetSQLName("QLC")+" " 
+            cQueryUpd +=  " SET D_E_L_E_T_ = '*' , " 
+            cQueryUpd +=      " R_E_C_D_E_L_ = R_E_C_N_O_ " 
+            cQueryUpd +=      " WHERE QLC_FILIAL = '" +xFilial("QLC")+ "' " 
+            cQueryUpd +=            " AND QLC_CODCFG = '"+ cCodCfg+ "' " 
+            cQueryUpd +=            " AND QLC_CODCON = '"+ cCodCon + "' "  
+            cQueryUpd +=            " AND D_E_L_E_T_ = ' ' "
+            cQueryUpd +=            " AND ( "
+            cQueryUpd +=                " SELECT COUNT(*) AS COUNTITEMS FROM "+RetSQLName("QLD")+" "
+            cQueryUpd +=                " WHERE QLD_FILIAL = '" +xFilial("QLD")+ "' "
+            cQueryUpd +=                    " AND QLD_CODCON = '"+ cCodCon+ "' " 
+            cQueryUpd +=                    " AND QLD_CODCFG = '"+ cCodCfg + "' " 
+            cQueryUpd +=                    " AND D_E_L_E_T_ = ' ' " 
+            cQueryUpd +=                    " ) < 1 "
+
+            IIf(TcSqlExec(cQueryUpd) <> 0,; 
+                (conout(TCSqlError()),;
+                cError := STR0006),; //"Ocorreu um erro inesperado ao excluir o cabeçalho de conciliação" 
+            cError := "")
+
+        EndIf
+    // Deletar registros com conciliacao não efetivada mas com match na Conciliacão Manual
+    ElseIf Empty(cCodCon) .And. (cCodCfg == '0024' .Or. ((QLB->(FieldPos("QLB_CFGORI")) > 0) .And. (QLB->QLB_CFGORI == "0024")))
+        If(Len(cIdMatch)==11)
+            cRegMatch := SubStr(cIdMatch, 1, 1) //tratativa para regra de match alterado no setup campo regmatch ficava apenas com 1 casa
+            cSeqMatch := SubStr(cIdMatch, 2, 10)
+        Else
+            cRegMatch := SubStr(cIdMatch, 1, 3)
+            cSeqMatch := SubStr(cIdMatch, 4, 10)
+        EndIf
+
+        //Gravação complementar
+        ::updatePosReconciliate(cCodCon, cCodCfg, cRegMatch, cSeqMatch, cTabOri, cUuid, @cError) 
+    EndIf
+
+Return lContinua
+
+/*/{Protheus.doc} updatePosReconciliate
+    Metodo que complementa a gravação do dos matchs cancelados. 
+
+    @author pequim
+    @since 30/11/2022
+    @version 12.1.2210
+    @param cCodCon, character, Código de conciliação
+    @param cCodCfg, character, Codigo de configuração utilizado
+    @param cRegMatch, character, Código da regra de match
+    @param cSeqMatch, character, Sequencia do match cancelado
+    @param cTabOri, character, Tabela Origem da conciliação
+    @param cUuid, character, UUID do registro para cancelamento match
+    @param cError, character, Mensagem de erro, caso aconteça
+
+    /*/
+Method updatePosReconciliate(cCodCon as character, cCodCfg as character, cRegMatch as character, cSeqMatch as character, cTabOri as character, ;
+                            cUuid as character, cError as character) class MatchDeleteProtheusData
+
+    Local aArea := GetArea()    as Array
+    Local bBlock As Codeblock
+    Local cPosCan As Character
+
+    If QLB->(ColumnPos("QLB_POSCAN")) > 0 .and. (!Empty(cCodCon) .Or. cCodCfg == '0024' .Or. ((QLB->(FieldPos("QLB_CFGORI")) > 0) .And. (QLB->QLB_CFGORI == "0024"))) .and. !Empty(cCodCfg).and. !Empty(cRegMatch).and. !Empty(cSeqMatch) .and. !Empty(cUuid)
+        QLB->(dbSetOrder(1)) //QLB_FILIAL+QLB_CODCFG
+        If QLB->(dbSeek(FWxFilial("QLB")+Padr(cCodCfg, TamSx3("QLB_CODCFG")[1]))) 
+            cPosCan := QLB->QLB_POSCAN
+            If !Empty(cPosCan)
+                If FindFunction(cPosCan)
+                    bBlock := ErrorBlock( { |e| ChecErro(e) } )
+                    BEGIN SEQUENCE
+                        cPosCan := cPosCan + "('" + cCodCon + "', '" + cCodCfg + "', '" + cRegMatch + "', '" + cSeqMatch + "', '" + cTabOri +"', '" + cUuid + "', @cError)"
+                        &cPosCan
+                    END SEQUENCE
+                    ErrorBlock(bBlock)
+                Endif
+            Endif
+        Endif
+    Endif
+    RestArea(aArea)
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GetUUIDT
+	(long_description)
+	@type  Function
+	@author user
+	@since 31/10/2023
+	@version version
+	@param cUUID	, Character , ID do registro
+	@param cTable	, Character , RealName da tabela temporária 
+
+	@return dOldDispo, Date, Data de disponibilidade atual (TRB)
+/*/
+//---------------------------------------------------------------------
+Method GetUUIDT(cTabTRB as character, cIdMatch as character, cWhere as character, cCampo as character ) as character class MatchDeleteProtheusData
+	Local cUUID as Character
+	Local cQuery as Character
+
+	cQuery := ""
+
+	If __oPrepQry == NIL
+		cQuery := "SELECT ? UUID "
+		cQuery += " FROM ? "
+		cQuery += " WHERE ? AND "
+		cQuery += " D_E_L_E_T_ = ' ' "
+		
+		cQuery := ChangeQuery(cQuery)
+		__oPrepQry:=FWPreparedStatement():New(cQuery)
+	Endif
+
+    __oPrepQry:SetUnsafe(1,cCampo)
+	__oPrepQry:SetUnsafe(2,cTabTRB)
+	__oPrepQry:SetUnsafe(3,cWhere)
+	cQuery := __oPrepQry:GetFixQuery()
+			
+	cUUID := ((MpSysExecScalar(cQuery,"UUID")))
+
+Return cUUID
+

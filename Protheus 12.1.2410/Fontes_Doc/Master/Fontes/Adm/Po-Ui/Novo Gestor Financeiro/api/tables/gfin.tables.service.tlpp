@@ -1,0 +1,508 @@
+#include 'tlpp-core.th'
+#include 'gfin.tables.service.ch'
+
+NameSpace gfin.api.tables
+Using NameSpace gfin.util
+Using NameSpace totvs.protheus.backoffice.ngf.util
+
+Static __cAllowedTables := 'FWP|SE1|SE2|SA1|SA2|SA6|SEA|SEH|SEI|FK1|FK2|FK6|CV8|F79|F7A|FKD|FKC|SEV|SEZ|F7B|SE9|SM4|CT1|CTT|CTD|CTH|CVL|CV0|SED|FIT|FRV|F7C|F7D|F7E'
+
+Class GfinTablesService FROM FWAdapterBaseV2
+  Public Method new()
+  Public Method getData()
+  Public Method getStruct()
+  Protected Method getBorderauxGroupingFields() as array
+  Protected Method getBorderauxGroupingFieldsStruct() as array
+  Protected Data oExecBorderauxGroupingFields as object
+EndClass
+
+Method new() Class GfinTablesService
+  _Super:new('GET')
+  If MethIsMemberOf( self, "setUseSpaces", .T. )
+    ::setUseSpaces(.T.)
+  Endif
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getData
+retorna os Dados da Tabela passada como parâmetro
+
+@Input
+    tableNick As Character
+    queryRequestParams As Json, parâmetros recebidos
+
+@Return response As Json, retorno da lista de dados
+
+@author Daniel Ambrozio
+@since abr |2021
+/*/
+//-------------------------------------------------------------------
+Method getData(tableNick As Character, queryRequestParams As Json, headers As Json) Class GfinTablesService
+	Local response                                     as Json
+	Local jStruct                                      as Json
+	Local filter                 := {}                 as Array
+	Local fields                 := {}                 as Array
+	Local aStruct                := {}                 as Array
+	Local branches               := {}                 as Array
+	Local folders                := {}                 as Array
+	Local queryWhere             := ""                 as Character
+	Local filial                 := ""                 as Character
+	Local cbranchQry             := ""                 as Character
+	Local queryAux               := ""                 as Character
+	Local aliasAux               := ""                 as Character
+	Local fieldFilial            := 0                  as Numeric
+	Local lBol                   := .F.                as Logical
+	Local cTableBills            := "SE1"              as Character
+	Local lBolOcurrencies        := .F.                as Logical
+	Local aMapFields             := {}                 as Array
+	Local nField                 := 1                  as Numeric
+	Local cTableNickQry	  	     := ""	   			   as Character
+	Local lGroupBillsByBorderaux := .F.                as Logical
+	Local cQuery                 := ""                 as Character
+	Local jAdapterResponse       := JsonObject():New() as json
+	Local jItem       			 := JsonObject():New() as json
+	Local nX                     := 1                  as Numeric
+
+	response      := JsonObject():New()
+
+	tableNick := upper(tableNick)
+	lBol      := tableNick == 'BOL'
+	tableNick := If(lBol, 'SEA', tableNick)
+	cTableNickQry := tableNick
+	lGroupBillsByBorderaux := lBol .and. queryRequestParams:hasProperty('groupByBorderaux') .and. queryRequestParams['groupByBorderaux'] == "true"
+
+	// indica qual página devemos retornar
+	If !(Empty(queryRequestParams['page']))
+		::setPage(Val(queryRequestParams['page']))
+	EndIf
+
+	// indica o tamanho da página
+	If !(Empty(queryRequestParams['pagesize']))
+		::setPageSize(Val(queryRequestParams['pagesize']))
+	EndIf
+
+	If !(Empty(queryRequestParams['order']))
+		// indica a ordem definida por querystring
+		::setOrderQuery(UPPER(queryRequestParams['order']))
+	EndIf
+
+		// indica o filtro querystring recebido (pode se utilizar um filtro oData)
+	If !(Empty(queryRequestParams['filter']))
+		AAdd(filter, {"FILTER", queryRequestParams['filter']})
+		::SetUrlFilter(filter)
+	EndIf
+	// trata as filiais encaminhadas no header para o filtro
+	If !(Empty(headers['branches']))
+		branches := STRtokARR(headers['branches'], ',')
+	EndIf
+
+	If lBol .and. queryRequestParams:hasProperty('tableBills')
+		cTableBills := queryRequestParams['tableBills']
+	Endif
+
+	// desvio para retornar folders
+	If !Empty(queryRequestParams['folders']) .and. Upper(queryRequestParams['folders']) == 'S'
+		mapFieldsFolders(Self, tableNick, @aStruct, @folders)
+	Else
+		if queryRequestParams:hasProperty('browser') .and. UPPER(queryRequestParams['browser']) == 'S'
+			totvs.protheus.backoffice.ngf.util.mapTableFieldsBaseV2(Self, @aStruct, tableNick, FWModeAccess(tableNick, 1) <> 'C', .T.)
+		else
+			If !(Empty(queryRequestParams['fields']))
+				fields := STRtokARR(UPPER(queryRequestParams['fields']), ',')
+			EndIf
+
+			If lBol .and. cTableBills == "SE2"
+				getFieldsUser(@fields)
+			Endif
+
+			apiTablesMapFields(Self, @fields, tableNick, @aStruct)
+		endif
+	EndIf
+
+	// adiciona campos utilizados no filtro que não serão retornados no resultado
+	if queryRequestParams:hasProperty('filterFields')
+		aFilterFields := STRtoArray(UPPER(queryRequestParams['filterFields']), ',')
+		totvs.protheus.backoffice.ngf.util.mapFields(Self, aFilterFields)
+	endif
+
+	if lGroupBillsByBorderaux
+		self:setOrder("EA_FILIAL, EA_NUMBOR ") // Não posso incluir campos que não estarão na subquery
+	else
+		::SetOrder((tableNick)->(StrTran(IndexKey(1),"+",",")))
+	endIf
+
+	// Informa a Query a ser utilizada pela API
+	If lBol
+		If queryRequestParams:hasProperty('ocurrencies') .and. queryRequestParams['ocurrencies'] == "true"
+			lBolOcurrencies :=  .T.
+		Endif
+
+		cQuery := apiTablesQueryBol(cTableBills, lBolOcurrencies)
+		
+		if lGroupBillsByBorderaux .and. queryRequestParams:hasProperty('fields') .and. !(Empty(queryRequestParams['fields']))
+			cQuery += " GROUP BY " + Upper(queryRequestParams['fields'])
+		endIf		
+
+		::SetQuery(cQuery)
+		fieldFilial := AScanX(fields, { |x,y| 'EA_FILIAL' $ x })
+
+		If lBolOcurrencies .and. AScanX(fields, { |x,y| 'FI2_FILIAL' $ x }) > 0
+			fieldFilial := AScanX(fields, { |x,y| 'FI2_FILIAL' $ x })
+			cTableNickQry := "FI2"
+		Endif
+
+	Else
+		::SetQuery(apiTablesQuery(tableNick))
+		fieldFilial := AScanX(fields, { |x,y| '_FILIAL' $ x })
+	EndIf
+
+	filial := IIf(fieldFilial > 0, fields[fieldFilial], Nil)
+
+	If !Empty(filial) .And. (!Empty(queryRequestParams['branch']) .Or. !Empty(branches))
+		If !(Empty(queryRequestParams['branch']))
+			if Len(Alltrim(queryRequestParams['branch'])) > Len(Alltrim(FWxFilial(cTableNickQry,queryRequestParams['branch'])))
+				cbranchQry := " IN ('" +FWxFilial(cTableNickQry,queryRequestParams['branch']) + "') "
+			else
+				cbranchQry := " LIKE '%" + Alltrim(queryRequestParams['branch']) + "%' "
+			Endif
+		Else
+			cbranchQry :=  " IN (" + gfin.util.branchesFormatToIn(branches, cTableNickQry) + ")"
+		EndIf
+	EndIf
+
+	If !Empty(cbranchQry)
+		queryWhere := " AND " + cTableNickQry + "."+ filial + cbranchQry
+	EndIf
+
+	if lGroupBillsByBorderaux
+		queryWhere += " AND EA_BORAPI = 'S' AND EA_CART = 'R' AND EA_TRANSF = 'S' " //SetUrlFilter não funciona para campos fora do Select
+	endIf
+
+	If queryRequestParams:hasProperty('msblql') .and. queryRequestParams['msblql'] == "true"
+		aliasAux  := getCutAliasName(tableNick)
+		If (tableNick)->(FieldPos( aliasAux + '_MSBLQL')) > 0
+		queryAux += " AND " + tableNick + "." + aliasAux + "_MSBLQL != '1' "
+		Endif
+	Endif
+
+	If !Empty(queryWhere) .or. !Empty(queryAux)
+		::SetWhere(queryWhere + queryAux)
+	Endif
+
+	//Executa a consulta, se retornar .T. tudo ocorreu conforme esperado
+	If ::Execute()
+		aMapFields := SELF:oJsonObj:aMapFields
+		For nField := 1 to Len(aMapFields)
+			If aMapFields[nField][5][2] == "N"
+				TCSetField(SELF:oJsonObj:cAlias, aMapFields[nField][5][1], aMapFields[nField][5][2], aMapFields[nField][5][3], aMapFields[nField][5][4])
+			EndIf
+		Next nField
+		// Gera o arquivo Json com o retorno da Query
+		::FillGetResponse()
+	EndIf
+
+	If ::lOk
+
+		jAdapterResponse:fromJson(self:getJsonResponse())	
+
+		jStruct := gfin.util.arrayToJson(aStruct)	
+
+		if lGroupBillsByBorderaux
+			for nX := 1 to len(jAdapterResponse['items'])
+				jItem := jAdapterResponse['items'][nX]
+				aGroupingFields := self:getBorderauxGroupingFields(jItem['ea_filial'], jItem['ea_numbor'])
+				aEval(aGroupingFields, {| jFieldToAdd |, jItem[jFieldToAdd['property']] := jFieldToAdd['value']})
+			next nX
+
+			aGroupingFieldsStruct := self:getBorderauxGroupingFieldsStruct()
+			aEval(aGroupingFieldsStruct, {| jStructToAdd |, aAdd(jStruct, jStructToAdd)})
+		endIf
+
+		response["result"] := .T.
+		response["response"] := JsonObject():New()
+		response["response"] := jAdapterResponse
+
+		response["response"]["struct"] := jStruct
+		response["response"]["modeAccess"] := gfin.util.tableModeAccess(tableNick)
+		If len(folders) > 0
+			response["response"]["folders"] := gfin.util.arrayToJson(folders)
+		EndIf
+	Else
+		response := answerErrorFormat(::GetCode(), ::GetMessage(), ::GetMessage())
+	EndIf
+	//faz a desalocação de objetos e arrays utilizados
+	::DeActivate()
+
+Return response
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getStruct
+retorna a Estrutura da Tabela passada como parâmetro
+
+@Input
+    tableNick As Character
+    queryRequestParams As Json, parâmetros recebidos
+
+@Return response As Json, retorno da lista de dados
+
+@author Daniel Ambrozio
+@since abr |2021
+/*/
+//-------------------------------------------------------------------
+Method getStruct(tableNick As Character, queryRequestParams As Json, headers As Json) Class GfinTablesService
+  Local response  as Json
+  Local aStruct   as Array
+  Local fields    as Array
+
+  fields := {}
+
+  If !(Empty(queryRequestParams['fields']))
+    fields := STRtoArray(UPPER(queryRequestParams['fields']), ',')
+  EndIf
+
+  apiTablesMapFields(Self, @fields, tableNick, @aStruct)
+
+  response := JsonObject():New()
+
+  If !Empty(aStruct)
+    response["result"] := .T.
+    response["response"] := JsonObject():New()
+    response["response"]["struct"] := gfin.util.arrayToJson(aStruct)
+  Else
+    response := answerErrorFormat(401, STR0003, STR0004)
+  EndIf
+Return response
+
+/*/{Protheus.doc} getTablesItems
+  orquestra as operações para o retorno da api
+  @type function
+  @author renato.ito
+  @since 25/11/2021
+  @param cTable, character, tabela
+  @param jParams, json, query params
+  @param jHeaders, json, headers
+  @return json, response
+/*/
+Function getTablesItems(cTable as Character, jParams as Json, jHeaders as Json)
+	Local oServiceAPI           as Object
+	Local cQueryBaseV2   := ''  as Character
+	Local jResponse             as Json
+	Local cAllowedTables := __cAllowedTables as Character
+	Local FK7Alias       := ''  as Character
+	Local nLenID         := 1   as Numeric
+	Local aDocId         := {}  as Array
+	Local lOk            := .T. as Logical
+	Local cTableQuery    := ""  as Character
+	Local lCustom        := .F. as Logical
+
+	If !(cTable $ cAllowedTables)
+		jResponse := answerErrorFormat(403, STR0001, STR0002)
+	Else
+		If jParams:hasProperty('custom') .And. !Empty(jParams['custom'])
+			cTableQuery := cTable + UPPER(AllTrim(jParams['custom']))
+			lCustom := .T.
+		Else
+			cTableQuery := cTable
+		EndIf
+		cQueryBaseV2 := apiTablesQuery(cTableQuery, jParams, jHeaders)
+
+		// tratamento de IDDOC para tabelas que utilizam
+		If jParams:hasProperty('idDoc') .And. jParams:hasProperty('fk7Alias') .And. cTable $ 'FK1|FK2|CV8'
+			// Verifica se a chave do título foi encaminhada corretamente
+			FK7Alias := UPPER(jParams['fk7Alias'])
+			nLenID := IIF('SE1' == FK7Alias, 5, 7)
+			aDocId := STRtokARR2(jParams['idDoc'], '|',.T.)
+			If Len(aDocId) <> nLenID
+				// id invalido
+				jResponse := AnswerErrorFormat(403, STR0005, STR0006)  // ID do título inválido , A chave única do título deve ser separa por |.
+				lOk := .F.
+			Else
+				aDocId[1] := Padr(aDocId[1], FWSizeFilial())
+				cQueryBaseV2 += gfin.api.tables.addIDDOC(cTable, FK7Alias, aDocId)
+			EndIf
+		EndIf
+		If lOk
+			oServiceAPI := totvs.protheus.backoffice.ngf.util.api.ApiBaseV2():new()
+			oServiceAPI:setParams(cTable, jParams, jHeaders)
+			oServiceAPI:setQuery(cQueryBaseV2)
+			If lCustom
+				customize(oServiceAPI, cTableQuery)
+			EndIf
+			jResponse := oServiceAPI:getResponse()
+
+			If jParams:hasProperty('relation')
+				oServiceAPI:setRelation(jParams['relation'])
+				oServiceAPI:prepareRelation(jResponse)
+			Endif
+			oServiceAPI:destroy()
+			FreeObj(oServiceAPI)
+		EndIf
+	EndIf
+Return jResponse
+
+/*/{Protheus.doc} getStructV2
+  orquestra as operações para o retorno da api
+  @type function
+  @author Vitor Duca
+  @since 09/12/2021
+  @param cTable, character, tabela
+  @param jParams, json, query params
+  @return json, response
+/*/
+Function getStructV2(cTable as character, jParams as json) As Json
+  Local oServiceAPI as object
+  Local jResponse as json
+  Local aStruct := {} As Array
+
+  oServiceAPI := totvs.protheus.backoffice.ngf.util.api.ApiBaseV2():new()
+  aStruct := oServiceAPI:tableStruct(cTable, jParams)
+
+  jResponse := JsonObject():New()
+
+  If !Empty(aStruct)
+    jResponse["result"] := .T.
+    jResponse["response"] := JsonObject():New()
+    jResponse["response"]["struct"] := gfin.util.arrayToJson(aStruct)
+  Else
+    jResponse := answerErrorFormat(401, STR0003, STR0004)
+  EndIf
+
+  oServiceAPI:destroy()
+  FreeObj(oServiceAPI)
+
+return jResponse
+
+/*/{Protheus.doc} getCutAliasName
+  Corta o primeiro caracter se o Alias tiver "S" como primeiro digito
+  @type function
+  @author Francisco Oliveira
+  @since 29/09/2022
+  @param tableNick, character, tabela
+  @param jParams, json, query params
+  @return character
+/*/
+
+Function getCutAliasName(tableNick As Character) As Character
+  Local cRetAlias := tableNick As Character
+
+  If SubStr(Upper(tableNick), 1, 1) == "S"
+    cRetAlias := Upper(SubStr(tableNick, 2, 2))
+  Endif
+
+Return cRetAlias
+
+/*/{Protheus.doc} getFieldsUser
+  Permite adicionar novos campos na resposta da API
+  @type  Function
+  @author Vitor Duca
+  @since 07/03/2023
+  @version 1.0
+  @param aFields, Array, Matriz ontendo os campos que foram solicitados pela API
+/*/
+Function getFieldsUser(aFields As Array)
+  Local nFields := 0 As Numeric
+  Local aFieldsUser := {} As Array
+
+  If ExistBlock("NGFBOLCMP")
+    aFieldsUser := ExecBlock("NGFBOLCMP", .F., .F.)
+
+    For nFields := 1 to Len(aFieldsUser)
+      If !Empty(FWSX3Util():GetFieldType( aFieldsUser[nFields] ) )
+        Aadd(aFields, aFieldsUser[nFields])
+      Endif
+    Next nFields
+  Endif
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getBorderauxGroupingFields
+	@description Método que retorna a quantidade de títulos e a quantidade de títulos transmitidos
+	em determinado borderô. Isso porque o FWAdapterBaseV2 não permite uso de GROUP BY.
+	@author guilherme.sordi@totvs.com.br
+	@since 03/04/2024
+	@type method
+	@version 12.1.2310
+/*/
+//-------------------------------------------------------------------
+method getBorderauxGroupingFields(cBranch as character, cBorderaux as character) as array class GfinTablesService
+	local aList := {} as array
+	local jItem := JsonObject():new() as json
+	local cQuery := "" as character
+	local nParameter := 1 as numeric
+	local cAlias := "" as character
+
+	if self:oExecBorderauxGroupingFields == NIL
+
+		cQuery := " SELECT ISNULL(COUNT(*),0) COUNT_BILLS, ISNULL(SUM(CASE WHEN EA_TRANSF = 'S' THEN 1 ELSE 0 END),0) COUNT_TRANSF "
+		cQuery += " FROM ? SEA "
+		cQuery += " WHERE EA_FILIAL = ? "
+		cQuery += " AND EA_NUMBOR = ? "
+		cQuery += " AND D_E_L_E_T_ = ' ' "
+
+		cQuery := changeQuery(cQuery)
+
+		self:oExecBorderauxGroupingFields := FWExecStatement():new(cQuery)
+
+	endIf
+
+	self:oExecBorderauxGroupingFields:setUnsafe(nParameter++, retSQLName("SEA"))
+	self:oExecBorderauxGroupingFields:setString(nParameter++, cBranch)
+	self:oExecBorderauxGroupingFields:setString(nParameter++, cBorderaux)
+
+	cAlias := self:oExecBorderauxGroupingFields:openAlias()
+
+	if !(cAlias)->(eof())
+		jItem := JsonObject():new()
+		jItem['property'] := "count_bills"
+		jItem['value'] := (cAlias)->COUNT_BILLS
+		aAdd(aList, jItem)
+
+		jItem := JsonObject():new()
+		jItem['property'] := "count_transf"
+		jItem['value'] := (cAlias)->COUNT_TRANSF
+		aAdd(aList, jItem)
+	endIf
+
+	(cAlias)->(DbCloseArea())
+
+return aList
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getBorderauxGroupingFieldsStruct
+	@description Retorna a estrutura dos campos agrupadores calculados no método getBorderauxGroupingFields.
+	@author guilherme.sordi@totvs.com.br
+	@since 03/04/2024
+	@type method
+	@version 12.1.2310
+/*/
+//-------------------------------------------------------------------
+method getBorderauxGroupingFieldsStruct() as array class GfinTablesService
+	local aList := {} as array
+	local jItem := JsonObject():new() as json
+	
+	jItem := JsonObject():new()
+	jItem['field'] := "count_bills"
+	jItem['title'] := STR0007 //"Títulos"
+	jItem['description'] := STR0008 //"Títulos no borderô"
+	jItem['type'] := "N"
+	jItem['size'] := 14
+	jItem['decimals'] := 0
+	jItem['picture'] := ""
+	jItem['options'] := {}
+	jItem['standardQuery'] := ""
+	aAdd(aList, jItem)
+	
+	jItem := JsonObject():new()
+	jItem['field'] := "count_transf"
+	jItem['title'] := STR0009 //"Transmitidos"
+	jItem['description'] := STR0010 //"Títulos transmitidos"
+	jItem['type'] := "N"
+	jItem['size'] := 14
+	jItem['decimals'] := 0
+	jItem['picture'] := ""
+	jItem['options'] := {}
+	jItem['standardQuery'] := ""
+	aAdd(aList, jItem)
+
+return aList

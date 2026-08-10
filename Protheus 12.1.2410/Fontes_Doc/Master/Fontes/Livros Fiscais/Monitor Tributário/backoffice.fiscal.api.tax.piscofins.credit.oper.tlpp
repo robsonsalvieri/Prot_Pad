@@ -1,0 +1,466 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+#INCLUDE "FISA318.ch"
+
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTPcOpCrUfFilter
+API que retorna os valores das informações de Operação por Tipo de Crédito de PIS COFINS.
+
+@author Gabriela Luche
+@parâmetros de entrada do endpoint
+    branches: Filiais
+    periodStart: Data Inicial
+    periodEnd: Data Final
+
+@since 19/05/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/pis-cofins/credit-operation', description='Obtém valores de Tipos de Créditos de PIS COFINS apurados conforme Códigos de Situação Tributária, para preenchimento do gráfico de Operação por Tipo de Crédito de PIS COFINS no período.')
+
+Function MTPcOpCrUfFilter()
+    Local oJsResponse      := JsonObject():new() as json
+    Local oQryStr          := oRest:getQueryRequest() as json
+    Local aRequiredProperties as array
+    //--------------------------------
+    //Monta um array bidimensional com query strings que se deseja verificar se existem na requisição
+    //--------------------------------
+        aRequiredProperties	:= {;
+            {'branches',400,; //PROPERTY //ERROR_CODE
+            STR0069,; //"O parâmetro 'branches' é obrigatório e não foi informado."
+            STR0070},;//"Informar Código de Filiais separadas por vírgula."
+            {'periodStart',400,;
+            STR0071,; //"Nenhuma Data foi informada no parâmetro 'periodStart'."
+            STR0072},; //"Informar a data desejada para o período"
+            {'periodEnd',400,;
+            STR0073,; //"Nenhuma Data foi informada no parâmetro 'periodEnd'."
+            STR0072}; //"Informar a data desejada para o período"
+        }
+    //--------------------------------
+    // Verifica se tem parâmetros obrigatórios na requisição da API
+    //--------------------------------	
+    If FISA318F6HasApiRequiredProperties(aRequiredProperties, oQryStr, @oJsResponse) 
+        oJsResponse := PisCofCrOpFilter(oQryStr['branches'] , oQryStr['periodStart'] , oQryStr['periodEnd'] , oQryStr['page'], oQryStr['pageSize'] )   
+    EndIf  
+
+    oRest:setKeyHeaderResponse('Content-Type', 'application/json')
+    oRest:setResponse(oJsResponse)
+    //--------------------------------
+    // Libera os objetos
+    //-------------------------------    
+    FWFreeObj(oJsResponse)
+    FWFreeObj(oQryStr)
+
+Return 
+/*-------------------------------------------------------------------
+{Protheus.doc} GET PisCofCrOpFilter
+Função responsável por preencher o Json com informações das operações por Tipo de Crédito de PIS COFINS
+
+@author Gabriela Luche
+@parâmetros de entrada da funcao
+    Filiais         as character  // Filiais
+    Data Inicial    as character  // Data Inicial
+    Data Final      as character  // Data Final
+@since 19/05/2025
+@return oJsonResp:toJson() as character
+-------------------------------------------------------------------*/
+Static Function PisCofCrOpFilter(cBranches as character, cPeriodStart as character, cPeriodEnd as character, cPage as character, cPageSize as character)
+    Local cAlias        := getNextAlias()           as character
+    Local nPosItem      := 0                        as numeric    
+    Local nPageSize     := 10                       as integer
+    Local nPage         := 1                        as integer
+    Local lHasNext      := .f.                      as logical    
+    Local oJsonResp     := JsonObject():New()       as object
+    Local cDbMs         := ""                       as character
+    
+    Default cPage       := "1"
+    Default cPageSize   := "10"
+
+    nPage               := Val(cPage)
+    nPageSize           := Val(cPageSize)
+    //--------------------------------
+    // Verifica o banco de dados do ambiente
+    //--------------------------------	
+    cDbMs := TcGetDb()
+    //--------------------------------
+    // Chama a função responsável por retornar a consulta da query
+    //--------------------------------	
+    GetPisCofCrOp(cDbMs , @cAlias, cBranches, cPeriodStart, cPeriodEnd, nPage, nPageSize )  
+    //--------------------------------
+    // Percorre todo o alias retornado pela query
+    //--------------------------------	
+    If (cAlias)->(!Eof()) 
+        //--------------------------------	
+        // Inicia o objeto Json
+        //--------------------------------	
+        oJsonResp["items"] := {}
+      
+        While (cAlias)->(!Eof()) 
+
+            nPosItem++
+
+            If nPosItem <= nPageSize
+                 //--------------------------------
+                // Alimenta o json com os dados retornado pela query
+                //--------------------------------	  
+                aAdd( oJsonResp["items"], JsonObject():New() )            
+                oJsonResp["items"][nPosItem]["creditCode"]          :=   (cAlias)->CODBCC   
+                oJsonResp["items"][nPosItem]["creditDescription"]   :=   Alltrim((cAlias)->DESCR)
+                oJsonResp["items"][nPosItem]["creditValue"]         :=   (cAlias)->TOTALCRED           
+            Else
+                lHasNext := .t.
+                exit            
+            Endif
+
+            (cAlias)->(DbSkip())
+
+        EndDo
+        oJsonResp["hasNext"]        := lHasNext
+    Else
+        oJsonResp['code']           := 200
+        oJsonResp['items']          := {}
+        oJsonResp['hasNext']        := lHasNext
+    EndIf  
+    //--------------------------------
+    // Fecha o alias
+    //--------------------------------	     
+    (cAlias)->(DBCloseArea())
+
+Return oJsonResp:toJson()
+/*--------------------------------------------------------------------
+{Protheus.doc} GetPisCofCrOp
+(Responsável por executar a consulta aos campos da tabela CL9 )
+A função retorna um alias com os seguintes campos:
+CST : Código de Situação Tributária
+CODBCC : Código do Benefício Fiscal
+DESCR : Descrição do Benefício Fiscal
+TOTALCRED : Valor total do calculado no período
+
+@author Gabriela Luche
+@parâmetros de entrada da funcao
+@since 19/05/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetPisCofCrOp(cDbMs as character, cAlias as character, cBranches as character, cPeriodStart as character, cPeriodEnd as character, nPage as numeric, nPageSize as numeric)
+    Local cQuery    := ''  as character
+    Local oGetPisCof  := Nil as object
+    //--------------------------------
+    // Montagem da query
+    //--------------------------------	
+    cQuery := "SELECT "
+    cQuery += "     CL9_CODBCC	AS CODBCC, "
+    cQuery += "     CL9_DESCR	AS DESCR, "
+    cQuery += "     SUM(CL9_TOTBSE) AS TOTALCRED "
+    cQuery += " FROM "+RetSQLName("CL9")+" CL9 "
+    cQuery += " WHERE "
+    cQuery += " CL9.CL9_FILIAL IN (?) "
+    cQuery += "     AND CL9.CL9_PER BETWEEN ? AND ? " 
+    cQuery += "     AND CL9.D_E_L_E_T_ = ? "
+    cQuery += " GROUP BY "
+    cQuery += "    CL9_CODBCC,CL9_DESCR "
+    cQuery += " ORDER BY CL9_CODBCC ASC "
+    cQuery += "    OFFSET ( ? * ? ) ROWS "
+    cQuery += "    FETCH NEXT ? ROWS ONLY "
+    //--------------------------------
+    // Executa a criação da área de acordo com a query
+    //--------------------------------
+    oGetPisCof := FwExecStatement():New()
+    //--------------------------------
+    // Montagem dos Binds
+    //--------------------------------	
+    oGetPisCof:SetQuery(ChangeQuery(cQuery))
+    oGetPisCof:setIn(1, StrTokArr(cBranches, "," ))
+    oGetPisCof:SetString(2, StrTran(cPeriodStart, "-", ""))
+    oGetPisCof:setString(3, StrTran(cPeriodEnd, "-", ""))  
+    oGetPisCof:setString(4, ' ')
+    oGetPisCof:SetUnsafe(5, cValToChar(nPage-1))
+    oGetPisCof:SetUnsafe(6, cValToChar(nPageSize))
+    oGetPisCof:SetUnsafe(7, cValToChar(nPageSize+1))
+    cAlias := oGetPisCof:OpenAlias()
+    //--------------------------------
+    // Libera o objeto
+    //--------------------------------
+    FWFreeObj(oGetPisCof)
+
+Return
+
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GET MTPcCrPerFilter
+API que retorna os valores das informações de valores de Detalhamento de Créditos de PIS COFINS no período, para preenchimento da 
+tabela de Detalhamento de Créditos de PIS COFINS.
+
+@author Gabriela Luche
+@parâmetros de entrada do endpoint
+    branches: Filiais
+    periodStart: Data Inicial
+    periodEnd: Data Final
+
+@since 19/05/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/pis-cofins/credits', description='Obtém valores de Detalhamento de Créditos de PIS COFINS no período, para preenchimento da tabela de Detalhamento de Créditos de PIS COFINS.')
+
+Function MTPcCrPerFilter()
+    Local oJsResponse      := JsonObject():new() as json
+    Local oQryStr          := oRest:getQueryRequest() as json
+    Local aRequiredProperties as array
+    //--------------------------------
+    //Monta um array bidimensional com query strings que se deseja verificar se existem na requisição
+    //--------------------------------
+    aRequiredProperties	:= {;
+        {'branches',400,; //PROPERTY //ERROR_CODE
+        STR0069,; //"O parâmetro 'branches' é obrigatório e não foi informado."
+        STR0070},;//"Informar Código de Filiais separadas por vírgula."
+        {'periodStart',400,;
+        STR0071,; //"Nenhuma Data foi informada no parâmetro 'periodStart'."
+        STR0072},; //"Informar a data desejada para o período"
+        {'periodEnd',400,;
+        STR0073,; //"Nenhuma Data foi informada no parâmetro 'periodEnd'."
+        STR0072}; //"Informar a data desejada para o período"
+    }
+    //--------------------------------
+    // Verifica se tem parâmetros obrigatórios na requisição da API
+    //--------------------------------	
+    If FISA318F6HasApiRequiredProperties(aRequiredProperties, oQryStr, @oJsResponse) 
+        oJsResponse := PisCofCRPerFilter(oQryStr['branches'] , oQryStr['periodStart'] , oQryStr['periodEnd'] , oQryStr['page'], oQryStr['pageSize'] )   
+    EndIf  
+    oRest:setKeyHeaderResponse('Content-Type', 'application/json')
+    oRest:setResponse(oJsResponse)
+    //--------------------------------
+    // Libera os objetos
+    //-------------------------------    
+    FWFreeObj(oJsResponse)
+    FWFreeObj(oQryStr)
+
+Return 
+/*-------------------------------------------------------------------
+{Protheus.doc} GET PisCofCRPerFilter
+Função responsável por preencher o Json com informações dos créditos de PIS COFINS
+A funcao retorna um Json com os seguintes campos:
+    period          as character  // Período
+    branch          as character  // Filial
+    creditType      as character  // Tipo de Crédito
+    pisTotal        as numeric    // Total de PIS
+    cofinsTotal     as numeric    // Total de COFINS
+
+@author Gabriela Luche
+@parâmetros de entrada da funcao
+    Filiais         as character  // Filiais
+    Data Inicial    as character  // Data Inicial
+    Data Final      as character  // Data Final
+@since 19/05/2025
+@return oJsonResp:toJson() as character
+-------------------------------------------------------------------*/
+Static Function PisCofCRPerFilter(cBranches as character, cPeriodStart as character, cPeriodEnd as character, cPage as character, cPageSize as character)
+    Local cAlias        := getNextAlias()           as character
+    Local nPosItem      := 0                        as numeric    
+    Local nPageSize     := 10                       as integer
+    Local nPage         := 1                        as integer
+    Local lHasNext      := .f.                      as logical    
+    Local oJsonResp     := JsonObject():New()       as object
+    Local cKeyAtual     := ""                       as character
+    Local cKeyLinha     := ""                       as character
+    Local aDetails      := {}                       as array
+    Local nCount        := 0                        as numeric
+    Default cPage       := "1"
+    Default cPageSize   := "10"
+    nPage               := Val(cPage)
+    nPageSize           := Val(cPageSize)
+    //--------------------------------
+    // Verifica o banco de dados do ambiente
+    //--------------------------------	
+    cDbMs := TcGetDb()
+    //--------------------------------
+    // Chama a função responsável por retornar a consulta da query
+    //--------------------------------	
+    GetPisCofCredPer(cDbMs , @cAlias, cBranches, cPeriodStart, cPeriodEnd, nPage, nPageSize )  
+    //--------------------------------
+    // Percorre todo o alias retornado pela query
+    //--------------------------------	
+    If (cAlias)->(!Eof()) 
+        //--------------------------------	
+        // Inicia o objeto Json como array
+        //--------------------------------	
+        oJsonResp["items"] := {}
+        //--------------------------------
+        // Percorre o alias retornado pela query
+        //--------------------------------
+        While (cAlias)->(!Eof()) 
+            //--------------------------------
+            // Verifica se o item já existe no array
+            //--------------------------------
+            cKeyLinha := (cAlias)->MESANO + "|" + AllTrim((cAlias)->FILIAL) + "|" + AllTrim((cAlias)->CREDITTYPE)
+            If cKeyLinha != cKeyAtual
+
+                If !Empty(cKeyAtual)
+                    //--------------------------------
+                    // Fecha o item anterior
+                    //--------------------------------
+                    oJsonResp["items"][nPosItem]["detail"] := aDetails
+                EndIf
+
+                nCount++
+
+                //----------------- 
+                // Verifica se o número de itens ultrapassa o limite da página
+                //-----------------
+                If nCount > nPageSize
+                    lHasNext := .t.
+                    Exit
+                EndIf
+                //--------------------------------
+                // Cria o novo item
+                //--------------------------------
+                nPosItem++
+                cKeyAtual := cKeyLinha
+                //--------------------------------
+                // Limpa o array de detalhes
+                //--------------------------------
+                aDetails := {}
+                //--------------------------------
+                // Alimenta o json com os dados retornado pela query
+                //--------------------------------	  
+                aAdd( oJsonResp["items"], JsonObject():New() )            
+                oJsonResp["items"][nPosItem]["period"]              :=   SUBSTRING(MesExtenso(SUBSTRING((cAlias)->MESANO, 1, 2)),1,3) + "/" + SUBSTRING((cAlias)->MESANO, 3, 4)
+                oJsonResp["items"][nPosItem]["branch"]              :=   (cAlias)->FILIAL
+                oJsonResp["items"][nPosItem]["creditType"]          :=   (cAlias)->CREDITTYPE
+                oJsonResp["items"][nPosItem]["pisTotal"]            :=   0
+                oJsonResp["items"][nPosItem]["cofinsTotal"]         :=   0
+
+            Endif
+            //--------------------------------
+            // Soma os totais
+            //--------------------------------
+            oJsonResp["items"][nPosItem]["pisTotal"]    += (cAlias)->PISCREDTOTAL
+            oJsonResp["items"][nPosItem]["cofinsTotal"] += (cAlias)->COFINSCREDTOTAL   
+            //------------------
+            // Adiciona os detalhes no array auxiliar
+            //------------------
+            aAdd(aDetails, JsonObject():New())
+            oDetail := JsonObject():New()
+            aDetails[Len(aDetails)]["cst"]           := (cAlias)->CST
+            aDetails[Len(aDetails)]["pisCredits"]    := (cAlias)->PISCREDTOTAL
+            aDetails[Len(aDetails)]["cofinsCredits"] := (cAlias)->COFINSCREDTOTAL
+
+            (cAlias)->(DbSkip())
+
+        EndDo
+
+        // Finaliza último item
+        If nPosItem > 0 .And. !Empty(aDetails)
+            oJsonResp["items"][nPosItem]["detail"] := aDetails
+        EndIf
+        //--------------------------------
+        // Verifica se o número de itens ultrapassa o limite da página
+        //--------------------------------  
+        oJsonResp["hasNext"]        := lHasNext
+        
+    Else
+        oJsonResp['code']           := 200
+        oJsonResp['items']          := {}
+        oJsonResp['hasNext']        := lHasNext
+    EndIf  
+    //--------------------------------
+    // Fecha o alias
+    //--------------------------------	     
+    (cAlias)->(DBCloseArea())
+
+Return oJsonResp:toJson()
+/*--------------------------------------------------------------------
+{Protheus.doc} GetPisCofCredPer
+(Responsável por executar a consulta aos campos da tabela CL9 )
+A função retorna um alias com os seguintes campos:
+UF : Estado(UF) que originou o beneficio (dois digitos iniciais do código cBenef)
+TOTALBENEF : Valor total do calculado no período 
+
+@author Gabriela Luche
+@parâmetros de entrada da funcao
+@since 19/05/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetPisCofCredPer(cDbMs as character, cAlias as character, cBranches as character, cPeriodStart as character, cPeriodEnd as character, nPage as numeric, nPageSize as numeric)
+    Local cQuery    := ''  as character
+    Local oGetPisCof  := Nil as object
+    //--------------------------------
+    // Montagem da query
+    //--------------------------------	
+
+    If Upper(cDbMs) == "MSSQL"
+        cQuery := " SELECT RIGHT('0' + CAST(DATEPART(MONTH, CONVERT(DATE, CL9_PER, 112)) AS VARCHAR(2)), 2) + "
+        cQuery += " CAST(DATEPART(YEAR, CONVERT(DATE, CL9_PER, 112)) AS VARCHAR(4)) AS MESANO, " 
+        cQuery += " CL9.CL9_FILIAL AS FILIAL, " 
+        cQuery += " CASE WHEN CL9.CL9_CODBCC IS NULL OR CL9.CL9_CODBCC = ? THEN ? ELSE CL9.CL9_CODBCC END AS CREDITTYPE, "
+        cQuery += " CL9.CL9_CST AS CST, " 
+        cQuery += " SUM(CASE WHEN SUBSTRING(CL9.CL9_CHV, 9, 1) = ? THEN CL9.CL9_TOTBSE ELSE ? END ) AS PISCREDTOTAL, "
+        cQuery += " SUM(CASE WHEN SUBSTRING(CL9.CL9_CHV, 9, 1) = ? THEN CL9.CL9_TOTBSE ELSE ? END ) AS COFINSCREDTOTAL "
+        cQuery += " FROM "+RetSQLName("CL9")+" CL9 "
+        cQuery += " WHERE CL9.CL9_FILIAL IN (?) " 
+        cQuery += " AND CL9.CL9_PER BETWEEN ? AND ? "
+        cQuery += " AND CL9.D_E_L_E_T_ = ? " 
+        cQuery += " GROUP BY RIGHT('0' + CAST(DATEPART(MONTH, CONVERT(DATE, CL9_PER, 112)) AS VARCHAR(2)), 2) + "
+        cQuery += " CAST(DATEPART(YEAR, CONVERT(DATE, CL9_PER, 112)) AS VARCHAR(4)), CL9.CL9_FILIAL, CL9.CL9_CODBCC, CL9.CL9_CST "
+        cQuery += " ORDER BY MESANO, FILIAL, CREDITTYPE, CST "
+        cQuery += " OFFSET ( ? * ? ) ROWS FETCH NEXT ? ROWS ONLY "
+    //--------------------------------
+    // Montagem da query para o banco de dados ORACLE
+    //--------------------------------  
+    ElseIf Upper(cDbMs) == "ORACLE"
+        cQuery := " SELECT " 
+        cQuery += " SUBSTR(CL9_PER, 5, 2) || SUBSTR(CL9_PER, 1, 4) AS MESANO, " 
+        cQuery += " CL9.CL9_FILIAL AS FILIAL, " 
+        cQuery += " CASE WHEN CL9.CL9_CODBCC IS NULL OR CL9.CL9_CODBCC = ? THEN ? ELSE CL9.CL9_CODBCC END AS CREDITTYPE, " 
+        cQuery += " CL9.CL9_CST AS CST , " 
+        cQuery += " SUM(CASE WHEN SUBSTR(CL9.CL9_CHV, 9, 1) = ? THEN CL9.CL9_TOTBSE ELSE ? END ) AS PISCREDTOTAL, " 
+        cQuery += " SUM(CASE WHEN SUBSTR(CL9.CL9_CHV, 9, 1) = ? THEN CL9.CL9_TOTBSE ELSE ? END ) AS COFINSCREDTOTAL " 
+        cQuery += " FROM "+RetSQLName("CL9")+" CL9 "
+        cQuery += " WHERE CL9.CL9_FILIAL IN (?) " 
+        cQuery += " AND CL9.CL9_PER BETWEEN  ? AND ? " 
+        cQuery += " AND CL9.D_E_L_E_T_ = ? " 
+        cQuery += " GROUP BY SUBSTR(CL9_PER, 5, 2) || SUBSTR(CL9_PER, 1, 4), CL9.CL9_FILIAL, CL9.CL9_CODBCC, CL9.CL9_CST " 
+        cQuery += " ORDER BY MESANO, FILIAL, CREDITTYPE, CST "
+        cQuery += " OFFSET ( ? * ? ) ROWS FETCH NEXT ? ROWS ONLY "
+    ElseIf Upper(cDbMs) == "POSTGRES"
+        cQuery := " SELECT " 
+        cQuery += " CAST(SUBSTRING(CL9_PER, 5, 2) AS VARCHAR(2)) || CAST(SUBSTR(CL9_PER, 1, 4) AS VARCHAR(4)) AS MESANO, " 
+        cQuery += " CL9.CL9_FILIAL AS FILIAL, " 
+        cQuery += " CASE WHEN CL9.CL9_CODBCC IS NULL OR CL9.CL9_CODBCC = ? THEN ? ELSE CL9.CL9_CODBCC END AS CREDITTYPE, " 
+        cQuery += " CL9.CL9_CST AS CST, " 
+        cQuery += " SUM(CASE WHEN SUBSTRING(CL9.CL9_CHV, 9, 1 ) = ? THEN CL9.CL9_TOTBSE ELSE ? END) AS PISCREDTOTAL, " 
+        cQuery += " SUM(CASE WHEN SUBSTRING(CL9.CL9_CHV, 9, 1 ) = ? THEN CL9.CL9_TOTBSE ELSE ? END) AS COFINSCREDTOTAL " 
+        cQuery += " FROM "+RetSQLName("CL9")+" CL9 "
+        cQuery += " WHERE CL9.CL9_FILIAL IN (?) " 
+        cQuery += " AND CL9.CL9_PER BETWEEN ? AND ? " 
+        cQuery += " AND CL9.D_E_L_E_T_ = ? " 
+        cQuery += " GROUP BY CAST(SUBSTRING(CL9_PER, 5, 2) AS VARCHAR(2)) || CAST(SUBSTR(CL9_PER, 1, 4) AS VARCHAR(4)), "
+        cQuery += " CL9.CL9_FILIAL, CL9.CL9_CODBCC, CL9.CL9_CST " 
+        cQuery += " ORDER BY MESANO, FILIAL, CREDITTYPE, CL9.CL9_CST "
+        cQuery += " OFFSET ( ? * ? ) ROWS FETCH NEXT ? ROWS ONLY "
+    EndIf
+    //--------------------------------
+    // Executa a criação da área de acordo com a query
+    //--------------------------------
+    oGetPisCof := FwExecStatement():New()
+    //--------------------------------
+    // Montagem dos Binds
+    //--------------------------------	
+    oGetPisCof:SetQuery(ChangeQuery(cQuery))
+    oGetPisCof:SetString(1, '' )
+    oGetPisCof:SetString(2, 'NI')
+    oGetPisCof:SetString(3, '1')
+    oGetPisCof:SetNumeric(4, 0)
+    oGetPisCof:SetString(5, '2')
+    oGetPisCof:SetNumeric(6, 0)
+    oGetPisCof:setIn(7, StrTokArr(cBranches, "," ))
+    oGetPisCof:SetString(8, StrTran(cPeriodStart, "-", ""))
+    oGetPisCof:setString(9, StrTran(cPeriodEnd, "-", ""))  
+    oGetPisCof:setString(10, ' ')
+    oGetPisCof:SetUnsafe(11, cValToChar(nPage-1))
+    oGetPisCof:SetUnsafe(12, cValToChar(nPageSize))
+    oGetPisCof:SetUnsafe(13, cValToChar(nPageSize+1))
+    oGetPisCof:CBASEQUERY := oGetPisCof:GETFIXQUERY()
+    cAlias := oGetPisCof:OpenAlias()
+    //--------------------------------
+    // Libera o objeto
+    //--------------------------------
+    FWFreeObj(oGetPisCof)
+
+Return

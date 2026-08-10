@@ -1,0 +1,3445 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "APWEBSRV.CH"
+
+/* ===============================================================================
+WSDL Location    http://localhost:8081/nfe/SPEDCFGNFE.apw?WSDL
+Gerado em        17/05/23 17:39:44
+Observações      Código-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Alterações neste arquivo podem causar funcionamento incorreto
+                 e serão perdidas caso o código-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _QYLOTDL ; Return  // "dummy" function - Internal Use  
+
+/* ------------------------------------------------------------------------------
+WSDL Service WSSPEDCFGNFE
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSSPEDCFGNFE
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD CFGAMBIENTE
+	WSMETHOD CFGAMBIENTEEX
+	WSMETHOD CFGAMBIENTENSE
+	WSMETHOD CFGAMBIENTENSEEX
+	WSMETHOD CFGNFCOM
+	WSMETHOD CFGAUTOCONT
+	WSMETHOD CFGAUTOOFFLINE
+	WSMETHOD CFGBPE
+	WSMETHOD CFGCANCEVEN
+	WSMETHOD CFGCCE
+	WSMETHOD CFGCERTIFICATE
+	WSMETHOD CFGCERTIFICATEPFX
+	WSMETHOD CFGCONNECT
+	WSMETHOD CFGCONNECTEX
+	WSMETHOD CFGEPECCTE
+	WSMETHOD CFGGETTSSPORTAL
+	WSMETHOD CFGHSM
+	WSMETHOD CFGHSMEX
+	WSMETHOD CFGKEYSTORE
+	WSMETHOD CFGMDFE
+	WSMETHOD CFGMODALIDADE
+	WSMETHOD CFGMODALIDADEEX
+	WSMETHOD CFGMODALIDGRV
+	WSMETHOD CFGNOTIFICACAO
+	WSMETHOD CFGPARAMNSE
+	WSMETHOD CFGPARAMSPED
+	WSMETHOD CFGPOPMAIL
+	WSMETHOD CFGPOPMAILNX
+	WSMETHOD CFGREADY
+	WSMETHOD CFGREADYEX
+	WSMETHOD CFGSMTPMAIL
+	WSMETHOD CFGSMTPMAILNX
+	WSMETHOD CFGSTATUSCERTIFICATE
+	WSMETHOD CFGTEMPOESPERA
+	WSMETHOD CFGTSSPORTAL
+	WSMETHOD CFGTSSVERSAO
+	WSMETHOD CFGVERSAO
+	WSMETHOD CFGVERSAOCTE
+	WSMETHOD CFGVERSAODPEC
+	WSMETHOD CFGVERSAONSE
+	WSMETHOD GETALLINIPARAM
+	WSMETHOD GETALLMVTSS
+	WSMETHOD GETAUTODIST
+	WSMETHOD GETDATECONT
+	WSMETHOD GETPARAMNSE
+	WSMETHOD GETPOPMAIL
+	WSMETHOD GETSMTPMAIL
+	WSMETHOD LOTCCE
+	WSMETHOD TSSCFGFTP
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   cUSERTOKEN                AS string
+	WSDATA   cID_ENT                   AS string
+	WSDATA   nAMBIENTE                 AS integer
+	WSDATA   cMODELO                   AS string
+	WSDATA   cCFGAMBIENTERESULT        AS string
+	WSDATA   nCFGAMBIENTEEXRESULT      AS integer
+	WSDATA   nAMBIENTENSE              AS integer
+	WSDATA   cCFGAMBIENTENSERESULT     AS string
+	WSDATA   nCFGAMBIENTENSEEXRESULT   AS integer
+	WSDATA   oWSCFGAUTOCONT            AS SPEDCFGNFE_AUTOCFGCONT
+	WSDATA   oWSCFGAUTOCONTRESULT      AS SPEDCFGNFE_RETAUTOCFGCONT
+	WSDATA   nCONTINGENCIA             AS integer
+	WSDATA   cCFGAUTOOFFLINERESULT     AS string
+	WSDATA   nAMBIENTEBPE              AS integer
+	WSDATA   cVERSAOBPE                AS string
+	WSDATA   cVERBPELAYOUT             AS string
+	WSDATA   cVERBPELAYEVEN            AS string
+	WSDATA   cHORAVERAOBPE             AS string
+	WSDATA   cHORARIOBPE               AS string
+	WSDATA   oWSCFGBPERESULT           AS SPEDCFGNFE_STRUCTCFGBPERESULT
+	WSDATA   lCFGCANCEVENRESULT        AS boolean
+	WSDATA   nAMBIENTECCE              AS integer
+	WSDATA   nAMBIENTEEPP              AS integer
+	WSDATA   cVERCCELAYOUT             AS string
+	WSDATA   cVERCCELAYEVEN            AS string
+	WSDATA   cVERCCEEVEN               AS string
+	WSDATA   cVERCCE                   AS string
+	WSDATA   cHORAVERAOCCE             AS string
+	WSDATA   cHORARIOCCE               AS string
+	WSDATA   cVEREPPLAYOUT             AS string
+	WSDATA   cVEREPPLAYEVEN            AS string
+	WSDATA   cVEREPPEVEN               AS string
+	WSDATA   cVEREPP                   AS string
+	WSDATA   nSEQLOTECCE               AS integer
+	WSDATA   nSEQLOTEEPP               AS integer
+	WSDATA   cCCEPDF	               AS string
+	WSDATA   oWSCFGCCERESULT           AS SPEDCFGNFE_STRUCTCFGCCE
+	WSDATA   cCERTIFICATE              AS base64Binary
+	WSDATA   cPRIVATEKEY               AS base64Binary
+	WSDATA   cPASSWORD                 AS base64Binary
+	WSDATA   cCFGCERTIFICATERESULT     AS string
+	WSDATA   cCFGCERTIFICATEPFXRESULT  AS string
+	WSDATA   cCFGCONNECTRESULT         AS string
+	WSDATA   nCFGCONNECTEXRESULT       AS integer
+	WSDATA   cVERSAOGERALEPEC          AS string
+	WSDATA   cVERSAOEVENCOMPROV        AS string
+	WSDATA   cVERSAOEVENCANCCOMPROV    AS string
+	WSDATA   cVERSAOEVENEPEC           AS string
+	WSDATA   cVERSAOGERALCANC          AS string
+	WSDATA   cVERSAOEVENCANC           AS string
+	WSDATA   cVERSAOGERALCCE           AS string
+	WSDATA   cVERSAOEVENCCE            AS string
+	WSDATA   cVERSAOGERALMULT          AS string
+	WSDATA   cVERSAOEVENMULT           AS string
+	WSDATA   cVERSAOGERALGTV           AS string
+	WSDATA   cVERSAOEVENGTV            AS string
+	WSDATA   cVERSAOGERALDESAC         AS string
+	WSDATA   cVERSAOEVENDESAC          AS string
+	WSDATA   nSEQLOTEEPEC              AS integer
+	WSDATA   lCTECANCEVENTO            AS boolean
+	WSDATA   cHORAVERAOCTE             AS string
+	WSDATA   cHORARIOCTE               AS string
+	WSDATA   oWSCFGEPECCTERESULT       AS SPEDCFGNFE_STRUCTCFGEPEC
+	WSDATA   cCFGGETTSSPORTALRESULT    AS string
+	WSDATA   cSLOT                     AS base64Binary
+	WSDATA   cLABEL                    AS base64Binary
+	WSDATA   cMODULE                   AS base64Binary
+	WSDATA   cIDHEX                    AS base64Binary
+	WSDATA   cCFGHSMRESULT             AS string
+	WSDATA   cLABELKEY                 AS base64Binary
+	WSDATA   cCFGHSMEXRESULT           AS string
+	WSDATA   oWSRETCFGKEYSTORE         AS SPEDCFGNFE_CFGKEYSTORE
+	WSDATA   cCFGKEYSTORERESULT        AS string
+	WSDATA   nAMBIENTEMDFE             AS integer
+	WSDATA   nAMBIENTENFCOM            AS integer
+	WSDATA   cVERSAOMDFE               AS string
+	WSDATA   cVERSAONFCOM              AS string
+	WSDATA   nMODALIDADENFCOM          AS integer
+	WSDATA   nMODALIDADEMDFE           AS integer
+	WSDATA   cVERMDFELAYOUT            AS string
+	WSDATA   cVERNFCOMLAYOUT           AS string
+	WSDATA   cVERNFCOMLAYEVEN          AS string
+	WSDATA   cVERMDFELAYEVEN           AS string
+	WSDATA   nSEQLOTEMDFE              AS integer
+	WSDATA   nSEQLOTENFCOM             AS integer
+	WSDATA   cHORAVERAOMDFE            AS string
+	WSDATA   cHORAVERAONFCOM           AS string
+	WSDATA   cHORARIOMDFE              AS string
+	WSDATA   cHORARIONFCOM             AS string
+	WSDATA   oWSCFGMDFERESULT          AS SPEDCFGNFE_STRUCTCFGMDFE
+	WSDATA   oWSCFGNFCOMRESULT         AS SPEDCFGNFE_STRUCTCFGNFCOM
+	WSDATA   nMODALIDADE               AS integer
+	WSDATA   cCFGMODALIDADERESULT      AS string
+	WSDATA   nCFGMODALIDADEEXRESULT    AS integer
+	WSDATA   cMOTIVO                   AS string
+	WSDATA   oWSCFGMODALIDGRVRESULT    AS SPEDCFGNFE_MODALIDGRV
+	WSDATA   nNOTIFICACAO              AS integer
+	WSDATA   cCFGNOTIFICACAORESULT     AS string
+	WSDATA   oWSPARNSE                 AS SPEDCFGNFE_PARAMNSE
+	WSDATA   cCFGPARAMNSERESULT        AS string
+	WSDATA   cUSACOLAB                 AS string
+	WSDATA   nNUMRETNF                 AS integer
+	WSDATA   cVERSAONFE                AS string
+	WSDATA   cVERSAONSE                AS string
+	WSDATA   cVERSAODPEC               AS string
+	WSDATA   cVERSAOCTE                AS string
+	WSDATA   cUSERNEOG                 AS string
+	WSDATA   cCONFALL                  AS string
+	WSDATA   cDOCSCOL                  AS string
+	WSDATA   nAMBNFECOLAB              AS integer
+	WSDATA   nAMBCTECOLAB              AS integer
+	WSDATA   oWSCFGPARAMDOC            AS SPEDCFGNFE_CFGS
+	WSDATA   lNFECANCEVENTO            AS boolean
+	WSDATA   cNFEDISTRDANFE            AS string
+	WSDATA   cNFEENVEPEC               AS string
+	WSDATA   cAUTODISTR				   AS string
+	WSDATA   oWSCFGAUTODIST            AS SPEDCFGNFE_STRUCTCFGAUTODIST
+	WSDATA   cCFGPARAMSPEDRESULT       AS string
+	WSDATA   oWSPOP                    AS SPEDCFGNFE_POPSERVER
+	WSDATA   cCFGPOPMAILRESULT         AS string
+	WSDATA   oWSPOPNX                  AS SPEDCFGNFE_POPSERVERNX
+	WSDATA   lALTCONFIG                AS boolean
+	WSDATA   cCFGPOPMAILNXRESULT       AS string
+	WSDATA   cCFGREADYRESULT           AS string
+	WSDATA   nCFGREADYEXRESULT         AS integer
+	WSDATA   oWSSMTP                   AS SPEDCFGNFE_SMTPSERVER
+	WSDATA   cCFGSMTPMAILRESULT        AS string
+	WSDATA   oWSSMTPNX                 AS SPEDCFGNFE_SMTPSERVERNX
+	WSDATA   cCFGSMTPMAILNXRESULT      AS string
+	WSDATA   cPREFIXO                  AS string
+	WSDATA   oWSCFGSTATUSCERTIFICATERESULT AS SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE
+	WSDATA   nTEMPOESPERA              AS integer
+	WSDATA   nCFGTEMPOESPERARESULT     AS integer
+	WSDATA   cURLPORTAL                AS string
+	WSDATA   cCFGTSSPORTALRESULT       AS string
+	WSDATA   cCFGTSSVERSAORESULT       AS string
+	WSDATA   cVERSAO                   AS string
+	WSDATA   cCFGVERSAORESULT          AS string
+	WSDATA   cCFGVERSAOCTERESULT       AS string
+	WSDATA   cCFGVERSAODPECRESULT      AS string
+	WSDATA   cCFGVERSAONSERESULT       AS string
+	WSDATA   oWSGETALLINIPARAMRESULT   AS SPEDCFGNFE_ARRAYOFINIPARAM
+	WSDATA   oWSENTSGETALLMV           AS SPEDCFGNFE_ENTGETALLMV
+	WSDATA   oWSGETALLMVTSSRESULT      AS SPEDCFGNFE_ARRAYOFRETGETALLMV
+	WSDATA   cLISTFILIAIS              AS string
+	WSDATA   oWSGETAUTODISTRESULT      AS SPEDCFGNFE_ARRAYOFCFGAUTODIST
+	WSDATA   dDATEINIC                 AS date
+	WSDATA   dDATEFIM                  AS date
+	WSDATA   oWSGETDATECONTRESULT      AS SPEDCFGNFE_ARRAYOFGETCONT
+	WSDATA   oWSGETPARAMNSERESULT      AS SPEDCFGNFE_PARAMNSE
+	WSDATA   oWSGETPOPMAILRESULT       AS SPEDCFGNFE_POPSERVER
+	WSDATA   oWSGETSMTPMAILRESULT      AS SPEDCFGNFE_SMTPSERVER
+	WSDATA   oWSLOTCCERESULT           AS SPEDCFGNFE_STRLOTCCE
+	WSDATA   lFTPENABLE                AS boolean
+	WSDATA   lTSSCFGFTPRESULT          AS boolean
+	WSDATA   cTSSFTPMETODO             AS string
+
+	//Variável para passagem do token de autenticação nas requisições feitas por softwares de terceiros.
+	WSDATA   cBearerToken 			   AS String 	
+
+	// Estruturas mantidas por compatibilidade - NAO USAR
+	WSDATA   oWSAUTOCFGCONT            AS SPEDCFGNFE_AUTOCFGCONT
+	WSDATA   oWSPARAMNSE               AS SPEDCFGNFE_PARAMNSE
+	WSDATA   oWSCFGS                   AS SPEDCFGNFE_CFGS
+	WSDATA   oWSSTRUCTCFGAUTODIST      AS SPEDCFGNFE_STRUCTCFGAUTODIST
+	WSDATA   oWSPOPSERVER              AS SPEDCFGNFE_POPSERVER
+	WSDATA   oWSPOPSERVERNX            AS SPEDCFGNFE_POPSERVERNX
+	WSDATA   oWSSMTPSERVER             AS SPEDCFGNFE_SMTPSERVER
+	WSDATA   oWSSMTPSERVERNX           AS SPEDCFGNFE_SMTPSERVERNX
+	WSDATA   oWSENTGETALLMV            AS SPEDCFGNFE_ENTGETALLMV
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSSEND cBearerToken WSCLIENT WSSPEDCFGNFE
+
+Default cBearerToken := ""
+
+::Init()
+::cBearerToken := cBearerToken
+
+If !FindFunction("XMLCHILDEX")
+	UserException("O Código-Fonte Client atual requer os executáveis do Protheus Build [7.00.210324P-20210626] ou superior. Atualize o Protheus ou gere o Código-Fonte novamente utilizando o Build atual.")
+EndIf
+
+Return Self
+
+WSMETHOD INIT WSCLIENT WSSPEDCFGNFE
+	::oWSCFGAUTOCONT     := SPEDCFGNFE_AUTOCFGCONT():New()
+	::oWSCFGAUTOCONTRESULT := SPEDCFGNFE_RETAUTOCFGCONT():New()
+	::oWSCFGBPERESULT    := SPEDCFGNFE_STRUCTCFGBPERESULT():New()
+	::oWSCFGCCERESULT    := SPEDCFGNFE_STRUCTCFGCCE():New()
+	::oWSCFGEPECCTERESULT := SPEDCFGNFE_STRUCTCFGEPEC():New()
+	::oWSRETCFGKEYSTORE  := SPEDCFGNFE_CFGKEYSTORE():New()
+	::oWSCFGMDFERESULT   := SPEDCFGNFE_STRUCTCFGMDFE():New()
+	::oWSCFGNFCOMRESULT  := SPEDCFGNFE_STRUCTCFGNFCOM():New()
+	::oWSCFGMODALIDGRVRESULT := SPEDCFGNFE_MODALIDGRV():New()
+	::oWSPARNSE          := SPEDCFGNFE_PARAMNSE():New()
+	::oWSCFGPARAMDOC     := SPEDCFGNFE_CFGS():New()
+	::oWSCFGAUTODIST     := SPEDCFGNFE_STRUCTCFGAUTODIST():New()
+	::oWSPOP             := SPEDCFGNFE_POPSERVER():New()
+	::oWSPOPNX           := SPEDCFGNFE_POPSERVERNX():New()
+	::oWSSMTP            := SPEDCFGNFE_SMTPSERVER():New()
+	::oWSSMTPNX          := SPEDCFGNFE_SMTPSERVERNX():New()
+	::oWSCFGSTATUSCERTIFICATERESULT := SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE():New()
+	::oWSGETALLINIPARAMRESULT := SPEDCFGNFE_ARRAYOFINIPARAM():New()
+	::oWSENTSGETALLMV    := SPEDCFGNFE_ENTGETALLMV():New()
+	::oWSGETALLMVTSSRESULT := SPEDCFGNFE_ARRAYOFRETGETALLMV():New()
+	::oWSGETAUTODISTRESULT := SPEDCFGNFE_ARRAYOFCFGAUTODIST():New()
+	::oWSGETDATECONTRESULT := SPEDCFGNFE_ARRAYOFGETCONT():New()
+	::oWSGETPARAMNSERESULT := SPEDCFGNFE_PARAMNSE():New()
+	::oWSGETPOPMAILRESULT := SPEDCFGNFE_POPSERVER():New()
+	::oWSGETSMTPMAILRESULT := SPEDCFGNFE_SMTPSERVER():New()
+	::oWSLOTCCERESULT    := SPEDCFGNFE_STRLOTCCE():New()
+	::oWSSTRUCTCFGAUTODIST := ::oWSCFGAUTODIST
+Return
+
+WSMETHOD RESET WSCLIENT WSSPEDCFGNFE
+	::cUSERTOKEN         := NIL 
+	::cID_ENT            := NIL 
+	::nAMBIENTE          := NIL 
+	::cMODELO            := NIL 
+	::cCFGAMBIENTERESULT := NIL 
+	::nCFGAMBIENTEEXRESULT := NIL 
+	::nAMBIENTENSE       := NIL 
+	::cCFGAMBIENTENSERESULT := NIL 
+	::nCFGAMBIENTENSEEXRESULT := NIL 
+	::oWSCFGAUTOCONT     := NIL 
+	::oWSCFGAUTOCONTRESULT := NIL 
+	::nCONTINGENCIA      := NIL 
+	::cCFGAUTOOFFLINERESULT := NIL 
+	::nAMBIENTEBPE       := NIL 
+	::cVERSAOBPE         := NIL 
+	::cVERBPELAYOUT      := NIL 
+	::cVERBPELAYEVEN     := NIL 
+	::cHORAVERAOBPE      := NIL 
+	::cHORARIOBPE        := NIL 
+	::oWSCFGBPERESULT    := NIL 
+	::lCFGCANCEVENRESULT := NIL 
+	::nAMBIENTECCE       := NIL 
+	::nAMBIENTEEPP       := NIL 
+	::cVERCCELAYOUT      := NIL 
+	::cVERCCELAYEVEN     := NIL 
+	::cVERCCEEVEN        := NIL 
+	::cVERCCE            := NIL 
+	::cHORAVERAOCCE      := NIL 
+	::cHORARIOCCE        := NIL 
+	::cVEREPPLAYOUT      := NIL 
+	::cVEREPPLAYEVEN     := NIL 
+	::cVEREPPEVEN        := NIL 
+	::cVEREPP            := NIL 
+	::nSEQLOTECCE        := NIL 
+	::nSEQLOTEEPP        := NIL
+	::cCCEPDF			 := NIL
+	::oWSCFGCCERESULT    := NIL 
+	::cCERTIFICATE       := NIL 
+	::cPRIVATEKEY        := NIL 
+	::cPASSWORD          := NIL 
+	::cCFGCERTIFICATERESULT := NIL 
+	::cCFGCERTIFICATEPFXRESULT := NIL 
+	::cCFGCONNECTRESULT  := NIL 
+	::nCFGCONNECTEXRESULT := NIL 
+	::cVERSAOGERALEPEC   := NIL 
+	::cVERSAOEVENCOMPROV := NIL 
+	::cVERSAOEVENCANCCOMPROV := NIL 
+	::cVERSAOEVENEPEC    := NIL 
+	::cVERSAOGERALCANC   := NIL 
+	::cVERSAOEVENCANC    := NIL 
+	::cVERSAOGERALCCE    := NIL 
+	::cVERSAOEVENCCE     := NIL 
+	::cVERSAOGERALMULT   := NIL 
+	::cVERSAOEVENMULT    := NIL 
+	::cVERSAOGERALGTV    := NIL 
+	::cVERSAOEVENGTV     := NIL 
+	::cVERSAOGERALDESAC  := NIL 
+	::cVERSAOEVENDESAC   := NIL 
+	::nSEQLOTEEPEC       := NIL 
+	::lCTECANCEVENTO     := NIL 
+	::cHORAVERAOCTE      := NIL 
+	::cHORARIOCTE        := NIL 
+	::oWSCFGEPECCTERESULT := NIL 
+	::cCFGGETTSSPORTALRESULT := NIL 
+	::cSLOT              := NIL 
+	::cLABEL             := NIL 
+	::cMODULE            := NIL 
+	::cIDHEX             := NIL 
+	::cCFGHSMRESULT      := NIL 
+	::cLABELKEY          := NIL 
+	::cCFGHSMEXRESULT    := NIL 
+	::oWSRETCFGKEYSTORE  := NIL 
+	::cCFGKEYSTORERESULT := NIL 
+	::nAMBIENTEMDFE      := NIL 
+	::nAMBIENTENFCOM     := NIL
+	::cVERSAOMDFE        := NIL 
+	::cVERSAONFCOM       := NIL
+	::nMODALIDADEMDFE    := NIL 
+	::nMODALIDADENFCOM   := NIL
+	::cVERMDFELAYOUT     := NIL 
+	::cVERNFCOMLAYOUT    := NIL
+	::cVERNFCOMLAYEVEN   := NIL
+	::cVERMDFELAYEVEN    := NIL 
+	::nSEQLOTEMDFE       := NIL 
+	::nSEQLOTENFCOM      := NIL
+	::cHORAVERAOMDFE     := NIL 
+	::cHORAVERAONFCOM    := NIL
+	::cHORARIOMDFE       := NIL 
+	::cHORARIONFCOM       := NIL
+	::oWSCFGMDFERESULT   := NIL 
+	::oWSCFGNFCOMRESULT  := NIL
+	::nMODALIDADE        := NIL 	
+	::cCFGMODALIDADERESULT := NIL 
+	::nCFGMODALIDADEEXRESULT := NIL 
+	::cMOTIVO            := NIL 
+	::oWSCFGMODALIDGRVRESULT := NIL 
+	::nNOTIFICACAO       := NIL 
+	::cCFGNOTIFICACAORESULT := NIL 
+	::oWSPARNSE          := NIL 
+	::cCFGPARAMNSERESULT := NIL 
+	::cUSACOLAB          := NIL 
+	::nNUMRETNF          := NIL 
+	::cVERSAONFE         := NIL 
+	::cVERSAONSE         := NIL 
+	::cVERSAODPEC        := NIL 
+	::cVERSAOCTE         := NIL 
+	::cUSERNEOG          := NIL 
+	::cCONFALL           := NIL 
+	::cDOCSCOL           := NIL 
+	::nAMBNFECOLAB       := NIL 
+	::nAMBCTECOLAB       := NIL 
+	::oWSCFGPARAMDOC     := NIL 
+	::lNFECANCEVENTO     := NIL 
+	::cNFEDISTRDANFE     := NIL 
+	::cNFEENVEPEC        := NIL 
+	::cAUTODISTR         := NIL 
+	::oWSCFGAUTODIST     := NIL 
+	::cCFGPARAMSPEDRESULT := NIL 
+	::oWSPOP             := NIL 
+	::cCFGPOPMAILRESULT  := NIL 
+	::oWSPOPNX           := NIL 
+	::lALTCONFIG         := NIL 
+	::cCFGPOPMAILNXRESULT := NIL 
+	::cCFGREADYRESULT    := NIL 
+	::nCFGREADYEXRESULT  := NIL 
+	::oWSSMTP            := NIL 
+	::cCFGSMTPMAILRESULT := NIL 
+	::oWSSMTPNX          := NIL 
+	::cCFGSMTPMAILNXRESULT := NIL 
+	::cPREFIXO           := NIL 
+	::oWSCFGSTATUSCERTIFICATERESULT := NIL 
+	::nTEMPOESPERA       := NIL 
+	::nCFGTEMPOESPERARESULT := NIL 
+	::cURLPORTAL         := NIL 
+	::cCFGTSSPORTALRESULT := NIL 
+	::cCFGTSSVERSAORESULT := NIL 
+	::cVERSAO            := NIL 
+	::cCFGVERSAORESULT   := NIL 
+	::cCFGVERSAOCTERESULT := NIL 
+	::cCFGVERSAODPECRESULT := NIL 
+	::cCFGVERSAONSERESULT := NIL 
+	::oWSGETALLINIPARAMRESULT := NIL 
+	::oWSENTSGETALLMV    := NIL 
+	::oWSGETALLMVTSSRESULT := NIL 
+	::cLISTFILIAIS       := NIL 
+	::oWSGETAUTODISTRESULT := NIL 
+	::dDATEINIC          := NIL 
+	::dDATEFIM           := NIL 
+	::oWSGETDATECONTRESULT := NIL 
+	::oWSGETPARAMNSERESULT := NIL 
+	::oWSGETPOPMAILRESULT := NIL 
+	::oWSGETSMTPMAILRESULT := NIL 
+	::oWSLOTCCERESULT    := NIL 
+	::lFTPENABLE         := NIL 
+	::lTSSCFGFTPRESULT   := NIL 
+	::oWSSTRUCTCFGAUTODIST := NIL
+	::cTSSFTPMETODO 	:= NIL 
+Return
+
+WSMETHOD CLONE WSCLIENT WSSPEDCFGNFE
+Local oClone := WSSPEDCFGNFE():New()
+	oClone:_URL          := ::_URL 
+	oClone:cUSERTOKEN    := ::cUSERTOKEN
+	oClone:cID_ENT       := ::cID_ENT
+	oClone:nAMBIENTE     := ::nAMBIENTE
+	oClone:cMODELO       := ::cMODELO
+	oClone:cCFGAMBIENTERESULT := ::cCFGAMBIENTERESULT
+	oClone:nCFGAMBIENTEEXRESULT := ::nCFGAMBIENTEEXRESULT
+	oClone:nAMBIENTENSE  := ::nAMBIENTENSE
+	oClone:cCFGAMBIENTENSERESULT := ::cCFGAMBIENTENSERESULT
+	oClone:nCFGAMBIENTENSEEXRESULT := ::nCFGAMBIENTENSEEXRESULT
+	oClone:oWSCFGAUTOCONT :=  IIF(::oWSCFGAUTOCONT = NIL , NIL ,::oWSCFGAUTOCONT:Clone() )
+	oClone:oWSCFGAUTOCONTRESULT :=  IIF(::oWSCFGAUTOCONTRESULT = NIL , NIL ,::oWSCFGAUTOCONTRESULT:Clone() )
+	oClone:nCONTINGENCIA := ::nCONTINGENCIA
+	oClone:cCFGAUTOOFFLINERESULT := ::cCFGAUTOOFFLINERESULT
+	oClone:nAMBIENTEBPE  := ::nAMBIENTEBPE
+	oClone:cVERSAOBPE    := ::cVERSAOBPE
+	oClone:cVERBPELAYOUT := ::cVERBPELAYOUT
+	oClone:cVERBPELAYEVEN := ::cVERBPELAYEVEN
+	oClone:cHORAVERAOBPE := ::cHORAVERAOBPE
+	oClone:cHORARIOBPE   := ::cHORARIOBPE
+	oClone:oWSCFGBPERESULT :=  IIF(::oWSCFGBPERESULT = NIL , NIL ,::oWSCFGBPERESULT:Clone() )
+	oClone:lCFGCANCEVENRESULT := ::lCFGCANCEVENRESULT
+	oClone:nAMBIENTECCE  := ::nAMBIENTECCE
+	oClone:nAMBIENTEEPP  := ::nAMBIENTEEPP
+	oClone:cVERCCELAYOUT := ::cVERCCELAYOUT
+	oClone:cVERCCELAYEVEN := ::cVERCCELAYEVEN
+	oClone:cVERCCEEVEN   := ::cVERCCEEVEN
+	oClone:cVERCCE       := ::cVERCCE
+	oClone:cHORAVERAOCCE := ::cHORAVERAOCCE
+	oClone:cHORARIOCCE   := ::cHORARIOCCE
+	oClone:cVEREPPLAYOUT := ::cVEREPPLAYOUT
+	oClone:cVEREPPLAYEVEN := ::cVEREPPLAYEVEN
+	oClone:cVEREPPEVEN   := ::cVEREPPEVEN
+	oClone:cVEREPP       := ::cVEREPP
+	oClone:nSEQLOTECCE   := ::nSEQLOTECCE
+	oClone:nSEQLOTEEPP   := ::nSEQLOTEEPP
+	oClone:cCCEPDF  	 := ::cCCEPDF
+	oClone:oWSCFGCCERESULT :=  IIF(::oWSCFGCCERESULT = NIL , NIL ,::oWSCFGCCERESULT:Clone() )
+	oClone:cCERTIFICATE  := ::cCERTIFICATE
+	oClone:cPRIVATEKEY   := ::cPRIVATEKEY
+	oClone:cPASSWORD     := ::cPASSWORD
+	oClone:cCFGCERTIFICATERESULT := ::cCFGCERTIFICATERESULT
+	oClone:cCFGCERTIFICATEPFXRESULT := ::cCFGCERTIFICATEPFXRESULT
+	oClone:cCFGCONNECTRESULT := ::cCFGCONNECTRESULT
+	oClone:nCFGCONNECTEXRESULT := ::nCFGCONNECTEXRESULT
+	oClone:cVERSAOGERALEPEC := ::cVERSAOGERALEPEC
+	oClone:cVERSAOEVENEPEC := ::cVERSAOEVENEPEC
+	oClone:cVERSAOGERALCANC := ::cVERSAOGERALCANC
+	oClone:cVERSAOEVENCANC := ::cVERSAOEVENCANC
+	oClone:cVERSAOGERALCCE := ::cVERSAOGERALCCE
+	oClone:cVERSAOEVENCCE := ::cVERSAOEVENCCE
+	oClone:cVERSAOGERALMULT := ::cVERSAOGERALMULT
+	oClone:cVERSAOEVENMULT := ::cVERSAOEVENMULT
+	oClone:cVERSAOGERALGTV := ::cVERSAOGERALGTV
+	oClone:cVERSAOEVENGTV := ::cVERSAOEVENGTV
+	oClone:cVERSAOGERALDESAC := ::cVERSAOGERALDESAC
+	oClone:cVERSAOEVENDESAC := ::cVERSAOEVENDESAC
+	oClone:nSEQLOTEEPEC  := ::nSEQLOTEEPEC
+	oClone:lCTECANCEVENTO := ::lCTECANCEVENTO
+	oClone:cHORAVERAOCTE := ::cHORAVERAOCTE
+	oClone:cHORARIOCTE   := ::cHORARIOCTE
+	oClone:oWSCFGEPECCTERESULT :=  IIF(::oWSCFGEPECCTERESULT = NIL , NIL ,::oWSCFGEPECCTERESULT:Clone() )
+	oClone:cCFGGETTSSPORTALRESULT := ::cCFGGETTSSPORTALRESULT
+	oClone:cSLOT         := ::cSLOT
+	oClone:cLABEL        := ::cLABEL
+	oClone:cMODULE       := ::cMODULE
+	oClone:cIDHEX        := ::cIDHEX
+	oClone:cCFGHSMRESULT := ::cCFGHSMRESULT
+	oClone:cLABELKEY     := ::cLABELKEY
+	oClone:cCFGHSMEXRESULT := ::cCFGHSMEXRESULT
+	oClone:oWSRETCFGKEYSTORE :=  IIF(::oWSRETCFGKEYSTORE = NIL , NIL ,::oWSRETCFGKEYSTORE:Clone() )
+	oClone:cCFGKEYSTORERESULT := ::cCFGKEYSTORERESULT
+	oClone:nAMBIENTEMDFE := ::nAMBIENTEMDFE
+	oClone:nAMBIENTENFCOM := ::nAMBIENTENFCOM
+	oClone:cVERSAOMDFE   := ::cVERSAOMDFE
+	oClone:cVERSAONFCOM   := ::cVERSAONFCOM
+	oClone:nMODALIDADEMDFE := ::nMODALIDADEMDFE
+	oClone:nMODALIDADENFCOM := ::nMODALIDADENFCOM
+	oClone:cVERMDFELAYOUT := ::cVERMDFELAYOUT
+	oClone:cVERNFCOMLAYOUT := ::cVERNFCOMLAYOUT
+	oClone:cVERNFCOMLAYEVEN := ::cVERNFCOMLAYEVEN
+	oClone:cVERMDFELAYEVEN := ::cVERMDFELAYEVEN
+	oClone:nSEQLOTEMDFE  := ::nSEQLOTEMDFE
+	oClone:nSEQLOTENFCOM  := ::nSEQLOTENFCOM
+	oClone:cHORAVERAOMDFE := ::cHORAVERAOMDFE
+	oClone:cHORAVERAONFCOM := ::cHORAVERAONFCOM
+	oClone:cHORARIOMDFE  := ::cHORARIOMDFE
+	oClone:cHORARIONFCOM  := ::cHORARIONFCOM
+	oClone:oWSCFGMDFERESULT :=  IIF(::oWSCFGMDFERESULT = NIL , NIL ,::oWSCFGMDFERESULT:Clone() )
+	oClone:oWSCFGNFCOMRESULT :=  IIF(::oWSCFGNFCOMRESULT = NIL , NIL ,::oWSCFGNFCOMRESULT:Clone() )
+	oClone:nMODALIDADE   := ::nMODALIDADE
+	oClone:cCFGMODALIDADERESULT := ::cCFGMODALIDADERESULT
+	oClone:nCFGMODALIDADEEXRESULT := ::nCFGMODALIDADEEXRESULT
+	oClone:cMOTIVO       := ::cMOTIVO
+	oClone:oWSCFGMODALIDGRVRESULT :=  IIF(::oWSCFGMODALIDGRVRESULT = NIL , NIL ,::oWSCFGMODALIDGRVRESULT:Clone() )
+	oClone:nNOTIFICACAO  := ::nNOTIFICACAO
+	oClone:cCFGNOTIFICACAORESULT := ::cCFGNOTIFICACAORESULT
+	oClone:oWSPARNSE     :=  IIF(::oWSPARNSE = NIL , NIL ,::oWSPARNSE:Clone() )
+	oClone:cCFGPARAMNSERESULT := ::cCFGPARAMNSERESULT
+	oClone:cUSACOLAB     := ::cUSACOLAB
+	oClone:nNUMRETNF     := ::nNUMRETNF
+	oClone:cVERSAONFE    := ::cVERSAONFE
+	oClone:cVERSAONSE    := ::cVERSAONSE
+	oClone:cVERSAODPEC   := ::cVERSAODPEC
+	oClone:cVERSAOCTE    := ::cVERSAOCTE
+	oClone:cUSERNEOG     := ::cUSERNEOG
+	oClone:cCONFALL      := ::cCONFALL
+	oClone:cDOCSCOL      := ::cDOCSCOL
+	oClone:nAMBNFECOLAB  := ::nAMBNFECOLAB
+	oClone:nAMBCTECOLAB  := ::nAMBCTECOLAB
+	oClone:oWSCFGPARAMDOC :=  IIF(::oWSCFGPARAMDOC = NIL , NIL ,::oWSCFGPARAMDOC:Clone() )
+	oClone:lNFECANCEVENTO := ::lNFECANCEVENTO
+	oClone:cNFEDISTRDANFE := ::cNFEDISTRDANFE
+	oClone:cNFEENVEPEC   := ::cNFEENVEPEC
+	oClone:cAUTODISTR	  := ::cAUTODISTR
+	oClone:oWSCFGAUTODIST :=  IIF(::oWSCFGAUTODIST = NIL , NIL ,::oWSCFGAUTODIST:Clone() )
+	oClone:cCFGPARAMSPEDRESULT := ::cCFGPARAMSPEDRESULT
+	oClone:oWSPOP        :=  IIF(::oWSPOP = NIL , NIL ,::oWSPOP:Clone() )
+	oClone:cCFGPOPMAILRESULT := ::cCFGPOPMAILRESULT
+	oClone:oWSPOPNX      :=  IIF(::oWSPOPNX = NIL , NIL ,::oWSPOPNX:Clone() )
+	oClone:lALTCONFIG    := ::lALTCONFIG
+	oClone:cCFGPOPMAILNXRESULT := ::cCFGPOPMAILNXRESULT
+	oClone:cCFGREADYRESULT := ::cCFGREADYRESULT
+	oClone:nCFGREADYEXRESULT := ::nCFGREADYEXRESULT
+	oClone:oWSSMTP       :=  IIF(::oWSSMTP = NIL , NIL ,::oWSSMTP:Clone() )
+	oClone:cCFGSMTPMAILRESULT := ::cCFGSMTPMAILRESULT
+	oClone:oWSSMTPNX     :=  IIF(::oWSSMTPNX = NIL , NIL ,::oWSSMTPNX:Clone() )
+	oClone:cCFGSMTPMAILNXRESULT := ::cCFGSMTPMAILNXRESULT
+	oClone:cPREFIXO      := ::cPREFIXO
+	oClone:oWSCFGSTATUSCERTIFICATERESULT :=  IIF(::oWSCFGSTATUSCERTIFICATERESULT = NIL , NIL ,::oWSCFGSTATUSCERTIFICATERESULT:Clone() )
+	oClone:nTEMPOESPERA  := ::nTEMPOESPERA
+	oClone:nCFGTEMPOESPERARESULT := ::nCFGTEMPOESPERARESULT
+	oClone:cURLPORTAL    := ::cURLPORTAL
+	oClone:cCFGTSSPORTALRESULT := ::cCFGTSSPORTALRESULT
+	oClone:cCFGTSSVERSAORESULT := ::cCFGTSSVERSAORESULT
+	oClone:cVERSAO       := ::cVERSAO
+	oClone:cCFGVERSAORESULT := ::cCFGVERSAORESULT
+	oClone:cCFGVERSAOCTERESULT := ::cCFGVERSAOCTERESULT
+	oClone:cCFGVERSAODPECRESULT := ::cCFGVERSAODPECRESULT
+	oClone:cCFGVERSAONSERESULT := ::cCFGVERSAONSERESULT
+	oClone:oWSGETALLINIPARAMRESULT :=  IIF(::oWSGETALLINIPARAMRESULT = NIL , NIL ,::oWSGETALLINIPARAMRESULT:Clone() )
+	oClone:oWSENTSGETALLMV :=  IIF(::oWSENTSGETALLMV = NIL , NIL ,::oWSENTSGETALLMV:Clone() )
+	oClone:oWSGETALLMVTSSRESULT :=  IIF(::oWSGETALLMVTSSRESULT = NIL , NIL ,::oWSGETALLMVTSSRESULT:Clone() )
+	oClone:cLISTFILIAIS  := ::cLISTFILIAIS
+	oClone:oWSGETAUTODISTRESULT :=  IIF(::oWSGETAUTODISTRESULT = NIL , NIL ,::oWSGETAUTODISTRESULT:Clone() )
+	oClone:dDATEINIC     := ::dDATEINIC
+	oClone:dDATEFIM      := ::dDATEFIM
+	oClone:oWSGETDATECONTRESULT :=  IIF(::oWSGETDATECONTRESULT = NIL , NIL ,::oWSGETDATECONTRESULT:Clone() )
+	oClone:oWSGETPARAMNSERESULT :=  IIF(::oWSGETPARAMNSERESULT = NIL , NIL ,::oWSGETPARAMNSERESULT:Clone() )
+	oClone:oWSGETPOPMAILRESULT :=  IIF(::oWSGETPOPMAILRESULT = NIL , NIL ,::oWSGETPOPMAILRESULT:Clone() )
+	oClone:oWSGETSMTPMAILRESULT :=  IIF(::oWSGETSMTPMAILRESULT = NIL , NIL ,::oWSGETSMTPMAILRESULT:Clone() )
+	oClone:oWSLOTCCERESULT :=  IIF(::oWSLOTCCERESULT = NIL , NIL ,::oWSLOTCCERESULT:Clone() )
+	oClone:lFTPENABLE    := ::lFTPENABLE
+	oClone:lTSSCFGFTPRESULT := ::lTSSCFGFTPRESULT
+	oClone:oWSSTRUCTCFGAUTODIST := oClone:oWSCFGAUTODIST
+	oClone:cTSSFTPMETODO	:= ::cTSSFTPMETODO
+Return oClone
+
+// WSDL Method CFGAMBIENTE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGAMBIENTE WSSEND cUSERTOKEN,cID_ENT,nAMBIENTE,cMODELO WSRECEIVE cCFGAMBIENTERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGAMBIENTE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTE", ::nAMBIENTE, nAMBIENTE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODELO", ::cMODELO, cMODELO , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGAMBIENTE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGAMBIENTE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGAMBIENTERESULT :=  WSAdvValue( oXmlRet,"_CFGAMBIENTERESPONSE:_CFGAMBIENTERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGAMBIENTEEX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGAMBIENTEEX WSSEND cUSERTOKEN,cID_ENT,nAMBIENTE WSRECEIVE nCFGAMBIENTEEXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGAMBIENTEEX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTE", ::nAMBIENTE, nAMBIENTE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGAMBIENTEEX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGAMBIENTEEX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::nCFGAMBIENTEEXRESULT :=  WSAdvValue( oXmlRet,"_CFGAMBIENTEEXRESPONSE:_CFGAMBIENTEEXRESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGAMBIENTENSE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGAMBIENTENSE WSSEND cUSERTOKEN,cID_ENT,nAMBIENTENSE WSRECEIVE cCFGAMBIENTENSERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGAMBIENTENSE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTENSE", ::nAMBIENTENSE, nAMBIENTENSE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGAMBIENTENSE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGAMBIENTENSE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGAMBIENTENSERESULT :=  WSAdvValue( oXmlRet,"_CFGAMBIENTENSERESPONSE:_CFGAMBIENTENSERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGAMBIENTENSEEX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGAMBIENTENSEEX WSSEND cUSERTOKEN,cID_ENT,nAMBIENTENSE WSRECEIVE nCFGAMBIENTENSEEXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGAMBIENTENSEEX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTENSE", ::nAMBIENTENSE, nAMBIENTENSE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGAMBIENTENSEEX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGAMBIENTENSEEX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::nCFGAMBIENTENSEEXRESULT :=  WSAdvValue( oXmlRet,"_CFGAMBIENTENSEEXRESPONSE:_CFGAMBIENTENSEEXRESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGAUTOCONT of Service WSSPEDCFGNFE
+
+WSMETHOD CFGAUTOCONT WSSEND cUSERTOKEN,oWSCFGAUTOCONT WSRECEIVE oWSCFGAUTOCONTRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGAUTOCONT xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CFGAUTOCONT", ::oWSCFGAUTOCONT, oWSCFGAUTOCONT , "AUTOCFGCONT", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CFGAUTOCONT>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGAUTOCONT",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8080/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGAUTOCONTRESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGAUTOCONTRESPONSE:_CFGAUTOCONTRESULT","RETAUTOCFGCONT",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGAUTOOFFLINE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGAUTOOFFLINE WSSEND cUSERTOKEN,cID_ENT,nCONTINGENCIA,cMODELO WSRECEIVE cCFGAUTOOFFLINERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGAUTOOFFLINE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("CONTINGENCIA", ::nCONTINGENCIA, nCONTINGENCIA , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODELO", ::cMODELO, cMODELO , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGAUTOOFFLINE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGAUTOOFFLINE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://172.16.36.40:8080/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGAUTOOFFLINERESULT :=  WSAdvValue( oXmlRet,"_CFGAUTOOFFLINERESPONSE:_CFGAUTOOFFLINERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGBPE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGBPE WSSEND cUSERTOKEN,cID_ENT,nAMBIENTEBPE,cVERSAOBPE,cVERBPELAYOUT,cVERBPELAYEVEN,cHORAVERAOBPE,cHORARIOBPE WSRECEIVE oWSCFGBPERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGBPE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("AMBIENTEBPE", ::nAMBIENTEBPE, nAMBIENTEBPE , "integer", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAOBPE", ::cVERSAOBPE, cVERSAOBPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERBPELAYOUT", ::cVERBPELAYOUT, cVERBPELAYOUT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERBPELAYEVEN", ::cVERBPELAYEVEN, cVERBPELAYEVEN , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("HORAVERAOBPE", ::cHORAVERAOBPE, cHORAVERAOBPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("HORARIOBPE", ::cHORARIOBPE, cHORARIOBPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CFGBPE>"
+
+oXmlRet := SvcSoapCall( ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGBPE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8090/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGBPERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGBPERESPONSE:_CFGBPERESULT","STRUCTCFGBPERESULT",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGCANCEVEN of Service WSSPEDCFGNFE
+
+WSMETHOD CFGCANCEVEN WSSEND cUSERTOKEN,cID_ENT WSRECEIVE lCFGCANCEVENRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGCANCEVEN xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGCANCEVEN>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCANCEVEN",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://172.16.36.40:8080/SPEDCFGNFE.apw")
+
+::Init()
+::lCFGCANCEVENRESULT :=  WSAdvValue( oXmlRet,"_CFGCANCEVENRESPONSE:_CFGCANCEVENRESULT:TEXT","boolean",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGCCE of Service WSSPEDCFGNFE
+WSMETHOD CFGCCE WSSEND cUSERTOKEN,cID_ENT,nAMBIENTECCE,cVERCCELAYOUT,cVERCCELAYEVEN,cVERCCEEVEN,cVERCCE,cHORAVERAOCCE,cHORARIOCCE,;
+			cVEREPPLAYOUT,cVEREPPLAYEVEN,cVEREPPEVEN,cVEREPP,nSEQLOTECCE,nSEQLOTEEPP,nAMBIENTEEPP,cCCEPDF WSRECEIVE oWSCFGCCERESULT WSCLIENT WSSPEDCFGNFE
+
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGCCE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTECCE", ::nAMBIENTECCE, nAMBIENTECCE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERCCELAYOUT", ::cVERCCELAYOUT, cVERCCELAYOUT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERCCELAYEVEN", ::cVERCCELAYEVEN, cVERCCELAYEVEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERCCEEVEN", ::cVERCCEEVEN, cVERCCEEVEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERCCE", ::cVERCCE, cVERCCE , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORAVERAOCCE", ::cHORAVERAOCCE, cHORAVERAOCCE , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORARIOCCE", ::cHORARIOCCE, cHORARIOCCE , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VEREPPLAYOUT", ::cVEREPPLAYOUT, cVEREPPLAYOUT , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VEREPPLAYEVEN", ::cVEREPPLAYEVEN, cVEREPPLAYEVEN , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VEREPPEVEN", ::cVEREPPEVEN, cVEREPPEVEN , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VEREPP", ::cVEREPP, cVEREPP , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SEQLOTECCE", ::nSEQLOTECCE, nSEQLOTECCE , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SEQLOTEEPP", ::nSEQLOTEEPP, nSEQLOTEEPP , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTEEPP", ::nAMBIENTEEPP, nAMBIENTEEPP , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ENVIACCEPDF", ::cCCEPDF, cCCEPDF , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGCCE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCCE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8080/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGCCERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGCCERESPONSE:_CFGCCERESULT","STRUCTCFGCCE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGCERTIFICATE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGCERTIFICATE WSSEND cUSERTOKEN,cID_ENT,cCERTIFICATE,cPRIVATEKEY,cPASSWORD WSRECEIVE cCFGCERTIFICATERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGCERTIFICATE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("CERTIFICATE", ::cCERTIFICATE, cCERTIFICATE , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("PRIVATEKEY", ::cPRIVATEKEY, cPRIVATEKEY , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, cPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGCERTIFICATE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCERTIFICATE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGCERTIFICATERESULT :=  WSAdvValue( oXmlRet,"_CFGCERTIFICATERESPONSE:_CFGCERTIFICATERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGCERTIFICATEPFX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGCERTIFICATEPFX WSSEND cUSERTOKEN,cID_ENT,cCERTIFICATE,cPASSWORD WSRECEIVE cCFGCERTIFICATEPFXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGCERTIFICATEPFX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("CERTIFICATE", ::cCERTIFICATE, cCERTIFICATE , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, cPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGCERTIFICATEPFX>"
+
+If !Empty(::cBearerToken) .And. FindFunction("TafSetTssHeader")
+
+	oXmlRet := SvcSoapCall(	TafSetTssHeader(Self,::cBearerToken),cSoap,; 
+		"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCERTIFICATEPFX",; 
+		"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+		"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+Else 
+
+	oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+		"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCERTIFICATEPFX",; 
+		"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+		"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+EndIf 
+
+::Init()
+::cCFGCERTIFICATEPFXRESULT :=  WSAdvValue( oXmlRet,"_CFGCERTIFICATEPFXRESPONSE:_CFGCERTIFICATEPFXRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGCONNECT of Service WSSPEDCFGNFE
+
+WSMETHOD CFGCONNECT WSSEND cUSERTOKEN WSRECEIVE cCFGCONNECTRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGCONNECT xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGCONNECT>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCONNECT",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGCONNECTRESULT  :=  WSAdvValue( oXmlRet,"_CFGCONNECTRESPONSE:_CFGCONNECTRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGCONNECTEX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGCONNECTEX WSSEND cUSERTOKEN WSRECEIVE nCFGCONNECTEXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGCONNECTEX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGCONNECTEX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGCONNECTEX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::nCFGCONNECTEXRESULT :=  WSAdvValue( oXmlRet,"_CFGCONNECTEXRESPONSE:_CFGCONNECTEXRESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGEPECCTE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGEPECCTE WSSEND cUSERTOKEN,cID_ENT,cVERSAOGERALEPEC,cVERSAOEVENCOMPROV,cVERSAOEVENCANCCOMPROV,cVERSAOEVENEPEC,cVERSAOGERALCANC,cVERSAOEVENCANC,cVERSAOGERALCCE,cVERSAOEVENCCE,cVERSAOGERALMULT,cVERSAOEVENMULT,cVERSAOGERALGTV,cVERSAOEVENGTV,cVERSAOGERALDESAC,cVERSAOEVENDESAC,nSEQLOTEEPEC,lCTECANCEVENTO,cHORAVERAOCTE,cHORARIOCTE WSRECEIVE oWSCFGEPECCTERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGEPECCTE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOGERALEPEC", ::cVERSAOGERALEPEC, cVERSAOGERALEPEC , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOEVENCOMPROV", ::cVERSAOEVENCOMPROV, cVERSAOEVENCOMPROV , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAOEVENCANCCOMPROV", ::cVERSAOEVENCANCCOMPROV, cVERSAOEVENCANCCOMPROV , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAOEVENEPEC", ::cVERSAOEVENEPEC, cVERSAOEVENEPEC , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOGERALCANC", ::cVERSAOGERALCANC, cVERSAOGERALCANC , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOEVENCANC", ::cVERSAOEVENCANC, cVERSAOEVENCANC , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOGERALCCE", ::cVERSAOGERALCCE, cVERSAOGERALCCE , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOEVENCCE", ::cVERSAOEVENCCE, cVERSAOEVENCCE , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOGERALMULT", ::cVERSAOGERALMULT, cVERSAOGERALMULT , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOEVENMULT", ::cVERSAOEVENMULT, cVERSAOEVENMULT , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOGERALGTV", ::cVERSAOGERALGTV, cVERSAOGERALGTV , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOEVENGTV", ::cVERSAOEVENGTV, cVERSAOEVENGTV , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOGERALDESAC", ::cVERSAOGERALDESAC, cVERSAOGERALDESAC , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOEVENDESAC", ::cVERSAOEVENDESAC, cVERSAOEVENDESAC , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SEQLOTEEPEC", ::nSEQLOTEEPEC, nSEQLOTEEPEC , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("CTECANCEVENTO", ::lCTECANCEVENTO, lCTECANCEVENTO , "boolean", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORAVERAOCTE", ::cHORAVERAOCTE, cHORAVERAOCTE , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORARIOCTE", ::cHORARIOCTE, cHORARIOCTE , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGEPECCTE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGEPECCTE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://172.16.33.53:8080/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGEPECCTERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGEPECCTERESPONSE:_CFGEPECCTERESULT","STRUCTCFGEPEC",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGGETTSSPORTAL of Service WSSPEDCFGNFE 
+
+WSMETHOD CFGGETTSSPORTAL WSSEND cUSERTOKEN,cID_ENT WSRECEIVE cCFGGETTSSPORTALRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGGETTSSPORTAL xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGGETTSSPORTAL>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGGETTSSPORTAL",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8011/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGGETTSSPORTALRESULT :=  WSAdvValue( oXmlRet,"_CFGGETTSSPORTALRESPONSE:_CFGGETTSSPORTALRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGHSM of Service WSSPEDCFGNFE
+
+WSMETHOD CFGHSM WSSEND cUSERTOKEN,cID_ENT,cSLOT,cLABEL,cMODULE,cPASSWORD,cIDHEX WSRECEIVE cCFGHSMRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGHSM xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SLOT", ::cSLOT, cSLOT , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("LABEL", ::cLABEL, cLABEL , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODULE", ::cMODULE, cMODULE , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, cPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("IDHEX", ::cIDHEX, cIDHEX , "base64Binary", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGHSM>"
+
+If !Empty(::cBearerToken) .And. FindFunction("TafSetTssHeader")
+
+	oXmlRet := SvcSoapCall(	TafSetTssHeader(Self,::cBearerToken),cSoap,; 
+		"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGHSM",; 
+		"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+		"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+Else 
+
+	oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+		"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGHSM",; 
+		"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+		"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+EndIf 
+
+::Init()
+::cCFGHSMRESULT      :=  WSAdvValue( oXmlRet,"_CFGHSMRESPONSE:_CFGHSMRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGHSMEX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGHSMEX WSSEND cUSERTOKEN,cID_ENT,cSLOT,cLABEL,cLABELKEY,cMODULE,cPASSWORD,cIDHEX WSRECEIVE cCFGHSMEXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGHSMEX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SLOT", ::cSLOT, cSLOT , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("LABEL", ::cLABEL, cLABEL , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("LABELKEY", ::cLABELKEY, cLABELKEY , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODULE", ::cMODULE, cMODULE , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, cPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("IDHEX", ::cIDHEX, cIDHEX , "base64Binary", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGHSMEX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGHSMEX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGHSMEXRESULT    :=  WSAdvValue( oXmlRet,"_CFGHSMEXRESPONSE:_CFGHSMEXRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGKEYSTORE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGKEYSTORE WSSEND cUSERTOKEN,cID_ENT,oWSRETCFGKEYSTORE WSRECEIVE cCFGKEYSTORERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGKEYSTORE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("RETCFGKEYSTORE", ::oWSRETCFGKEYSTORE, oWSRETCFGKEYSTORE , "CFGKEYSTORE", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CFGKEYSTORE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGKEYSTORE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8083/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGKEYSTORERESULT :=  WSAdvValue( oXmlRet,"_CFGKEYSTORERESPONSE:_CFGKEYSTORERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGMDFE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGMDFE WSSEND cUSERTOKEN,cID_ENT,nAMBIENTEMDFE,cVERSAOMDFE,nMODALIDADEMDFE,cVERMDFELAYOUT,cVERMDFELAYEVEN,nSEQLOTEMDFE,cHORAVERAOMDFE,cHORARIOMDFE WSRECEIVE oWSCFGMDFERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGMDFE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTEMDFE", ::nAMBIENTEMDFE, nAMBIENTEMDFE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAOMDFE", ::cVERSAOMDFE, cVERSAOMDFE , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODALIDADEMDFE", ::nMODALIDADEMDFE, nMODALIDADEMDFE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERMDFELAYOUT", ::cVERMDFELAYOUT, cVERMDFELAYOUT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERMDFELAYEVEN", ::cVERMDFELAYEVEN, cVERMDFELAYEVEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SEQLOTEMDFE", ::nSEQLOTEMDFE, nSEQLOTEMDFE , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORAVERAOMDFE", ::cHORAVERAOMDFE, cHORAVERAOMDFE , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORARIOMDFE", ::cHORARIOMDFE, cHORARIOMDFE , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGMDFE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGMDFE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGMDFERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGMDFERESPONSE:_CFGMDFERESULT","STRUCTCFGMDFE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGMODALIDADE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGMODALIDADE WSSEND cUSERTOKEN,cID_ENT,nMODALIDADE,cMODELO WSRECEIVE cCFGMODALIDADERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGMODALIDADE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODALIDADE", ::nMODALIDADE, nMODALIDADE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODELO", ::cMODELO, cMODELO , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGMODALIDADE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGMODALIDADE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGMODALIDADERESULT :=  WSAdvValue( oXmlRet,"_CFGMODALIDADERESPONSE:_CFGMODALIDADERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL)
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGMODALIDADEEX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGMODALIDADEEX WSSEND cUSERTOKEN,cID_ENT,nMODALIDADE WSRECEIVE nCFGMODALIDADEEXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGMODALIDADEEX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODALIDADE", ::nMODALIDADE, nMODALIDADE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGMODALIDADEEX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGMODALIDADEEX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::nCFGMODALIDADEEXRESULT :=  WSAdvValue( oXmlRet,"_CFGMODALIDADEEXRESPONSE:_CFGMODALIDADEEXRESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGMODALIDGRV of Service WSSPEDCFGNFE
+
+WSMETHOD CFGMODALIDGRV WSSEND cUSERTOKEN,cID_ENT,nMODALIDADE,cMOTIVO,cMODELO WSRECEIVE oWSCFGMODALIDGRVRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGMODALIDGRV xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODALIDADE", ::nMODALIDADE, nMODALIDADE , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MOTIVO", ::cMOTIVO, cMOTIVO , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODELO", ::cMODELO, cMODELO , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGMODALIDGRV>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGMODALIDGRV",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGMODALIDGRVRESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGMODALIDGRVRESPONSE:_CFGMODALIDGRVRESULT","MODALIDGRV",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGNOTIFICACAO of Service WSSPEDCFGNFE
+
+WSMETHOD CFGNOTIFICACAO WSSEND cUSERTOKEN,cID_ENT,nNOTIFICACAO WSRECEIVE cCFGNOTIFICACAORESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGNOTIFICACAO xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("NOTIFICACAO", ::nNOTIFICACAO, nNOTIFICACAO , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGNOTIFICACAO>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGNOTIFICACAO",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGNOTIFICACAORESULT :=  WSAdvValue( oXmlRet,"_CFGNOTIFICACAORESPONSE:_CFGNOTIFICACAORESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGPARAMNSE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGPARAMNSE WSSEND cUSERTOKEN,cID_ENT,oWSPARNSE WSRECEIVE cCFGPARAMNSERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGPARAMNSE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("PARNSE", ::oWSPARNSE, oWSPARNSE , "PARAMNSE", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGPARAMNSE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGPARAMNSE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGPARAMNSERESULT :=  WSAdvValue( oXmlRet,"_CFGPARAMNSERESPONSE:_CFGPARAMNSERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGPARAMSPED of Service WSSPEDCFGNFE
+
+WSMETHOD CFGPARAMSPED WSSEND cUSERTOKEN,cID_ENT,cUSACOLAB,nNUMRETNF,nAMBIENTE,nMODALIDADE,cVERSAONFE,cVERSAONSE,cVERSAODPEC,cVERSAOCTE,cUSERNEOG,cPASSWORD,cCONFALL,cDOCSCOL,nAMBNFECOLAB,nAMBCTECOLAB,oWSCFGPARAMDOC,lNFECANCEVENTO,cNFEDISTRDANFE,cNFEENVEPEC,cAUTODISTR,oWSCFGAUTODIST WSRECEIVE cCFGPARAMSPEDRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGPARAMSPED xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("USACOLAB", ::cUSACOLAB, cUSACOLAB , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NUMRETNF", ::nNUMRETNF, nNUMRETNF , "integer", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("AMBIENTE", ::nAMBIENTE, nAMBIENTE , "integer", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("MODALIDADE", ::nMODALIDADE, nMODALIDADE , "integer", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAONFE", ::cVERSAONFE, cVERSAONFE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAONSE", ::cVERSAONSE, cVERSAONSE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAODPEC", ::cVERSAODPEC, cVERSAODPEC , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VERSAOCTE", ::cVERSAOCTE, cVERSAOCTE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("USERNEOG", ::cUSERNEOG, cUSERNEOG , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, cPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CONFALL", ::cCONFALL, cCONFALL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("DOCSCOL", ::cDOCSCOL, cDOCSCOL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("AMBNFECOLAB", ::nAMBNFECOLAB, nAMBNFECOLAB , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("AMBCTECOLAB", ::nAMBCTECOLAB, nAMBCTECOLAB , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CFGPARAMDOC", ::oWSCFGPARAMDOC, oWSCFGPARAMDOC , "CFGS", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NFECANCEVENTO", ::lNFECANCEVENTO, lNFECANCEVENTO , "boolean", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NFEDISTRDANFE", ::cNFEDISTRDANFE, cNFEDISTRDANFE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NFEENVEPEC", ::cNFEENVEPEC, cNFEENVEPEC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("AUTODISTR", ::cAUTODISTR, cAUTODISTR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CFGAUTODIST", ::oWSCFGAUTODIST, oWSCFGAUTODIST , "STRUCTCFGAUTODIST", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CFGPARAMSPED>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGPARAMSPED",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGPARAMSPEDRESULT :=  WSAdvValue( oXmlRet,"_CFGPARAMSPEDRESPONSE:_CFGPARAMSPEDRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGPOPMAIL of Service WSSPEDCFGNFE
+
+WSMETHOD CFGPOPMAIL WSSEND cUSERTOKEN,cID_ENT,oWSPOP WSRECEIVE cCFGPOPMAILRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGPOPMAIL xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("POP", ::oWSPOP, oWSPOP , "POPSERVER", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGPOPMAIL>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGPOPMAIL",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGPOPMAILRESULT  :=  WSAdvValue( oXmlRet,"_CFGPOPMAILRESPONSE:_CFGPOPMAILRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGPOPMAILNX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGPOPMAILNX WSSEND cUSERTOKEN,cID_ENT,oWSPOPNX,lALTCONFIG WSRECEIVE cCFGPOPMAILNXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGPOPMAILNX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("POPNX", ::oWSPOPNX, oWSPOPNX , "POPSERVERNX", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ALTCONFIG", ::lALTCONFIG, lALTCONFIG , "boolean", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGPOPMAILNX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGPOPMAILNX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGPOPMAILNXRESULT :=  WSAdvValue( oXmlRet,"_CFGPOPMAILNXRESPONSE:_CFGPOPMAILNXRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGREADY of Service WSSPEDCFGNFE
+
+WSMETHOD CFGREADY WSSEND cUSERTOKEN,cID_ENT WSRECEIVE cCFGREADYRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGREADY xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGREADY>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGREADY",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGREADYRESULT    :=  WSAdvValue( oXmlRet,"_CFGREADYRESPONSE:_CFGREADYRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGREADYEX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGREADYEX WSSEND cUSERTOKEN,cID_ENT WSRECEIVE nCFGREADYEXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGREADYEX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGREADYEX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGREADYEX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::nCFGREADYEXRESULT  :=  WSAdvValue( oXmlRet,"_CFGREADYEXRESPONSE:_CFGREADYEXRESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGSMTPMAIL of Service WSSPEDCFGNFE
+
+WSMETHOD CFGSMTPMAIL WSSEND cUSERTOKEN,cID_ENT,oWSSMTP WSRECEIVE cCFGSMTPMAILRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGSMTPMAIL xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SMTP", ::oWSSMTP, oWSSMTP , "SMTPSERVER", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGSMTPMAIL>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGSMTPMAIL",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGSMTPMAILRESULT :=  WSAdvValue( oXmlRet,"_CFGSMTPMAILRESPONSE:_CFGSMTPMAILRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGSMTPMAILNX of Service WSSPEDCFGNFE
+
+WSMETHOD CFGSMTPMAILNX WSSEND cUSERTOKEN,cID_ENT,oWSSMTPNX,lALTCONFIG WSRECEIVE cCFGSMTPMAILNXRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGSMTPMAILNX xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SMTPNX", ::oWSSMTPNX, oWSSMTPNX , "SMTPSERVERNX", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ALTCONFIG", ::lALTCONFIG, lALTCONFIG , "boolean", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGSMTPMAILNX>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGSMTPMAILNX",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGSMTPMAILNXRESULT :=  WSAdvValue( oXmlRet,"_CFGSMTPMAILNXRESPONSE:_CFGSMTPMAILNXRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGSTATUSCERTIFICATE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGSTATUSCERTIFICATE WSSEND cUSERTOKEN,cID_ENT WSRECEIVE oWSCFGSTATUSCERTIFICATERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGSTATUSCERTIFICATE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGSTATUSCERTIFICATE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGSTATUSCERTIFICATE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGSTATUSCERTIFICATERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGSTATUSCERTIFICATERESPONSE:_CFGSTATUSCERTIFICATERESULT","ARRAYOFDIGITALCERTIFICATE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGTEMPOESPERA of Service WSSPEDCFGNFE
+
+WSMETHOD CFGTEMPOESPERA WSSEND cUSERTOKEN,cID_ENT,nTEMPOESPERA WSRECEIVE nCFGTEMPOESPERARESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGTEMPOESPERA xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("TEMPOESPERA", ::nTEMPOESPERA, nTEMPOESPERA , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGTEMPOESPERA>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGTEMPOESPERA",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::nCFGTEMPOESPERARESULT :=  WSAdvValue( oXmlRet,"_CFGTEMPOESPERARESPONSE:_CFGTEMPOESPERARESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGTSSPORTAL of Service WSSPEDCFGNFE
+
+WSMETHOD CFGTSSPORTAL WSSEND cUSERTOKEN,cID_ENT,cURLPORTAL WSRECEIVE cCFGTSSPORTALRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGTSSPORTAL xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("URLPORTAL", ::cURLPORTAL, cURLPORTAL , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGTSSPORTAL>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGTSSPORTAL",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8011/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGTSSPORTALRESULT :=  WSAdvValue( oXmlRet,"_CFGTSSPORTALRESPONSE:_CFGTSSPORTALRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGTSSVERSAO of Service WSSPEDCFGNFE
+
+WSMETHOD CFGTSSVERSAO WSSEND cUSERTOKEN WSRECEIVE cCFGTSSVERSAORESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGTSSVERSAO xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGTSSVERSAO>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGTSSVERSAO",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGTSSVERSAORESULT :=  WSAdvValue( oXmlRet,"_CFGTSSVERSAORESPONSE:_CFGTSSVERSAORESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGVERSAO of Service WSSPEDCFGNFE
+
+WSMETHOD CFGVERSAO WSSEND cUSERTOKEN,cID_ENT,cVERSAO,cMODELO WSRECEIVE cCFGVERSAORESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGVERSAO xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAO", ::cVERSAO, cVERSAO , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODELO", ::cMODELO, cMODELO , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGVERSAO>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGVERSAO",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGVERSAORESULT   :=  WSAdvValue( oXmlRet,"_CFGVERSAORESPONSE:_CFGVERSAORESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGVERSAOCTE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGVERSAOCTE WSSEND cUSERTOKEN,cID_ENT,cVERSAO, cMODELO WSRECEIVE cCFGVERSAOCTERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGVERSAOCTE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAO", ::cVERSAO, cVERSAO , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODELO", ::cMODELO, cMODELO , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CFGVERSAOCTE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGVERSAOCTE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGVERSAOCTERESULT :=  WSAdvValue( oXmlRet,"_CFGVERSAOCTERESPONSE:_CFGVERSAOCTERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGVERSAODPEC of Service WSSPEDCFGNFE
+
+WSMETHOD CFGVERSAODPEC WSSEND cUSERTOKEN,cID_ENT,cVERSAO WSRECEIVE cCFGVERSAODPECRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGVERSAODPEC xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAO", ::cVERSAO, cVERSAO , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGVERSAODPEC>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGVERSAODPEC",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGVERSAODPECRESULT :=  WSAdvValue( oXmlRet,"_CFGVERSAODPECRESPONSE:_CFGVERSAODPECRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CFGVERSAONSE of Service WSSPEDCFGNFE
+
+WSMETHOD CFGVERSAONSE WSSEND cUSERTOKEN,cID_ENT,cVERSAO WSRECEIVE cCFGVERSAONSERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGVERSAONSE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAO", ::cVERSAO, cVERSAO , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGVERSAONSE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGVERSAONSE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::cCFGVERSAONSERESULT :=  WSAdvValue( oXmlRet,"_CFGVERSAONSERESPONSE:_CFGVERSAONSERESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETALLINIPARAM of Service WSSPEDCFGNFE
+
+WSMETHOD GETALLINIPARAM WSSEND cUSERTOKEN WSRECEIVE oWSGETALLINIPARAMRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETALLINIPARAM xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</GETALLINIPARAM>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETALLINIPARAM",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETALLINIPARAMRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETALLINIPARAMRESPONSE:_GETALLINIPARAMRESULT","ARRAYOFINIPARAM",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETALLMVTSS of Service WSSPEDCFGNFE
+
+WSMETHOD GETALLMVTSS WSSEND cUSERTOKEN,oWSENTSGETALLMV WSRECEIVE oWSGETALLMVTSSRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETALLMVTSS xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ENTSGETALLMV", ::oWSENTSGETALLMV, oWSENTSGETALLMV , "ENTGETALLMV", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</GETALLMVTSS>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETALLMVTSS",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETALLMVTSSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETALLMVTSSRESPONSE:_GETALLMVTSSRESULT","ARRAYOFRETGETALLMV",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETAUTODIST of Service WSSPEDCFGNFE
+
+WSMETHOD GETAUTODIST WSSEND cUSERTOKEN,cLISTFILIAIS WSRECEIVE oWSGETAUTODISTRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETAUTODIST xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("LISTFILIAIS", ::cLISTFILIAIS, cLISTFILIAIS , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETAUTODIST>"
+
+oXmlRet := SvcSoapCall( ObjSelf(Self) ,cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETAUTODIST",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:9999/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETAUTODISTRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETAUTODISTRESPONSE:_GETAUTODISTRESULT","ARRAYOFCFGAUTODIST",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETDATECONT of Service WSSPEDCFGNFE
+
+WSMETHOD GETDATECONT WSSEND cUSERTOKEN,cID_ENT,dDATEINIC,dDATEFIM WSRECEIVE oWSGETDATECONTRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETDATECONT xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("DATEINIC", ::dDATEINIC, dDATEINIC , "date", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("DATEFIM", ::dDATEFIM, dDATEFIM , "date", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</GETDATECONT>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETDATECONT",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETDATECONTRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETDATECONTRESPONSE:_GETDATECONTRESULT","ARRAYOFGETCONT",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETPARAMNSE of Service WSSPEDCFGNFE
+
+WSMETHOD GETPARAMNSE WSSEND cUSERTOKEN,cID_ENT WSRECEIVE oWSGETPARAMNSERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETPARAMNSE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</GETPARAMNSE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETPARAMNSE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETPARAMNSERESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETPARAMNSERESPONSE:_GETPARAMNSERESULT","PARAMNSE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETPOPMAIL of Service WSSPEDCFGNFE
+
+WSMETHOD GETPOPMAIL WSSEND cUSERTOKEN,cID_ENT WSRECEIVE oWSGETPOPMAILRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETPOPMAIL xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</GETPOPMAIL>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETPOPMAIL",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETPOPMAILRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETPOPMAILRESPONSE:_GETPOPMAILRESULT","POPSERVER",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETSMTPMAIL of Service WSSPEDCFGNFE
+
+WSMETHOD GETSMTPMAIL WSSEND cUSERTOKEN,cID_ENT WSRECEIVE oWSGETSMTPMAILRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETSMTPMAIL xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</GETSMTPMAIL>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/GETSMTPMAIL",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSGETSMTPMAILRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETSMTPMAILRESPONSE:_GETSMTPMAILRESULT","SMTPSERVER",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method LOTCCE of Service WSSPEDCFGNFE
+
+WSMETHOD LOTCCE WSSEND cUSERTOKEN,cID_ENT WSRECEIVE oWSLOTCCERESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<LOTCCE xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += "</LOTCCE>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/LOTCCE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSLOTCCERESULT:SoapRecv( WSAdvValue( oXmlRet,"_LOTCCERESPONSE:_LOTCCERESULT","STRLOTCCE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.     
+
+// WSDL Method TSSCFGFTP of Service WSSPEDCFGNFE
+
+WSMETHOD TSSCFGFTP WSSEND cUSERTOKEN,lFTPENABLE WSRECEIVE lTSSCFGFTPRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<TSSCFGFTP xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("FTPENABLE", ::lFTPENABLE, lFTPENABLE , "boolean", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</TSSCFGFTP>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/TSSCFGFTP",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://172.16.32.28:8070/SPEDCFGNFE.apw")
+
+::Init()
+::lTSSCFGFTPRESULT   :=  WSAdvValue( oXmlRet,"_TSSCFGFTPRESPONSE:_TSSCFGFTPRESULT:TEXT","boolean",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+WSMETHOD CFGNFCOM WSSEND cUSERTOKEN, cID_ENT, nAMBIENTENFCOM, cVERSAONFCOM, nMODALIDADENFCOM, cVERNFCOMLAYOUT, cVERNFCOMLAYEVEN, nSEQLOTENFCOM, cHORAVERAONFCOM, cHORARIONFCOM WSRECEIVE oWSCFGNFCOMRESULT WSCLIENT WSSPEDCFGNFE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGNFCOM xmlns="http://webservices.totvs.com.br/spedcfgnfe.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("AMBIENTENFCOM", ::nAMBIENTENFCOM, nAMBIENTENFCOM , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERSAONFCOM", ::cVERSAONFCOM, cVERSAONFCOM , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("MODALIDADENFCOM", ::nMODALIDADENFCOM, nMODALIDADENFCOM , "integer", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERNFCOMLAYOUT", ::cVERNFCOMLAYOUT, cVERNFCOMLAYOUT , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VERNFCOMLAYEVEN", ::cVERNFCOMLAYEVEN, cVERNFCOMLAYEVEN , "string", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("SEQLOTENFCOM", ::nSEQLOTENFCOM, nSEQLOTENFCOM , "integer", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORAVERAONFCOM", ::cHORAVERAONFCOM, cHORAVERAONFCOM , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("HORARIONFCOM", ::cHORARIONFCOM, cHORARIONFCOM , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</CFGNFCOM>"
+
+oXmlRet := SvcSoapCall(	ObjSelf(Self),cSoap,; 
+	"http://webservices.totvs.com.br/spedcfgnfe.apw/CFGNFCOM",; 
+	"DOCUMENT","http://webservices.totvs.com.br/spedcfgnfe.apw",,"1.031217",; 
+	"http://localhost:8081/nfe/SPEDCFGNFE.apw")
+
+::Init()
+::oWSCFGNFCOMRESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGNFCOMRESPONSE:_CFGNFCOMRESULT","STRUCTCFGNFCOM",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure AUTOCFGCONT
+
+WSSTRUCT SPEDCFGNFE_AUTOCFGCONT
+	WSDATA   oWSCONFIG                 AS SPEDCFGNFE_CFGDATA
+	WSDATA   cOPTION                   AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_AUTOCFGCONT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_AUTOCFGCONT
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_AUTOCFGCONT
+	Local oClone := SPEDCFGNFE_AUTOCFGCONT():NEW()
+	oClone:oWSCONFIG            := IIF(::oWSCONFIG = NIL , NIL , ::oWSCONFIG:Clone() )
+	oClone:cOPTION              := ::cOPTION
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_AUTOCFGCONT
+	Local cSoap := ""
+	cSoap += WSSoapValue("CONFIG", ::oWSCONFIG, ::oWSCONFIG , "CFGDATA", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("OPTION", ::cOPTION, ::cOPTION , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure RETAUTOCFGCONT
+
+WSSTRUCT SPEDCFGNFE_RETAUTOCFGCONT
+	WSDATA   oWSCONFIG                 AS SPEDCFGNFE_CFGDATA
+	WSDATA   oWSSTATUSMSG              AS SPEDCFGNFE_STATUSMSG
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_RETAUTOCFGCONT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_RETAUTOCFGCONT
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_RETAUTOCFGCONT
+	Local oClone := SPEDCFGNFE_RETAUTOCFGCONT():NEW()
+	oClone:oWSCONFIG            := IIF(::oWSCONFIG = NIL , NIL , ::oWSCONFIG:Clone() )
+	oClone:oWSSTATUSMSG         := IIF(::oWSSTATUSMSG = NIL , NIL , ::oWSSTATUSMSG:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_RETAUTOCFGCONT
+	Local oNode1
+	Local oNode2
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_CONFIG","CFGDATA",NIL,"Property oWSCONFIG as s0:CFGDATA on SOAP Response not found.",NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSCONFIG := SPEDCFGNFE_CFGDATA():New()
+		::oWSCONFIG:SoapRecv(oNode1)
+	EndIf
+	oNode2 :=  WSAdvValue( oResponse,"_STATUSMSG","STATUSMSG",NIL,"Property oWSSTATUSMSG as s0:STATUSMSG on SOAP Response not found.",NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSSTATUSMSG := SPEDCFGNFE_STATUSMSG():New()
+		::oWSSTATUSMSG:SoapRecv(oNode2)
+	EndIf
+Return
+
+// WSDL Data Structure STRUCTCFGBPERESULT
+
+WSSTRUCT SPEDCFGNFE_STRUCTCFGBPERESULT
+	WSDATA   cAMBIENTEBPE              AS string
+	WSDATA   cHORARIOBPE               AS string
+	WSDATA   cHORAVERAOBPE             AS string
+	WSDATA   cVERBPELAYEVEN            AS string
+	WSDATA   cVERBPELAYOUT             AS string
+	WSDATA   cVERSAOBPE                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRUCTCFGBPERESULT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRUCTCFGBPERESULT
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRUCTCFGBPERESULT
+	Local oClone := SPEDCFGNFE_STRUCTCFGBPERESULT():NEW()
+	oClone:cAMBIENTEBPE         := ::cAMBIENTEBPE
+	oClone:cHORARIOBPE          := ::cHORARIOBPE
+	oClone:cHORAVERAOBPE        := ::cHORAVERAOBPE
+	oClone:cVERBPELAYEVEN       := ::cVERBPELAYEVEN
+	oClone:cVERBPELAYOUT        := ::cVERBPELAYOUT
+	oClone:cVERSAOBPE           := ::cVERSAOBPE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STRUCTCFGBPERESULT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTEBPE       :=  WSAdvValue( oResponse,"_AMBIENTEBPE","string",NIL,"Property cAMBIENTEBPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cHORARIOBPE        :=  WSAdvValue( oResponse,"_HORARIOBPE","string",NIL,"Property cHORARIOBPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cHORAVERAOBPE      :=  WSAdvValue( oResponse,"_HORAVERAOBPE","string",NIL,"Property cHORAVERAOBPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cVERBPELAYEVEN     :=  WSAdvValue( oResponse,"_VERBPELAYEVEN","string",NIL,"Property cVERBPELAYEVEN as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cVERBPELAYOUT      :=  WSAdvValue( oResponse,"_VERBPELAYOUT","string",NIL,"Property cVERBPELAYOUT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cVERSAOBPE         :=  WSAdvValue( oResponse,"_VERSAOBPE","string",NIL,"Property cVERSAOBPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure STRUCTCFGCCE
+
+WSSTRUCT SPEDCFGNFE_STRUCTCFGCCE
+	WSDATA   cAMBIENTE                 AS string OPTIONAL
+	WSDATA   cHORARIOCCE               AS string OPTIONAL
+	WSDATA   cHORAVERAOCCE             AS string OPTIONAL
+	WSDATA   nSEQLOTECCE               AS integer OPTIONAL
+	WSDATA   nSEQLOTEEPP               AS integer OPTIONAL
+	WSDATA   cVERCCE                   AS string OPTIONAL
+	WSDATA   cVERCCEEVEN               AS string OPTIONAL
+	WSDATA   cVERCCELAYEVEN            AS string OPTIONAL
+	WSDATA   cVERCCELAYOUT             AS string OPTIONAL
+	WSDATA   cVEREPP                   AS string OPTIONAL
+	WSDATA   cVEREPPEVEN               AS string OPTIONAL
+	WSDATA   cVEREPPLAYEVEN            AS string OPTIONAL
+	WSDATA   cVEREPPLAYOUT             AS string OPTIONAL
+	WSDATA   nAMBIENTEEPP              AS string OPTIONAL
+	WSDATA   cCCEPDF				   AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRUCTCFGCCE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRUCTCFGCCE
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRUCTCFGCCE
+	Local oClone := SPEDCFGNFE_STRUCTCFGCCE():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cHORARIOCCE          := ::cHORARIOCCE
+	oClone:cHORAVERAOCCE        := ::cHORAVERAOCCE
+	oClone:nSEQLOTECCE          := ::nSEQLOTECCE
+	oClone:nSEQLOTEEPP          := ::nSEQLOTEEPP
+	oClone:cVERCCE              := ::cVERCCE
+	oClone:cVERCCEEVEN          := ::cVERCCEEVEN
+	oClone:cVERCCELAYEVEN       := ::cVERCCELAYEVEN
+	oClone:cVERCCELAYOUT        := ::cVERCCELAYOUT
+	oClone:cVEREPP              := ::cVEREPP
+	oClone:cVEREPPEVEN          := ::cVEREPPEVEN
+	oClone:cVEREPPLAYEVEN       := ::cVEREPPLAYEVEN
+	oClone:cVEREPPLAYOUT        := ::cVEREPPLAYOUT
+	oClone:nAMBIENTEEPP			:= ::nAMBIENTEEPP
+	oClone:cCCEPDF         		:= ::cCCEPDF
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STRUCTCFGCCE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTE          :=  WSAdvValue( oResponse,"_AMBIENTE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHORARIOCCE        :=  WSAdvValue( oResponse,"_HORARIOCCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHORAVERAOCCE      :=  WSAdvValue( oResponse,"_HORAVERAOCCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nSEQLOTECCE        :=  WSAdvValue( oResponse,"_SEQLOTECCE","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::nSEQLOTEEPP        :=  WSAdvValue( oResponse,"_SEQLOTEEPP","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cVERCCE            :=  WSAdvValue( oResponse,"_VERCCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERCCEEVEN        :=  WSAdvValue( oResponse,"_VERCCEEVEN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERCCELAYEVEN     :=  WSAdvValue( oResponse,"_VERCCELAYEVEN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERCCELAYOUT      :=  WSAdvValue( oResponse,"_VERCCELAYOUT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVEREPP            :=  WSAdvValue( oResponse,"_VEREPP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVEREPPEVEN        :=  WSAdvValue( oResponse,"_VEREPPEVEN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVEREPPLAYEVEN     :=  WSAdvValue( oResponse,"_VEREPPLAYEVEN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVEREPPLAYOUT      :=  WSAdvValue( oResponse,"_VEREPPLAYOUT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nAMBIENTEEPP       :=  WSAdvValue( oResponse,"_AMBIENTEEPP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCCEPDF		     :=  WSAdvValue( oResponse,"_CCEPDF","string",NIL,NIL,NIL,"S",NIL,NIL)  	
+Return
+
+// WSDL Data Structure STRUCTCFGEPEC
+
+WSSTRUCT SPEDCFGNFE_STRUCTCFGEPEC
+	WSDATA   cCTECANCEVENTO            AS string OPTIONAL
+	WSDATA   cHORARIOCTE               AS string OPTIONAL
+	WSDATA   cHORAVERAOCTE             AS string OPTIONAL
+	WSDATA   nSEQLOTEEPEC              AS integer OPTIONAL
+	WSDATA   cVERSAOEVENCANC           AS string OPTIONAL
+	WSDATA   cVERSAOEVENCANCCOMPROV    AS string OPTIONAL
+	WSDATA   cVERSAOEVENCCE            AS string OPTIONAL
+	WSDATA   cVERSAOEVENCOMPROV        AS string OPTIONAL
+	WSDATA   cVERSAOEVENDESAC          AS string OPTIONAL
+	WSDATA   cVERSAOEVENEPEC           AS string OPTIONAL
+	WSDATA   cVERSAOEVENGTV            AS string OPTIONAL
+	WSDATA   cVERSAOEVENMULT           AS string OPTIONAL
+	WSDATA   cVERSAOGERALCANC          AS string OPTIONAL
+	WSDATA   cVERSAOGERALCCE           AS string OPTIONAL
+	WSDATA   cVERSAOGERALDESAC         AS string OPTIONAL
+	WSDATA   cVERSAOGERALEPEC          AS string OPTIONAL
+	WSDATA   cVERSAOGERALGTV           AS string OPTIONAL
+	WSDATA   cVERSAOGERALMULT          AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRUCTCFGEPEC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRUCTCFGEPEC
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRUCTCFGEPEC
+	Local oClone := SPEDCFGNFE_STRUCTCFGEPEC():NEW()
+	oClone:cCTECANCEVENTO       := ::cCTECANCEVENTO
+	oClone:cHORARIOCTE          := ::cHORARIOCTE
+	oClone:cHORAVERAOCTE        := ::cHORAVERAOCTE
+	oClone:nSEQLOTEEPEC         := ::nSEQLOTEEPEC
+	oClone:cVERSAOEVENCANC      := ::cVERSAOEVENCANC
+	oClone:cVERSAOEVENCANCCOMPROV := ::cVERSAOEVENCANCCOMPROV
+	oClone:cVERSAOEVENCCE       := ::cVERSAOEVENCCE
+	oClone:cVERSAOEVENCOMPROV   := ::cVERSAOEVENCOMPROV
+	oClone:cVERSAOEVENDESAC     := ::cVERSAOEVENDESAC
+	oClone:cVERSAOEVENEPEC      := ::cVERSAOEVENEPEC
+	oClone:cVERSAOEVENGTV       := ::cVERSAOEVENGTV
+	oClone:cVERSAOEVENMULT      := ::cVERSAOEVENMULT
+	oClone:cVERSAOGERALCANC     := ::cVERSAOGERALCANC
+	oClone:cVERSAOGERALCCE      := ::cVERSAOGERALCCE
+	oClone:cVERSAOGERALDESAC    := ::cVERSAOGERALDESAC
+	oClone:cVERSAOGERALEPEC     := ::cVERSAOGERALEPEC
+	oClone:cVERSAOGERALGTV      := ::cVERSAOGERALGTV
+	oClone:cVERSAOGERALMULT     := ::cVERSAOGERALMULT
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STRUCTCFGEPEC
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCTECANCEVENTO     :=  WSAdvValue( oResponse,"_CTECANCEVENTO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHORARIOCTE        :=  WSAdvValue( oResponse,"_HORARIOCTE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHORAVERAOCTE      :=  WSAdvValue( oResponse,"_HORAVERAOCTE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nSEQLOTEEPEC       :=  WSAdvValue( oResponse,"_SEQLOTEEPEC","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cVERSAOEVENCANC    :=  WSAdvValue( oResponse,"_VERSAOEVENCANC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENCANCCOMPROV :=  WSAdvValue( oResponse,"_VERSAOEVENCANCCOMPROV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENCCE     :=  WSAdvValue( oResponse,"_VERSAOEVENCCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENCOMPROV :=  WSAdvValue( oResponse,"_VERSAOEVENCOMPROV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENDESAC   :=  WSAdvValue( oResponse,"_VERSAOEVENDESAC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENEPEC    :=  WSAdvValue( oResponse,"_VERSAOEVENEPEC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENGTV     :=  WSAdvValue( oResponse,"_VERSAOEVENGTV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOEVENMULT    :=  WSAdvValue( oResponse,"_VERSAOEVENMULT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOGERALCANC   :=  WSAdvValue( oResponse,"_VERSAOGERALCANC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOGERALCCE    :=  WSAdvValue( oResponse,"_VERSAOGERALCCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOGERALDESAC  :=  WSAdvValue( oResponse,"_VERSAOGERALDESAC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOGERALEPEC   :=  WSAdvValue( oResponse,"_VERSAOGERALEPEC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOGERALGTV    :=  WSAdvValue( oResponse,"_VERSAOGERALGTV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOGERALMULT   :=  WSAdvValue( oResponse,"_VERSAOGERALMULT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CFGKEYSTORE
+
+WSSTRUCT SPEDCFGNFE_CFGKEYSTORE
+	WSDATA   cHOSTNAME                 AS string OPTIONAL
+	WSDATA   cISSUER                   AS string OPTIONAL
+	WSDATA   cPASSWORD                 AS base64Binary OPTIONAL
+	WSDATA   cPATH                     AS string
+	WSDATA   cSUBJECT                  AS string
+	WSDATA   cSYSTEM                   AS string
+	WSDATA   cTYPE                     AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_CFGKEYSTORE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_CFGKEYSTORE
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_CFGKEYSTORE
+	Local oClone := SPEDCFGNFE_CFGKEYSTORE():NEW()
+	oClone:cHOSTNAME            := ::cHOSTNAME
+	oClone:cISSUER              := ::cISSUER
+	oClone:cPASSWORD            := ::cPASSWORD
+	oClone:cPATH                := ::cPATH
+	oClone:cSUBJECT             := ::cSUBJECT
+	oClone:cSYSTEM              := ::cSYSTEM
+	oClone:cTYPE                := ::cTYPE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_CFGKEYSTORE
+	Local cSoap := ""
+	cSoap += WSSoapValue("HOSTNAME", ::cHOSTNAME, ::cHOSTNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ISSUER", ::cISSUER, ::cISSUER , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, ::cPASSWORD , "base64Binary", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PATH", ::cPATH, ::cPATH , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SUBJECT", ::cSUBJECT, ::cSUBJECT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SYSTEM", ::cSYSTEM, ::cSYSTEM , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPE", ::cTYPE, ::cTYPE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+// WSDL Data Structure STRUCTCFGMDFE
+
+WSSTRUCT SPEDCFGNFE_STRUCTCFGMDFE
+	WSDATA   cAMBIENTEMDFE             AS string
+	WSDATA   cHORARIOMDFE              AS string OPTIONAL
+	WSDATA   cHORAVERAOMDFE            AS string OPTIONAL
+	WSDATA   cMODALIDADEMDFE           AS string
+	WSDATA   nSEQLOTEMDFE              AS integer OPTIONAL
+	WSDATA   cVERMDFELAYEVEN           AS string OPTIONAL
+	WSDATA   cVERMDFELAYOUT            AS string OPTIONAL
+	WSDATA   cVERSAOMDFE               AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRUCTCFGMDFE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRUCTCFGMDFE
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRUCTCFGMDFE
+	Local oClone := SPEDCFGNFE_STRUCTCFGMDFE():NEW()
+	oClone:cAMBIENTEMDFE        := ::cAMBIENTEMDFE
+	oClone:cHORARIOMDFE         := ::cHORARIOMDFE
+	oClone:cHORAVERAOMDFE       := ::cHORAVERAOMDFE
+	oClone:cMODALIDADEMDFE      := ::cMODALIDADEMDFE
+	oClone:nSEQLOTEMDFE         := ::nSEQLOTEMDFE
+	oClone:cVERMDFELAYEVEN      := ::cVERMDFELAYEVEN
+	oClone:cVERMDFELAYOUT       := ::cVERMDFELAYOUT
+	oClone:cVERSAOMDFE          := ::cVERSAOMDFE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STRUCTCFGMDFE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTEMDFE      :=  WSAdvValue( oResponse,"_AMBIENTEMDFE","string",NIL,"Property cAMBIENTEMDFE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cHORARIOMDFE       :=  WSAdvValue( oResponse,"_HORARIOMDFE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHORAVERAOMDFE     :=  WSAdvValue( oResponse,"_HORAVERAOMDFE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMODALIDADEMDFE    :=  WSAdvValue( oResponse,"_MODALIDADEMDFE","string",NIL,"Property cMODALIDADEMDFE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::nSEQLOTEMDFE       :=  WSAdvValue( oResponse,"_SEQLOTEMDFE","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cVERMDFELAYEVEN    :=  WSAdvValue( oResponse,"_VERMDFELAYEVEN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERMDFELAYOUT     :=  WSAdvValue( oResponse,"_VERMDFELAYOUT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAOMDFE        :=  WSAdvValue( oResponse,"_VERSAOMDFE","string",NIL,"Property cVERSAOMDFE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure STRUCTCFGNFCOM
+WSSTRUCT SPEDCFGNFE_STRUCTCFGNFCOM
+	WSDATA   cAMBIENTENFCOM            AS string
+	WSDATA   cHORARIONFCOM             AS string OPTIONAL
+	WSDATA   cHORAVERAONFCOM           AS string OPTIONAL
+	WSDATA   cMODALIDADENFCOM          AS string
+	WSDATA   nSEQLOTENFCOM             AS integer OPTIONAL
+	WSDATA   cVERNFCOMLAYEVEN          AS string OPTIONAL
+	WSDATA   cVERNFCOMLAYOUT           AS string OPTIONAL
+	WSDATA   cVERSAONFCOM              AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRUCTCFGNFCOM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRUCTCFGNFCOM
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRUCTCFGNFCOM
+	Local oClone := SPEDCFGNFE_STRUCTCFGNFCOM():NEW()
+	oClone:cAMBIENTENFCOM       := ::cAMBIENTENFCOM
+	oClone:cHORARIONFCOM        := ::cHORARIONFCOM
+	oClone:cHORAVERAONFCOM      := ::cHORAVERAONFCOM
+	oClone:cMODALIDADENFCOM     := ::cMODALIDADENFCOM
+	oClone:nSEQLOTENFCOM        := ::nSEQLOTENFCOM
+	oClone:cVERNFCOMLAYEVEN     := ::cVERNFCOMLAYEVEN
+	oClone:cVERNFCOMLAYOUT      := ::cVERNFCOMLAYOUT
+	oClone:cVERSAONFCOM         := ::cVERSAONFCOM
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STRUCTCFGNFCOM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTENFCOM      :=  WSAdvValue( oResponse,"_AMBIENTENFCOM","string",NIL,"Property cAMBIENTENFCOM as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cHORARIONFCOM       :=  WSAdvValue( oResponse,"_HORARIONFCOM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHORAVERAONFCOM     :=  WSAdvValue( oResponse,"_HORAVERAONFCOM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMODALIDADENFCOM    :=  WSAdvValue( oResponse,"_MODALIDADENFCOM","string",NIL,"Property cMODALIDADENFCOM as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::nSEQLOTENFCOM       :=  WSAdvValue( oResponse,"_SEQLOTENFCOM","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cVERNFCOMLAYEVEN    :=  WSAdvValue( oResponse,"_VERNFCOMLAYEVEN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERNFCOMLAYOUT     :=  WSAdvValue( oResponse,"_VERNFCOMLAYOUT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVERSAONFCOM        :=  WSAdvValue( oResponse,"_VERSAONFCOM","string",NIL,"Property cVERSAOMDFE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure MODALIDGRV
+
+WSSTRUCT SPEDCFGNFE_MODALIDGRV
+	WSDATA   cCODCONT                  AS string
+	WSDATA   cMSG                      AS string
+	WSDATA   cVALOR                    AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_MODALIDGRV
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_MODALIDGRV
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_MODALIDGRV
+	Local oClone := SPEDCFGNFE_MODALIDGRV():NEW()
+	oClone:cCODCONT             := ::cCODCONT
+	oClone:cMSG                 := ::cMSG
+	oClone:cVALOR               := ::cVALOR
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_MODALIDGRV
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODCONT           :=  WSAdvValue( oResponse,"_CODCONT","string",NIL,"Property cCODCONT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMSG               :=  WSAdvValue( oResponse,"_MSG","string",NIL,"Property cMSG as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cVALOR             :=  WSAdvValue( oResponse,"_VALOR","string",NIL,"Property cVALOR as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure PARAMNSE
+
+WSSTRUCT SPEDCFGNFE_PARAMNSE
+	WSDATA   cINCCULT                  AS string
+	WSDATA   cREGTRIB                  AS string
+	WSDATA   cSIMPNAC                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_PARAMNSE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_PARAMNSE
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_PARAMNSE
+	Local oClone := SPEDCFGNFE_PARAMNSE():NEW()
+	oClone:cINCCULT             := ::cINCCULT
+	oClone:cREGTRIB             := ::cREGTRIB
+	oClone:cSIMPNAC             := ::cSIMPNAC
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_PARAMNSE
+	Local cSoap := ""
+	cSoap += WSSoapValue("INCCULT", ::cINCCULT, ::cINCCULT , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REGTRIB", ::cREGTRIB, ::cREGTRIB , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SIMPNAC", ::cSIMPNAC, ::cSIMPNAC , "string", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_PARAMNSE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cINCCULT           :=  WSAdvValue( oResponse,"_INCCULT","string",NIL,"Property cINCCULT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cREGTRIB           :=  WSAdvValue( oResponse,"_REGTRIB","string",NIL,"Property cREGTRIB as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cSIMPNAC           :=  WSAdvValue( oResponse,"_SIMPNAC","string",NIL,"Property cSIMPNAC as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CFGS
+
+WSSTRUCT SPEDCFGNFE_CFGS
+	WSDATA   oWSPARAMDOC               AS SPEDCFGNFE_ARRAYOFCFGDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_CFGS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_CFGS
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_CFGS
+	Local oClone := SPEDCFGNFE_CFGS():NEW()
+	oClone:oWSPARAMDOC          := IIF(::oWSPARAMDOC = NIL , NIL , ::oWSPARAMDOC:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_CFGS
+	Local cSoap := ""
+	cSoap += WSSoapValue("PARAMDOC", ::oWSPARAMDOC, ::oWSPARAMDOC , "ARRAYOFCFGDOC", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure STRUCTCFGAUTODIST
+
+WSSTRUCT SPEDCFGNFE_STRUCTCFGAUTODIST
+	WSDATA   oWSPARAMDIST              AS SPEDCFGNFE_ARRAYOFCFGAUTO OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRUCTCFGAUTODIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRUCTCFGAUTODIST
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRUCTCFGAUTODIST
+	Local oClone := SPEDCFGNFE_STRUCTCFGAUTODIST():NEW()
+	oClone:oWSPARAMDIST         := IIF(::oWSPARAMDIST = NIL , NIL , ::oWSPARAMDIST:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_STRUCTCFGAUTODIST
+	Local cSoap := ""
+	cSoap += WSSoapValue("PARAMDIST", ::oWSPARAMDIST, ::oWSPARAMDIST , "ARRAYOFCFGAUTO", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure POPSERVER
+
+WSSTRUCT SPEDCFGNFE_POPSERVER
+	WSDATA   cLOGINACCOUNT             AS string
+	WSDATA   cMAILPASSWORD             AS base64Binary
+	WSDATA   cMAILSERVER               AS string
+	WSDATA   lSSL                      AS boolean OPTIONAL
+	WSDATA   lTLS                      AS boolean OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_POPSERVER
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_POPSERVER
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_POPSERVER
+	Local oClone := SPEDCFGNFE_POPSERVER():NEW()
+	oClone:cLOGINACCOUNT        := ::cLOGINACCOUNT
+	oClone:cMAILPASSWORD        := ::cMAILPASSWORD
+	oClone:cMAILSERVER          := ::cMAILSERVER
+	oClone:lSSL                 := ::lSSL
+	oClone:lTLS                 := ::lTLS
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_POPSERVER
+	Local cSoap := ""
+	cSoap += WSSoapValue("LOGINACCOUNT", ::cLOGINACCOUNT, ::cLOGINACCOUNT , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILPASSWORD", ::cMAILPASSWORD, ::cMAILPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILSERVER", ::cMAILSERVER, ::cMAILSERVER , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SSL", ::lSSL, ::lSSL , "boolean", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("TLS", ::lTLS, ::lTLS , "boolean", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_POPSERVER
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cLOGINACCOUNT      :=  WSAdvValue( oResponse,"_LOGINACCOUNT","string",NIL,"Property cLOGINACCOUNT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMAILPASSWORD      :=  WSAdvValue( oResponse,"_MAILPASSWORD","base64Binary",NIL,"Property cMAILPASSWORD as s:base64Binary on SOAP Response not found.",NIL,"SB",NIL,NIL) 
+	::cMAILSERVER        :=  WSAdvValue( oResponse,"_MAILSERVER","string",NIL,"Property cMAILSERVER as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSSL               :=  WSAdvValue( oResponse,"_SSL","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+	::lTLS               :=  WSAdvValue( oResponse,"_TLS","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+Return
+
+// WSDL Data Structure POPSERVERNX
+
+WSSTRUCT SPEDCFGNFE_POPSERVERNX
+	WSDATA   cLOGINACCOUNT             AS string OPTIONAL
+	WSDATA   cMAILPASSWORD             AS base64Binary OPTIONAL
+	WSDATA   cMAILSERVER               AS string OPTIONAL
+	WSDATA   lSSL                      AS boolean OPTIONAL
+	WSDATA   lTLS                      AS boolean OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_POPSERVERNX
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_POPSERVERNX
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_POPSERVERNX
+	Local oClone := SPEDCFGNFE_POPSERVERNX():NEW()
+	oClone:cLOGINACCOUNT        := ::cLOGINACCOUNT
+	oClone:cMAILPASSWORD        := ::cMAILPASSWORD
+	oClone:cMAILSERVER          := ::cMAILSERVER
+	oClone:lSSL                 := ::lSSL
+	oClone:lTLS                 := ::lTLS
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_POPSERVERNX
+	Local cSoap := ""
+	cSoap += WSSoapValue("LOGINACCOUNT", ::cLOGINACCOUNT, ::cLOGINACCOUNT , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILPASSWORD", ::cMAILPASSWORD, ::cMAILPASSWORD , "base64Binary", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILSERVER", ::cMAILSERVER, ::cMAILSERVER , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SSL", ::lSSL, ::lSSL , "boolean", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("TLS", ::lTLS, ::lTLS , "boolean", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure SMTPSERVER
+
+WSSTRUCT SPEDCFGNFE_SMTPSERVER
+	WSDATA   lAUTHENTICATIONREQUERED   AS boolean OPTIONAL
+	WSDATA   cLOGINACCOUNT             AS string OPTIONAL
+	WSDATA   cMAILACCOUNT              AS string
+	WSDATA   cMAILADMIN                AS string OPTIONAL
+	WSDATA   cMAILPASSWORD             AS base64Binary
+	WSDATA   cMAILSERVER               AS string
+	WSDATA   lSSL                      AS boolean OPTIONAL
+	WSDATA   lTLS                      AS boolean OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_SMTPSERVER
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_SMTPSERVER
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_SMTPSERVER
+	Local oClone := SPEDCFGNFE_SMTPSERVER():NEW()
+	oClone:lAUTHENTICATIONREQUERED := ::lAUTHENTICATIONREQUERED
+	oClone:cLOGINACCOUNT        := ::cLOGINACCOUNT
+	oClone:cMAILACCOUNT         := ::cMAILACCOUNT
+	oClone:cMAILADMIN           := ::cMAILADMIN
+	oClone:cMAILPASSWORD        := ::cMAILPASSWORD
+	oClone:cMAILSERVER          := ::cMAILSERVER
+	oClone:lSSL                 := ::lSSL
+	oClone:lTLS                 := ::lTLS
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_SMTPSERVER
+	Local cSoap := ""
+	cSoap += WSSoapValue("AUTHENTICATIONREQUERED", ::lAUTHENTICATIONREQUERED, ::lAUTHENTICATIONREQUERED , "boolean", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("LOGINACCOUNT", ::cLOGINACCOUNT, ::cLOGINACCOUNT , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILACCOUNT", ::cMAILACCOUNT, ::cMAILACCOUNT , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILADMIN", ::cMAILADMIN, ::cMAILADMIN , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILPASSWORD", ::cMAILPASSWORD, ::cMAILPASSWORD , "base64Binary", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILSERVER", ::cMAILSERVER, ::cMAILSERVER , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SSL", ::lSSL, ::lSSL , "boolean", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("TLS", ::lTLS, ::lTLS , "boolean", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_SMTPSERVER
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::lAUTHENTICATIONREQUERED :=  WSAdvValue( oResponse,"_AUTHENTICATIONREQUERED","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+	::cLOGINACCOUNT      :=  WSAdvValue( oResponse,"_LOGINACCOUNT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMAILACCOUNT       :=  WSAdvValue( oResponse,"_MAILACCOUNT","string",NIL,"Property cMAILACCOUNT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMAILADMIN         :=  WSAdvValue( oResponse,"_MAILADMIN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMAILPASSWORD      :=  WSAdvValue( oResponse,"_MAILPASSWORD","base64Binary",NIL,"Property cMAILPASSWORD as s:base64Binary on SOAP Response not found.",NIL,"SB",NIL,NIL) 
+	::cMAILSERVER        :=  WSAdvValue( oResponse,"_MAILSERVER","string",NIL,"Property cMAILSERVER as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSSL               :=  WSAdvValue( oResponse,"_SSL","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+	::lTLS               :=  WSAdvValue( oResponse,"_TLS","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+Return
+
+// WSDL Data Structure SMTPSERVERNX
+
+WSSTRUCT SPEDCFGNFE_SMTPSERVERNX
+	WSDATA   lAUTHENTICATIONREQUERED   AS boolean OPTIONAL
+	WSDATA   cLOGINACCOUNT             AS string OPTIONAL
+	WSDATA   cMAILACCOUNT              AS string OPTIONAL
+	WSDATA   cMAILADMIN                AS string OPTIONAL
+	WSDATA   cMAILPASSWORD             AS base64Binary OPTIONAL
+	WSDATA   cMAILSERVER               AS string OPTIONAL
+	WSDATA   lSSL                      AS boolean OPTIONAL
+	WSDATA   lTLS                      AS boolean OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_SMTPSERVERNX
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_SMTPSERVERNX
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_SMTPSERVERNX
+	Local oClone := SPEDCFGNFE_SMTPSERVERNX():NEW()
+	oClone:lAUTHENTICATIONREQUERED := ::lAUTHENTICATIONREQUERED
+	oClone:cLOGINACCOUNT        := ::cLOGINACCOUNT
+	oClone:cMAILACCOUNT         := ::cMAILACCOUNT
+	oClone:cMAILADMIN           := ::cMAILADMIN
+	oClone:cMAILPASSWORD        := ::cMAILPASSWORD
+	oClone:cMAILSERVER          := ::cMAILSERVER
+	oClone:lSSL                 := ::lSSL
+	oClone:lTLS                 := ::lTLS
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_SMTPSERVERNX
+	Local cSoap := ""
+	cSoap += WSSoapValue("AUTHENTICATIONREQUERED", ::lAUTHENTICATIONREQUERED, ::lAUTHENTICATIONREQUERED , "boolean", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("LOGINACCOUNT", ::cLOGINACCOUNT, ::cLOGINACCOUNT , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILACCOUNT", ::cMAILACCOUNT, ::cMAILACCOUNT , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILADMIN", ::cMAILADMIN, ::cMAILADMIN , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILPASSWORD", ::cMAILPASSWORD, ::cMAILPASSWORD , "base64Binary", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("MAILSERVER", ::cMAILSERVER, ::cMAILSERVER , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SSL", ::lSSL, ::lSSL , "boolean", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("TLS", ::lTLS, ::lTLS , "boolean", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFDIGITALCERTIFICATE
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE
+	WSDATA   oWSDIGITALCERTIFICATE     AS SPEDCFGNFE_DIGITALCERTIFICATE OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE
+	::oWSDIGITALCERTIFICATE := {} // Array Of  SPEDCFGNFE_DIGITALCERTIFICATE():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE
+	Local oClone := SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE():NEW()
+	oClone:oWSDIGITALCERTIFICATE := NIL
+	If ::oWSDIGITALCERTIFICATE <> NIL 
+		oClone:oWSDIGITALCERTIFICATE := {}
+		aEval( ::oWSDIGITALCERTIFICATE , { |x| aadd( oClone:oWSDIGITALCERTIFICATE , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_ARRAYOFDIGITALCERTIFICATE
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_DIGITALCERTIFICATE","DIGITALCERTIFICATE",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSDIGITALCERTIFICATE , SPEDCFGNFE_DIGITALCERTIFICATE():New() )
+			::oWSDIGITALCERTIFICATE[len(::oWSDIGITALCERTIFICATE)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFINIPARAM
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFINIPARAM
+	WSDATA   oWSINIPARAM               AS SPEDCFGNFE_INIPARAM OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFINIPARAM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFINIPARAM
+	::oWSINIPARAM          := {} // Array Of  SPEDCFGNFE_INIPARAM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFINIPARAM
+	Local oClone := SPEDCFGNFE_ARRAYOFINIPARAM():NEW()
+	oClone:oWSINIPARAM := NIL
+	If ::oWSINIPARAM <> NIL 
+		oClone:oWSINIPARAM := {}
+		aEval( ::oWSINIPARAM , { |x| aadd( oClone:oWSINIPARAM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_ARRAYOFINIPARAM
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_INIPARAM","INIPARAM",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSINIPARAM , SPEDCFGNFE_INIPARAM():New() )
+			::oWSINIPARAM[len(::oWSINIPARAM)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ENTGETALLMV
+
+WSSTRUCT SPEDCFGNFE_ENTGETALLMV
+	WSDATA   cID                       AS string
+	WSDATA   cSEPARATOR                AS string
+	WSDATA   nTYPESEP                  AS integer
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ENTGETALLMV
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ENTGETALLMV
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ENTGETALLMV
+	Local oClone := SPEDCFGNFE_ENTGETALLMV():NEW()
+	oClone:cID                  := ::cID
+	oClone:cSEPARATOR           := ::cSEPARATOR
+	oClone:nTYPESEP             := ::nTYPESEP
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_ENTGETALLMV
+	Local cSoap := ""
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SEPARATOR", ::cSEPARATOR, ::cSEPARATOR , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("TYPESEP", ::nTYPESEP, ::nTYPESEP , "integer", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFRETGETALLMV
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFRETGETALLMV
+	WSDATA   oWSRETGETALLMV            AS SPEDCFGNFE_RETGETALLMV OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFRETGETALLMV
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFRETGETALLMV
+	::oWSRETGETALLMV       := {} // Array Of  SPEDCFGNFE_RETGETALLMV():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFRETGETALLMV
+	Local oClone := SPEDCFGNFE_ARRAYOFRETGETALLMV():NEW()
+	oClone:oWSRETGETALLMV := NIL
+	If ::oWSRETGETALLMV <> NIL 
+		oClone:oWSRETGETALLMV := {}
+		aEval( ::oWSRETGETALLMV , { |x| aadd( oClone:oWSRETGETALLMV , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_ARRAYOFRETGETALLMV
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_RETGETALLMV","RETGETALLMV",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSRETGETALLMV , SPEDCFGNFE_RETGETALLMV():New() )
+			::oWSRETGETALLMV[len(::oWSRETGETALLMV)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCFGAUTODIST
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFCFGAUTODIST
+	WSDATA   oWSCFGAUTODIST            AS SPEDCFGNFE_CFGAUTODIST OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTODIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTODIST
+	::oWSCFGAUTODIST       := {} // Array Of  SPEDCFGNFE_CFGAUTODIST():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTODIST
+	Local oClone := SPEDCFGNFE_ARRAYOFCFGAUTODIST():NEW()
+	oClone:oWSCFGAUTODIST := NIL
+	If ::oWSCFGAUTODIST <> NIL 
+		oClone:oWSCFGAUTODIST := {}
+		aEval( ::oWSCFGAUTODIST , { |x| aadd( oClone:oWSCFGAUTODIST , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTODIST
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_CFGAUTODIST","CFGAUTODIST",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCFGAUTODIST , SPEDCFGNFE_CFGAUTODIST():New() )
+			::oWSCFGAUTODIST[len(::oWSCFGAUTODIST)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGETCONT
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFGETCONT
+	WSDATA   oWSGETCONT                AS SPEDCFGNFE_GETCONT OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFGETCONT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFGETCONT
+	::oWSGETCONT           := {} // Array Of  SPEDCFGNFE_GETCONT():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFGETCONT
+	Local oClone := SPEDCFGNFE_ARRAYOFGETCONT():NEW()
+	oClone:oWSGETCONT := NIL
+	If ::oWSGETCONT <> NIL 
+		oClone:oWSGETCONT := {}
+		aEval( ::oWSGETCONT , { |x| aadd( oClone:oWSGETCONT , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_ARRAYOFGETCONT
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GETCONT","GETCONT",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGETCONT , SPEDCFGNFE_GETCONT():New() )
+			::oWSGETCONT[len(::oWSGETCONT)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure STRLOTCCE
+
+WSSTRUCT SPEDCFGNFE_STRLOTCCE
+	WSDATA   nSEQLOTCCE                AS integer
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STRLOTCCE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STRLOTCCE
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STRLOTCCE
+	Local oClone := SPEDCFGNFE_STRLOTCCE():NEW()
+	oClone:nSEQLOTCCE           := ::nSEQLOTCCE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STRLOTCCE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::nSEQLOTCCE         :=  WSAdvValue( oResponse,"_SEQLOTCCE","integer",NIL,"Property nSEQLOTCCE as s:integer on SOAP Response not found.",NIL,"N",NIL,NIL) 
+Return
+
+// WSDL Data Structure CFGDATA
+
+WSSTRUCT SPEDCFGNFE_CFGDATA
+	WSDATA   cACTIVE                   AS string
+	WSDATA   cDOCTYPE                  AS string
+	WSDATA   cENTITY                   AS string
+	WSDATA   cMODALITY                 AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_CFGDATA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_CFGDATA
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_CFGDATA
+	Local oClone := SPEDCFGNFE_CFGDATA():NEW()
+	oClone:cACTIVE              := ::cACTIVE
+	oClone:cDOCTYPE             := ::cDOCTYPE
+	oClone:cENTITY              := ::cENTITY
+	oClone:cMODALITY            := ::cMODALITY
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_CFGDATA
+	Local cSoap := ""
+	cSoap += WSSoapValue("ACTIVE", ::cACTIVE, ::cACTIVE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DOCTYPE", ::cDOCTYPE, ::cDOCTYPE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITY", ::cENTITY, ::cENTITY , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("MODALITY", ::cMODALITY, ::cMODALITY , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_CFGDATA
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cACTIVE            :=  WSAdvValue( oResponse,"_ACTIVE","string",NIL,"Property cACTIVE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cDOCTYPE           :=  WSAdvValue( oResponse,"_DOCTYPE","string",NIL,"Property cDOCTYPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cENTITY            :=  WSAdvValue( oResponse,"_ENTITY","string",NIL,"Property cENTITY as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMODALITY          :=  WSAdvValue( oResponse,"_MODALITY","string",NIL,"Property cMODALITY as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure STATUSMSG
+
+WSSTRUCT SPEDCFGNFE_STATUSMSG
+	WSDATA   cDESCRIPTION              AS string
+	WSDATA   lSTATUS                   AS boolean
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_STATUSMSG
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_STATUSMSG
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_STATUSMSG
+	Local oClone := SPEDCFGNFE_STATUSMSG():NEW()
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:lSTATUS              := ::lSTATUS
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_STATUSMSG
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,"Property cDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSTATUS            :=  WSAdvValue( oResponse,"_STATUS","boolean",NIL,"Property lSTATUS as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFCFGDOC
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFCFGDOC
+	WSDATA   oWSCFGDOC                 AS SPEDCFGNFE_CFGDOC OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFCFGDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFCFGDOC
+	::oWSCFGDOC            := {} // Array Of  SPEDCFGNFE_CFGDOC():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFCFGDOC
+	Local oClone := SPEDCFGNFE_ARRAYOFCFGDOC():NEW()
+	oClone:oWSCFGDOC := NIL
+	If ::oWSCFGDOC <> NIL 
+		oClone:oWSCFGDOC := {}
+		aEval( ::oWSCFGDOC , { |x| aadd( oClone:oWSCFGDOC , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_ARRAYOFCFGDOC
+	Local cSoap := ""
+	aEval( ::oWSCFGDOC , {|x| cSoap := cSoap  +  WSSoapValue("CFGDOC", x , x , "CFGDOC", .F. , .F., 0 , NIL, .F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFCFGAUTO
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFCFGAUTO
+	WSDATA   oWSCFGAUTO                AS SPEDCFGNFE_CFGAUTO OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTO
+	::oWSCFGAUTO           := {} // Array Of  SPEDCFGNFE_CFGAUTO():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTO
+	Local oClone := SPEDCFGNFE_ARRAYOFCFGAUTO():NEW()
+	oClone:oWSCFGAUTO := NIL
+	If ::oWSCFGAUTO <> NIL 
+		oClone:oWSCFGAUTO := {}
+		aEval( ::oWSCFGAUTO , { |x| aadd( oClone:oWSCFGAUTO , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_ARRAYOFCFGAUTO
+	Local cSoap := ""
+	aEval( ::oWSCFGAUTO , {|x| cSoap := cSoap  +  WSSoapValue("CFGAUTO", x , x , "CFGAUTO", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure DIGITALCERTIFICATE
+
+WSSTRUCT SPEDCFGNFE_DIGITALCERTIFICATE
+	WSDATA   nCERTIFICATETYPE          AS integer
+	WSDATA   cISSUER                   AS base64Binary
+	WSDATA   cSUBJECT                  AS string
+	WSDATA   dVALIDFROM                AS date
+	WSDATA   dVALIDTO                  AS date
+	WSDATA   cVERSION                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_DIGITALCERTIFICATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_DIGITALCERTIFICATE
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_DIGITALCERTIFICATE
+	Local oClone := SPEDCFGNFE_DIGITALCERTIFICATE():NEW()
+	oClone:nCERTIFICATETYPE     := ::nCERTIFICATETYPE
+	oClone:cISSUER              := ::cISSUER
+	oClone:cSUBJECT             := ::cSUBJECT
+	oClone:dVALIDFROM           := ::dVALIDFROM
+	oClone:dVALIDTO             := ::dVALIDTO
+	oClone:cVERSION             := ::cVERSION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_DIGITALCERTIFICATE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::nCERTIFICATETYPE   :=  WSAdvValue( oResponse,"_CERTIFICATETYPE","integer",NIL,"Property nCERTIFICATETYPE as s:integer on SOAP Response not found.",NIL,"N",NIL,NIL) 
+	::cISSUER            :=  WSAdvValue( oResponse,"_ISSUER","base64Binary",NIL,"Property cISSUER as s:base64Binary on SOAP Response not found.",NIL,"SB",NIL,NIL) 
+	::cSUBJECT           :=  WSAdvValue( oResponse,"_SUBJECT","string",NIL,"Property cSUBJECT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::dVALIDFROM         :=  WSAdvValue( oResponse,"_VALIDFROM","date",NIL,"Property dVALIDFROM as s:date on SOAP Response not found.",NIL,"D",NIL,NIL) 
+	::dVALIDTO           :=  WSAdvValue( oResponse,"_VALIDTO","date",NIL,"Property dVALIDTO as s:date on SOAP Response not found.",NIL,"D",NIL,NIL) 
+	::cVERSION           :=  WSAdvValue( oResponse,"_VERSION","string",NIL,"Property cVERSION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure INIPARAM
+
+WSSTRUCT SPEDCFGNFE_INIPARAM
+	WSDATA   cPARAMDESCR               AS string
+	WSDATA   cPARAMNAME                AS string
+	WSDATA   cPARAMVALUE               AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_INIPARAM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_INIPARAM
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_INIPARAM
+	Local oClone := SPEDCFGNFE_INIPARAM():NEW()
+	oClone:cPARAMDESCR          := ::cPARAMDESCR
+	oClone:cPARAMNAME           := ::cPARAMNAME
+	oClone:cPARAMVALUE          := ::cPARAMVALUE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_INIPARAM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cPARAMDESCR        :=  WSAdvValue( oResponse,"_PARAMDESCR","string",NIL,"Property cPARAMDESCR as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cPARAMNAME         :=  WSAdvValue( oResponse,"_PARAMNAME","string",NIL,"Property cPARAMNAME as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cPARAMVALUE        :=  WSAdvValue( oResponse,"_PARAMVALUE","string",NIL,"Property cPARAMVALUE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure RETGETALLMV
+
+WSSTRUCT SPEDCFGNFE_RETGETALLMV
+	WSDATA   cID_ENT                   AS string
+	WSDATA   oWSMVSTRUCT               AS SPEDCFGNFE_ARRAYOFRETMVGETALLMV
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_RETGETALLMV
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_RETGETALLMV
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_RETGETALLMV
+	Local oClone := SPEDCFGNFE_RETGETALLMV():NEW()
+	oClone:cID_ENT              := ::cID_ENT
+	oClone:oWSMVSTRUCT          := IIF(::oWSMVSTRUCT = NIL , NIL , ::oWSMVSTRUCT:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_RETGETALLMV
+	Local oNode2
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cID_ENT            :=  WSAdvValue( oResponse,"_ID_ENT","string",NIL,"Property cID_ENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode2 :=  WSAdvValue( oResponse,"_MVSTRUCT","ARRAYOFRETMVGETALLMV",NIL,"Property oWSMVSTRUCT as s0:ARRAYOFRETMVGETALLMV on SOAP Response not found.",NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSMVSTRUCT := SPEDCFGNFE_ARRAYOFRETMVGETALLMV():New()
+		::oWSMVSTRUCT:SoapRecv(oNode2)
+	EndIf
+Return
+
+// WSDL Data Structure CFGAUTODIST
+
+WSSTRUCT SPEDCFGNFE_CFGAUTODIST
+	WSDATA   cEMPRESA                  AS string
+	WSDATA   lENABLE                   AS boolean
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   cFILIAL                   AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_CFGAUTODIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_CFGAUTODIST
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_CFGAUTODIST
+	Local oClone := SPEDCFGNFE_CFGAUTODIST():NEW()
+	oClone:cEMPRESA             := ::cEMPRESA
+	oClone:lENABLE              := ::lENABLE
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:cFILIAL              := ::cFILIAL
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_CFGAUTODIST
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cEMPRESA           :=  WSAdvValue( oResponse,"_EMPRESA","string",NIL,"Property cEMPRESA as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lENABLE            :=  WSAdvValue( oResponse,"_ENABLE","boolean",NIL,"Property lENABLE as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+	::cENTIDADE          :=  WSAdvValue( oResponse,"_ENTIDADE","string",NIL,"Property cENTIDADE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cFILIAL            :=  WSAdvValue( oResponse,"_FILIAL","string",NIL,"Property cFILIAL as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure GETCONT
+
+WSSTRUCT SPEDCFGNFE_GETCONT
+	WSDATA   cCODCONT                  AS string
+	WSDATA   dDATEFIM                  AS date
+	WSDATA   dDATEINIC                 AS date
+	WSDATA   cTIMEFIM                  AS string
+	WSDATA   cTIMEINIC                 AS string
+	WSDATA   cXMOTIVO                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_GETCONT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_GETCONT
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_GETCONT
+	Local oClone := SPEDCFGNFE_GETCONT():NEW()
+	oClone:cCODCONT             := ::cCODCONT
+	oClone:dDATEFIM             := ::dDATEFIM
+	oClone:dDATEINIC            := ::dDATEINIC
+	oClone:cTIMEFIM             := ::cTIMEFIM
+	oClone:cTIMEINIC            := ::cTIMEINIC
+	oClone:cXMOTIVO             := ::cXMOTIVO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_GETCONT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODCONT           :=  WSAdvValue( oResponse,"_CODCONT","string",NIL,"Property cCODCONT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::dDATEFIM           :=  WSAdvValue( oResponse,"_DATEFIM","date",NIL,"Property dDATEFIM as s:date on SOAP Response not found.",NIL,"D",NIL,NIL) 
+	::dDATEINIC          :=  WSAdvValue( oResponse,"_DATEINIC","date",NIL,"Property dDATEINIC as s:date on SOAP Response not found.",NIL,"D",NIL,NIL) 
+	::cTIMEFIM           :=  WSAdvValue( oResponse,"_TIMEFIM","string",NIL,"Property cTIMEFIM as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cTIMEINIC          :=  WSAdvValue( oResponse,"_TIMEINIC","string",NIL,"Property cTIMEINIC as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cXMOTIVO           :=  WSAdvValue( oResponse,"_XMOTIVO","string",NIL,"Property cXMOTIVO as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CFGDOC
+
+WSSTRUCT SPEDCFGNFE_CFGDOC
+	WSDATA   nDOCUMENTOAMBIENTE        AS integer
+	WSDATA   nDOCUMENTOMODELO          AS integer
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_CFGDOC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_CFGDOC
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_CFGDOC
+	Local oClone := SPEDCFGNFE_CFGDOC():NEW()
+	oClone:nDOCUMENTOAMBIENTE   := ::nDOCUMENTOAMBIENTE
+	oClone:nDOCUMENTOMODELO     := ::nDOCUMENTOMODELO
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_CFGDOC
+	Local cSoap := ""
+	cSoap += WSSoapValue("DOCUMENTOAMBIENTE", ::nDOCUMENTOAMBIENTE, ::nDOCUMENTOAMBIENTE , "integer", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("DOCUMENTOMODELO", ::nDOCUMENTOMODELO, ::nDOCUMENTOMODELO , "integer", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure CFGAUTO
+
+WSSTRUCT SPEDCFGNFE_CFGAUTO
+	WSDATA   cENABLE                   AS string
+	WSDATA   cMODELO                   AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_CFGAUTO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_CFGAUTO
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_CFGAUTO
+	Local oClone := SPEDCFGNFE_CFGAUTO():NEW()
+	oClone:cENABLE              := ::cENABLE
+	oClone:cMODELO              := ::cMODELO
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT SPEDCFGNFE_CFGAUTO
+	Local cSoap := ""
+	cSoap += WSSoapValue("ENABLE", ::cENABLE, ::cENABLE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("MODELO", ::cMODELO, ::cMODELO , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFRETMVGETALLMV
+
+WSSTRUCT SPEDCFGNFE_ARRAYOFRETMVGETALLMV
+	WSDATA   oWSRETMVGETALLMV          AS SPEDCFGNFE_RETMVGETALLMV OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_ARRAYOFRETMVGETALLMV
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_ARRAYOFRETMVGETALLMV
+	::oWSRETMVGETALLMV     := {} // Array Of  SPEDCFGNFE_RETMVGETALLMV():New()
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_ARRAYOFRETMVGETALLMV
+	Local oClone := SPEDCFGNFE_ARRAYOFRETMVGETALLMV():NEW()
+	oClone:oWSRETMVGETALLMV := NIL
+	If ::oWSRETMVGETALLMV <> NIL 
+		oClone:oWSRETMVGETALLMV := {}
+		aEval( ::oWSRETMVGETALLMV , { |x| aadd( oClone:oWSRETMVGETALLMV , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_ARRAYOFRETMVGETALLMV
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_RETMVGETALLMV","RETMVGETALLMV",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSRETMVGETALLMV , SPEDCFGNFE_RETMVGETALLMV():New() )
+			::oWSRETMVGETALLMV[len(::oWSRETMVGETALLMV)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure RETMVGETALLMV
+
+WSSTRUCT SPEDCFGNFE_RETMVGETALLMV
+	WSDATA   cMVDESCR                  AS string
+	WSDATA   cMVNAME                   AS string
+	WSDATA   cMVVALUE                  AS string
+	WSDATA   cMVVALUEPOS               AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT SPEDCFGNFE_RETMVGETALLMV
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT SPEDCFGNFE_RETMVGETALLMV
+Return
+
+WSMETHOD CLONE WSCLIENT SPEDCFGNFE_RETMVGETALLMV
+	Local oClone := SPEDCFGNFE_RETMVGETALLMV():NEW()
+	oClone:cMVDESCR             := ::cMVDESCR
+	oClone:cMVNAME              := ::cMVNAME
+	oClone:cMVVALUE             := ::cMVVALUE
+	oClone:cMVVALUEPOS          := ::cMVVALUEPOS
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT SPEDCFGNFE_RETMVGETALLMV
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cMVDESCR           :=  WSAdvValue( oResponse,"_MVDESCR","string",NIL,"Property cMVDESCR as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMVNAME            :=  WSAdvValue( oResponse,"_MVNAME","string",NIL,"Property cMVNAME as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMVVALUE           :=  WSAdvValue( oResponse,"_MVVALUE","string",NIL,"Property cMVVALUE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMVVALUEPOS        :=  WSAdvValue( oResponse,"_MVVALUEPOS","string",NIL,"Property cMVVALUEPOS as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+

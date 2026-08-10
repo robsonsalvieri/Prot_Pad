@@ -1,0 +1,592 @@
+#INCLUDE 'protheus.ch'
+#INCLUDE 'restful.ch'
+#DEFINE SINGLE "S"
+#DEFINE COLLECTION "C"
+
+#DEFINE BUSCA_CODIGO "0"
+#DEFINE BUSCA_DESC "1"
+
+#DEFINE QRY_ORIGINAL "1"
+#DEFINE QRY_UNION "2"
+#DEFINE QRY_DEPARA "3"
+#DEFINE QRY_BUSCADIRETA "4"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLSProceduresSvc
+Servico da API de busca da procedimentos das jornadas do HAT
+
+@author  sakai
+@version P12
+@since   15/09/2023
+/*/
+//------------------------------------------------------------------- 
+class PLSProceduresSvc from PLSSvcAux
+
+    Data lSearchTableAndProc as Logical
+    Data nTotGuias as Integer
+    Data cComplexFilter as Character
+    Data nTamString as Integer
+    Data lPE_PLRSTPR1 as Logical
+    Data lPE_PLRSTPR2 as Logical
+    Data lPostgres as Logical
+    Data lLikeBothSides as Logical
+	Data cQueryType as Character
+    Data lNewQuery as Logical
+    Data cTipoBusca as Character
+
+    Public Method New()
+    Public Method procGet()    
+    Public Method setCollectionFilter()
+    Public Method setSingleFilter() 
+   
+    Private Method setResult(cType)
+    Private Method getQryProc()
+    Private Method mapCFOperators()
+    Private Method mapCFFunctions(cFunction)
+    Private Method getOrderGroup()
+    Private Method getJoinTerm(cType,cAlias,cFilJoin)
+	Private Method getNewQuery(cType)
+	Private Method checkTipoBusca()
+    Private Method getNewQryAux(cQueryType)
+	Private Method getQryDePara()
+	Private Method getQryBuscaDireta()
+    Private Method ajustAliasComplexFilter()
+
+endClass
+
+Method New(oRest) class PLSProceduresSvc
+
+    _Super:New(oRest)
+    self:nTotGuias := 0
+    self:lSearchTableAndProc := .F.
+    self:cComplexFilter := ""
+    self:nTamString := 0
+    self:lPE_PLRSTPR1 := ExistBlock("PLRSTPR1")
+    self:lPE_PLRSTPR2 := ExistBlock("PLRSTPR2")
+    self:lPostgres    := Alltrim(Upper(TCGetDB())) == "POSTGRES"
+    self:lLikeBothSides := GetNewPar("MV_PLAPIPR","1") == "2"
+	self:cQueryType   := GetNewPar("MV_PLAPPR1",QRY_ORIGINAL)
+    self:lNewQuery    := self:cQueryType == QRY_UNION .Or. self:cQueryType == QRY_DEPARA .Or. self:cQueryType == QRY_BUSCADIRETA
+    self:cTipoBusca   := BUSCA_CODIGO
+
+Return self
+
+Method setCollectionFilter() class PLSProceduresSvc
+
+    self:setPage(self:oRest:page)
+    self:setPageSize(self:oRest:pageSize)
+    if !empty(self:oRest:filter)
+        self:cComplexFilter := self:oRest:filter
+        self:mapCFOperators()
+        self:cComplexFilter := Upper(self:cComplexFilter)
+    else
+        self:lSearchTableAndProc := .T.
+        self:nTamString     := len(self:oRest:procedureId)
+        self:cComplexFilter += " AND TABLECODE = '"+self:oRest:tableCode+"' "
+        self:cComplexFilter += " AND PROCEDUREID = '"+self:oRest:procedureId+"' "
+    endIf
+    self:ajustAliasComplexFilter()
+
+Return
+
+Method setSingleFilter() class PLSProceduresSvc
+
+    self:nTamString     := len(self:oRest:procedureId)
+
+    if self:lNewQuery
+        self:cComplexFilter := " PROCEDUREID = '"+self:oRest:procedureId+"' "
+        self:cComplexFilter := StrTran(self:cComplexFilter,Upper("procedureId"),"BTQ_CDTERM")
+    else
+        self:cComplexFilter := " AND PROCEDUREID = '"+self:oRest:procedureId+"' "
+    endIf
+    self:ajustAliasComplexFilter()
+
+Return
+
+Method ajustAliasComplexFilter() class PLSProceduresSvc
+
+    //Realizando Substr para manter o novo padrao de 10 caracteres nos nomes de campos da Query
+    //Ajuste realizado pela TEC a partir do Binario 20.3.2.23
+    self:cComplexFilter := StrTran(self:cComplexFilter,'PROCEDUREDESCRIPTION','PROCDESC')
+    self:cComplexFilter := StrTran(self:cComplexFilter,'PROCEDUREID','PROCID')
+    self:cComplexFilter := StrTran(self:cComplexFilter,'MANUFACTURERREFERENCE','MANUFREFER')
+    self:cComplexFilter := StrTran(self:cComplexFilter,'MANUFACTURER','MANUFACT')
+
+Return
+
+Method procGet(cType) class PLSProceduresSvc
+
+    Local nI := 1
+    Local lHasNext := .F.
+	Local cSql := ""
+
+    if empty(self:oRest:procedureId) .Or. len(self:oRest:procedureId) < 3
+        self:setError(200, 200, "Nao foram localizados resultados com os valores informados")
+    else
+        cSql := iif(self:lNewQuery,self:getNewQuery(cType),self:getQryProc(cType))
+        dbUseArea(.T.,"TOPCONN",TcGenQry(,,cSql),"TRB",.T.,.F.)        
+        if cType == COLLECTION
+
+            self:oResult['items'] := {}
+            if !TRB->(EOF())
+                
+                while !TRB->(EOF()) .And. nI <= self:nPageSize
+                    
+                    if "1" != self:oRest:customWhere .Or. ;
+                    (self:oRest:customWhere == "1" .And. PLSISCON(Alltrim(TRB->BR8_CODPAD),Alltrim(TRB->BR8_CODPSA)) ) //Consulta
+                        
+                        self:setResult(cType)
+                        nI++
+                    endIf
+                    TRB->(DbSkip())
+                endDo
+                lHasNext := !TRB->(EOF())
+            endif            
+            self:oResult['hasNext'] := lHasNext
+
+        elseIf cType == SINGLE
+            if !TRB->(EOF())
+                self:setResult(cType)
+            else
+                self:setError(404, 404, "Nao foram localizados resultados com os valores informados")
+            endIf
+     
+        endIf
+        TRB->(dbCloseArea())
+    endif
+
+Return self:lSuccess
+
+Method setResult(cType) class PLSProceduresSvc
+
+    Local oItem := JsonObject():new()
+
+    oItem['manufacturer']  := Alltrim(TRB->BTQ_FABRIC)
+    oItem['procedureId']   := Alltrim(TRB->TABLECODE) + Alltrim(TRB->PROCIDJSON)
+    oItem['procedureCode'] := Alltrim(TRB->PROCIDJSON)
+    oItem['procedureType'] := Alltrim(TRB->BR8_TPPROC)
+    oItem['inSerie']       := TRB->BJE_TIPO == '2'
+    oItem['eventType']     := Alltrim(TRB->BR8_TIPEVE)
+    oItem['procedureDescription'] := Alltrim(TRB->PRODESJSON)
+    oItem['anvisaId']      := ''
+    oItem['tableCode']     := Alltrim(TRB->TABLECODE)
+    oItem['manufacturerReference'] := Alltrim(TRB->BTQ_REFFAB)
+    oItem['procedureDental'] := TRB->PROCDENTAL == '1'
+    
+    if self:lPE_PLRSTPR2
+        oItem := ExecBlock("PLRSTPR2", .F., .F., {oItem} )
+    endIf
+    
+    if cType == COLLECTION
+        aAdd(self:oResult['items'], oItem)
+    elseIf cType == SINGLE
+        self:oResult := oItem
+    endIf
+
+Return
+
+Method getQryProc(cType) class PLSProceduresSvc
+
+    Local nPos    := 0
+    Local cSql    := ""
+    Local cFiltro := ""
+    Local cFiltroBTU := ""
+    Local cFiltroBTQ := ""
+    Local cFilter    := ""
+    Local cTableCode := ""
+    Local cProcedID  := ""
+    Local cSubsOperator := iif(self:lDBisSQL, "SUBSTRING", "SUBSTR") as character
+    Local cConcOperator := iif(self:lDBisSQL, "+", "||") as character
+    
+    //Busca o final da condicao de filtro de tipos de tabela
+    nPos := At(")",self:cComplexFilter)
+    if nPos > 0 
+        cFiltro := Substr(self:cComplexFilter,1,nPos)
+        cFiltroBTU := StrTran(cFiltro,'TABLECODE','BTU_CODTAB')
+        cFiltroBTQ := StrTran(cFiltro,'TABLECODE','BTQ_CODTAB')
+        self:cComplexFilter := Substr(self:cComplexFilter,nPos+1,len(self:cComplexFilter))
+    endIf
+
+    cSql += " SELECT "
+    cSql += "    PRODESJSON, " //String completa para envio no json
+    cSql += "    PROCDESC, " //String com Substr para realizacao do filtro
+    cSql += "    PROCIDJSON, " //String completa para envio no json
+    cSql += "    PROCID, " //String com Substr para realizacao do filtro
+    cSql += "    TABLECODE, "
+    cSql += iif(self:oRest:customWhere=="12"," MANUFACT, ","")
+    cSql += iif(self:oRest:customWhere=="12"," MANUFREFER, ","")
+    cSql += "    BR8_TIPEVE, "
+    cSql += "    BR8_CODPAD, "
+    cSql += "    BR8_CODPSA, "
+    cSql += "    BR8_TPPROC, "
+    cSql += "    PROCDENTAL, "
+    cSql += "    BTQ_REFFAB, "
+    cSql += "    BTQ_FABRIC, "
+    cSql += "    BJE_TIPO "
+    cSql += " FROM ( "
+    cSql += " SELECT "
+    cSql += "    BR8_DESCRI AS PRODESJSON, "
+    cSql += "    UPPER(" + cSubsOperator+"(BR8_DESCRI,1,"+cValtoChar(self:nTamString)+")) AS PROCDESC, "
+    cSql += "    COALESCE(BTU_CDTERM,BTQ_CDTERM) AS PROCIDJSON, "
+    cSql +=      cSubsOperator+"(COALESCE(BTU_CDTERM,BTQ_CDTERM),1,"+cValtoChar(self:nTamString)+") AS PROCID, "
+    cSql += "    COALESCE(BTU_CODTAB,BTQ_CODTAB) AS TABLECODE, "
+    cSql += iif(self:oRest:customWhere=="12"," UPPER(" + cSubsOperator+"(BTQ_FABRIC,1,"+cValToChar(self:nTamString)+")) AS MANUFACT, ","")
+    cSql += iif(self:oRest:customWhere=="12"," UPPER(" + cSubsOperator+"(BTQ_REFFAB,1,"+cValToChar(self:nTamString)+")) AS MANUFREFER, ","")
+    cSql += "    BR8_TIPEVE, "
+    cSql += "    BR8_CODPAD, "
+    cSql += "    BR8_CODPSA, "
+    cSql += "    BR8_TPPROC, "
+    cSql += "    BR8_ODONTO AS PROCDENTAL, "
+    cSql += "    BTQ_REFFAB, "
+    cSql += "    BTQ_FABRIC, "
+    cSql += "    BJE_TIPO "
+    cSql += " FROM " + RetSqlName("BR8") + " BR8 "
+    
+    cSql += " LEFT JOIN " + RetSqlName("BTU") + " BTU "
+    cSql += "        ON BTU.BTU_FILIAL = '"+xFilial("BTU")+"' "
+    cSql += "           AND BTU.BTU_VLRSIS = " + iif(self:lDBisSQL,"BR8_FILIAL + BR8_CODPAD + BR8_CODPSA","BR8_FILIAL || BR8_CODPAD || BR8_CODPSA")
+    cSql += self:getJoinTerm(cType,"BTU",cFiltroBTU)
+    cSql += "           AND BTU.D_E_L_E_T_ = ' ' "
+    
+    cSql += " LEFT JOIN " + RetSqlName("BTQ") + " BTQ "
+    cSql += "        ON BTQ.BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+    cSql += "           AND BTQ.BTQ_CODTAB = BR8_CODPAD "
+    cSql += "           AND BTQ.BTQ_CDTERM = BR8_CODPSA "
+    cSql += self:getJoinTerm(cType,"BTQ",cFiltroBTQ)
+    cSql += "           AND BTQ.D_E_L_E_T_ = ' ' "
+    
+    cSql += " LEFT JOIN " + RetSqlName("BJE") + " BJE "
+    cSql += "        ON BJE.BJE_FILIAL = '"+xFilial("BJE")+"' "
+    cSql += "           AND BJE.BJE_CODIGO = BR8_CLASSE "
+    cSql += "           AND BJE.D_E_L_E_T_ = ' ' "
+   
+    cSql += " WHERE "
+    cSql += " (( BTU_CODTAB IS NOT NULL AND BTU_CDTERM IS NOT NULL ) OR ( BTQ_CODTAB IS NOT NULL AND BTQ_CDTERM IS NOT NULL )) "
+    cSql += " AND BR8_FILIAL = '"+xFilial("BR8")+"' "
+    cSql += " AND BR8_BENUTL = '1' "
+    cSql += iif(self:oRest:customWhere=="9"," AND BR8_ODONTO = '1' ","")
+    cSql += iif(self:oRest:customWhere=="tratSeriado"," AND BJE_TIPO = '2' ","")
+    cSql += " AND BR8.D_E_L_E_T_ = ' ' " 
+    if self:lLikeBothSides
+        cSql += " AND COALESCE(BTU_CDTERM,BTQ_CDTERM) "+cConcOperator+" UPPER(BR8_DESCRI) LIKE UPPER('%"+self:oRest:procedureId+"%') "
+    endIf
+    cSql += " ) QRY "
+    
+    //Subquery externa
+    cSql += " WHERE 1 = 1 "
+    if !self:lLikeBothSides
+        cSql += self:cComplexFilter
+    endIf
+    
+    cSql += " GROUP BY " + self:getOrderGroup()
+    if "1" != self:oRest:customWhere
+        cSql += " ORDER BY " + self:getOrderGroup()
+        if !self:lPostgres
+            cSql += self:getQryPage()
+        endIf
+    endIf
+    
+    if self:lPE_PLRSTPR1
+        cFilter     := iif(ValType(self:oRest:filter)=="C",self:oRest:filter,"")
+        cTableCode  := iif(ValType(self:oRest:tableCode)=="C",self:oRest:tableCode,"")
+        cProcedID   := iif(ValType(self:oRest:procedureId)=="C",self:oRest:procedureId,"")
+		cSql := ExecBlock("PLRSTPR1", .F., .F., { cSql, cType, cFilter, cTableCode, cProcedID, self:lSearchTableAndProc, self:oRest:healthProviderCode})
+	endIf
+
+Return cSql
+
+Method mapCFOperators() Class PLSProceduresSvc
+
+ 	self:cComplexFilter := " " + self:cComplexFilter + " "
+	self:cComplexFilter := strTran(self:cComplexFilter, " eq ", " = ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " ne ", " <> ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " gt ", " > ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " ge ", " >= ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " lt ", " < ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " le ", " <= ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " and ", " AND ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " or ", " OR ")
+	self:cComplexFilter := strTran(self:cComplexFilter, " not ", " NOT ")
+	self:cComplexFilter := strTran(self:cComplexFilter, "(not ", "( NOT ")
+    self:cComplexFilter := Strtran(self:cComplexFilter, '"', "'")
+
+	self:mapCFFunctions("startswith")
+	self:cComplexFilter := alltrim(self:cComplexFilter)
+
+Return
+
+Method mapCFFunctions(cFunction) Class PLSProceduresSvc
+	
+    Local nPosFunction := 0
+	Local cAux := ""
+	Local cNewFilter := ""
+
+    nPosFunction := At( cFunction, self:cComplexFilter )
+
+    while(nPosFunction > 0)
+
+		if nPosFunction > 0
+			cAux   := subStr(self:cComplexFilter, (nPosFunction+len(cFunction)+2) )
+			cValue := substr(cAux, 1, AT("'", cAux )-1)
+            self:nTamString := len(cValue)
+			self:cComplexFilter := strTran(self:cComplexFilter, " " + cFunction + "('", " = '", 1, 1)
+			self:cComplexFilter := strTran(self:cComplexFilter, "'" + cValue + "') ", "", 1, 1)
+			cNewFilter := substr(self:cComplexFilter, 1, nPosFunction+1)
+			cNewFilter += "'"+cValue+"' "
+            cNewFilter += substr(self:cComplexFilter, nPosFunction+2)
+			self:cComplexFilter := strtran(cNewFilter, "  ", " ")
+		endIf
+		nPosFunction := At(cFunction, self:cComplexFilter)
+
+	enddo
+
+Return
+
+Method getOrderGroup() Class PLSProceduresSvc
+
+    Local cSql := ''
+
+    cSql += " PROCIDJSON, "
+    cSql += " PROCID, "
+    cSql += " PRODESJSON, "
+    cSql += " PROCDESC, "
+    cSql += " TABLECODE, "
+    cSql += iif(self:oRest:customWhere=="12"," MANUFACT, ","")
+    cSql += iif(self:oRest:customWhere=="12"," MANUFREFER, ","")
+    cSql += " BR8_TIPEVE, "
+    cSql += " BR8_CODPAD, "
+    cSql += " BR8_CODPSA, "
+    cSql += " BR8_TPPROC, " 
+    cSql += " PROCDENTAL, "
+    cSql += " BTQ_REFFAB, "
+    cSql += " BTQ_FABRIC, "
+    cSql += " BJE_TIPO "
+
+Return cSql
+
+Method getJoinTerm(cType,cAlias,cFilJoin) Class PLSProceduresSvc
+
+    Local cSql := ''
+   
+    if self:lSearchTableAndProc
+        cSql += " AND "+cAlias+"_CODTAB IN ('"+self:oRest:tableCode+"') "
+
+    elseIf cType == COLLECTION .And. !Empty(cFilJoin)
+        cSql += " AND " + cFilJoin
+
+    elseIf cType == SINGLE
+        // 00 Tabela propria das operadoras
+        // 18 Diarias, taxas e gases medicinais
+        // 19 Materiais e Orteses, Proteses e Materiais Especiais (OPME)
+        // 20 Medicamentos
+        // 22 Procedimentos e eventos em saude
+        // 90 Tabela Propria Pacote Odontologico
+        // 98 Tabela Propria de Pacotes
+        cSql += " AND "+cAlias+"_CODTAB IN ( '00', '18', '19', '20', '22', '90', '98' ) "
+    endIf
+
+Return cSql
+
+/*
+    Query otimizada visando melhoria de performance. Ela e acionada atraves do parametro MV_PLAPPR1
+    1 - Usa query original
+    2 - A query faz um Union entre eventos com De-Para (BTU) e Busca Direta (BTQ)
+    3 - Busca somente eventos com De-Para (BTU)
+    4 - Busca somente eventos com Busca Direta (BTQ)
+*/
+Method getNewQuery(cType) Class PLSProceduresSvc
+
+	Local cSql       := ""
+	Local cFields    := ""
+    Local cFilter    := ""
+    Local cTableCode := ""
+    Local cProcedID  := ""
+    
+    self:checkTipoBusca()    
+
+	cFields += " PRODESJSON, PROCIDJSON, TABLECODE, BR8_TIPEVE, BR8_CODPAD, " 
+	cFields += " BR8_CODPSA, BR8_TPPROC, PROCDENTAL, BTQ_REFFAB, BTQ_FABRIC, BJE_TIPO "
+   
+	cSql += " SELECT "
+	cSql += cFields
+	cSql += " FROM ( "
+
+	if self:cQueryType == QRY_UNION
+		cSql += self:getNewQryAux(QRY_DEPARA)
+		cSql += " UNION ALL "
+		cSql += self:getNewQryAux(QRY_BUSCADIRETA)
+	else
+		cSql += self:getNewQryAux(self:cQueryType)
+	endIf
+
+	cSql += " ) QRY WHERE 1 = 1 "
+	cSql += " GROUP BY " + cFields
+    if "1" != self:oRest:customWhere
+        cSql += " ORDER BY " + cFields
+        cSql += self:getQryPage()
+    endIf
+
+    if self:lPE_PLRSTPR1
+        cFilter    := iif(ValType(self:oRest:filter)=="C",self:oRest:filter,"")
+        cTableCode := iif(ValType(self:oRest:tableCode)=="C",self:oRest:tableCode,"")
+        cProcedID  := iif(ValType(self:oRest:procedureId)=="C",self:oRest:procedureId,"")
+		cSql := ExecBlock("PLRSTPR1", .F., .F., { cSql, cType, cFilter, cTableCode, cProcedID, self:lSearchTableAndProc, self:oRest:healthProviderCode})
+	endIf
+
+Return cSql
+
+Method checkTipoBusca() Class PLSProceduresSvc
+
+    Local nX := 0
+
+    for nX := 1 to len(self:oRest:procedureId)
+        if !Substr(self:oRest:procedureId,nX,1) $ "0123456789"
+            self:cTipoBusca := BUSCA_DESC
+            exit
+        endIf
+        nX ++
+    next
+
+Return
+
+Method getNewQryAux(cQueryType) Class PLSProceduresSvc
+
+	Local cSql := ""
+
+	cSql += " SELECT BTQ_CODTAB AS TABLECODE, "
+    cSql += "   BTQ_CDTERM AS PROCIDJSON, "
+    cSql += "   BR8_DESCRI AS PRODESJSON, "
+    cSql += "   BR8_ODONTO AS PROCDENTAL, "
+    cSql += "   BR8_TIPEVE, BR8_CODPAD, BR8_CODPSA, BR8_TPPROC, BTQ_REFFAB, BTQ_FABRIC, BJE_TIPO "
+    cSql += " FROM "
+	
+    //Codigo de evento busca pela BTQ, descricao busca pela BR8
+    if self:cTipoBusca == BUSCA_CODIGO
+        cSql += RetSqlName("BTQ") + " BTQ "
+    elseIf self:cTipoBusca == BUSCA_DESC
+        cSql += RetSqlName("BR8") + " BR8 "
+    endIf
+
+	if cQueryType == QRY_DEPARA
+		cSql += self:getQryDePara()
+	elseIf cQueryType == QRY_BUSCADIRETA
+		cSql += self:getQryBuscaDireta()
+	endif
+
+    //Join de classe de evento
+    cSql += " LEFT JOIN " + RetSqlName("BJE") + " BJE "
+	cSql += " 	 ON BJE.BJE_FILIAL = '"+xFilial("BJE")+"' "
+	cSql += " 	AND BJE.BJE_CODIGO = BR8_CLASSE "
+    cSql += iif(self:oRest:customWhere == "tratSeriado"," AND BJE_TIPO = '2' ","")
+	cSql += " 	AND BJE.D_E_L_E_T_ = ' ' "
+
+	cSql += " WHERE 1 = 1 "
+    if self:cTipoBusca == BUSCA_CODIGO
+        cSql += "   AND BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+	    cSql += "   AND BTQ_CDTERM LIKE '"+ iif(self:lLikeBothSides,"%","") + self:oRest:procedureId + "%' "
+	    cSql += "   AND BTQ.D_E_L_E_T_ = ' ' "
+    
+    elseIf self:cTipoBusca == BUSCA_DESC
+        cSql += "   AND BR8_FILIAL = '"+xFilial("BR8")+"' "
+		cSql += "   AND BR8_DESCRI LIKE '"+ iif(self:lLikeBothSides,"%","") + Upper(self:oRest:procedureId) + "%' "
+        cSql += "   AND BR8_BENUTL = '1' "
+        cSql +=     iif(self:oRest:customWhere == "9"," AND BR8_ODONTO = '1' ","")
+		cSql += "   AND BR8.D_E_L_E_T_ = ' '
+    endIf
+
+Return cSql
+
+Method getQryDePara() Class PLSProceduresSvc
+
+	Local cSql := ""
+    Local nPos := 0
+    Local cFiltro := ""
+    Local cFiltroBTU := ""
+    Local cFiltroBTQ := ""
+	Local nTamFilial := Tamsx3("BTU_FILIAL")[1]
+	Local cSubsOperator := iif(self:lDBisSQL, "SUBSTRING", "SUBSTR")
+    Local cConcOperator := iif(self:lDBisSQL, "+", "||") as character
+
+    //Busca o final da condicao de filtro de tipos de tabela
+    nPos := At(")",self:cComplexFilter)
+    if nPos > 0 
+        cFiltro := Substr(self:cComplexFilter,1,nPos)
+        cFiltroBTU := StrTran(cFiltro,'TABLECODE','BTU_CODTAB')
+        cFiltroBTQ := StrTran(cFiltro,'TABLECODE','BTQ_CODTAB')
+    endIf
+
+    if self:cTipoBusca == BUSCA_CODIGO
+        cSql += " INNER JOIN " + RetSqlName("BTU") + " BTU "
+        cSql += "    ON BTU_FILIAL = '"+xFilial("BTU")+"' "
+        cSql += "   AND BTU_CODTAB = BTQ_CODTAB "
+        cSql += "   AND BTU_CDTERM = BTQ_CDTERM "
+        cSql +=     iif(!Empty(cFiltroBTQ)," AND " + cFiltroBTQ,"")
+        cSql += "   AND BTU.D_E_L_E_T_ = ' ' "
+
+        cSql += " INNER JOIN " + RetSqlName("BR8") + " BR8 "	
+
+        if Upper(TCGetDB()) $ "POSTGRES"
+            cSql += " 	 ON BR8.BR8_FILIAL = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, 1, "+cValToChar(nTamFilial)+" )) "
+            cSql += " 	AND BR8.BR8_CODPAD = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 1)+", 2 )) "
+            cSql += " 	AND BR8.BR8_CODPSA = TRIM("+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 3)+", 16 )) "
+        else
+            cSql += " 	 ON BR8.BR8_FILIAL = "+cSubsOperator+"( BTU.BTU_VLRSIS, 1, "+cValToChar(nTamFilial)+" ) "
+            cSql += " 	AND BR8.BR8_CODPAD = "+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 1)+", 2 ) "
+            cSql += " 	AND BR8.BR8_CODPSA = "+cSubsOperator+"( BTU.BTU_VLRSIS, "+cValToChar(nTamFilial + 3)+", 16 ) "
+        endIf
+        cSql += "   AND BR8_BENUTL = '1' "
+        cSql +=     iif(self:oRest:customWhere == "9"," AND BR8_ODONTO = '1' ","")
+        cSql += "   AND BR8.D_E_L_E_T_ = ' ' "
+    
+    elseIf self:cTipoBusca == BUSCA_DESC
+      
+        cSql += " INNER JOIN " + RetSqlName("BTU") + " BTU "
+        cSql += "    ON BTU_FILIAL = '"+xFilial("BTU")+"' "
+        cSql += "   AND BTU.BTU_VLRSIS = BR8_FILIAL "+cConcOperator+" BR8_CODPAD "+cConcOperator+" BR8_CODPSA "
+        cSql +=     iif(!Empty(cFiltroBTU)," AND " + cFiltroBTU,"")
+        cSql += "   AND BTU.D_E_L_E_T_ = ' ' "
+
+        cSql += " LEFT JOIN " + RetSqlName("BTQ") + " BTQ "
+        cSql += "    ON BTQ.BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+        cSql += "   AND BTQ.BTQ_CODTAB = BTU_CODTAB "
+        cSql += "   AND BTQ.BTQ_CDTERM = BTU_CDTERM "
+        cSql +=     iif(!Empty(cFiltroBTQ)," AND " + cFiltroBTQ,"")
+        cSql += "   AND BTQ.D_E_L_E_T_ = ' ' "
+    endIf
+
+Return cSql
+
+Method getQryBuscaDireta() Class PLSProceduresSvc
+
+	Local cSql := ""
+    Local nPos := 0
+    Local cFiltro := ""
+    Local cFiltroBTQ := ""
+
+    //Busca o final da condicao de filtro de tipos de tabela
+    nPos := At(")",self:cComplexFilter)
+    if nPos > 0 
+        cFiltro := Substr(self:cComplexFilter,1,nPos)
+        cFiltroBTQ := StrTran(cFiltro,'TABLECODE','BTQ_CODTAB')
+    endIf
+
+    if self:cTipoBusca == BUSCA_CODIGO
+        cSql += " INNER JOIN " + RetSqlName("BR8") + " BR8 "
+        cSql += " 	 ON BR8.BR8_FILIAL = '"+xFilial("BR8")+"' "
+        cSql += " 	AND BR8.BR8_CODPAD = BTQ_CODTAB "
+        cSql += " 	AND BR8.BR8_CODPSA = BTQ_CDTERM "
+        cSql += "   AND BR8_BENUTL = '1' "
+        cSql +=     iif(self:oRest:customWhere == "9"," AND BR8_ODONTO = '1' ","")
+        cSql += " 	AND BR8.D_E_L_E_T_ = ' ' "
+
+    elseIf self:cTipoBusca == BUSCA_DESC
+
+        cSql += " INNER JOIN " + RetSqlName("BTQ") + " BTQ "
+        cSql += "    ON BTQ.BTQ_FILIAL = '"+xFilial("BTQ")+"' "
+        cSql += "   AND BTQ.BTQ_CODTAB = BR8_CODPAD "
+        cSql += "   AND BTQ.BTQ_CDTERM = BR8_CODPSA "
+        cSql +=     iif(!Empty(cFiltroBTQ)," AND " + cFiltroBTQ,"")
+        cSql += "   AND BTQ.D_E_L_E_T_ = ' ' "
+    endIf
+
+Return cSql

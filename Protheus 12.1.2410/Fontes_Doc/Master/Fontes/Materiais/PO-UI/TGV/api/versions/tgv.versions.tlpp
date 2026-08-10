@@ -1,0 +1,461 @@
+#include "tlpp-core.th"
+#include "protheus.ch"
+#include "tgv.versions.ch"
+#INCLUDE "fwlibversion.ch"
+
+#define ALLVERSION_VERSION 1
+#define ALLVERSION_SCHEMA  2
+#define ALLVERSION_RELEASE 3
+
+#define SCHEMA2UPD_SCHEMA  1
+#define SCHEMA2UPD_VERSION 2
+
+using namespace tgv.util
+
+Static __queryStamp := nil as object
+Static __lExtPgvV :=  FindFunction("tgv.util.pgvvers") as logical
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions
+    API para consulta do portal Gestão de vendas
+    @type       class
+    @version    12.1.33
+    @author     Danilo Salve / Squad CRM & Faturamento
+    @since      09/12/2021
+/*/
+//------------------------------------------------------------------------------
+class tgvVersions
+    public method new () as object
+    @Get("/api/tgv/versions/")
+	public method getVersionFE() as logical
+
+    private method updateBEAutomaticaly() as logical
+    private method updateSchemas() as logical
+    private method verifyUpdateByVersion() as array
+    private method verifyStampInTables() as logical
+    private method createStampColumn() as logical
+endClass
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::new() as object
+    obtem uma nova instancia da classe tgvVersions
+    @type       method
+    @version    12.1.33
+    @author     Danilo Salve / Squad CRM & Faturamento
+    @since      09/12/2021
+    @return object, nova instancia da classe tgvVersions
+/*/
+//------------------------------------------------------------------------------
+method new() as object class tgvVersions
+return self
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::getVersionFE() as logical
+    Obtem a versão do portal Gestão de vendas
+    @type       method
+    @version    12.1.33
+    @author     Danilo Salve / Squad CRM & Faturamento
+    @since      09/12/2021
+    @return     logical, retorna sempre verdadeiro
+/*/
+//------------------------------------------------------------------------------
+method getVersionFE() as logical class tgvVersions
+    local jResponse := JsonObject():New()
+
+    jResponse['version'] := IIF(__lExtPgvV, PGVVERS(), "1.7.0")
+
+    FWLsPutAsyncInfo("LS006",RetCodUsr(),'05',"PGV")
+
+    if !(::updateBEAutomaticaly(jResponse['version']))
+        SetRestFault(503, FWHttpEncode(STR0001))   // #"Problema ao tentar realizar a atualização automática dos schemas. Por favor, caso o seu ambiente não esteja atualizado com a última expedição continua, realize esta atualização."
+        return .t.
+    endIf
+
+    if !(::createStampColumn())
+        SetRestFault(503, FWHttpEncode(STR0002))   // #"Algumas de suas tabelas podem não estar preparadas corretamente para o uso no Portal Gestão de Vendas. Por favor, caso o seu ambiente não esteja atualizado com a última expedição continua, realize esta atualização."
+        return .t.
+    endif
+    
+    oRest:setKeyHeaderResponse('Content-Type','application/json; charset=utf-8')
+    oRest:setStatusCode(200)
+    oRest:setResponse(jResponse)
+
+    FreeObj(jResponse)
+return .t.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::updateBEAutomaticaly() as logical
+    Realizar a atualização do Back-end caso seja necessario
+    @type       method
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      29/03/2022
+    @param      updatedPGVVersion, character, versao atual do PGV 
+    @return     processed        , logical  , resultado do processamento com sucesso ou nao
+/*/
+//------------------------------------------------------------------------------
+method updateBEAutomaticaly(updatedPGVVersion as character) as logical class tgvVersions
+
+    local processed as logical
+    local environmentPGVVersion as character
+    local schemasToBeUpdated as array
+    local nTamanA1W as numeric
+    local nTamanSX3 as numeric 
+    local aArea   := GetArea() as Array
+
+    clearNotificationType()
+
+    environmentPGVVersion := GetMV("MV_PGVVERS", .T., "")
+    processed := .F.
+    schemasToBeUpdated := {}
+
+    DbSelectArea("A1W")
+	A1W->(DbSetOrder(2))
+
+    If A1W->( dbSeek(xFilial("A1W")+"000010"+"C6_PEDCLI") )
+        nTamanA1W := A1W->A1W_TAMMAX
+        nTamanSX3 := GetSX3Cache(A1W_CAMPO,'X3_TAMANHO')                                                                 
+    EndIf
+
+	RestArea(aArea)
+	aSize(aArea, 0)
+
+    If !(nTamanSX3 == nTamanA1W)
+        environmentPGVVersion := ""
+    EndIf 
+
+    if !(environmentPGVVersion == updatedPGVVersion) 
+        schemasToBeUpdated := ::verifyUpdateByVersion(updatedPGVVersion, environmentPGVVersion)
+        Begin Transaction
+            processed := ::updateSchemas(schemasToBeUpdated)
+            if processed
+                putMV("MV_PGVVERS", updatedPGVVersion)
+            else
+                DisarmTransaction()
+            endIf
+        End Transaction
+    else
+        processed := .T.
+    endIf   
+
+    FWFreeObj(schemasToBeUpdated)
+    ASize(schemasToBeUpdated, 0)
+
+return processed
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::updateSchemas() as logical
+    Realizar a atualização dos schemas informados no parametro
+    @type       method
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      29/03/2022
+    @param      schemasToBeUpdated, character, schemas a serem atualizados
+    @return     processed         , logical  , resultado do processamento com sucesso ou nao
+/*/
+//------------------------------------------------------------------------------
+method updateSchemas(schemasToBeUpdated as array) as logical class tgvVersions
+
+    local processed as logical
+    local schema as numeric
+    local qtSchemas as numeric
+
+    qtSchemas := Len(schemasToBeUpdated)
+    processed := .T.
+
+    for schema := 1 to qtSchemas
+        deleteSchema_A1V_A1W(schemasToBeUpdated[schema][SCHEMA2UPD_SCHEMA])
+        if !(updateSchema_A1V_A1W(schemasToBeUpdated[schema][SCHEMA2UPD_SCHEMA]))
+            processed := .F.
+            exit
+        endIf
+    next
+
+return processed
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::verifyUpdateByVersion() as array
+    Realizar a verificacao dos schemas que precisam ser atualizados durante a atualizacao de versao
+    @type       method
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      29/03/2022
+    @param      updatedPGVVersion    , character, versao atual do PGV 
+    @param      environmentPGVVersion, character, versao que estava instalada no ambiente 
+    @return     schemasToBeUpdated, array  , lista com os schemas a serem atualizados para estarem na versao atual
+/*/
+//------------------------------------------------------------------------------
+method verifyUpdateByVersion(  updatedPGVVersion as character, environmentPGVVersion as character) ;
+                                as array class tgvVersions
+
+    local schemasToBeUpdated as array
+    local auxHashMap as object
+    local schemasVersion as array
+    local allVersionsVsSchemas as array
+    local version as numeric
+    local qtVersions as numeric
+    local schema as numeric
+    local qtSchemas as numeric
+
+    allVersionsVsSchemas := versionsVsSchemas()
+    qtVersions := Len(allVersionsVsSchemas)
+    auxHashMap := tHashMap():New()
+
+    for version := 1 to qtVersions
+        if allVersionsVsSchemas[version][ALLVERSION_VERSION] <= environmentPGVVersion
+            loop
+        endif
+
+        schemasVersion := allVersionsVsSchemas[version][ALLVERSION_SCHEMA]
+        qtSchemas := Len(schemasVersion)
+        for schema := 1 to qtSchemas
+            auxHashMap:Set(schemasVersion[schema], updatedPGVVersion)
+        next
+
+        FWFreeObj(schemasVersion)
+        ASize(schemasVersion, 0)
+
+    next
+
+    auxHashMap:List(schemasToBeUpdated)
+    
+    auxHashMap:Clean()
+    FWFreeObj(auxHashMap)
+    FWFreeObj(allVersionsVsSchemas)
+    ASize(allVersionsVsSchemas, 0)
+    auxHashMap := Nil
+
+return schemasToBeUpdated
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} versionsVsSchemas() as object
+    Funcao que informa por meio de um array os schemas que foram atualizados em cada versao
+    @type       method
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      29/03/2022
+    @return     allVersionsVsSchemas, array  , lista com todos schemas que devem ser atualizados em cada versao liberada
+/*/
+//------------------------------------------------------------------------------
+static function versionsVsSchemas() as array
+    local allVersionsVsSchemas as array
+    allVersionsVsSchemas := {}
+    
+    AAdd(allVersionsVsSchemas, {"0.0.4", {}, "12.1.33" })
+    AAdd(allVersionsVsSchemas, {"1.0.0", {  "PaymentConditions", ;
+                                            "Carriers", ;
+                                            "Products", ;
+                                            "Prospects", ;
+                                            "SalesBudgets", ;
+                                            "SalesBudgetsItems", ;
+                                            "Intermediaries"}, "12.1.33" })
+     AAdd(allVersionsVsSchemas, {"1.1.0", {"SalesOrders"}, "12.1.33" })
+     AAdd(allVersionsVsSchemas, {"1.2.0", {"SalesOrders"}, "12.1.33" })
+	 AAdd(allVersionsVsSchemas, {"1.3.0", {"SalesOrdersItems"}, "12.1.33" })
+     AAdd(allVersionsVsSchemas, {"1.4.1", {"IntegrationQueue"}, "12.1.2210" })
+     AAdd(allVersionsVsSchemas, {"1.4.3", { "Prospects", ;
+                                            "SalesBudgets"}, "12.1.2210" })
+	AAdd(allVersionsVsSchemas, {"1.5.5", {  "Prospects",;
+                                            "Customer",;
+                                            "Financialstatus" }, "12.1.2210" })
+    AAdd(allVersionsVsSchemas, {"1.11.4", { "PriceListHeader" }, "12.1.2410" })
+
+return allVersionsVsSchemas
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::createStampColumn() as logical
+    Realizar a criação de campos S_T_A_M_P_ das tabelas no Back-end caso seja 
+    necessario
+    @type       method
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      10/08/2022
+    @return     processed        , logical  ,   resultado do processamento com 
+                                                sucesso ou nao
+/*/
+//------------------------------------------------------------------------------
+method createStampColumn() as logical class tgvVersions
+
+    local processed           as logical
+    local tablesToBeprocessed as array
+
+    tablesToBeprocessed := ListTablesPGV(.T. /*isBlind*/)
+    processed := ::verifyStampInTables(@tablesToBeprocessed)
+
+    FWFreeObj(tablesToBeprocessed)
+    ASize(tablesToBeprocessed, 0)
+
+return processed
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} tgvVersions::verifyStampInTables() as logical
+    Verificar no array de tabelas, qual delas está precisando da criação do
+    campo S_T_A_M_P_
+    @type       method
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      10/08/2022
+    @param      tablesToBeprocessed ,Array  ,   Array com as tabelas a serem
+                                                verificadas
+    @return     processed        , logical  ,   resultado do processamento com 
+                                                sucesso ou nao
+/*/
+//------------------------------------------------------------------------------
+method verifyStampInTables(tablesToBeprocessed as array) as logical class tgvVersions
+
+    local processed                 as logical
+    local numTable                  as numeric
+    local qtTablesToBeVerified      as numeric
+    local queryStamp                as object
+    local dataBaseName              as character
+
+    dataBaseName := TcGetDb()
+    qtTablesToBeVerified := Len(tablesToBeprocessed)
+    processed := .T.
+
+    if (qtTablesToBeVerified > 0)
+        queryStamp := buildQueryStamp()
+        processed := .T.
+        
+        for numTable := 1 To qtTablesToBeVerified
+            if processed ;
+                .And. ;
+               !hasStamp(TablesToBeProcessed[numTable][2], queryStamp, dataBaseName)
+                processed := makeStampPGV(.T. /*isBlind*/, {TablesToBeProcessed[numTable]})
+            endif
+        next
+    endIf
+
+return processed
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} buildQueryStamp() as object
+    Criar e retornar o objeto do tipo FWExecStatement com a query para verificar
+    se determinada tabela tem o campo S_T_A_M_P_ criado
+    @type       static function
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      10/08/2022
+    @return     queryStamp        , object    , objeto do tipo FWExecStatement
+                                                com a query para verificar se
+                                                o campo S_T_A_M_P_ existe nas
+                                                tabelas do PGV
+/*/
+//------------------------------------------------------------------------------
+static function buildQueryStamp() as object
+	local query      as character
+    local queryStamp as object
+    
+    queryStamp := __queryStamp
+
+    if empty(__queryStamp)
+        query :=    "SELECT "
+        query +=    "   COUNT(COLUMN_NAME) qtd "
+        query +=    "FROM  ? "
+        query +=    "WHERE "
+        query +=    "   TABLE_NAME = ? "
+        query +=    "       AND "
+        query +=    "   COLUMN_NAME = ? "
+
+        query := ChangeQuery(query)
+        queryStamp := IIF(checkFWExecStat(), FwExecStatement():New( query ), FWPreparedStatement():New( query ))
+        __queryStamp := queryStamp
+    endif
+return queryStamp
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} hasStamp(cTable as character, queryStamp as object) as logical
+    Verificar se na tabela informada no parametro tem o campo S_T_A_M_P_
+    @type       static function
+    @version    12.1.33
+    @author     Rafael Mota Previdi / Squad CRM & Faturamento
+    @since      10/08/2022
+    @param      tableNamePGV , character , tabela do BD a ser verificada
+    @param      queryStamp   , object    , objeto da classe FWExecStatement
+    @param      dataBaseName , character , banco de dado usado no Protheus
+    @return     hasStamp     , logical   , indica se a tabela tem ou nao o
+                                           campo S_T_A_M_P_
+/*/
+//------------------------------------------------------------------------------
+static function hasStamp(   tableNamePGV as character, ;
+                            queryStamp   as object, ;
+                            dataBaseName as character ) as logical
+	local hasStamp  as logical
+	local cAlias    as character
+
+    cAlias := GetNextAlias()
+    hasStamp := .F.
+	tableNamePGV := IIF(dataBaseName == "POSTGRES", lower(tableNamePGV), tableNamePGV)
+	queryStamp:SetUnsafe(1, Iif(dataBaseName == "ORACLE", "ALL_TAB_COLUMNS", "INFORMATION_SCHEMA.COLUMNS"))
+    queryStamp:SetString(2, tableNamePGV)
+    queryStamp:SetString(3, IIF(dataBaseName == "POSTGRES", "s_t_a_m_p_","S_T_A_M_P_"))
+	Iif(checkFWExecStat(), cAlias := queryStamp:OpenAlias(cAlias), MPSysOpenQuery( queryStamp:GetFixQuery(), cAlias))
+
+	if !(cAlias)->(Eof())
+		if (cAlias)->qtd > 0
+			hasStamp := .T.
+		endif
+	endif
+
+	(cAlias)->(DbCloseArea())
+return hasStamp
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} checkFWExecStat
+	Função utilizada para validar a data da LIB para utilização da classe FWExecStatement
+	@type       Function
+	@return     lShemasVerLib, lógico, se pode ser utilizado a classe FWExecStatement
+	@author     Squad CRM/Faturamento
+	@since      18/07/2023
+	@version    12.1.2210
+	
+/*/
+//-------------------------------------------------------------------------------------
+Static Function checkFWExecStat()
+	Static lShemasVerLib := Nil
+
+	If lShemasVerLib == Nil
+		lShemasVerLib := FWLibVersion() >= "20211116"
+	EndIf
+Return lShemasVerLib
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} clearNotificationType
+	Função utilizada limpar o conteúdo do campo A1S_TIPO na carga inicial, devido a não ser possível limpar o conteúdo do mesmo por pacote de dicionário
+	@type       Function
+	@author     Squad CRM/Faturamento
+	@since      05/10/2023
+	@version    12.1.2210
+	
+/*/
+//-------------------------------------------------------------------------------------
+Static Function clearNotificationType()
+    
+    Local aArea     as array
+    Local aAreaSX3	as array
+    Local cRelease  as character
+
+    cRelease := GetRpoRelease()
+
+    If (cRelease $ "12.1.033|12.1.2210|12.1.2310")
+        aArea    :=	FwGetArea()
+        aAreaSX3 :=	SX3->(FwGetArea())
+        
+        SX3->(DBSetOrder(2))
+
+        If SX3->(MsSeek("A1S_TIPO") .And. !Empty(SX3->X3_CBOX))
+            If RecLock("SX3", .F.)
+                SX3->X3_CBOX    :=	""
+                SX3->X3_CBOXSPA :=	""
+                SX3->X3_CBOXENG :=	""
+                SX3->(MsUnlock())
+            EndIf
+        EndIf
+
+        RestArea(aArea)
+        RestArea(aAreaSX3)
+        FwFreeObj(aArea)
+        FwFreeObj(aAreaSX3)
+    EndIf
+
+Return Nil

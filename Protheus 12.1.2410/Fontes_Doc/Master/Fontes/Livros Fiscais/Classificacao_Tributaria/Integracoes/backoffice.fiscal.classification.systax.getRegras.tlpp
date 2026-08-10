@@ -1,0 +1,667 @@
+#Include "Protheus.ch"
+#Include "RwMake.ch"
+#Include "FwBrowse.ch"
+#Include "FwMvcDef.ch"
+#Include "TOPCONN.ch"
+#INCLUDE "TBICONN.CH"
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#include 'classificadorfiscal.ch'
+
+Namespace totvs.protheus.backoffice.fiscal.Classifier
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FISRetornaRegra
+Classe que contém as operações para obter o retorno das regras geradas pela Systax
+@author  Yuri Gimenes da Costa
+@since   04.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+CLASS FISRetornaRegra
+
+    data url as character
+    data username as character
+    data senha as character
+
+    data rest_client as object
+    data rToken as character
+    data error as numeric
+    data error_description as character
+    data JSONResult as json
+    data cIdCenario as character
+    data cCodProd as character
+    data cOriProd as character
+    data cPontAtu as character
+    data cUltPont as character
+    data lConsDia as logical
+    data cPriPont as character
+    data lConsAnt as logical
+    data cMockServer as character
+    data cPath as character
+    data lAutomato as logical
+    data oStatementRegraAnterior as object
+
+    public method new() CONSTRUCTOR
+    public method fisRetornaRegra(cIdCenario,cCodProd,cOriProd,nOperacao,cMockServer,cPath) as json
+    method setUserName(username)
+    method setSenha(senha)
+    method setUrl(url)
+    method montaConsulta(cIdCenario,cCodProd,cOriProd,cPontAtu)
+    method gravaPont(nOperacao,cPonteiro)
+
+    private method definePonteiros()
+    private method buscaRegraAnterior(cIdCenario,cProduto,cOrigem,cDB) as character
+    public method converteCampoJsonParaQuery(cDB) as character
+    private method existeAtualizacaoDaRegra(jRetornoSystax) as logical
+    private method gravaRegra(cIdCenario,cProduto,cOrigem,cJsonRegra,cPonteiro,lAtualizacao,cRelease)
+
+END CLASS
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new()
+Método construtor da classe
+@author  Yuri Gimenes da Costa
+@since   04.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+METHOD new() CLASS FISRetornaRegra
+
+Local aParam := {"URLREGRA","USERNAMEDEFAULT","SENHADEFAULT"}
+Local cParametro := GetConfigClassif(aParam)
+Local oParametro := JsonObject():New()
+
+If oParametro:FromJson(cParametro) == Nil
+
+    ::seturl(oParametro:URLREGRA)
+    ::setSenha(oParametro:SENHADEFAULT)
+    ::setUserName(oParametro:USERNAMEDEFAULT)
+
+    FreeObj(oParametro)
+
+    FWFreeArray(aParam)
+
+EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fisRetornaRegra
+Método para retornar os dados da Regra gerada pela Systax
+@author  Yuri Gimenes da Costa
+@since   04.05.2022
+@version 1.0
+@param   cIdCenario, character, ID do cenário
+@param   cCodProd, character, Código do produto
+@param   cOriProd, character, Origem do produto
+@param   nOperacao, numeric, Operaçao que está sendo executada (1-Primeira carga do cliente, 2-Primeira carga do dia, 3-Segunda ou mais cargas do dia, 4-Outros)
+@param   cMockServer, character, Mockserver para teste
+@param   cPath, character, Path para utilizaçao do mockserver
+@return  json, Json indicando se houve sucesso ou falha na execução e mensagem de retorno
+/*/
+//-------------------------------------------------------------------
+METHOD fisRetornaRegra(cIdCenario as character, cCodProd as character, cOriProd as character, nOperacao as numeric, cMockServer as character, cPath as character) as json CLASS FISRetornaRegra
+
+Local aHeaderRegra  := {} as array
+Local oResult 	    := Nil as object
+Local nY            as numeric
+Local nYB           as numeric
+Local lRecursiv     := .T. as logical
+Local lPaginacao    := .T. as logical
+Local cRet          := STR0207 as character //"Nenhuma regra disponível no momento."
+
+Local cCena         as character
+Local cProduto      as character
+Local cOrigem       as character
+Local nTamCJBIDCena as integer
+Local nTamCJBProdut as integer
+Local nTamCJBOrigem as integer
+
+Local lRet          as logical
+Local cChaveMD5     as character
+Local cChave        as character
+Local cPontAtu      as character
+Local cPontSystax   as character
+Local cjSonCons     as character
+Local cResult       as character
+
+Local jCenario      as json
+Local jRetorno      as json
+Local jRet          as json
+Local jRegra        as json
+Local cJsCenario    as character
+Local cJsRetorno    as character
+Local cJsRegra      as character
+Local lSuccess      := .T. as logical
+
+Local lAtualizacao  as logical
+Local cDB           := Upper(TCGetDB()) as character
+Local cJsonRegraAnt as character
+Local cRelease      := GetRpoRelease() as character
+
+Default cIdCenario  := "0"
+Default cCodProd    := "0"
+Default cOriProd    := "0"
+Default cMockServer := ""
+Default cPath       := ""
+
+If !Empty(cMockServer) //Caso passe pela automação de testes, será utilizado o mock server
+    ::rest_client := FwRest():New(cMockServer)
+    ::rest_client:setPath(cPath)
+    ::lAutomato := .T.
+Else
+    ::rest_client := FwRest():New(::url)
+    ::rest_client:setPath("/cockpit/v2/api/regras")
+EndIf
+
+If ( ( cRelease > '12.1.2310' .And. !('CJB_PTSYS' $ FWX2Unico('CJB')) ) .Or. ( self:lAutomato .And. cPath == '/dic-desatualizado' ) )
+    lSuccess := .F.
+    cRet := STR0246 // "Dicionário desatualizado. Verifique as atualizações da Classificação Tributária"
+EndIf
+
+If ( lSuccess )
+    ::rToken := AllTrim(ConsultTok(cUserName,cMockServer))
+
+    If !Empty(::rToken)
+
+        // PREENCHE CABEÇALHO DA REQUISIÇÃO
+        AAdd(aHeaderRegra, "Content-Type: application/json; charset=UTF-8")
+        AAdd(aHeaderRegra, "Content-Length: <calculated when request is sent>")
+        AAdd(aHeaderRegra, "Accept: */*")
+        AAdd(aHeaderRegra, "User-Agent: Chrome/65.0 (compatible; Protheus " + GetBuild() + ")")
+        Aadd(aHeaderRegra, "Authorization: Bearer " + ::rToken)
+
+        nTamCJBIDCena := FWSX3Util():GetFieldStruct('CJB_IDCENA')[3]
+        nTamCJBProdut := FWSX3Util():GetFieldStruct('CJB_PRODUT')[3]
+        nTamCJBOrigem := FWSX3Util():GetFieldStruct('CJB_ORIGEM')[3]
+
+        self:DefinePonteiros()
+
+        Do Case
+            //-------------------------------------------------------+
+            // 1 - Primeira consulta da empresa - carga inicial      |
+            //-------------------------------------------------------+
+            Case !(::lConsDia) .and. !(::lConsAnt)
+                nOperacao := 1
+                cPontAtu := "0"
+            //------------------------------------------------------+
+            // 2 - Primeira carga do dia com carga no dia anterior  |
+            //------------------------------------------------------+
+            Case !(::lConsDia) .and. (::lConsAnt)
+                nOperacao := 2
+                cPontAtu := ::cUltPont
+            //--------------------------------------+
+            // 3 - Segunda ou mais cargas do dia    |
+            //--------------------------------------+
+            Case (::lConsDia) .and. (::lConsAnt) .and. nOperacao == Nil
+                nOperacao := 3
+                cPontAtu := ::cUltPont
+            OTHERWISE
+                nOperacao := 4
+                cPontAtu := ::cUltPont
+        END
+
+        while lPaginacao
+            cjSonCons := ::MontaConsulta(cIdCenario,cCodProd,cOriProd,cPontAtu)
+
+            ::rest_client:SetPostParams(cjSonCons)
+            ::rest_client:SetChkStatus(.F.)
+
+            lRet := ::rest_client:Post(aHeaderRegra)
+
+            If lRet .And. cPath <> "/getRegras004" //A verificação do cPath é um desvio para o teste automatizado
+                cResult := ::rest_client:GetResult()
+                oResult := JsonObject():New()
+
+                If oResult:FromJson(cResult) == Nil .And. oResult:HasProperty('ponteiro_atualizacao') .And. oResult:HasProperty('cenario') .And. cPath <> "/getRegras005" //A verificação do cPath é um desvio para o teste automatizado
+                    cPontSystax := oResult["ponteiro_atualizacao"]
+
+                    //Controle de recursividade
+                    If lRecursiv
+                        lRecursiv := .F.
+
+                        //Grava o Ponteiro
+                        // 1 - Primeira execução do dia, Sem execução nos dias anteriores
+                        // 2 - Primeira execução do dia, com execução nos dias anteriores
+                        // 3 - Execução do processo, com outras execuções no dia
+                        If nOperacao <> 4
+                            ::GravaPont(nOperacao,cPontSystax)
+                        EndIf
+                    EndIf
+
+                    DbSelectArea("CJG")
+                    CJG->(DbSetOrder(2))
+
+                    For nY := 1 to len(oResult["cenario"])
+                        jCenario := oResult["cenario"][nY]
+
+                        cCena := PadR(jCenario["id_cenario"], nTamCJBIDCena)
+
+                        For nYB := 1 to len(jCenario["retorno"])
+                            jRetorno := jCenario["retorno"][nYB]
+
+                            //Organiza o seek de acordo com o tamanho dos campos na SX3
+                            cProduto := PadR(jRetorno["cod_prod"], nTamCJBProdut)
+                            cOrigem := PadR(jRetorno["origem_produto"], nTamCJBOrigem)
+
+                            If CJG->(MsSeek(xFilial("CJG")+AllTrim(cCena)))
+                                jRegra := JsonObject():New()
+                                jRegra:FromJson(DecodeUTF8(cResult,'cp1252'))
+
+                                jRegra["cenario"] := {}
+                                Aadd(jRegra["cenario"], JsonObject():New())
+
+                                cJsCenario := jCenario:ToJson()
+                                jRegra["cenario"][1]:FromJson(DecodeUTF8(cJsCenario,'cp1252'))
+
+                                jRegra["cenario"][1]["retorno"] := {}
+                                Aadd(jRegra["cenario"][1]["retorno"], JsonObject():New())
+
+                                cJsRetorno := jRetorno:ToJson()
+                                jRegra["cenario"][1]["retorno"][1]:FromJson(DecodeUTF8(cJsRetorno,'cp1252'))
+
+                                cJsRegra := jRegra:ToJson()
+
+                                FWFreeObj(jRegra)
+                                jRegra := nil
+
+                                cJsonRegraAnt := self:buscaRegraAnterior(cCena,cProduto,cOrigem,cDB)
+
+                                If ( !Empty(cJsonRegraAnt) )
+                                    If ( cRelease > '12.1.2310' )
+                                        lAtualizacao := self:existeAtualizacaoDaRegra(jRetorno)
+
+                                        If ( lAtualizacao )
+                                            self:gravaRegra(cCena,cProduto,cOrigem,cJsRegra,cPontSystax,lAtualizacao,cRelease)
+                                        EndIf
+                                    EndIf
+                                Else
+                                    lAtualizacao := .F.
+                                    self:gravaRegra(cCena,cProduto,cOrigem,cJsRegra,cPontSystax,lAtualizacao,cRelease)
+                                EndIf
+
+                                //Refaz o objeto oResult
+                                cResult := ::rest_client:GetResult()
+                                oResult := JsonObject():New()
+                                oResult:FromJson(cResult)
+
+                                cRet := STR0208 //"Novas regras recebidas com sucesso."
+                            EndIf
+
+                            // Atualiza o produto e origem para enviar na próxima chamada da API da Systax
+                            cCodProd := AllTrim(cProduto)
+                            cOriProd := AllTrim(cOrigem)
+                        Next nYB
+
+                        // Atualiza o ID Cenario para enviar na próxima chamada da API da Systax
+                        cIdCenario := AllTrim(cCena)                    
+                    Next nY
+
+                    CJG->(DbCloseArea())
+
+                    cChave := MD5(AllTrim(cCena)+Alltrim(cProduto)+AllTrim(cOrigem))
+
+                    If len(oResult["cenario"]) == 0 .Or. cChaveMD5 == cChave
+                        lPaginacao := .F.
+                    Else
+                        cChaveMD5 := MD5(cIdCenario+cCodProd+cOriProd)
+                    EndIf
+                else
+                    lPaginacao := .F.
+                    cRet := STR0317 // "Erro ao buscar novas regras."
+
+                    if ( oResult:HasProperty('status') .and. Valtype(oResult['status']) == 'J' )
+                        if ( oResult['status']:HasProperty('msg_status') )
+                            cRet := STR0222 + ': Systax - ' + DecodeUTF8(oResult['status']['msg_status'], 'cp1252') // "Origem"
+                        endif
+                    endif
+
+                    lSuccess := .F.
+                EndIF
+            else
+                lPaginacao := .F.
+                cRet := STR0210 //"Erro no envio da requisição da regra: "
+                lSuccess := .F.
+            EndIF
+        Enddo
+    EndIf
+
+    FWFreeArray(aHeaderRegra)
+
+    FWFreeObj(oResult)
+    oResult := nil
+
+    If ( ValType(self:oStatementRegraAnterior) == 'O' )
+        self:oStatementRegraAnterior:Destroy()
+        self:oStatementRegraAnterior := nil
+    EndIf
+EndIf
+
+jRet := JsonObject():New()
+jRet['success'] := lSuccess
+jRet['message'] := cRet
+
+Return(jRet)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} montaConsulta
+Método montar o jSOn de consulta da Regra
+@author  Yuri Gimenes
+@since   04.05.2022
+@version 1.0
+@param   cIdCenario, character, ID do cenário
+@param   cCodProd, character, Código do produto
+@param   cOriProd, character, Origem do produto
+@param   cPontAtu, character, Ponteiro de atualização
+@return  character, Json que será enviado para a API da Systax em fotmato de string
+/*/
+//-------------------------------------------------------------------
+Method montaConsulta(cIdCenario,cCodProd,cOriProd,cPontAtu) Class FISRetornaRegra
+
+Local jSonCons  := JsonObject():New()
+Local cConsulta as character
+
+jSonCons["id_cenario"]          := cIdCenario
+jSonCons["codigo_produto"]      := cCodProd
+jSonCons["origem_produto"]      := cOriProd
+jSonCons["paginacao"]           := 100
+jSonCons["ponteiro_atualizacao"]:= cPontAtu
+
+cConsulta := jSonCons:ToJson()
+
+FreeObj(jSonCons)
+
+Return (cConsulta)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} gravaPont
+Método gravar os ponteiros de controle da consulta de regra
+@author  Yuri Gimenes
+@since   04.05.2022
+@version 1.0
+@param   nOperacao, numeric, Operação que está sendo executada Operaçao que está sendo executada (1-Primeira carga do cliente, 2-Primeira carga do dia, 3-Segunda ou mais cargas do dia, 4-Outros)
+@param   cPonteiro, character, Ponteiro de atualização
+/*/
+//-------------------------------------------------------------------
+Method gravaPont(nOperacao,cPonteiro) Class FISRetornaRegra
+
+Local dDataCon := Date()
+
+If self:lAutomato
+    dDataCon := dDataBase
+EndIf
+
+// 1 - Primeira execução do dia, Sem execução nos dias anteriores
+// 2 - Primeira execução do dia, com execução nos dias anteriores
+// 3 - Execução do processo, com outras execuções no dia
+
+DbSelectArea("CJI")
+CJI->(DbSetOrder(1))
+
+IF nOperacao == 1 .or. nOperacao == 2
+
+    RecLock("CJI", .T.)
+
+        CJI->CJI_FILIAL := XFILIAL("CJI")
+        CJI->CJI_PRIPON := cPonteiro
+        CJI->CJI_DTCONS := dDataCon
+        CJI->CJI_HRCONS := TIME()
+        CJI->CJI_ULTPON := cPonteiro        
+        
+    CJI->(MsUnlock())
+
+ELSEIF nOperacao == 3
+
+    IF CJI->(MsSeek(xFilial("CJI")+DTOS(dDataCon)))
+
+        RecLock("CJI", .F.)
+
+        CJI->CJI_ULTPON := cPonteiro
+        
+        CJI->(MsUnlock())
+    
+    ENDIF
+ENDIF
+
+CJI->(DbCloseArea())
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setUserName
+Método para passar o nome do usuário que irá utilizar a api.
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+@param   username, character, Nome do usuário
+/*/
+//-------------------------------------------------------------------
+Method setUserName(username) Class FISRetornaRegra
+
+    Self:username := username
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setSenha
+Método para passar a senha do usuário que irá utilizar a api.
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+@param   senha, character, Senha do usuário
+/*/
+//-------------------------------------------------------------------
+Method setSenha(senha) Class FISRetornaRegra
+
+    Self:senha := senha
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setUrl
+Método para passar a senha do usuário que irá utilizar a api.
+@author  Erich Buttner
+@since   16.03.2022
+@version 1.0
+@param   url, character, Url da api
+/*/
+//-------------------------------------------------------------------
+Method setUrl(url) Class FISRetornaRegra
+
+    Self:url := url
+
+Return
+
+/*/{Protheus.doc} definePonteiro
+Método para definição dos ponteiros (Primeiro do dia e último recebido da Systax).
+O último ponteiro recebido da Systax será enviado para consulta de regras.
+@author  Juliano Fernandes
+@since   05.02.2025
+@version 1.0
+/*/
+method definePonteiros() class FISRetornaRegra
+
+    local cQry as character
+    local cAlias as character
+    local oStatement as object
+    local dDtAtual := Date() as date
+
+    if ( self:lAutomato )
+        dDtAtual := dDataBase // Considera a data definida no caso de teste
+    endif
+
+    cQry += ' SELECT CJI_DTCONS, CJI_PRIPON, CJI_ULTPON '
+    cQry += ' FROM ' + RetSqlName('CJI')
+    cQry += ' WHERE CJI_FILIAL = ? '
+    cQry += '   AND CJI_DTCONS <= ? '
+    cQry += '   AND D_E_L_E_T_ = ? '
+    cQry += ' ORDER BY R_E_C_N_O_ DESC '
+
+    oStatement := FwExecStatement():New( ChangeQuery(cQry) )
+
+    oStatement:SetString(1, FWxFilial("CJI"))
+    oStatement:SetDate(2, dDtAtual)
+    oStatement:SetString(3, ' ')
+
+    cQry := oStatement:GetFixQuery()
+
+    cAlias := oStatement:OpenAlias(GetNextAlias())
+
+    self:lConsAnt := .F.
+    self:lConsDia := .F.
+
+    if ( !(cAlias)->(EoF()) )
+        self:lConsAnt := .T. // Houve consulta anterior
+        self:lConsDia := ( SToD((cAlias)->CJI_DTCONS) == dDtAtual ) // Houve consulta no dia
+
+        self:cPriPont := AllTrim((cAlias)->CJI_PRIPON)
+        self:cUltPont := AllTrim((cAlias)->CJI_ULTPON)
+    endif    
+
+    (cAlias)->(DbCloseArea())
+
+    FreeObj(oStatement)
+    oStatement := nil
+
+return
+
+/*/{Protheus.doc} buscaRegraAnterior
+Método responsável por buscar uma regra já gravada anteriormente
+@author Juliano Fernandes
+@since  20/02/2025
+@version 1.0
+@param  cIdCenario, character, ID do cenário
+@param  cProduto, character, Código do produto
+@param  cOrigem, character, Origem do produto
+@param  cDB, character, Tipo de banco de dados
+@return character, Json com os dados da regra anterior
+/*/
+method buscaRegraAnterior(cIdCenario as character, cProduto as character, cOrigem as character, cDB as character) as character class FISRetornaRegra
+
+    local cQry as character
+
+    if ( self:oStatementRegraAnterior == nil )
+        cQry += ' SELECT ? '
+        cQry += ' FROM ' + RetSqlName('CJB')
+        cQry += ' WHERE CJB_FILIAL = ? '
+        cQry += '   AND CJB_IDCENA = ? '
+        cQry += '   AND CJB_PRODUT = ? '
+        cQry += '   AND CJB_ORIGEM = ? '
+        cQry += '   AND CJB_STATUS IN ( ? ) '
+        cQry += '   AND D_E_L_E_T_ = ? '
+        cQry += ' ORDER BY R_E_C_N_O_ DESC '
+
+        self:oStatementRegraAnterior := FwExecStatement():New( ChangeQuery(cQry) )       
+    endif
+
+    self:oStatementRegraAnterior:SetUnsafe(1, self:converteCampoJsonParaQuery(cDB))
+    self:oStatementRegraAnterior:SetString(2, FWxFilial('CJB'))
+    self:oStatementRegraAnterior:SetString(3, cIdCenario)
+    self:oStatementRegraAnterior:SetString(4, cProduto)
+    self:oStatementRegraAnterior:SetString(5, cOrigem)
+    self:oStatementRegraAnterior:SetIn(6, {'AA', 'AP'}) // Pendente, aprovada
+    self:oStatementRegraAnterior:SetString(7, ' ')
+
+return self:oStatementRegraAnterior:ExecScalar('CJB_JSREGR')
+
+/*/{Protheus.doc} converteCampoJsonParaQuery
+Método responsável por converter o campo de regra de json para query de acordo com o banco de dados utilizado
+@author Juliano Fernandes
+@since  25/02/2025
+@version 1.0
+@param  cDB, character, Tipo de banco de dados
+@return character, Campo convertido para query
+/*/
+method converteCampoJsonParaQuery(cDB as character) as character class fisRetornaRegra
+    
+    local cCampo as character
+
+    cCampo := " ISNULL(CAST(CAST(CJB_JSREGR AS VARBINARY(8000)) AS VARCHAR(8000)),'') AS [CJB_JSREGR] "
+
+    if ( 'ORACLE' $ cDB )
+        cCampo := " UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(CJB_JSREGR, 4000,1)) CJB_JSREGR "
+    elseif ( 'POSTGRES' $ cDB )
+        cCampo := " encode(CJB_JSREGR,'escape') CJB_JSREGR "
+    endif
+
+return cCampo
+
+/*/{Protheus.doc} existeAtualizacaoDaRegra
+Método responsável por verificar se existe atualização de uma regra por meio do 
+campo estatística que é enviado pela Systax nos tributos do json de retorno
+@author Juliano Fernandes
+@since  20/02/2025
+@version 1.0
+@param  jRetornoSystax, json, Json retornado pela API da Systax
+@return logical, Indica se houve ou não atualização da regra
+/*/
+method existeAtualizacaoDaRegra(jRetornoSystax as json) as logical class FISRetornaRegra
+
+    local lAtualiza as logical
+    local aChaves := jRetornoSystax:GetNames() as array
+    local cChave as character
+    local i as integer
+
+    for i := 1 to Len(aChaves)
+        cChave := aChaves[i]
+
+        if ( ValType(jRetornoSystax[cChave]) == 'J' .and. ;
+             jRetornoSystax[cChave]:HasProperty('estatistica') .and. ;
+             !Empty(jRetornoSystax[cChave]['estatistica']) )
+
+            lAtualiza := .T.
+            exit
+        endif
+    next i
+
+    ASize(aChaves, 0)
+    aChaves := nil
+
+return lAtualiza
+
+/*/{Protheus.doc} gravaRegra
+Método responsável por gravar a regra no banco de dados
+@author Juliano Fernandes
+@since  20/02/2025
+@version 1.0
+@param  cIdCenario, character, ID do cenário
+@param  cProduto, character, Código do produto
+@param  cOrigem, character, Origem do produto
+@param  cJsonRegra, character, Json da regra
+@param  cPonteiro, character, Ponteiro de atualização
+@param  lAtualizacao, logical, Indica se é uma atualização de regra
+@param  cRelease, character, Release do Protheus
+/*/
+method gravaRegra(cIdCenario as character, cProduto as character, cOrigem as character, cJsonRegra as character, cPonteiro as character, lAtualizacao as logical, cRelease as character) class FISRetornaRegra
+
+    local cSeek as character
+
+    cSeek := FWxFilial('CJB') + cIdCenario + cProduto + cOrigem
+
+    if ( cRelease > '12.1.2310' )
+        cSeek += cPonteiro
+    endif
+
+    DbSelectArea('CJB')
+    CJB->(DbSetOrder(1)) // CJB_FILIAL+CJB_IDCENA+CJB_PRODUT+CJB_ORIGEM+CJB_PTSYS
+    if ( !CJB->(MsSeek( cSeek )) )
+        CJB->(RecLock('CJB', .T.))
+
+            CJB->CJB_FILIAL := FWxFilial('CJB')
+            CJB->CJB_IDCENA := cIdCenario
+            CJB->CJB_PRODUT := cProduto
+            CJB->CJB_ORIGEM := cOrigem
+            CJB->CJB_JSREGR := cJsonRegra
+            CJB->CJB_PTSYS  := cPonteiro
+            CJB->CJB_STATUS := 'AA' // Aguardando Aprovação
+
+            if ( lAtualizacao )
+                CJB->CJB_STSRET := '2' // Status Atualização
+                CJB->CJB_JSRGNW := cJsonRegra
+            endif
+
+        CJB->(MsUnlock())
+    endif
+
+return

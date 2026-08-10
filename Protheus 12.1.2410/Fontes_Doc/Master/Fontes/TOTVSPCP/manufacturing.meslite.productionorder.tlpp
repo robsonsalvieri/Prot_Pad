@@ -1,0 +1,892 @@
+#include "tlpp-core.th"
+#include "MANUFACTURING.MESLITE.PRODUCTIONORDER.CH"
+
+namespace totvs.protheus.manufacturing.meslite.productionorder
+
+#DEFINE STATUS_INTEGRA_OK       "1"
+#DEFINE STATUS_INTEGRA_PENDENTE "2"
+#DEFINE STATUS_INTEGRA_ERRO     "3"
+
+Static _lTemHWF            := Nil
+Static _lPEMesLiteAlteraOP := Nil
+Static _lHoraNormal        := Nil
+
+/*/{Protheus.doc} integraOrdem
+Executa a função de integração de OP com o MES Lite.
+
+@type  Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param 01 cOp         , Character, Numeração da ordem de produção
+@param 02 cPont       , Character, Ponteiro para acessar dados da OP (M-> ou SC2->)
+@param 03 lExclusao   , Logical  , Identifica se é uma exclusão de OP.
+@param 04 lPendAut    , Logical  , Identifica se gera pendência automaticamente.
+@param 05 cOperacao   , Character, texto da operação que está sendo executada (inclusão, alteração ou exclusão)
+@param 06 lForceDel   , Logical  , identifica que deve executar a exclusão, sem precisar fazer as validações se a OP permite integrar. Usado para TOTVS APS.
+@param 07 lSoPendencia, Logical  , identifica que deve só gerar a pendência, utilizado para a integração com o MRP.
+@param 08 lFiltra     , Logical  , identifica se deve aplicar o filtro na OP. Usado na sincronização.
+@param 09 cJson       , Character, JSON para envio. Utilziado para a rotina de sincronização. Quando recebido, apenas tenta reenviar a informação.
+@return aRet, Array, Indentifica se executou a integração com sucesso.
+                     [1] - se permite continuar a execução (integrado com sucesso ou gerou pendência)
+                     [2] - indica se houve erro de integração
+/*/
+Function integraOrdem(cOp as Character, cPont as Character, lExclusao as Logical, lPendAut as Logical, cOperacao as Character, lForceDel as Logical, lSoPendencia as Logical, lFiltra as Logical, cJson as Character)
+	Local aRetArq     := {}                        as Array
+	Local cCode       := ""                        as Character
+	Local cData       := DtoS(Date())              as Character
+	Local cEndPoint   := "/api/v1/exchange/order"  as Character
+	Local cError      := ""                        as Character
+	Local cGerouArq   := ""                        as Character
+	Local cHelp       := ""                        as Character
+	Local cHora       := Time()                    as Character
+	Local cProduto    := ""                        as Character
+	Local cRoteiro    := ""                        as Character
+	Local cNomeArq    := ""                        as Character
+	Local cRetAPI     := ""                        as Character
+	Local cRetorno    := ""                        as Character
+	Local cJsEnv      := ""                        as Character
+	Local cStatus     := ""                        as Character
+	Local lFalha      := .F.                       as Logical
+	Local lRet        := .T.                       as Logical
+	Local lErroDelete := .F.                       as Logical
+	Local lHouveErro  := .F.                       as Logical
+	Local oConMES     := Nil                       as Object
+	Local oDataEnv    := Nil                       as Json
+
+	Default lForceDel := .F.
+	Default lFiltra   := .T.
+
+	If lForceDel == .F.
+		cProduto := &(cPont + "->C2_PRODUTO")
+	EndIf
+
+	If lForceDel .Or. !lFiltra .Or. !Empty(cJson) .Or. permiteIntegrarOrdem(cOp, cPont, cProduto, @cRoteiro)
+
+		If lSoPendencia
+			lRet     := .T.
+			cStatus  := STATUS_INTEGRA_PENDENTE
+			cRetorno := STR0001 //"Pendente processamento MRP"
+			oDataEnv := montaDadosOP(cPont, cRoteiro)
+			cJsEnv   := PCPEncUtf8(oDataEnv:toJson())
+			FreeObj(oDataEnv)
+		Else
+			oConMES := MESLiteConnection():New()
+			
+			If lExclusao
+				lRet := oConMES:executaDelete(cEndPoint, { {"code", RTrim(cOp)} })
+			Else
+				If Empty(cJson)
+					oDataEnv := montaDadosOP(cPont, cRoteiro)
+				Else
+					oDataEnv := JsonObject():New()
+					oDataEnv:FromJson(cJson)
+				EndIf
+				lRet := oConMES:executaPost(cEndPoint, oDataEnv)
+
+				FreeObj(oDataEnv)
+			EndIf
+
+			If lRet
+				cStatus  := STATUS_INTEGRA_OK
+				cRetorno := "OK"
+			Else
+				oConMES:retornoAPI(@cCode, @cRetAPI, @cError, @lFalha)
+				cStatus  := Iif(lFalha, STATUS_INTEGRA_PENDENTE, STATUS_INTEGRA_ERRO)
+				cRetorno := Iif(Empty(cError), cRetAPI, cError)
+			EndIf
+
+			cJsEnv := oConMES:getJsonEnviado()
+
+			oConMES:Destroy()
+			FreeObj(oConMES)
+		EndIf
+
+		//Se for rotina/pendência automática, não mostra mensagem e gera a pendência
+		lRet := lRet .Or. lPendAut .Or. (Type('l650Auto') == "L" .And. l650Auto)
+		//Se for exclusão de OP e retornou erro de não encontrar a OP, não mostra mensagem e gera pendência.
+		lErroDelete := lExclusao .And. cStatus == STATUS_INTEGRA_ERRO .And. cCode == "404"
+		lRet        := lRet .Or. lErroDelete
+		If !lRet
+			cHelp := I18N(STR0002, {cRetorno}) //"Atenção! Ocorreram erros na integração com o TOTVS MES. Erro: #1[erro]#."
+			cHelp += CHR(10) //pular linha
+			cHelp += I18N(STR0003, {cOperacao}) //"Deseja #1[operacao]# a ordem de produção no protheus e gerar pendência para integração?"
+			
+			lRet := MsgYesNo(cHelp, STR0004) //"Erro de integração"
+		EndIf
+
+		If lRet
+			aRetArq := PCPXmLPPI(cStatus, "SC2", cOp, cData, cHora, cJsEnv, .T.)
+			If aRetArq[1]
+				cNomeArq := aRetArq[2]
+			
+			ElseIf !Empty(aRetArq[2])
+				cHelp := STR0005 + CHR(10) + aRetArq[2] //"Erro ao salvar a mensagem de integração do TOTVS MES."
+				Help( ,, 'Help',, cHelp , 1, 0 )
+			EndIf
+
+			If !Empty(cNomeArq)
+				cGerouArq := "1"
+			EndIf
+
+			PCPCriaSOF("SC2", cOp, cStatus, cGerouArq, cNomeArq, cData, cHora, __cUserId, cRetorno, cJsEnv, .T.)
+
+			lHouveErro := !lErroDelete .And. cStatus <> STATUS_INTEGRA_OK
+
+			If lRet .And. lHouveErro .And. Type('aIntegPPI') == "A"
+				//Array com as ops intermediárias que tiveram erro.
+				aAdd(aIntegPPI, {cOp, cRetorno})
+			EndIf
+		EndIf
+
+		aSize(aRetArq, 0)
+
+	EndIf
+
+Return {lRet, lHouveErro}
+
+/*/{Protheus.doc} permiteIntegrarOrdem
+Verifica se a ordem de produção atende aos requisitos para integrar com o MES Lite.
+
+@type  Static Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param 01 cOrdem  , Character, Numeração da OP
+@param 02 cPont   , Character, Ponteiro para acesso aos dados da SC2 (M-> ou SC2->)
+@param 03 cProduto, Character, Produto da ordem de produção
+@param 04 cRoteiro, Character, Retorna por referência o código do roteiro que foi considerado para a OP
+@return lTemOperac, Logical, Retorna se possui operações
+/*/
+Function permiteIntegrarOrdem(cOrdem as Character, cPont as Character, cProduto as Character, cRoteiro as Character)
+	Local lPermite := .F. as Logical
+
+	/*
+		Filtro de ordens:
+		Somente envia OPS Firmes, que estejam abertas
+		Somente OPs com operações
+		Somente OPs que atendam aos filtros definidos no PCPA109
+	*/
+	lPermite := &(cPont + "->C2_TPOP") == "F" .And. Empty( &(cPont + "->C2_DATRF"))
+	lPermite := lPermite .And. OPComOper(cPont, @cRoteiro)
+	lPermite := lPermite .And. filtraProdutoNaOrdem(cProduto) .And. PCPFiltPPI("SC2", cOrdem, cPont)
+Return lPermite
+
+/*/{Protheus.doc} OPComOper
+Verifica se a ordem de produção possui roteiro informado
+
+@type  Static Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param 01 cPont   , Character, Ponteiro para acesso aos dados da SC2 (M-> ou SC2->)
+@param 02 cRoteiro, Character, Retorna por referência o código do roteiro que foi considerado.
+@return lTemOperac, Logical, Retorna se possui operações
+/*/
+Static Function OPComOper(cPont as Character, cRoteiro as Character)
+	Local aArea      := {}                      as Array
+	Local cAlias     := ""                      as Character
+	Local cFiltroG2  := ""                      as Character
+	Local cProduto   := &(cPont+"->C2_PRODUTO") as Character
+	Local dDatIni                               as Date
+	Local lTemOperac := .F.                     as Logical
+	
+	cRoteiro := &(cPont+"->C2_ROTEIRO")
+
+	If Empty(cRoteiro)
+		//Verifica se o produto possui roteiro padrão.
+		aArea := SB1->(GetArea())
+		SB1->(dbSetOrder(1))
+		If SB1->(dbSeek(xFilial("SB1") + cProduto))
+			cRoteiro := SB1->B1_OPERPAD
+		EndIf
+		SB1->(RestArea(aArea))
+		aSize(aArea, 0)
+	EndIf
+	
+	If Empty(cRoteiro)
+		//Verifica se existe o roteiro 01 na SG2
+		aArea := SG2->(GetArea())
+		SG2->(dbSetOrder(1))
+		If SG2->(dbSeek(xFilial("SG2") + cProduto + "01"))
+			cRoteiro := SG2->G2_CODIGO
+		EndIf
+
+		SG2->(RestArea(aArea))
+		aSize(aArea, 0)
+	EndIf
+
+	lTemOperac := !Empty(cRoteiro)	
+
+	//Se encontrou roteiro, verifica se são aplicados filtros
+	//nas operações. Se aplicar, verifica se ao menos uma operação
+	//do roteiro será integrada.
+	If lTemOperac .And. aplicaFiltroRoteiroNaOP(@cFiltroG2) .And. !Empty(cFiltroG2)
+		
+		cAlias    := GetNextAlias()
+		cFiltroG2 := "%" + cFiltroG2 + "%"
+		dDatIni   := &(cPont+"->C2_DATPRI")
+
+		BeginSql Alias cAlias
+			SELECT COUNT(*) TOTAL
+			  FROM %Table:SG2%
+			 WHERE G2_FILIAL  = %xFilial:SG2%
+			   AND G2_PRODUTO = %Exp:cProduto%
+			   AND G2_CODIGO  = %Exp:cRoteiro%
+			   AND (G2_DTINI  = ' ' OR G2_DTINI < %Exp:dDatIni% )
+			   AND (G2_DTFIM  = ' ' OR G2_DTFIM > %Exp:dDatIni% )
+			   AND %Exp:cFiltroG2%
+			   AND %NotDel%
+		EndSql
+
+		lTemOperac := (cAlias)->TOTAL > 0
+		(cAlias)->(dbCloseArea())
+
+	EndIf
+
+Return lTemOperac
+
+/*/{Protheus.doc} montaDadosOP
+Monta o JSON com os dados da OP para enviar ao MES.
+Para uso, a tabela SC2 deve estar posicionada na OP correta.
+
+@type  Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param 01 cPont   , Character, Ponteiro para acessar os dados da SC2. (M-> ou SC2->)
+@param 02 cRoteiro, Character, Código do roteiro utilizado na OP
+@return oData, JsonObject, Json com os dados da OP
+/*/
+Function montaDadosOP(cPont as Character, cRoteiro as Character)
+	Local cNumOP   as Character
+	Local cProduto as Character
+	Local oData    as Json
+
+	cNumOP   := &(cPont + "->(C2_NUM+C2_ITEM+C2_SEQUEN+C2_ITEMGRD)") 
+	cProduto := &(cPont + "->C2_PRODUTO")
+	oData    := JsonObject():New()
+
+	oData["code"       ] := RTrim(cNumOP)
+	oData["productCode"] := RTrim(cProduto)
+	oData["unit"       ] := RTrim(&(cPont + "->C2_UM"))
+	oData["quantity"   ] := &(cPont + "->C2_QUANT")
+	oData["startDate"  ] := FWTimeStamp(6, &(cPont + "->C2_DATPRI"), "00:00:00")
+	oData["endDate"    ] := FWTimeStamp(6, &(cPont + "->C2_DATPRF"), "23:59:59")
+	oData["status"     ] := ""
+	oData["operations" ] := carregaOperacoes(cNumOP, cProduto, cRoteiro, @oData["startDate"], @oData["endDate"], oData["quantity"])
+
+	If _lPEMesLiteAlteraOP == Nil
+		_lPEMesLiteAlteraOP := ExistBlock("MLiteAOP")
+	EndIf
+	
+	If _lPEMesLiteAlteraOP
+		oData := Execblock("MLiteAOP", .T., .T., oData)
+	EndIf
+Return oData
+
+/*/{Protheus.doc} carregaOperacoes
+Busca as operações da OP para enviar ao MES LITE.
+
+@type  Static Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param 01 cNumOP    , Character, Numeração da OP para busca das operações
+@param 02 cProduto  , Character, Código do produto da OP
+@param 03 cRoteiro  , Character, Código do roteiro
+@param 04 cIniOP    , Character, Data de início da OP (no formato do FwTimeStamp). Retorna por referência o início da 1° operação.
+@param 05 cEntregaOP, Character, Data de entrega da OP (no formato do FwTimeStamp). Retorna por referência o término da última operação.
+@param 06 nQuantOP  , Numeric  , Quantidade da OP
+@return aOperacoes, Array, Array com as operações da OP.
+/*/
+Static Function carregaOperacoes(cNumOP as Character, cProduto as Character, cRoteiro as Character, cIniOP as Character, cEntregaOP as Character, nQuantOP as Numeric)
+	Local aOperacoes := {}  as Array
+	Local cFiltro    := ""  as Character
+	Local lCarregou  := .F. as Logical
+
+	aplicaFiltroRoteiroNaOP(@cFiltro)
+
+	//Primeiro tento buscar as operações na HWF
+	If possuiHWF()
+		HWF->(dbSetOrder(1))
+		If HWF->(dbSeek(xFilial("HWF") + cNumOP))
+			//Carrega o início e entrega da OP conforme hora das operações.
+			carregaInicioEFimHWF(@cIniOP, @cEntregaOP)
+
+			aOperacoes := buscaOperacaoHWF(cNumOP, cProduto, cFiltro, nQuantOP)
+			lCarregou  := .T.
+		EndIf
+	EndIf
+
+	//Se não existir na HWF, busco na SHY/SG2.
+	If !lCarregou
+		aOperacoes := buscaOperacoesOrdem(cNumOP, cProduto, cRoteiro, @cIniOP, @cEntregaOP, cFiltro, nQuantOP)
+		lCarregou  := .T.
+	EndIf
+
+Return aOperacoes
+
+/*/{Protheus.doc} buscaOperacaoHWF
+Busca as operações da OP na tabela HWF para enviar ao MES LITE.
+
+@type  Static Function
+@author lucas.franca
+@since 22/10/2024
+@version P12
+@param 01 cNumOP    , Character, Numeração da OP para busca das operações
+@param 02 cProduto  , Character, Código do produto da OP
+@param 03 cFiltroG2 , Character, Filtro da tabela SG2 para aplicar.
+@param 04 nQuantOP  , Numeric  , Quantidade da OP.
+@return aOperacoes, Array, Array com as operações da OP.
+/*/
+Static Function buscaOperacaoHWF(cNumOP as Character, cProduto as Character, cFiltroG2 as Character, nQuantOP as Numeric)
+	Local aOperacoes := {}             as Array
+	Local cAlias     := GetNextAlias() as Character
+	Local cQuery     := ""             as Character
+	Local cOperAnt   := ""             as Character
+	Local cHoraFim   := ""             as Character
+	Local dDataFim                     as Date
+	Local nSequence  := 0              as Integer
+	Local nTempo     := 0              as Numeric
+	Local oOper                        as Json
+
+	cQuery := " SELECT HWF.HWF_OPER,"
+	cQuery +=        " SG2.G2_DESCRI,"
+	cQuery +=        " SG2.G2_TEMPAD,"
+	cQuery +=        " SG2.G2_LOTEPAD,"
+	cQuery +=        " SG2.G2_TPOPER,"
+	cQuery +=        " SG2.G2_MAOOBRA,"
+	cQuery +=        " SH1.H1_MAOOBRA,"
+	cQuery +=        " HWF.HWF_RECURS,"
+	cQuery +=        " HWF.HWF_CTRAB,"
+	cQuery +=        " HWF.HWF_DATA,"
+	cQuery +=        " HWF.HWF_HRINI,"
+	cQuery +=        " HWF.HWF_HRFIM,"
+	cQuery +=        " HWF.HWF_TEMPOT,"
+	cQuery +=        " HWF.HWF_TIPO,"
+	cQuery +=        " SMF.MF_TEMPO,"
+	cQuery +=        " SMF.MF_SALDO"
+	cQuery +=   " FROM " + RetSqlName("HWF") + " HWF"
+	cQuery +=  " INNER JOIN " + RetSqlName("SG2") + " SG2 "
+	cQuery +=     " ON SG2.G2_FILIAL  = '" + xFilial("SG2") + "' "
+	cQuery +=    " AND SG2.G2_PRODUTO = '" + cProduto + "' "
+	cQuery +=    " AND SG2.G2_CODIGO  = HWF.HWF_ROTEIR"
+	cQuery +=    " AND SG2.G2_OPERAC  = HWF.HWF_OPER"
+	cQuery +=    " AND SG2.D_E_L_E_T_ = ' '"
+	
+	If !Empty(cFiltroG2)
+		cFiltroG2 := StrTran(cFiltroG2, "G2_", "SG2.G2_")
+		cQuery +=  " AND (" + cFiltroG2 + ")"
+	EndIf
+
+	cQuery +=  " INNER JOIN " + RetSqlName("SH1") + " SH1"
+	cQuery +=     " ON SH1.H1_FILIAL  = '" + xFilial("SH1") + "'"
+	cQuery +=    " AND SH1.H1_CODIGO  = SG2.G2_RECURSO"
+	cQuery +=    " AND SH1.D_E_L_E_T_ = ' '"
+	cQuery +=   " LEFT JOIN " + RetSqlName("SMF") + " SMF"
+	cQuery +=     " ON SMF.MF_FILIAL  = '" + xFilial("SMF") + "'"
+	cQuery +=    " AND SMF.MF_PROG    = HWF.HWF_PROG"
+	cQuery +=    " AND SMF.MF_OP      = HWF.HWF_OP"
+	cQuery +=    " AND SMF.MF_OPER    = HWF.HWF_OPER"
+	cQuery +=    " AND SMF.D_E_L_E_T_ = ' '"
+	cQuery +=  " WHERE HWF.HWF_FILIAL = '" + xFilial("SHY") + "'"
+	cQuery +=    " AND HWF.HWF_OP     = '" + cNumOP + "'"
+	cQuery +=    " AND HWF.D_E_L_E_T_ = ' '"
+	cQuery +=  " ORDER BY HWF_OPER, HWF_SEQ"
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,,cQuery), cAlias, .T., .T.)
+	TcSetField(cAlias, "HWF_DATA", "D", 8, 0)
+
+	While (cAlias)->(!Eof())
+		
+		If cOperAnt != (cAlias)->(HWF_OPER)
+			nSequence++
+			cOperAnt := (cAlias)->(HWF_OPER)
+			oOper    := JsonObject():New()
+
+			oOper["sequence"                   ] := nSequence
+			oOper["code"                       ] := RTrim((cAlias)->HWF_OPER)
+			oOper["name"                       ] := descricaoOperacao((cAlias)->G2_DESCRI, oOper["code"])
+			oOper["workCenterCode"             ] := RTrim((cAlias)->HWF_CTRAB)
+			oOper["resourceCode"               ] := RTrim((cAlias)->HWF_RECURS)
+			oOper["convertFactor"              ] := 1 //Enviado fixo com valor 1.
+			oOper["setupDurationInMinutes"     ] := 0
+			oOper["startDate"                  ] := FWTimeStamp(6, (cAlias)->HWF_DATA, (cAlias)->HWF_HRINI + ":00")
+			
+			If !Empty((cAlias)->MF_SALDO) .And. !Empty((cAlias)->MF_TEMPO)
+				//Se ainda existe dados na SMF, usa o tempo e saldo usados no processo do CRP para identificar o tempo por unidade.
+				nTempo := __Min2Hrs((cAlias)->MF_TEMPO, .F.)
+				nTempo := PCPA152TempoOperacao():horasNormaisParaCentesimais(nTempo)
+				oOper["productionDurationInMinutes"] := buscaMinutosPorUnidade(nTempo, (cAlias)->MF_SALDO)
+			Else
+				//Não existe mais a SMF, calcula novamente conforme o roteiro do produto.
+				oOper["productionDurationInMinutes"] := buscaTempoPorUnidadeDaOperacao(cAlias, nQuantOP)
+			EndIf
+		EndIf
+
+		dDataFim := (cAlias)->HWF_DATA
+		cHoraFim := (cAlias)->HWF_HRFIM
+
+		If (cAlias)->HWF_TIPO == 1
+			oOper["setupDurationInMinutes"] += (cAlias)->HWF_TEMPOT
+		EndIf
+
+		(cAlias)->(dbSkip())
+
+		If (cAlias)->(Eof()) .Or. cOperAnt != (cAlias)->(HWF_OPER)
+			oOper["endDate"] := FWTimeStamp(6, dDataFim, cHoraFim + ":00")
+			aAdd(aOperacoes, oOper)
+			oOper := Nil
+		EndIf
+	End
+	(cAlias)->(dbCloseArea())
+
+Return aOperacoes
+
+/*/{Protheus.doc} buscaTempoPorUnidadeDaOperacao
+Calcula o tempo por unidade da operação, considerando as informações do roteiro padrão.
+O alias recebido deve possuir os seguintes campos:
+G2_MAOOBRA, H1_MAOOBRA, G2_LOTEPAD, G2_TEMPAD, G2_TPOPER
+
+@type  Static Function
+@author lucas.franca
+@since 06/11/2024
+@version P12
+@param 01 cAlias  , Character, Alias da query com os dados para fazer o calculo do tempo
+@param 02 nQuantOP, Numeric  , Quantidade da ordem de produção
+@return nTempo, Numeric, Tempo por unidade para a operação
+/*/
+Static Function buscaTempoPorUnidadeDaOperacao(cAlias as Character, nQuantOP as Numeric)
+	Local nMaoObra as Numeric
+	Local nTempo   as Numeric
+
+	nMaoObra := (cAlias)->G2_MAOOBRA
+	If Empty(nMaoObra)
+		nMaoObra := (cAlias)->H1_MAOOBRA
+	EndIf
+	
+	//tempo para produção de 1 unidade.
+	//primeiro verifica qual será o tempo da operação, e depois busca o tempo por unidade.
+	nTempo := calculaTempoOperacao((cAlias)->G2_LOTEPAD, (cAlias)->G2_TEMPAD, (cAlias)->G2_TPOPER, nMaoObra, nQuantOP)
+	nTempo := buscaMinutosPorUnidade(nTempo, nQuantOP)
+
+Return nTempo
+
+/*/{Protheus.doc} buscaOperacoesOrdem
+Busca as operações da OP na tabela SG2 ou SHY para enviar ao MES LITE.
+
+@type  Static Function
+@author lucas.franca
+@since 22/10/2024
+@version P12
+@param 01 cNumOP    , Character, Numeração da OP para busca das operações
+@param 02 cProduto  , Character, Código do produto da OP
+@param 03 cRoteiro  , Character, Código do roteiro
+@param 03 cIniOP    , Character, Data de início da OP (no formato do FwTimeStamp)
+@param 04 cEntregaOP, Character, Data de entrega da OP (no formato do FwTimeStamp)
+@param 05 cFiltroG2 , Character, Filtro da tabela SG2 para aplicar.
+@param 06 nQuantOP  , Numeric  , Quantidade da ordem de produção
+@return aOperacoes, Array, Array com as operações da OP.
+/*/
+Static Function buscaOperacoesOrdem(cNumOP as Character, cProduto as Character, cRoteiro as Character,;
+                                    cIniOP as Character, cEntregaOP as Character, cFiltroG2 as Character, nQuantOP as Numeric)
+	Local aOperacoes := {}             as Array
+	Local cAlias     := GetNextAlias() as Character
+	Local cQuery     := ""             as Character
+	Local cHora      := ""             as Character
+	Local lOperSHY   := .F.            as Logical
+	Local nSequence  := 0              as Integer
+	Local oOper                        as Json
+
+	cQuery := " SELECT COALESCE(SHY.HY_OPERAC , SG2.G2_OPERAC ) G2_OPERAC,"
+	cQuery +=        " COALESCE(SHY.HY_DESCRI , SG2.G2_DESCRI ) G2_DESCRI,"
+	cQuery +=        " COALESCE(SHY.HY_RECURSO, SG2.G2_RECURSO) G2_RECURSO,"
+	cQuery +=        " COALESCE(SHY.HY_CTRAB  , SG2.G2_CTRAB  ) G2_CTRAB,"
+	cQuery +=        " COALESCE(SHY.HY_DATAINI, ' ') DATAINI,"
+	cQuery +=        " COALESCE(SHY.HY_DATAFIM, ' ') DATAFIM,"
+	cQuery +=        " COALESCE(SHY.HY_HORAINI, ' ') HORAINI,"
+	cQuery +=        " COALESCE(SHY.HY_HORAFIM, ' ') HORAFIM,"
+	cQuery +=        " COALESCE(SHY.HY_TEMPOS , SG2.G2_SETUP) SETUP,"
+	cQuery +=        " SHY.HY_TEMPOM,"
+	cQuery +=        " SHY.HY_QUANT,"
+	cQuery +=        " SG2.G2_TEMPAD,"
+	cQuery +=        " SG2.G2_LOTEPAD,"
+	cQuery +=        " SG2.G2_TPOPER,"
+	cQuery +=        " SG2.G2_MAOOBRA,"
+	cQuery +=        " SHY.HY_OP,"
+	cQuery +=        " SH1.H1_CTRAB,"
+	cQuery +=        " SH1.H1_MAOOBRA"
+	cQuery +=   " FROM " + RetSqlName("SG2") + " SG2"
+	cQuery +=  " INNER JOIN " + RetSqlName("SH1") + " SH1"
+	cQuery +=     " ON SH1.H1_FILIAL  = '" + xFilial("SH1") + "'"
+	cQuery +=    " AND SH1.H1_CODIGO  = SG2.G2_RECURSO"
+	cQuery +=    " AND SH1.D_E_L_E_T_ = ' '"
+	cQuery +=   " LEFT JOIN " + RetSqlName("SHY") + " SHY"
+	cQuery +=     " ON SHY.HY_FILIAL  = '" + xFilial("SHY") + "'"
+	cQuery +=    " AND SHY.HY_OP      = '" + cNumOP + "'"
+	cQuery +=    " AND SHY.HY_ROTEIRO = SG2.G2_CODIGO"
+	cQuery +=    " AND SHY.HY_OPERAC  = SG2.G2_OPERAC"
+	cQuery +=    " AND SHY.D_E_L_E_T_ = ' '"
+	cQuery +=  " WHERE SG2.G2_FILIAL  = '" + xFilial("SG2") + "' "
+	cQuery +=    " AND SG2.G2_PRODUTO = '" + cProduto + "' "
+	cQuery +=    " AND SG2.G2_CODIGO  = '" + cRoteiro + "' "
+	If !Empty(cFiltroG2)
+		cFiltroG2 := StrTran(cFiltroG2, "G2_", "SG2.G2_")
+		cQuery +=  " AND (" + cFiltroG2 + ")"
+	EndIf
+	cQuery +=    " AND SG2.D_E_L_E_T_ = ' '"
+	cQuery +=  " ORDER BY G2_OPERAC"
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,,cQuery), cAlias, .T., .T.)
+
+	lOperSHY := !Empty((cAlias)->HY_OP)
+	
+	If lOperSHY
+		//Se existe a SHY carrega o início e entrega da OP conforme hora das operações.
+		carregaInicioEFimSHY(cNumOP, @cIniOP, @cEntregaOP)
+	EndIf
+
+	While (cAlias)->(!Eof())
+		
+		nSequence++
+		oOper := JsonObject():New()
+
+		oOper["sequence"                   ] := nSequence
+		oOper["code"                       ] := RTrim((cAlias)->G2_OPERAC)
+		oOper["name"                       ] := descricaoOperacao((cAlias)->G2_DESCRI, oOper["code"])
+		oOper["workCenterCode"             ] := RTrim((cAlias)->G2_CTRAB)
+		oOper["resourceCode"               ] := RTrim((cAlias)->G2_RECURSO)
+		oOper["convertFactor"              ] := 1 //Enviado fixo com valor 1.
+		oOper["startDate"                  ] := cIniOP
+		oOper["endDate"                    ] := cEntregaOP
+		oOper["setupDurationInMinutes"     ] := (cAlias)->SETUP
+		oOper["productionDurationInMinutes"] := buscaTempoPorUnidadeDaOperacao(cAlias, nQuantOP)
+
+		If lOperSHY
+			//Converte o tempo de setup para minutos. Na SHY estará sempre com tempo Centesimal.
+			If !Empty(oOper["setupDurationInMinutes"])
+				oOper["setupDurationInMinutes"] := PCPA152TempoOperacao():horasCentesimaisParaNormais(oOper["setupDurationInMinutes"], .T.)
+				oOper["setupDurationInMinutes"] := __Hrs2Min(oOper["setupDurationInMinutes"])
+			EndIf
+			
+			If !Empty((cAlias)->DATAINI)
+				cHora := "00:00:00"
+				If !Empty((cAlias)->HORAINI)
+					cHora := (cAlias)->HORAINI
+				EndIf
+				oOper["startDate"] := FwTimeStamp(6, PCPConvDat((cAlias)->DATAINI, 1), cHora)
+			EndIf
+
+			If !Empty((cAlias)->DATAFIM)
+				cHora := "23:59:59"
+				If !Empty((cAlias)->HORAFIM)
+					cHora := (cAlias)->HORAFIM
+				EndIf
+				oOper["endDate"] := FwTimeStamp(6, PCPConvDat((cAlias)->DATAFIM, 1), cHora)
+			EndIf
+		Else
+			//Converte o tempo de setup para minutos. Na SG2 precisa tratar o parâmetro MV_TPHR.
+			If !Empty(oOper["setupDurationInMinutes"])
+				If !usaHoraNormal()
+					oOper["setupDurationInMinutes"] := PCPA152TempoOperacao():horasCentesimaisParaNormais(oOper["setupDurationInMinutes"], .T.)
+				EndIf
+				oOper["setupDurationInMinutes"] := __Hrs2Min(oOper["setupDurationInMinutes"])
+			EndIf
+		EndIf
+
+		//Se possuir centro de trabalho na SH1 e não na operação, usa o CT da SH1.
+		If Empty(oOper["workCenterCode"]) .And. !Empty((cAlias)->H1_CTRAB)
+			oOper["workCenterCode"] := RTrim((cAlias)->H1_CTRAB)
+		EndIf
+
+		aAdd(aOperacoes, oOper)
+		oOper := Nil
+
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(dbCloseArea())
+
+Return aOperacoes
+
+/*/{Protheus.doc} calculaTempoOperacao
+Calcula o tempo total de execução da operação considerando a quantidade da OP e parâmetros da operação.
+
+@type  Static Function
+@author lucas.franca
+@since 02/11/2024
+@version P12
+@param 01 nLotePadrao , Numeric  , Lote padrão da operação
+@param 02 nTempoPadrao, Numeric  , Tempo padrão da operação
+@param 03 cTipoOper   , Character, Tipo da operação (normal, tempo fixo, ilimitada, tempo mínimo)
+@param 04 nMaoObra    , Numeric  , Quantidade de mão de obra
+@param 05 nQuantOP    , Numeric  , Quantidade da ordem de produção
+@return nTempoOperacao, Numeric  , Tempo de execução da operação, em formato centesimal.
+/*/
+Static Function calculaTempoOperacao(nLotePadrao as Numeric, nTempoPadrao as Numeric, cTipoOper as Character, nMaoObra as Numeric, nQuantOP as Numeric)
+	Local nTempoOperacao := 0 as Numeric
+
+	If Empty(nLotePadrao)
+		nLotePadrao := 1
+	EndIf
+
+	If usaHoraNormal()
+		nTempoPadrao := PCPA152TempoOperacao():horasCentesimaisParaNormais(nTempoPadrao, .F.)
+	EndIf
+
+	If cTipoOper == "4" //operação por tempo mínimo
+		nTempoOperacao := Ceiling((nQuantOP / nLotePadrao)) * nTempoPadrao
+
+	ElseIf cTipoOper $ "23" //tempo fixo ou ilimitado
+		nTempoOperacao := nTempoPadrao
+
+	Else //tempo padrão
+		nTempoOperacao := nQuantOP * (nTempoPadrao / nLotePadrao)
+
+	EndIf
+
+	//aplica mão de obra no tempo da operação quando operação não é tempo fixo ou ilimitada
+	If !Empty(nMaoObra) .And. (cTipoOper $ "23") == .F.
+		nTempoOperacao := nTempoOperacao / nMaoObra
+	EndIf
+
+Return nTempoOperacao
+
+/*/{Protheus.doc} usaHoraNormal
+Verifica se utiliza hora normal ou centesimal (MV_TPHR)
+
+@type  Static Function
+@author lucas.franca
+@since 02/11/2024
+@version P12
+@return _lHoraNormal, Logic, Identifica se usa hora normal ou centesimal
+/*/
+Static Function usaHoraNormal()
+
+	If _lHoraNormal == Nil
+		_lHoraNormal := SuperGetMv("MV_TPHR", .F., "C") == "N"
+	EndIf
+
+Return _lHoraNormal
+
+/*/{Protheus.doc} buscaMinutosPorUnidade
+Calcula quantos minutos são necessários para produção de uma unidade
+conforme tempo total da operação e quantidade da OP
+
+@type  Static Function
+@author lucas.franca
+@since 02/11/2024
+@version P12
+@param 01 nTempoTotal, Numeric, Tempo total de produção no formato Centesimal
+@param 02 nQtdTotal  , Numeric, Quantidade total da produção
+@return nTempoMinutos, Numeric, Quantidade de minutos para produzir uma unidade
+/*/
+Static Function buscaMinutosPorUnidade(nTempoTotal as Numeric, nQtdTotal as Numeric)
+	Local nTempoMinutos := 0 As Numeric
+
+	//Usa o tempo de produção da OP dividido pela quantidade da OP
+	nTempoMinutos := nTempoTotal / nQtdTotal
+
+	//Converte o tempo que vai estar em centesimal para hora normal
+	nTempoMinutos := PCPA152TempoOperacao():horasCentesimaisParaNormais(nTempoMinutos, .F.)
+	
+	//converte as horas normais para minutos
+	nTempoMinutos := __Hrs2Min(nTempoMinutos)
+Return nTempoMinutos
+
+/*/{Protheus.doc} carregaInicioEFimHWF
+Carrega as datas de início e entrega para a OP
+considerando as datas planejadas das operações na tabela HWF
+HWF já deve ter sido posicionada para a OP, utilizando o índice 1 da tabela.
+
+@type  Static Function
+@author lucas.franca
+@since 26/10/2024
+@version P12
+@param 01 cIniOP    , Character, Início da OP, retorna por referência
+@param 02 cEntregaOP, Character, Entrega da op, retorna por referência
+@return Nil
+/*/
+Static Function carregaInicioEFimHWF(cIniOP as Character, cEntregaOP as Character)
+	Local cAlias := GetNextAlias()
+	Local cNumOP := HWF->HWF_OP
+
+	//Início, já está posicionado na primeira operação e sequência da OP.
+	cIniOP := FWTimeStamp(6, HWF->HWF_DATA, HWF->HWF_HRINI + ":00")
+
+	//Entrega, busca o último registro dessa OP.
+	BeginSql Alias cAlias
+		%noparser%
+		COLUMN HWF_DATA AS DATE
+		SELECT HWF.HWF_DATA, HWF.HWF_HRFIM
+		  FROM %Table:HWF% HWF
+		 WHERE HWF.HWF_FILIAL = %xFilial:HWF%
+		   AND HWF.HWF_OP     = %Exp:cNumOP%
+		   AND HWF.%NotDel%
+		 ORDER BY HWF.HWF_OPER DESC, HWF.HWF_DATA DESC, HWF.HWF_SEQ DESC 
+	EndSql
+	If (cAlias)->(!Eof())
+		cEntregaOP := FWTimeStamp(6, (cAlias)->HWF_DATA, (cAlias)->HWF_HRFIM + ":00")
+	EndIf
+	(cAlias)->(dbCloseArea())
+Return Nil
+
+/*/{Protheus.doc} carregaInicioEFimSHY
+Carrega as datas de início e entrega para a OP
+considerando as datas planejadas das operações na tabela SHY
+
+@type  Static Function
+@author lucas.franca
+@since 26/10/2024
+@version P12
+@param 01 cNumOP    , Character, Numeração da OP
+@param 02 cIniOP    , Character, Início da OP, retorna por referência
+@param 03 cEntregaOP, Character, Entrega da op, retorna por referência
+@return Nil
+/*/
+Static Function carregaInicioEFimSHY(cNumOP as Character, cIniOP as Character, cEntregaOP as Character)
+	Local cAlias := GetNextAlias()
+
+	SHY->(dbSetOrder(1))
+	If SHY->(dbSeek(xFilial("SHY") + cNumOP)) .And. !Empty(SHY->HY_DATAINI) .And. !Empty(SHY->HY_HORAINI)
+		//Pelo índice já vai posicionar na primeira operação.
+		cIniOP := FWTimeStamp(6, PCPConvDat(SHY->HY_DATAINI, 1), SHY->HY_HORAINI)
+	EndIf
+
+	//busca a entrega da ultima operação
+	BeginSql Alias cAlias
+		%noparser%
+		SELECT SHY.HY_DATAFIM, SHY.HY_HORAFIM
+		  FROM %Table:SHY% SHY 
+		 WHERE SHY.HY_FILIAL = %xFilial:SHY%
+		   AND SHY.HY_OP     = %Exp:cNumOP%
+		   AND SHY.%NotDel%
+		 ORDER BY SHY.HY_OPERAC DESC
+	EndSql
+	If (cAlias)->(!Eof()) .And. !Empty((cAlias)->HY_DATAFIM) .And. !Empty((cAlias)->HY_HORAFIM)
+		cEntregaOP := FWTimeStamp(6, PCPConvDat(SHY->HY_DATAFIM, 1), SHY->HY_HORAFIM)
+	EndIf
+	(cAlias)->(dbCloseArea())
+Return
+
+/*/{Protheus.doc} possuiHWF
+Verifica se a tabela HWF existe no ambiente.
+
+@type  Static Function
+@author lucas.franca
+@since 22/10/2024
+@version P12
+@return _lTemHWF, Logical, indica se a tabela HWF existe na base
+/*/
+Static Function possuiHWF()
+	If _lTemHWF == Nil
+		_lTemHWF := AliasInDic("HWF")
+	EndIf
+Return _lTemHWF
+
+/*/{Protheus.doc} filtraProdutoNaOrdem
+Caso estiver parametrizado para aplicar o filtro de produto
+na integração de OP, verifica se o produto da ordem atende
+aos filtros definidos para a SB1
+
+@type  Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param cProduto, Character, Código do produto da OP para filtrar
+@return lOk, Logical, .T. se o produto da OP atende aos filtros
+/*/
+Function filtraProdutoNaOrdem(cProduto as Character)
+	Local aAreaB1 := {}  as Array
+	Local lOk     := .T. as Logical
+
+	If aplicaFiltroProdutoNaOP()
+		aAreaB1 := SB1->(GetArea())
+		lOk     := .F.
+
+		SB1->(dbSetOrder(1))
+		If SB1->(dbSeek(xFilial("SB1") + cProduto))
+			lOk := PCPFiltPPI("SB1", cProduto, "SB1")
+		EndIf
+
+		SB1->(RestArea(aAreaB1))
+		aSize(aAreaB1, 0)
+	EndIf
+Return lOk
+
+/*/{Protheus.doc} aplicaFiltroRoteiroNaOP
+Verifica se está parametrizado para filtrar o roteiro
+no envio das OPs.
+
+@type  Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param cFiltro, Character, Retorna por referência o filtro da SG2.
+@return lFiltra, Logical, .T. se deve aplicar filtro de roteiro nas operações da OP.
+/*/
+Function aplicaFiltroRoteiroNaOP(cFiltro)
+	Local aAreaSOE := SOE->(GetArea()) as Array
+	Local lFiltra  := .F.              as Logical
+
+	cFiltro := ""
+
+	SOE->(dbSetOrder(1))
+	lFiltra := SOE->(dbSeek(xFilial("SOE")+"SC2")) .And. AllTrim(SOE->OE_VAR2) == "1"
+	
+	If lFiltra .And. SOE->(dbSeek(xFilial("SOE")+"SG2"))
+		cFiltro := StrTran(SOE->OE_FILTRO,'"',"'")
+	EndIf
+
+	SOE->(RestArea(aAreaSOE))
+	aSize(aAreaSOE, 0)
+Return lFiltra
+
+/*/{Protheus.doc} aplicaFiltroProdutoNaOP
+Verifica se está parametrizado para filtrar o produto
+no envio das OPs.
+
+@type  Function
+@author lucas.franca
+@since 19/10/2024
+@version P12
+@param 01 cFiltro   , Character, Retorna o filtro de produto por referência.
+@param 02 lRetFiltro, Logical  , Identifica se deve retornar o filtro por referência.
+@return lFiltra, Logical, .T. se deve aplicar filtro de produto na OP.
+/*/
+Function aplicaFiltroProdutoNaOP(cFiltro as Character, lRetFiltro as Logical)
+	Local aAreaSOE := SOE->(GetArea()) as Array
+	Local lFiltra  := .F.              as Logical
+
+	Default lRetFiltro := .F.
+
+	SOE->(dbSetOrder(1))
+	lFiltra := SOE->(dbSeek(xFilial("SOE")+"SC2")) .And. AllTrim(SOE->OE_CHAR1) == "1"
+	
+	If lRetFiltro .And. lFiltra .And. SOE->(dbSeek(xFilial("SOE")+"SB1"))
+		cFiltro := StrTran(SOE->OE_FILTRO,'"',"'")
+	EndIf
+
+	SOE->(RestArea(aAreaSOE))
+	aSize(aAreaSOE, 0)
+Return lFiltra
+
+/*/{Protheus.doc} descricaoOperacao
+Trata valor padrão para a descrição da operação caso esta não tenha sido informada no cadastro do roteiro
+
+@type  Static Function
+@author lucas.franca
+@since 08/12/2024
+@version P12
+@param 01 cDescri , Character, Descrição da operação na SG2/SHY
+@param 02 cCodOper, Character, Código da operação
+@return cDescri, Character, Descrição tratada para conteúdos vazios
+/*/
+Static Function descricaoOperacao(cDescri as Character, cCodOper as Character)
+
+	cDescri := RTrim(cDescri)
+	If Empty(cDescri)
+		cDescri := I18N(STR0006, {cCodOper}) //"Operação #1[codOper]#"
+	EndIf
+
+Return cDescri

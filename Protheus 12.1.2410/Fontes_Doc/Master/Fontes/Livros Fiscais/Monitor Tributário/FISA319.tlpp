@@ -1,0 +1,1546 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "totvs.ch"
+#INCLUDE "TOPCONN.CH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FISA319.CH"
+
+Static cGroup  := 'TOTVSInteligenciaTributaria' as character
+Static aTabMNT := {"CJX"/*IPI*/, "CJY"/*ISS*/, "CJZ"/*ICMS*/, "CK0"/*PIS/COFINS*/}	as array
+
+/*/{Protheus.doc} ParseScheduleJson
+	Realiza parser do conteúdo da XX1_RECORR e XX1_ENV num objeto json esperado pelo componente POUI Job Scheduler
+	
+	@type  Static Function
+	@author Fábio Mendonça
+	@since 30/05/2025
+	@version 1.0
+	@param aScheduleInfo, array, Conteúdo da totvs.framework.schedule.information.ScheduleInformation():New()
+	@return oScheduleJson, json, Objeto Json com conteúdo da XX1_RECORR e XX1_ENV
+
+	@see https://tdn.totvs.com/display/public/framework/FWTimeStamp
+	@see https://tdn.totvs.com/display/tec/At
+	@see https://tdn.totvs.com/display/public/framework/FWTimeStamp
+	@see https://tdn.totvs.com/pages/releaseview.action?pageId=908346692
+	@see https://po-ui.io/documentation/po-page-job-scheduler
+/*/
+Static Function ParseScheduleJson(aScheduleInfo as array) as json
+	Local nIPosDaily							as numeric
+	Local nIPosWeekly							as numeric
+	Local nIPosMonthly							as numeric
+	Local nIPosFrequency						as numeric
+	Local nIPosLimit							as numeric
+	Local nIDayOfWeek							as numeric
+	Local nValueFrequency						as numeric
+	Local cDay									as character
+	Local cXX1_RECORR							as character
+	Local cXX1_ENV								as character
+	Local cHrFirstExecution 					as character
+	Local cTypeFrequency						as character
+	Local cRangeExecutionsString				as character
+	Local dDtFirstExecution 					as date
+	Local aHourMinute							as array
+	Local aDaysOfWeekDesc						as array
+	Local aRangeExecutions := {}				as array
+	Local aDaysOfWeek := {}						as array
+	Local oScheduleJson	:= JsonObject():new()	as json
+	Local oRegex								as object
+
+	cXX1_RECORR := aScheduleInfo[1][1]["OFWBOSCHDPERIOD"]["CPERIOD"]
+	cXX1_ENV	:= AllTrim(aScheduleInfo[1][1]["CENV"])
+
+	// Grava ID do TIT Schedule no Json de Retorno
+	oScheduleJson["scheduleId"]	:= AllTrim(aScheduleInfo[1][1]["CID"])
+
+	// =============== Extraindo Data e Hora da Primeira Execução =============== 
+	cHrFirstExecution	:= Substr(cXX1_RECORR, At("First(D(", cXX1_RECORR) + 20, 5) + ":00"
+	dDtFirstExecution	:= StoD(;
+		Substr(cXX1_RECORR, At("First(D(", cXX1_RECORR) + 8, 8);
+	)
+	oScheduleJson["firstExecution"]	:= FWTimeStamp(5, dDtFirstExecution, cHrFirstExecution)
+
+	// =============== Extraindo Ambiente do Agendamento =============== 
+	oScheduleJson["executionParameter"] := { "environment": cXX1_ENV }
+
+	// =============== Extraindo Recorrência =============== 
+	If At("End(", cXX1_RECORR) > 0
+		oScheduleJson["recurrent"]	:= .F.
+	Else
+		oScheduleJson["recurrent"]	:= .T.
+	EndIf
+
+	// =============== Extraindo Periodicidade =============== 
+	nIPosDaily		:= At("D(Init(", cXX1_RECORR)
+	nIPosWeekly		:= At("W(", cXX1_RECORR)
+	nIPosMonthly	:= At("M(Init(", cXX1_RECORR)
+	
+	If nIPosDaily > 0 .Or. nIPosWeekly > 0 .Or. nIPosMonthly > 0
+		// =============== Extraindo Periodicidades ===============
+		Do Case
+			// =============== Diária ===============
+			Case nIPosDaily > 0
+				aHourMinute	:= StrTokArr(;
+					Substr(cXX1_RECORR, nIPosDaily + 10, 5),;
+					":";
+				)
+				oScheduleJson["daily"] := {;
+					"hour": Val(aHourMinute[1]),;
+					"minute": Val(aHourMinute[2]);
+				}	
+
+			// =============== Semanal ===============
+			Case nIPosWeekly > 0
+				aHourMinute	:= StrTokArr(;
+					Substr(cXX1_RECORR, At("Init(HM(", cXX1_RECORR) + 8, 5),;
+					":";
+				)
+				oScheduleJson["weekly"] := {;
+					"hour": Val(aHourMinute[1]),;
+					"minute": Val(aHourMinute[2]);
+				}
+				
+				aDaysOfWeekDesc	:= {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" }
+				oRegex			:= tlpp.regex.Regex():New('\.(T|F)\.')
+				oRegex:tokenizer(cXX1_RECORR, @aDaysOfWeek)
+
+				oScheduleJson["weekly"]["daysOfWeek"] := {}
+				For nIDayOfWeek := 1 to Len(aDaysOfWeek)
+					If &(aDaysOfWeek[nIDayOfWeek])
+						AAdd(oScheduleJson["weekly"]["daysOfWeek"], aDaysOfWeekDesc[nIDayOfWeek])
+					EndIf
+				Next nIDayOfWeek	
+
+			// =============== Mensal ===============
+			Case nIPosMonthly > 0
+				cDay		:= Substr(cXX1_RECORR, nIPosMonthly + 9, 2)
+				aHourMinute	:= StrTokArr(;
+					Substr(cXX1_RECORR, nIPosMonthly + 14, 5),;
+					":";
+				)
+				oScheduleJson["monthly"] := {;
+					"day": Val(cDay),;
+					"hour": Val(aHourMinute[1]),;
+					"minute": Val(aHourMinute[2]);
+				}	
+		EndCase
+
+		// =============== Extraindo Range Executions ===============
+		If At("Freq(", cXX1_RECORR) > 0 .Or. At("Limit(", cXX1_RECORR) > 0
+			// =============== Extraindo Frequências ===============			
+			oRegex					:= tlpp.regex.Regex():New("Freq\(([^)]*)\)")
+			oRegex:tokenizer(cXX1_RECORR, @aRangeExecutions)
+			cRangeExecutionsString	:= aRangeExecutions[1]
+
+			Do Case
+				// =============== Se Hora ou Minuto ===============
+				Case (nIPosFrequency := At("HM(", cRangeExecutionsString)) > 0
+					aHourMinute	:= StrTokArr(;
+						Substr(cRangeExecutionsString, nIPosFrequency + 3, At(")", cRangeExecutionsString) - (nIPosFrequency + 3)),;
+						":";
+					)
+
+					// Se Hora > 0, é Frequência do tipo "hour". Senão, é Frequência do tipo "minute"
+					If Val(aHourMinute[1]) >	0
+						cTypeFrequency 	:= "hour"
+						nValueFrequency	:= Val(aHourMinute[1])
+					Else
+						cTypeFrequency 	:= "minute"
+						nValueFrequency	:= Val(aHourMinute[2])
+					EndIf
+
+				// =============== Se Dia ===============
+				Case (nIPosFrequency := At("D(", cRangeExecutionsString)) > 0					
+					cTypeFrequency 	:= "day"
+					nValueFrequency	:= Val(;
+						Substr(cRangeExecutionsString, nIPosFrequency + 2, 3);
+					)
+			EndCase
+
+			oScheduleJson["rangeExecutions"]	:= { "frequency": { "type": cTypeFrequency, "value": nValueFrequency } }
+
+			// =============== Extraindo Limites Finais ===============			
+			oRegex					:= tlpp.regex.Regex():New("Limit\(((?:[^()]+|\([^()]*\))*)\)")
+			oRegex:tokenizer(cXX1_RECORR, @aRangeExecutions)
+			cRangeExecutionsString	:= aRangeExecutions[1]
+
+			// =============== Se Hora e Minuto ===============	
+			If (nIPosLimit := At("HM(", cRangeExecutionsString)) > 0
+				aHourMinute	:= StrTokArr(;
+					Substr(cRangeExecutionsString, nIPosLimit + 3, 5),;
+					":";
+				)				
+				oScheduleJson["rangeExecutions"]["rangeLimit"] :=  {;
+					"hour": Val(aHourMinute[1]),;
+					"minute": Val(aHourMinute[2]);
+				} 
+			EndIf
+
+			// =============== Se Dia ===============	
+			If (nIPosLimit := At("D(", cRangeExecutionsString)) > 0
+				oScheduleJson["rangeExecutions"]["rangeLimit"]	:= {;
+					"day": Val(;
+						SubStr(cRangeExecutionsString, At("D(", cRangeExecutionsString) + 2, 2);
+					);
+				}
+			EndIf			
+		EndIf
+	EndIf
+
+	FwFreeArray(aHourMinute)
+	FwFreeArray(aDaysOfWeekDesc)
+	FwFreeArray(aRangeExecutions)
+	FwFreeArray(aDaysOfWeek)
+	FwFreeObj(oRegex)
+Return oScheduleJson
+
+/*/{Protheus.doc} FIS319SchedulerGet
+	Retorna agendamento de Smart Schedule existente
+
+	@type  Function
+	@author Fábio Mendonça
+	@since 05/05/2025
+	@version 1.0
+
+	@see https://code.engpro.totvs.com.br/totvs-fiscal/monitor-tributario/wiki/%2Fschedule#get-api-fiscal-tax-monitor-v1-icms-schedule-idschedule
+	@see https://tdn.totvs.com/pages/releaseview.action?pageId=908346692
+	/*/	
+@Get(endpoint="/api/fiscal/tax-monitor/v1/schedule/:idSchedule", description="API de Obtenção de Parametrização de Schedule conforme Id informado")
+Function FIS319SchedulerGet()
+	Local cDetailedMessage								as character
+	Local oResponse	:= JsonObject():new()				as json
+	Local oPathParams := oRest:getPathParamsRequest()	as json
+	Local oProfile	:= JsonObject():new()            	as json
+	Local aScheduleInfo									as array
+	Local oScheduleInfo									as object
+
+	oRest:setKeyHeaderResponse("Content-Type", "application/json")
+    
+    oScheduleInfo   := totvs.framework.schedule.information.ScheduleInformation():New()
+	aScheduleInfo	:= oScheduleInfo:getScheduleById(oPathParams["idSchedule"])
+
+	If Len(aScheduleInfo) > 0
+		oResponse	:= ParseScheduleJson(aScheduleInfo)
+	Else
+		cDetailedMessage	:= STR0017 //"ID 'YY1YY' de Agendamento Smart Schedule não foi encontrado na tabela XX1"
+
+		oResponse["code"]				:= 404
+		oResponse["message"]			:= STR0018 //"Smart Schedule não encontrado"
+		oResponse["detailedMessage"]	:= StrTran(cDetailedMessage, "YY1YY", oPathParams["idSchedule"])
+		oRest:setStatusCode(404)
+	EndIf
+
+	oRest:setResponse(oResponse)    
+
+	FwFreeArray(aScheduleInfo)
+	FwFreeObj(oResponse)
+	FwFreeObj(oPathParams)
+	FwFreeObj(oProfile)
+Return
+
+/*/{Protheus.doc} FIS319SchedulerPost
+	Criação de Schedule
+
+	@type  Function
+	@author Fábio Mendonça
+	@since 05/05/2025
+	@version 1.0
+
+	@see https://code.engpro.totvs.com.br/totvs-fiscal/monitor-tributario/wiki/%2Fschedule#post-api-fiscal-tax-monitor-v1-icms-schedule
+	/*/	
+@Post(endpoint="/api/fiscal/tax-monitor/v1/schedule", description="API de Criação de Parametrização de Schedule")
+Function FIS319SchedulerPost()
+	CallTITScheduler()
+Return
+
+/*/{Protheus.doc} FIS319SchedulerPut
+	Atualização de Schedule existente
+
+	@type  Function
+	@author Fábio Mendonça
+	@since 05/05/2025
+	@version 1.0
+
+	@see https://code.engpro.totvs.com.br/totvs-fiscal/monitor-tributario/wiki/%2Fschedule#put-api-fiscal-tax-monitor-v1-icms-schedule-idschedule
+	/*/	
+@Put(endpoint="/api/fiscal/tax-monitor/v1/schedule/:idSchedule", description="API de Atualização de Parametrização de Schedule")
+Function FIS319SchedulerPut()
+	Local oPathParams := oRest:getPathParamsRequest()	as json
+
+	CallTITScheduler(oPathParams["idSchedule"])
+Return
+
+/*/{Protheus.doc} FIS319SchedulerReprocess
+	Função responsável por criar o método post
+	para que possa ser criado a sched de reprocessamento
+	@type  Function
+	@author Caique Carlos
+	@since 20/08/2025
+	@see https://tdn.totvs.com/display/tec/oRest%3AgetBodyRequest
+/*/
+@Post(endpoint="/api/fiscal/tax-monitor/v1/reprocess/scheduler", description="API de criação da schedule de reprocessamednto TIT")
+Function FIS319SchedulerReprocess()
+	Local cBodyParams := oRest:getBodyRequest() as character
+
+	F319CRep(cBodyParams)
+Return
+
+/*/{Protheus.doc} FIS319ExecuteReprocess
+	Função responsável por criar o método post
+	para que possa ser executado a sched de reprocessamento
+	@type  Function
+	@author Caique Carlos
+	@since 20/08/2025
+	@see https://tdn.totvs.com/display/tec/oRest%3AsetChunkedResponse
+/*/
+@Post(endpoint="/api/fiscal/tax-monitor/v1/reprocess/execute", description="API para execução do reprocessamento TIT")
+Function FIS319ExecuteReprocess()
+	Local cDateStart   	  := oRest:getQueryRequest()['periodStart']  as character
+	Local cDateEnd     	  := oRest:getQueryRequest()['periodEnd']    as character
+	Local oJsonProfile 	  := JsonObject():new()  				     as json
+	Local oUpdateProfile  := JsonObject():new()  				     as json
+
+	cDateStart := StrTran(cDateStart,"-","")
+	cDateEnd   := StrTran(cDateEnd,"-","")
+
+	FIS319Extrator(cDateStart, cDateEnd)
+
+    FISA318F7OnboardProfile(2, @oJsonProfile)
+	If oJsonProfile["extractionStartPeriod"] > oRest:getQueryRequest()['periodStart']
+		oUpdateProfile["extractionStartPeriod"] := oRest:getQueryRequest()['periodStart']
+		FISA318F7OnboardProfile(3, oUpdateProfile)
+	EndIf
+Return
+
+@Get(endpoint="/api/fiscal/tax-monitor/v1/reprocess/profile", description="API para execução do reprocessamento TIT")
+Function FIS319ProfileReprocess()
+	Local oJsonContent := JsonObject():New()
+
+	FISA318F7OnboardProfile(2, @oJsonContent)
+	oRest:setKeyHeaderResponse("Content-Type", "application/json")
+	oRest:setResponse(oJsonContent)
+Return
+
+/*/{Protheus.doc} CallTITScheduler
+	Executa Configurador do Smart Schedule
+
+	@type  Static Function
+	@author Fábio Mendonça
+	@since 22/05/2025
+	@version 1.0
+	@param cIdSchedule, character, ID do SmartSchedule a atualizar (quando for uma alteração de agendamento)
+
+	@see https://tdn.totvs.com/display/public/framework/Schedule+Protheus
+	@see https://tdn.totvs.com/pages/releaseview.action?pageId=908346692
+/*/
+Static Function CallTITScheduler(cIdSchedule as character)
+	Local lOk := .T.							as logical
+	Local nSplitPosition						as numeric
+	Local nHrStartExec := Nil				 /* as numeric */	
+	Local nMnStartExec := Nil				 /* as numeric */
+	Local nDayStartExec := Nil				 /* as numeric */
+	Local nHttpStatudCode						as numeric
+	Local cHrFirstExecution := Nil			 /*	as character */
+	Local cPeriodicity							as character
+	Local cScheduleError						as character
+	Local cEnvironment := Nil				 /* as character */
+	Local dStartExtraction						as date
+	Local dEndExtraction						as date
+	Local dDtFirstExecution := Nil 			 /*	as date */
+    Local oBodyParams := JsonObject():New()		as json
+	Local oResponse := JsonObject():New()		as json
+	Local oProfile := JsonObject():new()		as json
+	Local oPeriodicity := JsonObject():New()	as json
+	Local oScheduleInfo                     	as object
+	Local aRequiredProperties					as array
+	Local aDaysOfWeek := Nil					as array
+	Local aFrequency := Nil						as array
+
+	Default cIdSchedule := Nil
+
+	oRest:setKeyHeaderResponse("Content-Type", "application/json")
+
+	aRequiredProperties	:= {{"firstExecution"}, {"recurrent"}, {"executionParameter"}}
+	oPeriodicity:fromJson('{"weekly":"S","monthly":"M","daily":"D"}')
+	oBodyParams:fromJson(oRest:getBodyRequest())
+	
+	If FISA318F6HasApiRequiredProperties(aRequiredProperties, oBodyParams) 
+		// =============== Extraindo Data e Hora da Primeira Execução ===============
+		nSplitPosition		:= At("T", oBodyParams["firstExecution"] )
+
+		If Empty(cIdSchedule)
+			dDtFirstExecution 	:= SToD(;
+				StrTran(;
+					SubStr(oBodyParams["firstExecution"], 1, (nSplitPosition - 1)),;
+					"-",;
+					"";
+				);
+			)
+			cHrFirstExecution	:=  StrTran(;
+				SubStr(oBodyParams["firstExecution"], (nSplitPosition + 1), 8),;
+				"-",;
+				"";
+			)
+		EndIf
+
+		// =============== Obtém Data Início e Fim da Extração ===============
+    	FISA318F7OnboardProfile(2, @oProfile) 
+		dStartExtraction	:= SToD(StrTran(oProfile["extractionStartPeriod"], "-", ""))
+		dEndExtraction		:= SToD(StrTran(oProfile["extractionEndPeriod"], "-", ""))
+		
+		// =============== Extraindo Periodicidade ===============
+		aEval(oPeriodicity:getNames(), {|periodicity| oBodyParams:hasProperty(periodicity) .And. (cPeriodicity := oPeriodicity[periodicity]) })
+		If Empty(cPeriodicity)
+			cPeriodicity := "U"
+		EndIf
+
+		// =============== Extraindo Hora e Minuto de Execução (seja hora e minuto de "daily", "weekly" ou "monthly", caso sejam informadas) ===============
+		aEval(oPeriodicity:getNames(), {|periodicity| oBodyParams:hasProperty(periodicity) .And. (nHrStartExec := oBodyParams[periodicity]["hour"]) })
+		aEval(oPeriodicity:getNames(), {|periodicity| oBodyParams:hasProperty(periodicity) .And. (nMnStartExec := oBodyParams[periodicity]["minute"]) })
+
+		// =============== Extraindo Ambiente do Agendamento =============== 
+		cEnvironment	:= oBodyParams["executionParameter"]["environment"]
+		oScheduleInfo   := totvs.framework.schedule.information.ScheduleInformation():New()
+		If Empty(cEnvironment) .Or. Empty(oScheduleInfo:getEnvironmentsScheduleRunning(2, cEnvironment))
+			cScheduleError	:= StrTran(STR0019, "XXXX", cEnvironment) //"Ambiente 'XXXX' informado não está com Smart Schedule ativo no momento ou não existe"
+			lOk				:= .F.
+		EndIf
+
+		// =============== Extraindo Dia de Início da Execução (somente no tipo "monthly") =============== 
+		If oBodyParams:hasProperty("monthly")
+			nDayStartExec	:= oBodyParams["monthly"]["day"]
+		EndIf
+
+		// =============== Extraindo Dias da Semana =============== 
+		If oBodyParams:hasProperty("weekly")
+			aDaysOfWeek	:= oBodyParams["weekly"]["daysOfWeek"]
+		EndIf
+
+		// =============== Extraindo Range Executions =============== 
+		If oBodyParams:hasProperty("rangeExecutions")
+			aFrequency	:= {,,,,}
+			// =============== Extraindo Frequências =============== 
+			aFrequency[1] := Upper(;
+				Substr(oBodyParams["rangeExecutions"]["frequency"]["type"], 1, 1);
+			)
+			aFrequency[2] := oBodyParams["rangeExecutions"]["frequency"]["value"]
+
+			// =============== Extraindo Limites =============== 
+			aFrequency[3] := oBodyParams["rangeExecutions"]["rangeLimit"]["day"]
+			aFrequency[4] := oBodyParams["rangeExecutions"]["rangeLimit"]["hour"]
+			aFrequency[5] := oBodyParams["rangeExecutions"]["rangeLimit"]["minute"]
+		EndIf
+
+		If lOk .And. TITSchdCfg(cIdSchedule, oBodyParams:toJson(), dStartExtraction, dEndExtraction, dDtFirstExecution, cHrFirstExecution,;
+								cPeriodicity, aFrequency, oBodyParams["recurrent"], nDayStartExec, nHrStartExec, nMnStartExec, cEnvironment,;
+								aDaysOfWeek, @cScheduleError)
+			nHttpStatudCode	:= IIf(Empty(cIdSchedule), 201, 204)
+
+			oRest:setStatusCode(nHttpStatudCode)
+		Else
+			oResponse["code"]				:= 400
+			oResponse["message"]			:= STR0014 //"Não foi possível criar o agendamento solicitado."
+			oResponse["detailedMessage"]	:= DecodeUTF8(cScheduleError)
+
+			oRest:setStatusCode(400)
+			oRest:setResponse(oResponse)
+		EndIf
+	EndIf
+
+	FwFreeObj(oBodyParams)
+	FwFreeObj(oResponse)
+	FwFreeObj(oProfile)
+	FwFreeObj(oPeriodicity)
+	FwFreeArray(aRequiredProperties)
+	FwFreeArray(aDaysOfWeek)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FIS319CriaTab
+Funcao de criacao de tabelas sem dicionário no banco
+
+@Param:
+Não há.
+
+@Return:
+lRet - Indica se foi possivel criar todas as tabelas contidas em aTabMNT
+
+@Author Eduardo Nunes Cirqueira
+@Since 18/02/2025
+@Version 1.0
+
+/*/
+//-------------------------------------------------------------------
+Function FIS319CriaTab()
+
+	Local cError	:= ""				as character
+	Local cTab      := ""				as character
+	Local cAlias	:= ""				as character
+
+	Local nX        := 0				as numeric
+	Local lRet		:= .T.				as logical
+
+	For nX := 1 to Len(aTabMNT)
+
+		cAlias := aTabMNT[nX]
+
+		//Atualiza as informações no Top
+		cTab := cAlias + cEmpAnt + "0"
+
+		//Tenta realizar a criação da tabela
+		lRet := FIS319TabSD( cTab, cAlias, @cError )
+
+		If ! lRet
+			FWLogMsg("ERROR", /*cTransactionId*/, cGroup, FunName()/*cCategory*/, /*cStep*/, /*cMsgId*/, cError, /*nMensure*/, /*nElapseTime*/, /*aMessage*/)
+			FISA318F3SendInfoToExtractionProgressBar(cError, lRet, 0)
+		EndIf
+		
+	Next
+
+Return ( lRet )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FIS319TabSD
+Realiza a alteração das tabelas sem dicionário de dados de acordo com a
+estrutura definida na função FIS319GetStru()
+
+@Param	
+cTable - Tabela a ser alterada 
+cAlias - Alias da tabela
+cError - Variável para controle do erro
+
+@Return:
+lRet - Indica se foi possivel criar ou alterar a tabela enviada em cTable
+
+@author Eduardo Nunes Cirqueira
+@since 18/02/2025
+@version 1.0
+
+/*/
+//-------------------------------------------------------------------
+Function FIS319TabSD( cTable as character, cAlias as character, cError as character )
+
+Local nX          := 0		as numeric
+Local nErro       := 0		as numeric
+
+Local lRet        := .T.	as logical
+
+Local aStruct     := {}		as array
+Local aCampos     := {}		as array
+Local aArqStru    := {}		as array
+
+aStruct := FIS319GetStru( cAlias )
+
+//Busca a Estrutura de Campos
+aCampos := aStruct[1]
+
+BEGIN SEQUENCE
+
+	//Verifica se a tabela já existe no BD
+	if !MSFile( RetArq( __CRDD, cTable, .T. ), ,__CRDD )
+
+		FWLogMsg("INFO", , cGroup, FunName(), , , STR0008 + cTable)
+
+		//Prepara o banco para criação da tabela
+		TcCommit( 5 )
+
+		TcInternal( 30 , "AUTORECNO" )
+		TcInternal( 25 , "CLOB" )
+
+		FWLogMsg("INFO",, cGroup, FunName(), , , __CRDD)
+
+		//Realiza a criação da tabela
+		DBCreate( cTable, aCampos, __CRDD )
+
+		//Finaliza o banco após criação da tabela
+		TcCommit( 5 )
+
+		TcInternal( 30 , "OFF" )
+		TcInternal( 25 , "OFF" )
+		
+		TcRefresh( cTable )
+
+		FWLogMsg("INFO",, cGroup, FunName(), , , STR0009 + cTable + STR0010)
+
+	else  //Tabela Já existe no BD
+
+		If Select(cAlias) > 0
+			(cAlias)->( dbCloseArea() )
+		EndIf
+			
+		//Abre tabela em modo exclusivo para buscar a sua estrutura atual
+		//Sintaxe: DBUseArea( [ lNewArea ], [ cDriver ], < cFile >, < cAlias >, [ lShared ], [ lReadOnly ] )
+		dbUseArea( .T., __CRDD, cTable, cAlias, .F., .F.)
+
+		if !NetErr()
+			aArqStru := (cAlias)->( dbStruct() )
+
+			(cAlias)->( dbCloseArea() )
+
+			FWLogMsg("INFO",, cGroup, FunName(), , , STR0003 + cTable + " !")
+
+			TcInternal( 25, "CLOB" )
+
+			//Realiza a alteração na tabela
+		    If !TcAlter( cTable, aArqStru, aCampos, @nErro )
+		    	cError := STR0001 + cTable + STR0004 + LTrim( Str(nErro) )
+				FWLogMsg("ERROR",, cGroup, FunName(), , , cError)
+				BREAK
+		    EndIf
+
+			TcInternal( 25, "OFF" )
+		else
+			cError := STR0002 + cTable
+			BREAK
+		endif
+	EndIf
+
+	//Verifica se não ocorreu erro no processamento acima
+	if Empty( cError )
+
+		dbUseArea( .T., __CRDD, cTable, cAlias, .F., .F.) // Abre em modo exclusivo
+		
+		If NetErr()
+			cError := STR0002 + cTable
+			BREAK
+		Else
+			For nX := 1 To Len( aStruct[2] )	//	Índices
+
+				If aStruct[2][nX][1]
+
+					If TCUnique(cTable,aStruct[2][nX][3]) < 0
+						cError := STR0013 + cTable
+						BREAK
+					EndIf
+
+				Else
+					If ( !MsFile( cTable, aStruct[2][nX][2], __CRDD ) )
+
+						DBCreateIndex(aStruct[2][nX][2]/*Nome*/,;
+					    	          aStruct[2][nX][3]/*Chave*/,;
+									  ,;
+									  aStruct[2][nX][1]/*Chave Unica (.T./.F.)*/ )
+					EndIf
+				EndIf
+
+			Next nX
+
+			TcRefresh( cTable )
+			(cAlias)->( dbCloseArea() )
+		EndIf
+	endif
+
+RECOVER
+
+	lRet := .F.
+
+END SEQUENCE
+
+If lRet
+	dbUseArea( .T., __CRDD, cTable, cAlias, .T., .F.)
+EndIf
+
+Return ( lRet )
+
+/*---------------------------------------------------------------------
+{Protheus.doc} FIS319Extrator()
+(Responsável por gravar os dados da SFT nas tabelas Fato do Montrib)
+@author eduardo.cirqueira
+
+@parâmetros de entrada
+cDtStart = data inicial do período a ser filtrado
+cDtEnd = data final do período a ser filtrado
+
+@Return:
+lRet - Indica se havia dados no período solicitado e se gravou todos os dados sem erros
+
+@since 21/01/2025
+//-------------------------------------------------------------------*/
+Function FIS319Extrator(cDtStart as character,cDtEnd as character)
+
+Local nQtdFlush := 1000					as numeric
+Local nQtdProc  := 0					as numeric
+Local nParcial  := 0					as numeric
+Local nPercent  := 60					as numeric		// considerando que 60% do processamento será no Bulk
+Local nEvolucao := 100-nPercent			as numeric
+Local nX        := 0           			as numeric
+Local nCount    := 0           			as numeric
+
+Local aCount    := {0,0,0,0}            as array		// Total de registros por imposto {IPI,ISS,ICMS,PIS/COFINS}
+Local cAlias    := getNextAlias()		as character
+Local cMsgErro  := ''					as character
+Local cErrorTab := ''					as character
+
+Local oBulkCJX	:= Nil					as object
+Local oBulkCJY	:= Nil					as object
+
+Local lRet      := .F.					as logical
+Local lCanBulk  := FwBulk():CanBulk()	as logical
+
+If lCanBulk
+
+    oBulkCJX := FwBulk():New(FIS319SqlName("CJX"),nQtdFlush)
+	oBulkCJX:setFields( CJX->( DbStruct() ) )
+
+    oBulkCJY := FwBulk():New(FIS319SqlName("CJY"),nQtdFlush)
+	oBulkCJY:setFields( CJY->( DbStruct() ) )
+
+    oBulkCJZ := FwBulk():New(FIS319SqlName("CJZ"),nQtdFlush)
+	oBulkCJZ:setFields( CJZ->( DbStruct() ) )
+
+    oBulkCK0 := FwBulk():New(FIS319SqlName("CK0"),nQtdFlush)
+	oBulkCK0:setFields( CK0->( DbStruct() ) )
+
+	FISA318F3SendInfoToExtractionProgressBar(STR0005, .T., 0)
+
+	lRet := MNTQryExt(@cAlias,cDtStart,cDtEnd,@aCount)
+
+	If lRet
+
+		For nX := 1 To Len(aCount)
+			nCount += aCount[nX]
+		Next
+
+		nParcial := Int(nCount/(nPercent/10))
+
+		While (cAlias)->(!Eof())
+
+			If (cAlias)->TEMIPI > 0
+			
+				lRet := lRet .And.;
+						oBulkCJX:addData(	{	(cAlias)->FT_FILIAL		,;
+					 							(cAlias)->FT_ENTRADA	,;
+					 							(cAlias)->FT_CLIEFOR	,;
+					 							(cAlias)->FT_LOJA		,;
+					 							(cAlias)->FT_ESTADO		,;
+					 							' '						,;
+					 							(cAlias)->FT_TIPOMOV	,;
+					 							(cAlias)->FT_CFOP		,;
+					 							(cAlias)->FT_CTIPI		,;
+					 							(cAlias)->FT_SERIE		,;
+					 							(cAlias)->FT_NFISCAL	,;
+					 							(cAlias)->FT_ITEM		,;
+					 							(cAlias)->FT_PRODUTO	,;
+					 							(cAlias)->FT_POSIPI		,;
+					 							' '						,;
+					 							' '						,;
+					 							(cAlias)->FT_TIPO		,;
+					 							(cAlias)->FT_VALIPI		,;
+					 							(cAlias)->FT_VALCONT	,;
+					 							(cAlias)->FT_ISENIPI	,;
+					 							(cAlias)->FT_OUTRIPI	,;
+					 							(cAlias)->FT_IPIOBS		,;
+					 							(cAlias)->FT_CLASFIS	,;
+					 							(cAlias)->FT_VALICM		,;
+					 							(cAlias)->FT_ISENICM	,;
+					 							(cAlias)->FT_OUTRICM	,;
+					 							(cAlias)->FT_OBSICM		,;
+					 							(cAlias)->FT_VALPIS		,;
+					 							(cAlias)->FT_VALCOF		 ;
+					 						}	)
+				nQtdProc++
+				If !lRet
+					cErrorTab += "|CJX|" + (cAlias)->FT_NFISCAL + (cAlias)->FT_SERIE + (cAlias)->FT_TIPOMOV + (cAlias)->FT_CLIEFOR + (cAlias)->FT_LOJA + (cAlias)->FT_PRODUTO + (cAlias)->FT_ITEM
+				EndIf	
+			EndIf
+
+			If (cAlias)->TEMISS > 0
+
+				lRet := lRet .And.;
+						oBulkCJY:addData(	{	(cAlias)->FT_FILIAL  ,;
+					 							(cAlias)->FT_TIPOMOV ,;
+					 							(cAlias)->FT_SERIE   ,;
+					 							(cAlias)->FT_NFISCAL ,;
+					 							(cAlias)->FT_CLIEFOR ,;
+					 							(cAlias)->FT_LOJA    ,;
+					 							(cAlias)->FT_ITEM    ,;
+					 							(cAlias)->FT_PRODUTO ,;
+					 							(cAlias)->FT_ENTRADA ,;
+					 							(cAlias)->FT_EMISSAO ,;
+					 							(cAlias)->FT_ESTADO  ,;
+					 							(cAlias)->FT_CODISS  ,;
+					 							(cAlias)->FT_ALIQICM ,;
+					 							(cAlias)->FT_VALCONT ,;
+					 							(cAlias)->FT_BASEICM ,;
+					 							(cAlias)->FT_VALICM  ,;
+					 							(cAlias)->FT_ISENICM ,;
+					 							(cAlias)->FT_OUTRICM ,;
+					 							(cAlias)->FT_TIPO    ,;
+					 							(cAlias)->FT_ESPECIE ,;
+					 							(cAlias)->FT_RECISS   ;
+					 						}	)
+				nQtdProc++
+				If !lRet
+					cErrorTab += "|CJY|" + (cAlias)->FT_NFISCAL + (cAlias)->FT_SERIE + (cAlias)->FT_TIPOMOV + (cAlias)->FT_CLIEFOR + (cAlias)->FT_LOJA + (cAlias)->FT_PRODUTO + (cAlias)->FT_ITEM
+				EndIf 
+			EndIf
+
+			If (cAlias)->TEMICMS > 0
+
+				lRet := lRet .And.;
+						oBulkCJZ:addData(	{	(cAlias)->FT_FILIAL  ,;
+					 							(cAlias)->FT_TIPOMOV ,;
+					 							(cAlias)->FT_SERIE   ,;
+					 							(cAlias)->FT_NFISCAL ,;
+					 							(cAlias)->FT_CLIEFOR ,;
+					 							(cAlias)->FT_LOJA    ,;
+					 							(cAlias)->FT_ITEM    ,;
+					 							(cAlias)->FT_PRODUTO ,;
+					 							(cAlias)->FT_ENTRADA ,;
+					 							(cAlias)->FT_EMISSAO ,;
+					 							(cAlias)->FT_CFOP    ,;
+					 							(cAlias)->FT_ESTADO  ,;
+					 							(cAlias)->FT_ALIQICM ,;
+					 							(cAlias)->FT_VALCONT ,;
+					 							(cAlias)->FT_BASEICM ,;
+					 							(cAlias)->FT_VALICM  ,;
+					 							(cAlias)->FT_ISENICM ,;
+					 							(cAlias)->FT_OUTRICM ,;
+					 							(cAlias)->FT_ICMSRET ,;
+					 							(cAlias)->FT_TIPO    ,;
+					 							(cAlias)->FT_CLASFIS ,;
+					 							(cAlias)->FT_ESPECIE ,;
+												(cAlias)->FT_DIFAL ;
+					 						}	)
+				nQtdProc++
+				If !lRet
+					cErrorTab += "|CJZ|" + (cAlias)->FT_NFISCAL + (cAlias)->FT_SERIE + (cAlias)->FT_TIPOMOV + (cAlias)->FT_CLIEFOR + (cAlias)->FT_LOJA + (cAlias)->FT_PRODUTO + (cAlias)->FT_ITEM
+				EndIf 
+			EndIf
+
+			If (cAlias)->TEMPISCOF > 0
+
+				lRet := lRet .And.;
+						oBulkCK0:addData(	{	(cAlias)->FT_FILIAL  ,;
+					 							(cAlias)->FT_TIPOMOV ,;
+					 							(cAlias)->FT_SERIE   ,;
+					 							(cAlias)->FT_NFISCAL ,;
+					 							(cAlias)->FT_CLIEFOR ,;
+					 							(cAlias)->FT_LOJA    ,;
+					 							(cAlias)->FT_ITEM    ,;
+					 							(cAlias)->FT_PRODUTO ,;
+					 							(cAlias)->FT_ENTRADA ,;
+					 							(cAlias)->FT_EMISSAO ,;
+					 							(cAlias)->FT_ESTADO  ,;
+					 							(cAlias)->FT_VALCONT ,;
+					 							(cAlias)->FT_TIPO    ,;
+					 							(cAlias)->FT_ESPECIE ,;
+					 							(cAlias)->FT_BRETPIS ,;
+					 							(cAlias)->FT_BRETCOF ,;
+					 							(cAlias)->FT_ARETPIS ,;
+					 							(cAlias)->FT_ARETCOF ,;
+					 							(cAlias)->FT_VRETPIS ,;
+					 							(cAlias)->FT_VRETCOF ,;
+					 							(cAlias)->FT_BASEPIS ,;
+					 							(cAlias)->FT_BASECOF ,;
+					 							(cAlias)->FT_ALIQPIS ,;
+					 							(cAlias)->FT_ALIQCOF ,;
+					 							(cAlias)->FT_VALPIS  ,;
+					 							(cAlias)->FT_VALCOF  ,;
+					 							(cAlias)->FT_CSTPIS  ,;
+					 							(cAlias)->FT_CSTCOF   ;
+					 						}	)
+				nQtdProc++
+				If !lRet
+					cErrorTab += "|CK0|" + (cAlias)->FT_NFISCAL + (cAlias)->FT_SERIE + (cAlias)->FT_TIPOMOV + (cAlias)->FT_CLIEFOR + (cAlias)->FT_LOJA + (cAlias)->FT_PRODUTO + (cAlias)->FT_ITEM
+				EndIf 
+			EndIf
+
+			If lRet
+				If nQtdProc >= nParcial
+					If nEvolucao < 90
+						nEvolucao += 10
+					Else
+						nEvolucao += 5
+					EndIf
+					FISA318F3SendInfoToExtractionProgressBar(STR0006, lRet, nEvolucao)			
+					If FwIsInCallStack("FIS319EXECUTEREPROCESS")
+						oRest:setChunkedResponse(formatChunkResponseProgress(STR0006, nEvolucao)) // Gravando registros...
+					EndIF
+					nQtdProc := 0
+				EndIf
+			Else
+				cMsgErro := STR0011 + oBulkCJX:getError() + ;
+				                      oBulkCJY:getError() + ;
+									  oBulkCJZ:getError() + ;
+									  oBulkCK0:getError()
+				FWLogMsg("ERROR",, cGroup, FunName(), , , cMsgErro + cErrorTab)
+				FISA318F3SendInfoToExtractionProgressBar(cMsgErro + cErrorTab, lRet, 0)
+				Exit
+			EndIf
+
+			(cAlias)->(DbSkip())
+		EndDo
+	EndIf
+
+	oBulkCJX:Close()
+	If lRet
+		cMsgErro += oBulkCJX:getError()
+	EndIf
+	oBulkCJX:Destroy()
+	FWFreeObj(oBulkCJX)
+
+	oBulkCJY:Close()
+	If lRet
+		cMsgErro += oBulkCJY:getError()
+	EndIf
+	oBulkCJY:Destroy()
+	FWFreeObj(oBulkCJY)
+
+	oBulkCJZ:Close()
+	If lRet
+		cMsgErro += oBulkCJZ:getError()
+	EndIf
+	oBulkCJZ:Destroy()
+	FWFreeObj(oBulkCJZ)
+
+	oBulkCK0:Close()
+	If lRet
+		cMsgErro += oBulkCK0:getError()
+	EndIf
+	oBulkCK0:Destroy()
+	FWFreeObj(oBulkCK0)
+
+	lRet := ( lRet .And. Empty(cMsgErro) )
+
+	If lRet
+		FISA318F3SendInfoToExtractionProgressBar(STR0006, lRet, 100)
+		If FwIsInCallStack("FIS319EXECUTEREPROCESS")
+			oRest:setLastChunkedResponse(formatChunkResponseProgress(STR0020, 100, STR0021)) // Concluído - Reprocessamento finalizado
+		EndIf
+	Else
+		If ! Empty(cMsgErro) // Erro de FwBulk mas nos últimos registros (ao fazer o Close())
+			FWLogMsg("ERROR",, cGroup, FunName(), , , STR0011 + cMsgErro + cErrorTab)
+			FISA318F3SendInfoToExtractionProgressBar(cMsgErro + cErrorTab, lRet, 0)
+			If FwIsInCallStack("FIS319EXECUTEREPROCESS")
+				oRest:setLastChunkedResponse(formatChunkResponseProgress(STR0011, 0, cMsgErro + cErrorTab)) // Erro FwBulk: 
+			EndIf
+		EndIf
+	EndIf
+EndIf
+
+(cAlias)->(DBCloseArea())
+
+Return lRet
+
+/*---------------------------------------------------------------------
+{Protheus.doc} FIS319SqlName()
+(Para tabelas sem dicionário, a função RetSQLName(<Alias>) retorna conteúdo vazio. Esta função verifica se
+a tabela está no dicionário. Se estiver, utiliza a RetSqlName(), caso contrário pega da DbInfo())
+@author eduardo.cirqueira
+@parâmetros de entrada
+cAlias = Alias da tabela para retornar o seu nome
+@since 21/01/2025
+@return
+cTable - Nome da tabela representada pelo alias recebido
+//-------------------------------------------------------------------*/
+Function FIS319SqlName(cAlias as character)
+Local cTable := '' as character
+
+If FWAliasInDic(cAlias)
+	cTable := RetSqlName(cAlias)
+Else
+	If Select(cAlias) > 0
+		cTable := (cAlias)->( DbInfo(10) )
+	Else
+		cTable := cAlias + cEmpAnt + "0"
+		dbUseArea( .T., __CRDD, cTable, (cAlias), .T., .F.)
+	EndIf
+EndIf
+
+Return cTable
+
+
+/*---------------------------------------------------------------------
+{Protheus.doc} MNTQryExt()
+(Responsável por executar a consulta à SFT para gravação nas tabelas Fato do Monitor Tributário)
+@author eduardo.cirqueira
+
+@parâmetros de entrada
+cAlias = tabela temporaria para a query
+cDtStart = data inicial do período a ser filtrado
+cDtEnd = data final do período a ser filtrado
+aCount = qtd de registros selecionados na query separado por imposto 
+
+@since 21/01/2025
+
+@return 
+lRet - Indica se executou com sucesso a exclusão dos dados do período. Com isso pode incluir 
+       os registros sem causar erro por duplicidade de registro
+//-------------------------------------------------------------------*/
+Static Function MNTQryExt(cAlias as character, cDtStart as character, cDtEnd as character, aCount as array)
+Local cQuery    := ''											as character
+Local cCodRSef  := StrTran( xFUNCodSef({"D","I"},.F.)," ", "" )	as character
+Local cAliasQtd := ''											as character
+Local cFromWhere:= ''                                           as character
+Local cQueryFix := ''                                           as character
+
+Local nFrom     := 0                                            as numeric
+Local nOrderBy  := 0                                            as numeric
+
+Local dDataRef  := CtoD( ('15/' + StrZero(Month(dDataBase),2) + '/' + StrZero(Year(dDataBase),4) ) ) - 365 as date
+
+Local lRet      := .T.	as logical
+
+Local oExtCount := Nil	as object
+Local oExtMnt	:= Nil	as object
+
+Default cDtStart:= StrZero(Year(dDataRef),4) + StrZero(Month(dDataRef),2) + '01'
+Default cDtEnd  := DtoS(dDataBase)
+
+Default aCount  := {0,0}
+
+cDtStart := StrTran(cDtStart, "-", "")
+cDtEnd   := StrTran(cDtEnd  , "-", "")
+
+cQuery := "SELECT FT_FILIAL "
+cQuery +=      ", FT_ENTRADA "
+cQuery +=      ", FT_CLIEFOR "
+cQuery +=      ", FT_LOJA "
+cQuery +=      ", FT_ESTADO "
+cQuery +=      ", FT_TIPOMOV "
+cQuery +=      ", FT_CFOP "
+cQuery +=      ", FT_CTIPI "
+cQuery +=      ", FT_SERIE "
+cQuery +=      ", FT_NFISCAL "
+cQuery +=      ", FT_ITEM "
+cQuery +=      ", FT_PRODUTO "
+cQuery +=      ", FT_POSIPI "
+cQuery +=      ", FT_TIPO "
+cQuery +=      ", FT_VALIPI "
+cQuery +=      ", FT_VALCONT "
+cQuery +=      ", FT_ISENIPI "
+cQuery +=      ", FT_OUTRIPI "
+cQuery +=      ", FT_IPIOBS "
+cQuery +=      ", FT_CLASFIS "
+cQuery +=      ", FT_VALICM "
+cQuery +=      ", FT_ICMSRET "
+cQuery +=      ", FT_ISENICM "
+cQuery +=      ", FT_OUTRICM "
+cQuery +=      ", FT_OBSICM "
+cQuery +=      ", FT_VALPIS "
+cQuery +=      ", FT_VALCOF "
+cQuery +=      ", FT_EMISSAO "
+cQuery +=      ", FT_ALIQICM "
+cQuery +=      ", FT_BASEICM "
+cQuery +=      ", FT_ESPECIE "
+cQuery +=      ", FT_CODISS "
+cQuery +=      ", FT_RECISS "
+cQuery +=      ", FT_BRETPIS "
+cQuery +=      ", FT_BRETCOF "
+cQuery +=      ", FT_ARETPIS "
+cQuery +=      ", FT_ARETCOF "
+cQuery +=      ", FT_VRETPIS "
+cQuery +=      ", FT_VRETCOF "
+cQuery +=      ", FT_BASEPIS "
+cQuery +=      ", FT_BASECOF "
+cQuery +=      ", FT_ALIQPIS "
+cQuery +=      ", FT_ALIQCOF "
+cQuery +=      ", FT_VALPIS "
+cQuery +=      ", FT_VALCOF "
+cQuery +=      ", FT_CSTPIS "
+cQuery +=      ", FT_CSTCOF "
+cQuery +=      ", FT_DIFAL "
+cQuery +=      ", CASE WHEN (FT_CTIPI   <> ? OR FT_VALIPI  > ?) THEN 1 ELSE 0 END AS TEMIPI "		// 1 2
+cQuery +=      ", CASE WHEN  FT_TIPO     = ?                    THEN 1 ELSE 0 END AS TEMISS "		// 3
+cQuery +=      ", CASE WHEN (FT_TIPO    <> ? AND "													// 4
+cQuery +=                 " (FT_CLASFIS <> ? OR FT_VALICM > ?)) THEN 1 ELSE 0 END AS TEMICMS "		// 5 6
+cQuery +=      ", CASE WHEN (FT_VALPIS   > ? OR FT_VALCOF  > ? OR "									// 7 8
+cQuery +=                  " FT_VRETPIS  > ? OR FT_VRETCOF > ?) THEN 1 ELSE 0 END AS TEMPISCOF "	// 9 10
+cQuery += " FROM "      + RetSqlName('SFT') + " FT "
+cQuery += "INNER JOIN " + RetSqlName('SF3') + " F3 "
+cQuery +=                     " ON F3.F3_FILIAL  = FT.FT_FILIAL "
+cQuery +=                    " AND F3.F3_SERIE   = FT.FT_SERIE "
+cQuery +=                    " AND F3.F3_NFISCAL = FT.FT_NFISCAL "
+cQuery +=                    " AND F3.F3_CLIEFOR = FT.FT_CLIEFOR "
+cQuery +=                    " AND F3.F3_LOJA    = FT.FT_LOJA "
+cQuery +=                    " AND F3.F3_CFO     = FT.FT_CFOP "
+cQuery +=                    " AND F3.F3_TIPO    = FT.FT_TIPO "
+cQuery +=                    " AND F3.F3_IDENTFT = FT.FT_IDENTF3 "
+cQuery +=                    " AND F3.F3_ENTRADA = FT.FT_ENTRADA "									
+cQuery +=                    " AND F3.F3_ESPECIE = FT.FT_ESPECIE "
+cQuery +=                    " AND F3.F3_ALIQICM = FT.FT_ALIQICM "
+cQuery +=                    " AND F3.F3_DTCANC  = ? "												// 11
+cQuery +=                    " AND F3.F3_CODRSEF NOT IN (?) "										// 12
+cQuery +=                    " AND F3.D_E_L_E_T_ = ? "												// 13
+cQuery += " WHERE FT_DTCANC = ? "																	// 14
+cQuery +=   " AND FT_ENTRADA BETWEEN ? AND ? "														// 15 16
+cQuery +=   " AND ( "
+cQuery +=         " FT_CTIPI  <> ? OR FT_VALIPI > ? OR "											// 18 19
+cQuery +=         " FT_TIPO    = ? OR "															// 20
+cQuery +=         "(FT_TIPO   <> ? AND (FT_CLASFIS <> ? OR FT_VALICM > ?)) OR "					// 21 22 23
+cQuery +=         " FT_VALPIS  > ? OR FT_VALCOF > ? OR FT_VALCOF > ? OR FT_VRETCOF > ?"			// 24 25 26 27
+cQuery +=         " ) "
+cQuery +=   " AND FT.D_E_L_E_T_ = ? "																// 28
+cQuery += " ORDER BY FT.FT_TIPOMOV, FT.FT_ENTRADA "
+
+oExtMnt := FWExecStatement():New()
+oExtMnt:SetQuery(ChangeQuery(cQuery))
+
+FISA318F3SendInfoToExtractionProgressBar(STR0007, .T., 5)
+
+If oExtMnt != Nil
+    oExtMnt:SetString(1, " ")
+    oExtMnt:SetNumeric(2, 0)
+    oExtMnt:SetString(3, 'S')
+    oExtMnt:SetString(4, 'S')
+    oExtMnt:SetString(5, " ")
+    oExtMnt:SetNumeric(6, 0)
+    oExtMnt:SetNumeric(7, 0)
+    oExtMnt:SetNumeric(8, 0)
+    oExtMnt:SetNumeric(9, 0)
+    oExtMnt:SetNumeric(10, 0)
+    oExtMnt:SetString(11, " ")
+    oExtMnt:SetIn(12, StrTokArr(cCodRSef, ','))
+    oExtMnt:SetString(13, " ")
+    oExtMnt:SetString(14, " ")
+    oExtMnt:SetString(15, cDtStart)
+    oExtMnt:SetString(16, cDtEnd)
+    oExtMnt:SetString(17, " ")
+    oExtMnt:SetNumeric(18, 0)
+    oExtMnt:SetString(19, "S")
+    oExtMnt:SetString(20, "S")
+    oExtMnt:SetString(21, " ")
+    oExtMnt:SetNumeric(22, 0)
+    oExtMnt:SetNumeric(23, 0)
+    oExtMnt:SetNumeric(24, 0)
+    oExtMnt:SetNumeric(25, 0)
+    oExtMnt:SetNumeric(26, 0)
+    oExtMnt:SetString(27, " ")
+
+    cAlias := oExtMnt:OpenAlias()
+	FISA318F3SendInfoToExtractionProgressBar(STR0007, .T., 20)
+Endif
+
+// Reaproveitando o trecho do "From" e "Where" da query principal através da GetFixquery(), que já está com Bind
+cQueryFix  := oExtMnt:GetFixQuery()
+nFrom      := AT("FROM",cQueryFix,1) + 5
+nOrderBy   := AT("ORDER BY",cQueryFix,1)
+cFromWhere := SubSTR(cQueryFix, nFrom, nOrderBy-nFrom)
+
+FWFreeObj(oExtMnt)
+
+// Calculando a quantidade de registros apurados na query de extração, por imposto,
+// para mostrar no Front End a evolução do processamento.
+cQuery := "SELECT SUM( CASE WHEN (FT_CTIPI <> ? OR FT_VALIPI > ?) THEN 1 ELSE 0 END ) AS TEMIPI"		// 1 2
+cQuery +=      ", SUM( CASE WHEN FT_TIPO = ? THEN 1 ELSE 0 END ) AS TEMISS "							// 3
+cQuery +=      ", SUM( CASE WHEN (FT_TIPO    <> ? AND "													// 4
+cQuery +=                      " (FT_CLASFIS <> ? OR FT_VALICM > ?)) THEN 1 ELSE 0 END ) AS TEMICMS "	// 5 6
+cQuery +=      ", SUM( CASE WHEN (FT_VALPIS   > ? OR FT_VALCOF  > ? OR "								// 7 8
+cQuery +=                       " FT_VRETPIS  > ? OR FT_VRETCOF > ?) THEN 1 ELSE 0 END ) AS TEMPISCOF "	// 9 10
+cQuery +=  " FROM ?"
+
+oExtCount := FWExecStatement():New()
+oExtCount:SetQuery(ChangeQuery(cQuery))
+
+FISA318F3SendInfoToExtractionProgressBar(STR0007, .T., 25)
+
+If oExtCount != Nil
+    oExtCount:SetString(1, " ")
+    oExtCount:SetNumeric(2, 0)
+    oExtCount:SetString(3, 'S')
+    oExtCount:SetString(4, 'S')
+    oExtCount:SetString(5, " ")
+    oExtCount:SetNumeric(6, 0)
+    oExtCount:SetNumeric(7, 0)
+    oExtCount:SetNumeric(8, 0)
+    oExtCount:SetNumeric(9, 0)
+    oExtCount:SetNumeric(10, 0)
+	oExtCount:SetUnSafe(11,cFromWhere)
+
+	cAliasQtd := oExtCount:OpenAlias()
+Endif
+
+aCount[1] := (cAliasQtd)->TEMIPI
+aCount[2] := (cAliasQtd)->TEMISS
+aCount[3] := (cAliasQtd)->TEMICMS
+aCount[4] := (cAliasQtd)->TEMPISCOF
+
+FISA318F3SendInfoToExtractionProgressBar(STR0007, .T., 30)
+
+FWFreeObj(oExtCount)
+
+// Se encontrou dados na SFT no período informado, excluir da tabela fato
+// os dados desse período para evitar erro de duplicidade de registros, 
+// e também evitar fazer o DbSeek() (o que prejudicaria a performance).
+If (aCount[1] + aCount[2]) > 0
+	lRet := MNTDelQery(cDtStart,cDtEnd,aCount)
+EndIf
+
+Return lRet
+
+
+/*---------------------------------------------------------------------
+{Protheus.doc} MNTDelQery()
+(Responsável por excluir da tabela fato, os dados do mesmo período que deseja-se incluir. Com isso 
+evita-se a necessidade de atualizar os registros. Sempre fará inclusão.)
+@author eduardo.cirqueira
+@parâmetros de entrada
+cDtStart = data inicial do período a ser filtrado para exclusão
+cDtEnd = data final do período a ser filtrado para exclusão
+aCount = qtd de registros selecionados na query separado por imposto 
+
+@since 21/01/2025
+@Return:
+lRet - Indica se executou sem erro a query de deleção dos dados
+
+//-------------------------------------------------------------------*/
+Static Function MNTDelQery(cDtStart as character,cDtEnd as character, aCount as array)
+Local cQuery   := ''		as character
+Local cMsgErro := ''		as character
+Local cAlias   := ''		as character
+
+Local nX       := 0		as numeric
+
+Local lRet     := .T.	as logical
+
+Local oDelMnt  := Nil	as object
+
+For nX := 1 to Len(aTabMNT)
+	
+	If aCount[nX] > 0
+		cAlias := aTabMNT[nX]
+
+		cQuery := "DELETE FROM ?"
+		cQuery += " WHERE " +cAlias+ "_ENTRAD BETWEEN ? AND ?"
+		cQuery +=   " AND D_E_L_E_T_ = ? "
+
+		oDelMnt := FWExecStatement():New()
+		oDelMnt:SetQuery(cQuery)
+
+		If oDelMnt != Nil
+			oDelMnt:SetUnsafe(1, FIS319SqlName(cAlias))
+    		oDelMnt:SetString(2, cDtStart)
+    		oDelMnt:SetString(3, cDtEnd)
+	    	oDelMnt:SetString(4, " ")
+
+			lRet := (TCSqlExec( oDelMnt:GetFixQuery() ) >= 0)
+
+			If ! lRet
+				cMsgErro := STR0012 + TCSQLError()
+				FWLogMsg("ERROR",, cGroup, FunName(), , , cMsgErro)
+				FISA318F3SendInfoToExtractionProgressBar(cMsgErro, lRet, 0)
+
+				Exit
+			EndIf
+
+		Endif
+
+		FWFreeObj(oDelMnt)
+	EndIf
+Next
+
+If lRet
+	FISA318F3SendInfoToExtractionProgressBar(STR0007, lRet, 40)
+EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FIS319GetStru
+Funcao retorna a estrutura das tabelas
+
+@Param:
+cTabStru - Tabela
+
+@Return:
+aRet - Array contendo estrutura da tabela e indice
+
+@Author Eduardo Nunes Cirqueira
+@Since 21/02/2025
+@Version 1.0
+
+/*/
+//-------------------------------------------------------------------
+Function FIS319GetStru( cTabStru as character )
+
+Local aEstru		:=	{}	        as array
+Local aInd			:=	{}	        as array
+Local aRet			:=	{}	        as array
+Local aCampos		:=	{}	        as array
+
+Local nX            := 0 	        as numeric
+
+Default cTabStru	:= ""
+
+// Estrutura das tabelas sem dicionário para o Monitor Tributário.
+// Considerar os campos da SFT para as características Tipo, Tamanho e Decimais
+//
+// Especificamente a tabela CJX é híbrida em relação ao dicionário de dados.
+// Inicialmente não havia esse indicação de tabela sem dicionário, por isso, passou pelo AtuSX 
+// e entrou no UpdDistr. Posteriormente decidiu-se criá-la SEM Dicionário, o que é feito no OnBoard 
+// do Monitor Tributário.
+//
+// CJX Com dicionário: cliente que executar o UPDDISTR   antes do ONBOARDING;
+// CJX Sem Dicionário: cliente que executar o ONBOARDING antes do UPDDISTR.
+//
+If cTabStru == "CJX"	//	Tabela Fato para IPI no Monitor Tributário
+
+	aAdd( aCampos, { "CJX_FILIAL" , "FT_FILIAL"  } )
+	aAdd( aCampos, { "CJX_ENTRAD" , "FT_ENTRADA" } )
+	aAdd( aCampos, { "CJX_CLIFOR" ,	"FT_CLIEFOR" } )
+	aAdd( aCampos, { "CJX_LOJA"   ,	"FT_LOJA"    } )
+	aAdd( aCampos, { "CJX_ESTADO" ,	"FT_ESTADO"  } )
+	aAdd( aCampos, { "CJX_MUN"    ,	"A1_MUN"     } )
+	aAdd( aCampos, { "CJX_TIPMOV" ,	"FT_TIPOMOV" } )
+	aAdd( aCampos, { "CJX_CFOP"   ,	"FT_CFOP"    } )
+	aAdd( aCampos, { "CJX_CTIPI"  ,	"FT_CTIPI"   } )
+	aAdd( aCampos, { "CJX_SERIE"  ,	"FT_SERIE"   } )
+	aAdd( aCampos, { "CJX_NFISCA" ,	"FT_NFISCAL" } )
+	aAdd( aCampos, { "CJX_ITEM"   ,	"FT_ITEM"    } )
+	aAdd( aCampos, { "CJX_PRODUT" ,	"FT_PRODUTO" } )
+	aAdd( aCampos, { "CJX_POSIPI" ,	"FT_POSIPI"  } )
+	aAdd( aCampos, { "CJX_PAIS"   ,	"A1_PAIS"    } )
+	aAdd( aCampos, { "CJX_SIMNAC" ,	"A1_SIMPNAC" } )
+	aAdd( aCampos, { "CJX_TIPO"   ,	"FT_TIPO"    } )
+	aAdd( aCampos, { "CJX_VALIPI" ,	"FT_VALIPI"  } )
+	aAdd( aCampos, { "CJX_VALCON" ,	"FT_VALCONT" } )
+	aAdd( aCampos, { "CJX_ISEIPI" ,	"FT_ISENIPI" } )
+	aAdd( aCampos, { "CJX_OUTIPI" ,	"FT_OUTRIPI" } )
+	aAdd( aCampos, { "CJX_IPIOBS" ,	"FT_IPIOBS"  } )
+	aAdd( aCampos, { "CJX_CLAFIS" ,	"FT_CLASFIS" } )
+	aAdd( aCampos, { "CJX_VALICM" ,	"FT_VALICM"  } )
+	aAdd( aCampos, { "CJX_ISEICM" ,	"FT_ISENICM" } )
+	aAdd( aCampos, { "CJX_OUTICM" ,	"FT_OUTRICM" } )
+	aAdd( aCampos, { "CJX_OBSICM" ,	"FT_OBSICM"  } )
+	aAdd( aCampos, { "CJX_VALPIS" ,	"FT_VALPIS"  } )
+	aAdd( aCampos, { "CJX_VALCOF" ,	"FT_VALCOF"  } )
+
+	aAdd( aInd , { .T.,                          , "CJX_FILIAL+CJX_TIPMOV+CJX_NFISCA+CJX_SERIE+CJX_CLIFOR+CJX_LOJA+CJX_ITEM+CJX_PRODUT" } )
+	aAdd( aInd , { .F., cTabStru + cEmpAnt + '01', "CJX_FILIAL+CJX_TIPMOV+CJX_ENTRAD"} )
+EndIf
+
+If cTabStru == "CJY"	//	Tabela Fato para ISS no Monitor Tributário
+	aAdd( aCampos, { "CJY_FILIAL" , "FT_FILIAL"  } )
+	aAdd( aCampos, { "CJY_TIPOMO" ,	"FT_TIPOMOV" } )
+	aAdd( aCampos, { "CJY_SERIE"  ,	"FT_SERIE"   } )
+	aAdd( aCampos, { "CJY_NFISCA" ,	"FT_NFISCAL" } )
+	aAdd( aCampos, { "CJY_CLIEFO" ,	"FT_CLIEFOR" } )
+	aAdd( aCampos, { "CJY_LOJA"   ,	"FT_LOJA"    } )
+	aAdd( aCampos, { "CJY_ITEM"   ,	"FT_ITEM"    } )
+	aAdd( aCampos, { "CJY_PRODUT" ,	"FT_PRODUTO" } )
+	aAdd( aCampos, { "CJY_ENTRAD" , "FT_ENTRADA" } )
+	aAdd( aCampos, { "CJY_EMISSA" , "FT_EMISSAO" } )
+	aAdd( aCampos, { "CJY_ESTADO" ,	"FT_ESTADO"  } )
+	aAdd( aCampos, { "CJY_CODISS" ,	"FT_CODISS"  } )
+	aAdd( aCampos, { "CJY_ALIQIC" , "FT_ALIQICM" } )
+	aAdd( aCampos, { "CJY_VALCON" ,	"FT_VALCONT" } )
+	aAdd( aCampos, { "CJY_BASEIC" ,	"FT_BASEICM" } )
+	aAdd( aCampos, { "CJY_VALICM" ,	"FT_VALICM"  } )
+	aAdd( aCampos, { "CJY_ISENIC" ,	"FT_ISENICM" } )
+	aAdd( aCampos, { "CJY_OUTRIC" ,	"FT_OUTRICM" } )
+	aAdd( aCampos, { "CJY_TIPO"   , "FT_TIPO"    } )
+	aAdd( aCampos, { "CJY_ESPECI" , "FT_ESPECIE" } )
+	aAdd( aCampos, { "CJY_RECISS" , "FT_RECISS"  } )
+
+	aAdd( aInd , { .T.,                          , "CJY_FILIAL+CJY_TIPOMO+CJY_NFISCA+CJY_SERIE+CJY_CLIEFO+CJY_LOJA+CJY_ITEM+CJY_PRODUT" } )
+	aAdd( aInd , { .F., cTabStru + cEmpAnt + '01', "CJY_FILIAL+CJY_TIPOMO+DTOS(CJY_ENTRAD)"} )
+EndIf
+
+If cTabStru == "CJZ"	//	Tabela Fato para ICMS no Monitor Tributário
+	aAdd( aCampos, { "CJZ_FILIAL" , "FT_FILIAL"  } )
+	aAdd( aCampos, { "CJZ_TIPOMO" , "FT_TIPOMOV" } )
+	aAdd( aCampos, { "CJZ_SERIE"  , "FT_SERIE"   } )
+	aAdd( aCampos, { "CJZ_NFISCA" , "FT_NFISCAL" } )
+	aAdd( aCampos, { "CJZ_CLIEFO" , "FT_CLIEFOR" } )
+	aAdd( aCampos, { "CJZ_LOJA"   , "FT_LOJA"    } )	
+	aAdd( aCampos, { "CJZ_ITEM"   , "FT_ITEM"    } )	
+	aAdd( aCampos, { "CJZ_PRODUT" , "FT_PRODUTO" } )
+	aAdd( aCampos, { "CJZ_ENTRAD" , "FT_ENTRADA" } )
+	aAdd( aCampos, { "CJZ_EMISSA" , "FT_EMISSAO" } )
+	aAdd( aCampos, { "CJZ_CFOP"   , "FT_CFOP"    } )
+	aAdd( aCampos, { "CJZ_ESTADO" , "FT_ESTADO"  } )
+	aAdd( aCampos, { "CJZ_ALIQIC" , "FT_ALIQICM" } )
+	aAdd( aCampos, { "CJZ_VALCON" , "FT_VALCONT" } )
+	aAdd( aCampos, { "CJZ_BASEIC" , "FT_BASEICM" } )
+	aAdd( aCampos, { "CJZ_VALICM" , "FT_VALICM"  } )
+	aAdd( aCampos, { "CJZ_ISENIC" , "FT_ISENICM" } )
+	aAdd( aCampos, { "CJZ_OUTRIC" , "FT_OUTRICM" } )
+	aAdd( aCampos, { "CJZ_ICMSRE" , "FT_ICMSRET" } )
+	aAdd( aCampos, { "CJZ_TIPO"   , "FT_TIPO"    } )
+	aAdd( aCampos, { "CJZ_CLASFI" , "FT_CLASFIS" } )
+	aAdd( aCampos, { "CJZ_ESPECI" , "FT_ESPECIE" } )
+	aAdd( aCampos, { "CJZ_DIFAL"  , "FT_DIFAL"	 } )
+
+	aAdd( aInd , { .T.,                          , "CJZ_FILIAL+CJZ_TIPOMO+CJZ_NFISCA+CJZ_SERIE+CJZ_CLIEFO+CJZ_LOJA+CJZ_ITEM+CJZ_PRODUT" } )
+	aAdd( aInd , { .F., cTabStru + cEmpAnt + '01', "CJZ_FILIAL+CJZ_TIPOMO+DTOS(CJZ_ENTRAD)"} )
+EndIf
+
+If cTabStru == "CK0"	//	Tabela Fato para PIS/Cofins no Monitor Tributário
+	aAdd( aCampos, { "CK0_FILIAL" , "FT_FILIAL"  } )
+	aAdd( aCampos, { "CK0_TIPOMO" , "FT_TIPOMOV" } )
+	aAdd( aCampos, { "CK0_SERIE " , "FT_SERIE"   } )
+	aAdd( aCampos, { "CK0_NFISCA" , "FT_NFISCAL" } )
+	aAdd( aCampos, { "CK0_CLIEFO" , "FT_CLIEFOR" } )
+	aAdd( aCampos, { "CK0_LOJA"   , "FT_LOJA"    } )
+	aAdd( aCampos, { "CK0_ITEM"   , "FT_ITEM"    } )
+	aAdd( aCampos, { "CK0_PRODUT" , "FT_PRODUTO" } )
+	aAdd( aCampos, { "CK0_ENTRAD" , "FT_ENTRADA" } )
+	aAdd( aCampos, { "CK0_EMISSA" , "FT_EMISSAO" } )
+	aAdd( aCampos, { "CK0_ESTADO" , "FT_ESTADO"  } )
+	aAdd( aCampos, { "CK0_VALCON" , "FT_VALCONT" } )
+	aAdd( aCampos, { "CK0_TIPO"   , "FT_TIPO"    } )
+	aAdd( aCampos, { "CK0_ESPECI" , "FT_ESPECIE" } )
+	aAdd( aCampos, { "CK0_BRETPI" , "FT_BRETPIS" } )
+	aAdd( aCampos, { "CK0_BRETCO" , "FT_BRETCOF" } )
+	aAdd( aCampos, { "CK0_ARETPI" , "FT_ARETPIS" } )
+	aAdd( aCampos, { "CK0_ARETCO" , "FT_ARETCOF" } )
+	aAdd( aCampos, { "CK0_VRETPI" , "FT_VRETPIS" } )
+	aAdd( aCampos, { "CK0_VRETCO" , "FT_VRETCOF" } )
+	aAdd( aCampos, { "CK0_BASEPI" , "FT_BASEPIS" } )
+	aAdd( aCampos, { "CK0_BASECO" , "FT_BASECOF" } )
+	aAdd( aCampos, { "CK0_ALIQPI" , "FT_ALIQPIS" } )
+	aAdd( aCampos, { "CK0_ALIQCO" , "FT_ALIQCOF" } )
+	aAdd( aCampos, { "CK0_VALPIS" , "FT_VALPIS"  } )
+	aAdd( aCampos, { "CK0_VALCOF" , "FT_VALCOF"  } )
+	aAdd( aCampos, { "CK0_CSTPIS" , "FT_CSTPIS"  } )
+	aAdd( aCampos, { "CK0_CSTCOF" , "FT_CSTCOF"  } )
+
+	aAdd( aInd , { .T.,                          , "CK0_FILIAL+CK0_TIPOMO+CK0_NFISCA+CK0_SERIE+CK0_CLIEFO+CK0_LOJA+CK0_ITEM+CK0_PRODUT" } )
+	aAdd( aInd , { .F., cTabStru + cEmpAnt + '01', "CK0_FILIAL+CK0_TIPOMO+DTOS(CK0_ENTRAD)"} )
+EndIf
+
+For nX := 1 to Len( aCampos )
+	aAdd( aEstru, { aCampos[nX][1]							  ,;
+					FWGetSX3Cache(aCampos[nX][2],"X3_TIPO"   ),;
+					FWGetSX3Cache(aCampos[nX][2],"X3_TAMANHO"),;
+					FWGetSX3Cache(aCampos[nX][2],"X3_DECIMAL") } )
+Next
+
+//Retorno sempre sera array de 2 posicoes
+// 1 - Estrutura da tabela 
+// 2 - Indices
+aRet := { aEstru, aInd }
+
+Return ( aRet )
+
+/*---------------------------------------------------------------------
+{Protheus.doc} FIS319TITGetDuplicateSF3()
+(Responsável por executar a consulta e reotnar registros duplicados na tabela SF3)
+@author william.palma
+
+@since 15/07/2025
+//-------------------------------------------------------------------*/
+Function FIS319TITGetDuplicateSF3()
+Local oItem   	   := JsonObject():New()        as object
+Local cAlias       := getNextAlias()            as character  
+Local aItems        							as Array 
+
+TITQueryDuplicateSF3(@cAlias)
+
+// Iniciando o While
+If (cAlias)->(!Eof())
+	aItems := {}
+    While (cAlias)->(!Eof())
+
+		oItem := JsonObject():New()
+        oItem["F3_FILIAL"]        :=   (cAlias)->F3_FILIAL
+        oItem["F3_TIPO"] 		  :=   (cAlias)->F3_TIPO
+		oItem["F3_NFISCAL"]       :=   (cAlias)->F3_NFISCAL
+		oItem["F3_SERIE"]         :=   (cAlias)->F3_SERIE
+		oItem["F3_CLIEFOR"]       :=   (cAlias)->F3_CLIEFOR
+		oItem["F3_LOJA"]          :=   (cAlias)->F3_LOJA
+		oItem["F3_CFO"]           :=   (cAlias)->F3_CFO
+		oItem["F3_ESTADO"]        :=   (cAlias)->F3_ESTADO
+		oItem["F3_ALIQICM"]       :=   (cAlias)->F3_ALIQICM
+		oItem["F3_IDENTFT"]       :=   (cAlias)->F3_IDENTFT
+		oItem["F3_NRLIVRO"]       :=   (cAlias)->F3_NRLIVRO
+		oItem["F3_DTCANC"]        :=   (cAlias)->F3_DTCANC
+		oItem["F3_CODRSEF"]       :=   (cAlias)->F3_CODRSEF
+		oItem["QUANTIDADE"]       :=   (cAlias)->QUANTIDADE
+
+		aAdd(aItems, oItem)
+		
+    (cAlias)->(DbSkip())
+    EndDo
+Else
+    aItems := {}
+EndIf       
+(cAlias)->(DBCloseArea())
+Return aItems
+
+/*---------------------------------------------------------------------
+{Protheus.doc} TITQueryDuplicateSF3()
+(Responsável por executar a consulta e reotnar registros duplicados na tabela SF3)
+@author william.palma
+
+@since 15/07/2025
+//-------------------------------------------------------------------*/
+Static Function TITQueryDuplicateSF3(cAlias as character)
+Local cQuery    := ''											as character
+Local cCodRSef  := StrTran( xFUNCodSef({"D","I"},.F.)," ", "" )	as character
+Local dDataRef  := CtoD( ('15/' + StrZero(Month(dDataBase),2) + '/' + StrZero(Year(dDataBase),4) ) ) - 365 as date
+Local cDtStart:= StrZero(Year(dDataRef),4) + StrZero(Month(dDataRef),2) + '01' as character
+Local cDtEnd  := DtoS(dDataBase) as date
+
+Local oTITDuplicateSF3	:= Nil	as object
+
+cDtStart := StrTran(cDtStart, "-", "")
+cDtEnd   := StrTran(cDtEnd  , "-", "")
+
+cQuery +=      "SELECT F3_FILIAL, F3_TIPO, F3_NFISCAL, F3_SERIE, F3_CLIEFOR, F3_LOJA, F3_CFO, F3_ESTADO, F3_ALIQICM, "
+cQuery +=      "F3_IDENTFT, F3_NRLIVRO, F3_DTCANC, F3_CODRSEF, COUNT(*) AS QUANTIDADE "
+cQuery +=      "FROM " + RetSqlName('SF3') + " F3 "									
+cQuery +=      "INNER JOIN " + RetSqlName('SFT') + " FT ON F3.F3_FILIAL = FT.FT_FILIAL AND F3.F3_SERIE = FT.FT_SERIE AND F3.F3_NFISCAL = FT.FT_NFISCAL "
+cQuery +=      "AND F3.F3_CLIEFOR = FT.FT_CLIEFOR AND F3.F3_LOJA = FT.FT_LOJA AND F3.F3_CFO = FT.FT_CFOP AND F3.F3_IDENTFT = FT.FT_IDENTF3 "
+cQuery +=      "AND F3.F3_ENTRADA = FT.FT_ENTRADA AND F3.F3_ESPECIE = FT.FT_ESPECIE AND F3.F3_ALIQICM = FT.FT_ALIQICM  "
+cQuery += 	   "AND F3.F3_DTCANC = ? AND F3.F3_CODRSEF NOT IN (?) AND FT.D_E_L_E_T_ = ? "
+cQuery += 	   "WHERE F3_ENTRADA BETWEEN ? AND ? "
+cQuery +=      "AND FT.FT_VALCONT > ? AND (FT.FT_CTIPI <> ? OR FT.FT_VALIPI > ? OR FT.FT_TIPO = ? OR (FT.FT_TIPO <> ? "
+cQuery +=      "AND (FT.FT_CLASFIS <> ? OR FT.FT_VALICM > ?)) OR FT.FT_VALPIS > ? OR FT.FT_VALCOF > ? OR FT.FT_VALCOF > ? OR FT.FT_VRETCOF > ? ) AND F3.D_E_L_E_T_ = ? "
+cQuery +=      "GROUP BY F3_FILIAL, F3_TIPO, F3_NFISCAL, F3_SERIE, F3_CLIEFOR, F3_LOJA, F3_CFO, F3_ESTADO, F3_ALIQICM, F3_IDENTFT, "
+cQuery +=      "F3_NRLIVRO, F3_DTCANC, F3_CODRSEF, FT.FT_ITEM "
+cQuery +=      "HAVING COUNT(*) > ? "
+cQuery +=      "ORDER BY F3_FILIAL, QUANTIDADE DESC "
+
+oTITDuplicateSF3 := FWExecStatement():New()
+oTITDuplicateSF3:SetQuery(ChangeQuery(cQuery))
+
+If oTITDuplicateSF3 != Nil 
+    oTITDuplicateSF3:SetString(1, " ")
+	oTITDuplicateSF3:SetIn(2, StrTokArr(cCodRSef, ','))
+	oTITDuplicateSF3:SetString(3, " ")
+    oTITDuplicateSF3:SetString(4, cDtStart)
+    oTITDuplicateSF3:SetString(5, cDtEnd)
+    oTITDuplicateSF3:SetNumeric(6, 0)
+	oTITDuplicateSF3:SetString(7, " ")
+    oTITDuplicateSF3:SetNumeric(8, 0)
+	oTITDuplicateSF3:SetString(9, "S")
+	oTITDuplicateSF3:SetString(10, "S")
+    oTITDuplicateSF3:SetString(11, " ")
+    oTITDuplicateSF3:SetNumeric(12, 0)
+    oTITDuplicateSF3:SetNumeric(13, 0)
+    oTITDuplicateSF3:SetNumeric(14, 0)
+    oTITDuplicateSF3:SetNumeric(15, 0)
+    oTITDuplicateSF3:SetNumeric(16, 0)
+    oTITDuplicateSF3:SetString(17, " ")
+	oTITDuplicateSF3:SetNumeric(18, 1)
+	oTITDuplicateSF3:CBASEQUERY := oTITDuplicateSF3:GETFIXQUERY()
+    cAlias := oTITDuplicateSF3:OpenAlias()
+Endif
+FWFreeObj(oTITDuplicateSF3)
+
+Return
+
+/*/{Protheus.doc} formatChunkResponseProgress
+	Formata retorno para particionar a resposta no response body
+	@type  Static Function
+	@author Caique Carlos
+	@since 21/08/2025
+	@param cStatus, character, mensagem de status da ocorrencia
+	@param nProgress, numeric, porcentagem representante do progresso
+	@param cDetailedMessage, character, detalhamento de um processo
+	@return cResponse + \n, character, retorna uma string + quebra de linha
+	@example
+		formatChunkResponseProgress("INICIANDO",0,"O processo está iniciando, aguarde")
+/*/
+Static function formatChunkResponseProgress(cStatus as character, nProgress as numeric, cDetailedMessage as character) 
+	Local jResponse := JsonObject():New() as object
+
+	Default cStatus := ""
+	Default nProgress := 0
+	Default cDetailedMessage := ""
+
+	jResponse["status"] := cStatus
+	jResponse["progress"] := nProgress
+	jResponse["detailMessage"] := cDetailedMessage
+
+Return jResponse:toJson() + Chr(10)

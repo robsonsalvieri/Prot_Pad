@@ -1,0 +1,941 @@
+#Include "Totvs.ch"
+#include "tlpp-core.th"
+#include "distribution.convergencia.pedido.venda.util.ch"
+
+Static nTamFilPv   	:= TamSX3("DAI_FILPV")[1]
+Static nTamNFiscal 	:= TamSX3("C9_NFISCAL")[1]
+Static nTamNum		:= TamSX3("C6_NUM")[1]
+Static nTamItem		:= TamSX3("C6_ITEM")[1]
+
+/*/{Protheus.doc} WMSSIntPdv
+    (Envia item do pedido de vendas para a convergência)
+    @type  Function
+    @author Equipe WMS
+    @since 13/05/2024
+    @version version
+    @param cDoc, character, numero do pedido
+    @param cFornece, character, cliente entrega
+    @param cLoja, character, loja cliente entrega
+    @param dCriacao, date, dDatabase
+    @param dEmissao, date, emissão do pedido
+    @return oPedido:id, character, id da convergencia
+    @example
+    (examples)
+    @see (DLOGWMSMSP-16130)
+    /*/
+Function WMSSIntPdv(cDoc as character, cFornece as character, cLoja as character, dCriacao as date, dEmissao as date, cTransp as character, cCarga as character, nRecnoSC9) as character
+Local aArea   := GetArea()
+Local oPedido := WMSSaasPedidoVenda():loadByChave(cDoc, cCarga) //Encontra se existem itens como CRIADO para o pedido. Após LIBERADO será uma nova DBZ.
+	
+	DbSelectArea("SC9")
+	SC9->(DbGoTo(nRecnoSC9))
+
+	If WMSSaasInt(SC9->C9_PRODUTO, SC9->C9_LOCAL)
+		//-- Verifica se o documento existente pode ser alterado
+		If !Empty(oPedido:id) .And. !oPedido:canBeUpdated()
+			return oPedido:id
+		ElseIf Empty(oPedido:id)
+			oPedido := WMSSaasPedidoVenda():new(cDoc, cFornece, cLoja, dCriacao, dEmissao, cTransp, cCarga)
+		EndIf
+
+		Begin Transaction
+			If oPedido:parseItemConvergencia(nRecnoSC9)
+				oPedido:save()
+				oPedido:saveItens()
+			EndIf
+		End Transaction
+	EndIf
+	RestArea(aArea)
+Return oPedido:id
+
+
+/*/{Protheus.doc} WMSSVlEPdV
+    Valida se é possivel o estorno de uma liberação para um item do pedido de venda
+    @type  Function
+    @author Filipe Mendes
+    @since 19/06/2024
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    @example
+    (examples)
+    @see (links_or_references)
+    /*/
+Function WMSSVlEPdV(nRecno as numeric, lShowMsg as logical) as logical
+Local aArea        := GetArea()
+Local oPedidoVenda := Nil
+
+	Default lShowMsg := .F.
+	DbSelectArea("SC9")
+	SC9->(DbGoTo(nRecno))
+
+	If WMSSaasInt(SC9->C9_PRODUTO, SC9->C9_LOCAL)
+		oPedidoVenda := WMSSaasPedidoVenda():loadByItem(SC9->C9_PEDIDO, SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+
+		If !Empty(oPedidoVenda:id) .And. !oPedidoVenda:canBeUpdated() .And. oPedidoVenda:isItemEligibleToIntegration(nRecno)
+			If lShowMsg
+				WmsMessage(STR0001 + oPedidoVenda:getDetalheStatus(),"WMSSVlEPdV",5,,,STR0002) //-- "Item ja integrado ao WMS SaaS. Status - "Realize o estorno do pedido no WMS SaaS."
+			EndIF
+			RestArea(aArea)
+			FwFreeObj(oPedidoVenda)
+			Return .F.
+		EndIf
+	EndIf
+
+	RestArea(aArea)
+	FwFreeObj(oPedidoVenda)
+Return .T.
+
+/*/{Protheus.doc} WMSaasCargaValidaEstornoItemPedidoVenda
+    Valida se é possivel o estorno de uma liberação para um item do pedido de venda com carga
+    @type  Function
+    @author Filipe Mendes
+    @since 22/08/2024
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    @example
+    (examples)
+    @see (links_or_references)
+    /*/
+Function WMSaasCargaValidaEstornoItemPedidoVenda(nRecno as numeric, lShowMsg as logical) as logical
+Local aArea        := GetArea()
+Local oPedidoVenda := Nil
+
+	Default lShowMsg := .F.
+	DbSelectArea("SC9")
+	SC9->(DbGoTo(nRecno))
+
+	oPedidoVenda := WMSSaasPedidoVenda():loadByItem(SC9->C9_PEDIDO, SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+
+	If !Empty(oPedidoVenda:id) .And. !Empty(oPedidoVenda:carga) .And. !oPedidoVenda:canBeUpdated() .And. oPedidoVenda:isItemEligibleToIntegration(nRecno)
+		If lShowMsg
+			WmsMessage(STR0001 + oPedidoVenda:getDetalheStatus(),"WMSaasCargaValidaEstornoItemPedidoVenda",,,,STR0002) //-- WMSSaas - WmsValidPreNota - Recebimento já integrado ao WMS SaaS. Status - /"Realize o estorno do pedido no SaaS."
+		EndIF
+		RestArea(aArea)
+		return .F.
+	EndIf
+
+	RestArea(aArea)
+	FwFreeObj(oPedidoVenda)
+Return .T.
+
+/*/{Protheus.doc} WMSSC6VAPv
+    Valida se campos da SC6 foram alterados
+    @type  Function
+    @author Filipe Mendes
+    @since 29/04/2024
+    @version version
+    @param aLinha, array, linha do aCols
+    @return lWasUpdated, boolean, Retorna se campos proibidos foram alterados
+    @example
+    (examples)
+    @see (links_or_references)
+    /*/
+Function WMSSC6VAPv(aLinha as array, cPedido as character) as logical
+Local aAreaSC6       := GetArea("SC6")
+Local nRecnoItem     := aLinha[Len(aLinha)-1]
+Local lIsItemDelete  := aLinha[Len(aLinha)]
+Local cCodItem       := aLinha[WMSSaasGetPosicaoSC6("C6_PRODUTO")]
+Local cLocalItem     := aLinha[WMSSaasGetPosicaoSC6("C6_LOCAL")]
+Local cItem          := aLinha[WMSSaasGetPosicaoSC6("C6_ITEM")]
+Local lPermiteAltPed := .T.
+Local lWMSSaasInt    := .F. 
+Local lRet           := .T.
+
+// -- Lista dos campos que nao podem ser alterados
+Local aForbiddenFields := {;
+	"C6_PRODUTO",;
+	"C6_LOCAL",;
+	"C6_LOTECTL",;
+	"C6_DTVALID",;
+	"C6_ITEM",;
+	"C6_TES";
+	}
+Local lAlterouCampoBloqueado := .F.
+
+	//FuncaoParaValidarSe pelo menos um item da SC9 -SC6 liberado para o SaaS
+	lWMSSaasInt := WMSSaasInt(cCodItem, cLocalItem)
+
+	SC6->(DBSetOrder(1)) //A SC6 nao esta vindo posicionada no item do banco de dados durante a alteracao
+	SC6->(MsSeek(xFilial("SC6")+Padr(cPedido,nTamNum)+Padr(cItem,nTamItem)))
+
+	// -- Valida se o codigo foi alterado e se algum deles controla WMS.
+	If !WMSSaasInt(SC6->C6_PRODUTO, SC6->C6_LOCAL) .And. !lWMSSaasInt
+		RestArea(aAreaSC6)
+		Return .T.
+	EndIF
+
+    lPermiteAltPed := WMSSaasPedidoAlterado(cPedido, cItem)
+
+	// -- Se recno está em branco, foi uma inserção
+	// -- Se recno está em branco e está deletado, nao atualizou
+	If (Empty(nRecnoItem) .And. lIsItemDelete) .Or. Empty(nRecnoItem)
+		RestArea(aAreaSC6)
+		Return .T.
+	EndIf
+
+	// -- Se delete está true e tem recno, foi uma deleção, então atualizou
+	If ((lIsItemDelete .And. !Empty(nRecnoItem))) .And. !lPermiteAltPed
+		WmsMessage(STR0003,"WMSSC6VAPv",5,,,STR0004)//"WMS SaaS - Já existem itens integrados para o item."/"Verifique a tabela de convergência para os itens liberados."
+		RestArea(aAreaSC6)
+		Return  .F.
+	EndIf
+
+	DbSelectArea("SC6")
+	SC6->(DbGoTo(nRecnoItem))
+
+	// -- Valida campos para ver se alteracao foi efetuada
+	aEval(aForbiddenFields, {|field| Iif(SC6->(&(field)) != aLinha[WMSSaasGetPosicaoSC6(field)], lAlterouCampoBloqueado := .T., nil) })
+
+	If lAlterouCampoBloqueado .AND. !lPermiteAltPed
+		lRet := .F.
+ 		WmsMessage(STR0005+CenArr2Str(aForbiddenFields, " | "),"WMSSC6VAPv",5,,,STR0004)//"WMS SaaS - Não é possível fazer alteração nos itens integrados ao WMS Saas. Campos proibidos: "/"Verifique a tabela de convergência para os itens liberados."
+	EndIF
+
+	RestArea(aAreaSC6)
+Return lRet
+
+/*/{Protheus.doc} WMSSC6VLPv
+    Valida se campos da SC6 foram alterados
+    @type  Function
+    @author Filipe Mendes
+    @since 29/04/2024
+    @version version
+    @param aLinha, array, linha do aCols
+    @return lAlterouCampoBloqueado, boolean, Retorna se campos proibidos foram alterados
+    @example
+    (examples)
+    @see (links_or_references)
+    /*/
+Function WMSSC6VLPv(aLinha as array) as logical
+Local aAreaSC6      := GetArea("SC6")
+Local aAreaSC9      := GetArea("SC9")
+Local nRecnoItem    := aLinha[Len(aLinha)-1]
+Local lIsItemDelete := aLinha[Len(aLinha)]
+Local cCodItem      := aLinha[WMSSaasGetPosicaoSC6("C6_PRODUTO")]
+Local cLocalItem    := aLinha[WMSSaasGetPosicaoSC6("C6_LOCAL")]
+Local nQtdLib       := aLinha[WMSSaasGetPosicaoSC6("C6_QTDLIB")]
+Local nQtdVen       := aLinha[WMSSaasGetPosicaoSC6("C6_QTDVEN")]
+Local nQtdEmp       := 0
+Local lCanLib       := .T.
+
+	//Quantidade liberada não pode ser maior do que a quantidade vendida. Não pode liberar do que está no pedido.
+	//Pode alterar quantidade vendidade, sempre para maior do que a quantidade liberada.
+    // -- Se recno está em branco e está deletado, nao atualizou
+	If Empty(nRecnoItem) .Or. lIsItemDelete
+		RestArea(aAreaSC6)
+		RestArea(aAreaSC9)
+		Return .T.
+	EndIf
+
+	DbSelectArea("SC6")
+	SC6->(DbGoTo(nRecnoItem))
+
+    // -- Valida campos para ver se liberacao foi efetuada
+	If WMSSaasInt(cCodItem, cLocalItem)
+		DbSelectArea("SC9")
+		SC9->(DbSetOrder(1))
+		If SC9->(DbSeek(xFilial("SC9")+SC6->C6_NUM+SC6->C6_ITEM))
+			While SC9->(!Eof()) .And. xFilial("SC9")+SC9->C9_PEDIDO+SC9->C9_ITEM == xFilial("SC6")+SC6->C6_NUM+SC6->C6_ITEM
+				If !WMSSVlEPdV(SC9->(Recno()))
+					nQtdEmp += SC9->C9_QTDLIB
+				EndIf
+				SC9->(DbSkip())
+			End
+		EndIf
+
+		If nQtdLib+nQtdEmp > nQtdVen
+			WmsMessage(STR0007,"WMSSC6VLPv",5,,,STR0004) //"WMS SaaS - Quantidade liberada é maior ou igual a quantidade vendida e já empenhada para a integração"/"Verifique a tabela de convergência para os itens liberados."
+			lCanLib := .F.
+		EndIf
+	EndIF
+
+	RestArea(aAreaSC6)
+	RestArea(aAreaSC9)
+Return lCanLib
+
+/*/{Protheus.doc} WMSSaasGetPosicaoSC6
+Efetuar o retorno da posição do aHeader do SC6
+
+@Param cCampo		nome do campo
+
+@author Nilton Rodrigues
+@since 22/03/2022
+@return Nil, indefinido
+/*/
+Function WMSSaasGetPosicaoSC6(cCampo as character)
+Local nX           as numeric
+Local nTotaHeader  as numeric
+Local nPos         as numeric
+
+Static _HeaderSC6
+
+	//- verifica se é um SC6
+	If Substr(aHeader[1,2],1,3) == 'C6_'
+		nTotaHeader:= Len(aHeader)
+		//- Valida o cache se ele existe e se é válido
+		If !_HeaderSC6 == nil .and. nTotaHeader <> Len(_HeaderSC6:Getnames())
+			_HeaderSC6:fromJson("{}")
+			FREEOBJ( _HeaderSC6 )
+			_HeaderSC6 := nil
+		EndIF
+
+		//- Verifica a existencia do cache
+		If _HeaderSC6 == nil
+			_HeaderSC6 := JsonObject():New()
+			//- efetua a carga do cache pela posição do aHeader
+			For nX := 1 to nTotaHeader
+				_HeaderSC6[AllTrim(aHeader[nX,2])] := nX
+			Next nX
+		EndIf
+
+		//- checa a existência do campo, sendo nulo ou 0 força mesmo assim
+		//- a pesquisa do registro pelo aScan
+		If (nPos := _HeaderSC6[AllTrim(cCampo)]) == nil .or. nPos == 0
+			nPos := aScan(aHeader,{|x| AllTrim(x[2]) == cCampo} )
+			//- retiro o nulo
+			_HeaderSC6:DelName(AllTrim(cCampo))
+		EndIf
+	Else
+		nPos := aScan(aHeader,{|x| AllTrim(x[2]) == cCampo} )
+	EndIf
+Return nPos
+
+/*/{Protheus.doc} WMSSExItPV
+    (long_description)
+    @type  Function
+    @author user
+    @since 27/06/2024
+    @version version
+    @param nRecno, numeric, recno da sc9
+    @return return_var, return_type, return_description
+    @example
+    (examples)
+    @see (links_or_references)
+    /*/
+Function WMSSExItPV(nRecno as numeric)
+Local aArea := GetArea()
+Local oWMSSaasItemPedidoVenda
+Local oWMSSaasConvergencia
+Local oPedidoVenda
+Local cIdDBZ
+
+	DbSelectArea("SC9")
+	SC9->(DbGoTo(nRecno))
+
+	If WMSSaasInt(SC9->C9_PRODUTO, SC9->C9_LOCAL)
+		oPedidoVenda := WMSSaasPedidoVenda():loadByItem(SC9->C9_PEDIDO, SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+
+		If !Empty(oPedidoVenda:id) .And. WMSSVlEPdV(nRecno)
+			oWMSSaasItemPedidoVenda := oPedidoVenda:getItem(SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+			cIdDBZ := oWMSSaasItemPedidoVenda:id
+			oWMSSaasItemPedidoVenda:delete()
+
+			// Se não existem mais itens, exclui o cabecalho
+			If Empty(oWMSSaasItemPedidoVenda:loadAllByParentId(cIdDBZ))
+				oWMSSaasConvergencia := WMSSaasConvergencia():loadById(cIdDBZ)
+				oWMSSaasConvergencia:delete()
+			EndIf
+		EndIF
+	EndIf
+	RestArea(aArea)
+Return .T.
+
+/*/{Protheus.doc} WMSaasFinishPedidoVenda
+   	Comportamento copiado da função wmsxExp.
+    @author Filipe Mendes
+    @since 11/07/2024
+    @version v1
+/*/
+/*-----------------------------------------------------------------------------
+Tem por objetivo atualizar a quantidade liberada no pedido de venda de acordo com
+o apanhe no WMS, atualizando informações na SC9 e gerando o empenho para a SDC
+-----------------------------------------------------------------------------*/
+Function WMSaasFinishPedidoVenda(cPedido,cItem, aSequencias,cProduto,cLoteCtl,cNumLote,nQuant,cLocal)
+Local lRet       := .T.
+Local lLote      := Rastro(cProduto)
+Local aAreaAnt   := GetArea()
+Local cAliasSC9  := GetNextAlias()
+Local cAliasSB8  := Nil
+Local cSeqSC9    := ""
+Local cNewSeq    := ""
+Local cMensagem  := ""
+Local nQtdLib    := 0
+Local nQtdLib2UM := 0
+Local nDifLib    := 0
+Local nDifLib2UM := 0
+Local nQtdLibTot := 0
+Local nNovoRecno := 0
+Local dDtValid   := CtoD('  /  /  ')
+Local aDadosAlt  := {}
+Local cSeqIn     := CenArr2Str(aSequencias, "','")
+Local aSequenciasCriadas   := {}
+Local aSequenciasAlteradas := {}
+
+    Conout("INCIO ATUALIZACAO SC9 | WMSaasFinishPedidoVenda")
+	BeginSql Alias cAliasSC9
+		SELECT SC9.C9_SEQUEN,
+				SC9.R_E_C_N_O_ RECNOSC9
+		  FROM %Table:SC9% SC9
+		 WHERE SC9.C9_FILIAL = %xFilial:SC9%
+		   AND SC9.C9_PEDIDO = %Exp:cPedido%
+		   AND SC9.C9_ITEM = %Exp:cItem%
+		   AND SC9.C9_PRODUTO = %Exp:cProduto%
+           AND SC9.C9_SEQUEN IN (%Exp:cSeqIn%)
+		   AND SC9.C9_NFISCAL = '  '
+           AND SC9.C9_BLWMS <> %Exp:WMSSaasPedidoVenda():getStatusFinalizadoWms()%
+		   AND SC9.%NotDel%
+		 ORDER BY C9_SEQUEN
+	EndSql
+	
+	if (cAliasSC9)->(Eof())
+		lRet := .F.
+        return { lRet, STR0009} 
+	endif
+
+	Do While lRet .And. (cAliasSC9)->(!Eof()) .And. QtdComp(nQuant) > 0
+        Conout("ACHOU SC9 | cAliasSC9 ")
+		nNovoRecno := 0 //Limpa variável de controle
+		
+		SC9->(dbGoTo((cAliasSC9)->RECNOSC9)) //-- Posiciona no registro do SC9 correspondente
+		
+
+		//-- Quando é por carga, porém a OS é gerada no pedido
+		cCarga   := SC9->C9_CARGA
+		//-- Pode ser que tenha sido por carga, então não tinha o pedido
+		cPedido  := SC9->C9_PEDIDO
+		cItem    := SC9->C9_ITEM
+		cSeqSC9  := SC9->C9_SEQUEN
+		nQtdLib  := SC9->C9_QTDLIB
+		
+		//-- Joga toda a quantidade liberada deste apanhe na 1a sequencia disponivel do SC9
+		If QtdComp(nQtdLib) > QtdComp(nQuant)
+			nQtdLib    := nQuant
+			nQtdLib2UM := ConvUM(cProduto, nQtdLib, 0, 2)
+			nDifLib    := SC9->C9_QTDLIB - nQtdLib
+			nDifLib2UM := ConvUM(cProduto, nDifLib, 0, 2)
+		Else
+			nQtdLib    := Min(nQtdLib,nQuant)
+			nQtdLib2UM := ConvUM(cProduto, nQtdLib, 0, 2)
+			nDifLib    := 0
+			nDifLib2UM := 0
+		EndIf
+		//-- Guarda o conteudo dos campos do SC9 em uma variavel
+		If QtdComp(nDifLib) > 0
+			aDadosAlt := {}
+			cNewSeq := WMSSaasMaxSeqSC9(cPedido,cItem,cProduto)
+			cNewSeq := Soma1(PadL(cNewSeq, Len(SC9->C9_SEQUEN), "0" )) 
+			aAdd(aDadosAlt,{"C9_SEQUEN",cNewSeq})
+			aAdd(aDadosAlt,{"C9_QTDLIB",nDifLib})
+			aAdd(aDadosAlt,{"C9_QTDLIB2",nDifLib2UM})
+			nNovoRecno := WmsCopy("SC9", aDadosAlt)
+		EndIf
+		//Se controla rastro e não tem a data de validade, deve buscar a mesma
+		If lLote
+			cAliasSB8 := GetNextAlias()
+			BeginSql Alias cAliasSB8
+				SELECT SB8.B8_DTVALID
+				  FROM %Table:SB8% SB8
+				 WHERE SB8.B8_FILIAL = %xFilial:SB8%
+				   AND SB8.B8_PRODUTO = %Exp:cProduto%
+				   AND SB8.B8_LOCAL = %Exp:cLocal%
+				   AND SB8.B8_LOTECTL = %Exp:cLoteCtl%
+				   AND SB8.%NotDel%
+			EndSql
+			TcSetField(cAliasSB8,'B8_DTVALID','D')
+			If (cAliasSB8)->(!Eof())
+				dDtValid := (cAliasSB8)->B8_DTVALID
+			EndIf
+			(cAliasSB8)->(dbCloseArea())
+		EndIf
+
+		Conout("ATUALIZA SB8 .T. | WMSSaasAtuSB8 ")
+		
+		WMSSaasAtuSB8(.T.)
+
+		RecLock("SC9", .F.)
+		SC9->C9_QTDLIB  := nQtdLib
+		SC9->C9_QTDLIB2 := nQtdLib2UM
+		SC9->C9_LOTECTL := cLoteCtl
+		SC9->C9_NUMLOTE := cNumLote
+		SC9->C9_DTVALID := dDtValid
+		SC9->C9_LOCAL   := cLocal
+		SC9->C9_POTENCI := 0
+		SC9->C9_QTDRESE := Min(nQuant,SC9->C9_QTDRESE)
+		SC9->C9_DATALIB := dDataBase
+		SC9->C9_BLWMS   := WMSSaasPedidoVenda():getStatusFinalizadoWms()
+		SC9->(MsUnlock())
+		SC9->(dbCommit())
+		
+		Conout("ATUALIZA SB8 .F. | WMSSaasAtuSB8 ")
+        WMSSaasAtuSB8(.F.)
+		
+		If WMSSaasPedidoVenda():IsItemInConvergencia(SC9->C9_PEDIDO, SC9->C9_ITEM, SC9->C9_PRODUTO, SC9->C9_SEQUEN)
+			aAdd(aSequenciasAlteradas, {;
+				"produto": cProduto,;
+				"item": cItem,;
+				"sequencia": Alltrim(SC9->C9_SEQUEN),;
+				"tipoEstoque": cLocal,;
+				"quantidade":nQtdLib,;
+				"lote":cLoteCtl,;
+				"dataValidade":dDtValid;
+			})
+		EndIf
+
+        //Posiciona no recno da nova SC9 gerada
+		If (nNovoRecno != 0) 
+			SC9->(DbGoTo(nNovoRecno))
+			WMSSaasAtuSB8(.F.)
+			aAdd(aSequenciasCriadas, {;
+				"produto": cProduto,;
+				"item": cItem,;
+				"sequencia": Alltrim(SC9->C9_SEQUEN),;
+				"tipoEstoque": cLocal;
+			})
+		EndIf			
+		//-- Diminui da quantidade total a quantidade liberada
+
+		nQuant -= nQtdLib
+		nQtdLibTot += nQtdLib
+
+		(cAliasSC9)->(DbSkip())
+	EndDo
+	(cAliasSC9)->(DbCloseArea())
+
+	If lRet .And. QtdComp(nQuant) > 0
+	    Conout("SEPARACAO A MAIOR - NQUANT MAIOR QUE 0")
+		//Não foi possível liberar toda a quantidade solicitada do pedido de venda.
+		//Pedido: 000000 - Item: 000 - ID DCF: 000000
+		//Qtd Solicitada: 999.999,000
+		//Qtd Liberada: 999.999,000
+		cMensagem := STR0010+CRLF // "Não foi possível liberar toda a quantidade solicitada do pedido de venda."
+		cMensagem += Trim(RetTitle("C9_PEDIDO"))+": "+cPedido+" - "+Trim(RetTitle("C9_ITEM"))+": "+cItem+CRLF
+		cMensagem += STR0011+AllTrim(Transf((nQuant+nQtdLibTot),PesqPictQt('C9_QTDLIB',14)))+CRLF //"Qtd Solicitada: "
+		cMensagem += STR0012+AllTrim(Transf(nQtdLibTot,PesqPictQt('C9_QTDLIB',14))) // "Qtd Liberada: "
+		WmsMessage(cMensagem,"WMSaasFinishPedidoVenda",1)
+		lRet := .F.
+        return { lRet, cMensagem }
+	EndIf
+
+	RestArea(aAreaAnt)
+	Conout("FIM ATUALIZACAO SC9 | WMSaasFinishPedidoVenda ")
+	
+Return { lRet, STR0013, aSequenciasCriadas, aSequenciasAlteradas}
+
+/*-----------------------------------------------------------------------------
+Pega qual é máxima sequencia de um item do pedido liberado SC9
+-----------------------------------------------------------------------------*/
+Static Function WMSSaasMaxSeqSC9(cPedido,cItem,cProduto)
+Local aAreaAnt  := SC9->(GetArea())
+Local cAliasSeq := GetNextAlias()
+Local cSeqSC9   := "01"
+
+	BeginSql Alias cAliasSeq
+		SELECT MAX(SC9.C9_SEQUEN) MAXSC9SEQ
+		  FROM %Table:SC9% SC9
+		 WHERE SC9.C9_FILIAL  = %xFilial:SC9%
+		   AND SC9.C9_PEDIDO  = %Exp:cPedido%
+		   AND SC9.C9_ITEM    = %Exp:cItem%
+		   AND SC9.C9_PRODUTO = %Exp:cProduto%
+		   AND SC9.%NotDel%
+	EndSql
+	If (cAliasSeq)->(!Eof())
+		cSeqSC9 := (cAliasSeq)->MAXSC9SEQ
+	EndIf
+	(cAliasSeq)->(DbCloseArea())
+	RestArea(aAreaAnt)
+Return cSeqSC9
+
+
+/*/{Protheus.doc  WMSSaasAtuSB8(lEstorno)
+	Atualiza empenhos conforme demanda
+	@type  Static Function
+	@author user
+	@since date
+	@version version
+	@param param, param_type, param_descr
+	@return return, return_type, return_description
+	@example
+	(examples)
+	@see (links_or_references)
+	/*/
+Static Function WMSSaasAtuSB8(lEstorno)
+Return SC9->(GravaEmp(C9_PRODUTO,;  //-- 01.C¢digo do Produto
+				C9_LOCAL,;    	//-- 02.Local
+				C9_QTDLIB,;   	//-- 03.Quantidade
+				C9_QTDLIB2,;  //-- 04.Quantidade
+				C9_LOTECTL,;  //-- 05.Lote
+				C9_NUMLOTE,;  //-- 06.SubLote
+				'',;  //-- 07.Localiza‡Æo
+				'',; //-- 08.Numero de S‚rie
+				Nil,;         	//-- 09.OP
+				C9_SEQUEN,;        	//-- 10.Seq. do Empenho/Libera‡Æo do PV (Pedido de Venda)
+				C9_PEDIDO,;  	//-- 11.PV
+				C9_ITEM,;     	//-- 12.Item do PV
+				'SC6',;       	//-- 13.Origem do Empenho
+				Nil,;        	//-- 14.OP Original
+				Nil,;			//-- 15.Data da Entrega do Empenho
+				NIL,;			//-- 16.Array para Travamento de arquivos
+				lEstorno,;     	   	//-- 17.Estorna Empenho?
+				.F.,;         	//-- 18.? chamada da Proje‡Æo de Estoques?
+				.T.,;         	//-- 19.Empenha no SB2?
+				.F.,;         	//-- 20.Grava SD4?
+				.T.,;         	//-- 21.Considera Lotes Vencidos?
+				.T.,;         //-- 22.Empenha no SB8/SBF?
+				.T.))         //-- 23.Cria SDC?
+
+/*/{Protheus.doc} SaasEstSc9
+	Faz o estorno da liberação na SC9.
+	@type  Function
+	@author Filipe Mendes
+	@since 11/04/2023
+	@version 1.0
+	@param nRecnoSC9, numeric, recno da SC9
+	@return boolean
+	@example
+	(examples)
+	@see (links_or_references)
+	/*/
+Function WMSSaasEstornoSC9(nRecnoSC9)
+Local aArea       := GetArea()
+Local l460Estorna := .F.
+
+Private c460Cond  := ""
+Private lWmsPergEP := .T.
+
+	Pergunte("MT461A",.F.)
+	MV_PAR02 := 2
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Inicializa o processamento                                             ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	If nRecnoSC9
+		dbSelectArea("SC9")
+		MsGoto(nRecnoSC9)
+		l460Estorna := a460Estorna()	
+	EndIf
+	DBSelectArea("SC9")
+
+	//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	//³ Restaura a integridade da rotina                                       ³
+	//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	RestArea(aArea)
+
+Return l460Estorna
+
+/*/{Protheus.doc} WMSSaasGravaFaturamentoPedidoVenda
+	Faz o estorno da liberação na SC9.
+	@type  Function
+	@author Filipe Mendes
+	@since 11/04/2023
+	@version 1.0
+	@param nRecnoSC9, numeric, recno da SC9
+	@return boolean
+	@example
+	(examples)
+	@see (links_or_references)
+	/*/
+Function WMSSaasGravaFaturamentoPedidoVenda(nRecnoSC9 as numeric)
+Local aAreaSC9 := SC9->(GetArea())
+Local oPedidoVenda
+Local oFaturamentoPedidoVenda 
+
+	DbSelectArea("SC9")
+	SC9->(DbGoTo(nRecnoSC9))
+
+	If WMSSaasInt(SC9->C9_PRODUTO, SC9->C9_LOCAL)
+		oPedidoVenda := WMSSaasPedidoVenda():loadByItem(SC9->C9_PEDIDO, SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+		If !Empty(oPedidoVenda:id) .And. oPedidoVenda:isFinalizado()
+			oFaturamentoPedidoVenda := WMSSaasFaturamentoPedidoVenda():loadOrNew(SC9->C9_PEDIDO, SC9->C9_CLIENTE,SC9->C9_LOJA, dDataBase, oPedidoVenda:sequenciaIntegracao)
+			Begin Transaction
+				If oFaturamentoPedidoVenda:parseItemConvergencia(nRecnoSC9)
+					oFaturamentoPedidoVenda:save()
+					oFaturamentoPedidoVenda:saveItens()
+				EndIf
+			End Transaction
+		EndIf
+	EndIf
+	RestArea(aAreaSC9)
+Return
+
+/*/{Protheus.doc} WMSSVlCarg
+	Valida se estorno da carga pode ser efetuado.
+	@type  Function
+	@author user
+	@since 19/08/2024
+	@version version
+	@param param_name, param_type, param_descr
+	@return lRet, boolean, se pode ou não excluir carga
+/*/
+Function WMSSVlCarg(cCarga, cSeqCar, cSeqEnt, cPedCar)
+Local lCanBeUpdated	:= .T.
+Local cAliasSC9		:= GetNextAlias()
+Local cWhere        := "% AND 1 = 1 %"
+Local cFilBkp		:= cFilAnt
+Default cSeqEnt 	:= ""
+Default cPedCar 	:= ""
+
+	If !Empty(cSeqEnt) .And. !Empty(cPedCar)
+		cWhere	:= "% AND SC9.C9_SEQENT = '"+cSeqEnt+"' AND SC9.C9_PEDIDO = '"+cPedCar+"' %"
+	EndIF
+
+	BeginSql Alias cAliasSC9
+		SELECT SC9.C9_FILIAL,SC9.C9_PEDIDO,SC9.R_E_C_N_O_ RECNOSC9
+		  FROM %Table:SC9% SC9
+		 INNER JOIN %Table:DAI% DAI
+		    ON (DAI.%NotDel%
+		   AND ((DAI.DAI_FILPV <> %Exp:Space(nTamFilPv)% AND  SC9.C9_FILIAL = DAI.DAI_FILPV) OR
+				(DAI.DAI_FILPV = %Exp:Space(nTamFilPv)%  AND  SC9.C9_FILIAL  = %Exp:xFilial("SC9")%))
+		   AND DAI.DAI_COD = SC9.C9_CARGA)
+		 WHERE SC9.C9_CARGA = %Exp:cCarga%
+		   AND SC9.C9_SEQCAR = %Exp:cSeqCar%
+		   AND SC9.%NotDel%
+		   %Exp:cWhere%
+	EndSql
+	While (cAliasSC9)->(!Eof())
+		cFilAnt := (cAliasSC9)->C9_FILIAL
+		If !WMSaasCargaValidaEstornoItemPedidoVenda((cAliasSC9)->RECNOSC9, .F.)
+			lCanBeUpdated := .F.
+			WmsMessage(STR0006,"WMSSVlCarg",,,,STR0008+Alltrim((cAliasSC9)->C9_PEDIDO)+STR0015+AllTrim((cAliasSC9)->C9_FILIAL)+STR0016) //"Carga com pedido integrado ou bloqueado pelo WMS SaaS.""Realize o estorno do pedido "" da filial "" no SaaS."
+			exit
+		EndIf
+		(cAliasSC9)->(DbSkip())
+	End
+	(cAliasSC9)->(DbCloseArea())
+	cFilAnt := cFilBkp
+Return lCanBeUpdated
+
+
+/*/{Protheus.doc} WMSSAlCarg
+	Função para atualização da convergência nos processos
+	de montagem, estorno e agrupamento de carga.
+	@type  Function
+	@author user
+	@since 15/08/2024
+	@version version
+	@param nRecnoSC9, numeric, recno SC9
+	@return return_var, return_type, return_description
+	@example
+	(examples)
+	@see (links_or_references)
+/*/
+Function WMSSAlCarg(nRecnoSC9 as numeric, lEstorno as logical)
+Local aAreaSC9    := GetArea("SC9")
+Local aAreaSC5    := GetArea("SC5")
+Local oPedido
+Local cFilAtu     := cFilAnt
+Local cMV_APDLFOP := SuperGetMV("MV_APDLFOP",.F.,"")
+Local lMV_APDLOPE := SuperGetMV("MV_APDLOPE",.F.,.F.)
+
+Default lEstorno := .F.
+
+	DbSelectArea("SC9")
+	SC9->(DbGoTo(nRecnoSC9))
+
+	//Quando montagem de carga com multi filiais alterar a filial logada para a filial de criacao do pedido
+	If !Empty(SC9->C9_FILIAL) .And. lMV_APDLOPE .And. !Empty(cMV_APDLFOP) .And. cMV_APDLFOP <> SC9->C9_FILIAL
+		cFilAnt := SC9->C9_FILIAL
+	EndIf
+	
+	If WMSSaasInt(SC9->C9_PRODUTO, SC9->C9_LOCAL)
+		//Excluir registro criado sem carga
+		WMSSExItPV(nRecnoSC9)
+
+		DbSelectArea("SC5")
+		SC5->(DbSeek(xFilial("SC5")+SC9->C9_PEDIDO))
+		
+		oPedido := WMSSaasPedidoVenda():loadByChave(SC9->C9_PEDIDO, SC9->C9_CARGA) //Encontra se existem itens como CRIADO para o pedido. Após LIBERADO será uma nova DBZ.
+		
+		//-- Verifica se o documento existente pode ser alterado
+		If !Empty(oPedido:id) .And. !oPedido:canBeUpdated()
+			cFilAnt := cFilAtu
+			Return oPedido:id
+		ElseIf Empty(oPedido:id)
+			oPedido := WMSSaasPedidoVenda():new(SC9->C9_PEDIDO, SC9->C9_CLIENTE, SC9->C9_LOJA, dDataBase, SC5->C5_EMISSAO, SC5->C5_TRANSP, SC9->C9_CARGA)
+		EndIf
+
+		Begin Transaction
+			If !WMSSaasPedidoVenda():IsItemInConvergencia(SC9->C9_PEDIDO, SC9->C9_ITEM, SC9->C9_PRODUTO, SC9->C9_SEQUEN); 
+				.And. oPedido:parseItemConvergencia(nRecnoSC9)
+					oPedido:save()
+					oPedido:saveItens()
+			EndIf
+		End Transaction
+
+	EndIf	
+	cFilAnt := cFilAtu
+	
+	RestArea(aAreaSC9)
+	RestArea(aAreaSC5)
+Return
+
+/*/{Protheus.doc} WMSSaasCargaFaturada
+	Valida se carga pode ser faturada
+	@type  Function
+	@author user
+	@since 22/08/2024
+	@version version
+	@param param_name, param_type, param_descr
+	@return return_var, return_type, return_description
+	@example
+	(examples)
+	@see (links_or_references)
+	/*/
+Function WMSSaasCargaFaturada(cCarga)
+Local canBeDone   := .T.
+Local aAreaSC9    := GetArea("SC9")
+Local cAliasSC9   := GetNextAlias()
+Local cMV_APDLFOP := SuperGetMV("MV_APDLFOP",.F.,"")
+Local lMV_APDLOPE := SuperGetMV("MV_APDLOPE",.F.,.F.)
+Local cFilAtu     := cFilAnt
+
+	BeginSql Alias cAliasSC9
+		SELECT SC9.R_E_C_N_O_ RECNOSC9
+		  FROM %Table:SC9% SC9
+		 INNER JOIN %Table:DAI% DAI
+            ON (DAI.%NotDel%
+				AND ((DAI.DAI_FILPV <> %Exp:Space(nTamFilPv)% AND  SC9.C9_FILIAL = DAI.DAI_FILPV) OR
+					(DAI.DAI_FILPV = %Exp:Space(nTamFilPv)%  AND  SC9.C9_FILIAL  = %Exp:xFilial("SC9")%))
+		    AND DAI.DAI_COD = SC9.C9_CARGA)
+		  WHERE SC9.C9_CARGA = %Exp:cCarga%
+	    	AND SC9.%NotDel%
+	EndSql
+
+	DbSelectArea("SC9")
+	SC9->(DbSetOrder(1))
+
+	While (cAliasSC9)->(!Eof())
+		SC9->(DbGoTo((cAliasSC9)->RECNOSC9))
+
+		//Quando montagem de carga com multi filiais alterar a filial logada para a filial de criacao do pedido
+		If !Empty(SC9->C9_FILIAL) .And. lMV_APDLOPE .And. !Empty(cMV_APDLFOP) .And. cMV_APDLFOP <> SC9->C9_FILIAL
+			cFilAnt := SC9->C9_FILIAL
+		EndIf
+
+		oPedido := WMSSaasPedidoVenda():loadByItem(SC9->C9_PEDIDO, SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+
+		//-- Verifica se o documento existente está finalizado
+		If !Empty(oPedido:id) .And. !(oPedido:isFinalizado() .Or. oPedido:isFinalizadoDivergente())
+			canBeDone := .F.
+			FwFreeObj(oPedido)
+			exit
+		EndIf
+
+		FwFreeObj(oPedido)
+	(cAliasSC9)->(DbSkip())
+	End
+
+	(cAliasSC9)->(DbCloseArea())
+	cFilAnt := cFilAtu
+	RestArea(aAreaSC9)
+
+Return canBeDone
+
+
+/*/{Protheus.doc} WMSSaaSPedidoFaturado
+    (Retorna se pedido foi faturado)
+    @author Equipe WMS
+    @since 04/10/2024
+    @param cId, character, id DBZ
+    @return lRet, numeric, pedido foi faturado
+    /*/
+Function WMSSaaSPedidoFaturado(cIdDBZ)
+Local cAliasSC9 := GetNextAlias()
+Local lRet      := .T.
+
+Default cIdDBZ  := "   "
+
+	BeginSql Alias cAliasSC9
+		SELECT SC9.C9_SEQUEN, SC9.R_E_C_N_O_ RECNOSC9
+		  FROM %Table:SC9% SC9
+		 INNER JOIN %Table:DBZ% DBZ
+		    ON DBZ.DBZ_FILIAL = %xFilial:DBZ%
+		   AND DBZ.DBZ_NUMDOC = SC9.C9_PEDIDO
+		   AND DBZ.DBZ_ID     = %Exp:cIdDBZ%
+		   AND DBZ.%NotDel%
+		 INNER JOIN %Table:DBY% DBY 
+		    ON DBY.DBY_FILIAL = %xFilial:DBY%
+		   AND DBZ.DBZ_ID     = DBY.DBY_ID
+		   AND DBY.DBY_ITEM   = SC9.C9_ITEM
+		   AND DBY.DBY_SEQUEN = SC9.C9_SEQUEN
+		   AND DBY.DBY_PRODUT = SC9.C9_PRODUTO 
+		   AND DBY.%NotDel%
+		 WHERE SC9.C9_FILIAL  = %xFilial:SC9%
+		   AND SC9.C9_NFISCAL <> %Exp:Space(nTamNFiscal)%
+		   AND SC9.%NotDel%
+		 ORDER BY C9_SEQUEN
+	EndSql
+	lRet := (cAliasSC9)->(!Eof())
+	(cAliasSC9)->(DbCloseArea())
+
+Return lRet 
+
+/*/{Protheus.doc} WMSSaasPedidoAlterado
+    (Retorna se pedido foi faturado)
+    @author Equipe WMS
+    @since 04/10/2024
+    @param cId, character, id DBZ
+    @return lRet, numeric, pedido foi faturado
+/*/
+Function WMSSaasPedidoAlterado(cPedido, cItem)
+Local lRet  := .T.
+Local aArea := GetArea()
+
+	SC9->(DbSetOrder(1))
+	If SC9->(DbSeek(xFilial("SC9")+Padr(cPedido,nTamNum)+Padr(cItem,nTamItem)))
+		While SC9->(!Eof()) .And. xFilial("SC9")+SC9->C9_PEDIDO+SC9->C9_ITEM == xFilial("SC6")+cPedido+cItem
+			If !WMSSVlEPdV(SC9->(Recno()))
+				lRet := .F.
+				Exit 
+			EndIf
+			SC9->(DbSkip())
+		END
+	EndIf
+	RestArea(aArea)
+
+Return lRet
+
+/*/{Protheus.doc} WMSSaasExcluiFaturamentoPedidoVenda
+	Exclui informações da faturamento antecipado nos dados de convergência
+	@type  Function
+	@author Alexsander Burigo Corrêa
+	@since 10/10/2024
+	@version 1.0
+	@param nRecnoSC9, numeric, recno da SC9
+/*/
+Function WMSSaasExcluiFaturamentoPedidoVenda(nRecnoSC9)
+Local aAreaSC9  := SC9->(GetArea())
+Local cIdDBZ    := ""
+Local oFaturamentoPedidoVenda   as object
+Local oWMSSaasItemPedidoVenda   as object
+Local oConvergencia             as object
+
+
+    DbSelectArea("SC9")
+    SC9->(DbGoTo(nRecnoSC9))
+
+    If WMSSaasInt(SC9->C9_PRODUTO, SC9->C9_LOCAL)
+        oFaturamentoPedidoVenda := WMSSaasFaturamentoPedidoVenda():loadByItem(SC9->C9_PEDIDO, SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN, SC9->C9_NFISCAL, SC9->C9_SERIENF)
+        If !Empty(oFaturamentoPedidoVenda:id)
+            WMSSTrfNfs(nRecnoSC9) 
+            If oFaturamentoPedidoVenda:canBeUpdated()
+                // Verifica item faturamento Pedido Venda que esteja com situação criada para permitir a exclusão
+                oWMSSaasItemPedidoVenda := oFaturamentoPedidoVenda:getItem(SC9->C9_PRODUTO, SC9->C9_ITEM, SC9->C9_SEQUEN)
+                // Faturamento de pedido de venda integrado com o Saas
+                cIdDBZ := oWMSSaasItemPedidoVenda:id
+                oWMSSaasItemPedidoVenda:delete()
+
+                // Se não existem mais itens, exclui o cabecalho
+                If Empty(oWMSSaasItemPedidoVenda:loadAllByParentId(cIdDBZ))
+                    oConvergencia := WMSSaasConvergencia():loadById(cIdDBZ)
+                    oConvergencia:delete()
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+    FwFreeObj(oFaturamentoPedidoVenda)
+    FwFreeObj(oWMSSaasItemPedidoVenda)
+    FwFreeObj(oConvergencia)
+    RestArea(aAreaSC9)
+Return .T.

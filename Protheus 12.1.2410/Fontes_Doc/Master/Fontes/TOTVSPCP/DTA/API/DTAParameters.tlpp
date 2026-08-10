@@ -1,0 +1,490 @@
+#Include "TLPP-CORE.TH"
+#Include "TLPP-REST.TH"
+#Include "DTAPARAMETERS.CH"
+
+#DEFINE DTA_SESSION_PREFIX "DTA_PARAMETERS_"
+#DEFINE DTA_CACHE_CHECK_UPDATE 300
+#DEFINE NUMERIC_PARAMETERS "|quantity_tools|loop_limit|max_tool_calls|model_temperature|"
+#DEFINE LOGICAL_PARAMETERS "|monitor_enabled|"
+#DEFINE QUANTITY_TOOLS_MIN 10
+#DEFINE QUANTITY_TOOLS_MAX 50
+#DEFINE LOOP_LIMIT_MIN 1
+#DEFINE LOOP_LIMIT_MAX 10
+#DEFINE TOOL_CALLS_MIN 1
+#DEFINE TOOL_CALLS_MAX 50
+
+Static _nParameterSize := Nil
+
+/*/{Protheus.doc} DTAParameters
+Classe responsável pela manipulação de parâmetros do DTA
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+/*/
+Class DTAParameters
+
+	Public Method New() Constructor
+
+	@Get("api/pcp/v1/DTAParameters")
+	Public Method getListParameters() as Logical
+	@Post("api/pcp/v1/DTAParameters")
+	Public Method postParameters() as Logical
+	Public Method processUpdateParameters(jBody as Json) as Array
+
+	Private Method tokenIsUpdated(cToken as Character) as Logical
+	Private Method tokenIsValid(cToken as Character) as Logical
+	Private Method validateParametersToUpdate(jBody as Json, aParameters as Array) as Array
+
+	Static Method clearGlobalCache()
+	Static Method getFieldsProperties() as Array
+	Static Method getEditableParameters() as Array
+	Static Method getGlobalParameters() as Json
+	Static Method getGlobalSession() as Character
+	Static Method getParameter(cParameter as Character) as Variant
+	Static Method getParametersFromTable() as Json
+	Static Method hasToken() as Logical
+	Static Method loadDefaultParameters() as Logical
+	Static Method updateParameter(cParameter as Character, xValue as Variant)
+EndClass
+
+/*/{Protheus.doc} New
+Método construtor da classe
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return Self, Object, Instância da classe
+/*/
+Method New() Class DTAParameters
+Return Self
+
+/*/{Protheus.doc} getListParameters
+API para busca da lista de parâmetros [GET] api/pcp/v1/DTAParameters
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return lRet, Logical, Identifica se executou corretamente a busca dos parâmetros
+/*/
+Method getListParameters() as Logical Class DTAParameters
+	Local jData := Nil as Json
+	Local lRet  := .T. as Logical
+	
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+
+	jData := JsonObject():New()
+	jData["fields"  ] := DTAParameters():getFieldsProperties()
+	jData["data"    ] := DTAParameters():getParametersFromTable()
+	jData["editable"] := DTAParameters():getEditableParameters()
+	//Oculta o token de acesso
+	If !Empty(jData["data"]["token"])
+		jData["data"]["token"] := Replicate("*", Len(jData["data"]["token"]))
+	EndIf
+
+	lRet := oRest:setResponse(jData:ToJson())
+	FwFreeObj(jData)
+Return lRet
+
+/*/{Protheus.doc} postParameters
+Endpoint para atualização de parâmetros do DTA [POST] api/pcp/v1/DTAParameters
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return lRet, Logical, Identifica se processou corretamente a atualização de parâmetros
+/*/
+Method postParameters() as Logical Class DTAParameters
+	Local aReturnData  := {}  as Array
+	Local jBodyRequest := Nil as Json
+	Local lRet         := .T. as Logical
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+
+	jBodyRequest := JsonObject():New()
+	jBodyRequest:FromJson(oRest:getBodyRequest())
+	aReturnData  := Self:processUpdateParameters(jBodyRequest)
+	oRest:setStatusCode(aReturnData[1])
+	lRet := oRest:setResponse(aReturnData[2]:toJson())
+	FreeObj(jBodyRequest)
+	FwFreeArray(aReturnData)
+Return lRet
+
+/*/{Protheus.doc} processUpdateParameters
+Faz o processamento da atualização de parâmetros
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@param 01 jBody, Json, Informações dos parâmetros para atualização
+@return aReturnData, Array, Array com informações do processamento, onde
+                            [1] - código http para retorno (201/400)
+                            [2] - json com informações para retorno
+/*/
+Method processUpdateParameters(jBody as Json) as Array Class DTAParameters
+	Local aReturnData   := Nil as Array
+	Local aParameters   := {}  as Array
+	Local nIndex        := 0   as Numeric
+
+	//cria parâmetros default caso não existam
+	//precisa ter os parâmetros default na tabela para conseguir fazer as validações do token
+	//dentro do método tokenIsValid. Por isso a carga já é feita no início
+	DTAParameters():loadDefaultParameters()
+
+	aReturnData := Self:validateParametersToUpdate(jBody, @aParameters)
+	If aReturnData[1] == 200
+		Begin Transaction
+			For nIndex := 1 To Len(aParameters)
+				DTAParameters():updateParameter(aParameters[nIndex], jBody[aParameters[nIndex]])
+			Next nIndex
+		End Transaction
+		aReturnData[2]["status"  ] := "OK"
+		aReturnData[2]["hasTools"] := HZV->(dbSeek(xFilial("HZV")))
+		DTAParameters():clearGlobalCache()
+	EndIf
+	aSize(aParameters, 0)
+Return aReturnData
+
+/*/{Protheus.doc} updateParameter
+Faz a atualização/inclusão de um parâmetro na tabela HZU, fazendo as conversões necessárias para a coluna HZU_VALOR
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@param 01 cParameter, Character, Código do parâmetro
+@param 02 xValue    , Variant  , Valor do parâmetro
+@return Nil
+/*/
+Method updateParameter(cParameter as Character, xValue as Variant) Class DTAParameters
+	
+	loadStatics()
+
+	cParameter := AllTrim(cParameter)
+	If "|"+cParameter+"|" $ NUMERIC_PARAMETERS
+		xValue := AllTrim(Str(xValue))
+	ElseIf "|"+cParameter+"|" $ LOGICAL_PARAMETERS
+		xValue := cValToChar(xValue)
+	ElseIf cParameter == "token" .And. !Empty(xValue)
+		xValue := DTAUtils():encryptData(RTrim(xValue))
+	EndIf
+
+	cParameter := PadR(cParameter, _nParameterSize)
+	HZU->(dbSetOrder(1))
+	If !HZU->(dbSeek(xFilial("HZU") + cParameter))
+		RecLock("HZU", .T.)
+		HZU->HZU_FILIAL := xFilial("HZU")
+		HZU->HZU_NOME   := cParameter
+	Else
+		RecLock("HZU", .F.)
+	EndIf
+
+	HZU->HZU_VALOR := xValue
+	HZU->(MsUnLock())
+
+Return Nil
+
+/*/{Protheus.doc} validateParametersToUpdate
+Faz a validação dos parâmetros antes da atualização
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@param 01 jBody      , Json , Parâmetros para atualização
+@param 02 aParameters, Array, Retorna por referência a lista dos parâmetros que devem ser atualizados
+@return aReturnData, Array, Array com o status da validação, contendo código http e JSON com mensagem de erro.
+/*/
+Method validateParametersToUpdate(jBody as Json, aParameters as Array) as Array Class DTAParameters
+	Local aReturnData   := {}  as Array
+	Local lTokenUpdated := .F. as Logical
+	Local lStatus       := .T. as Logical
+
+	aReturnData   := {200, JsonObject():New()}
+	lTokenUpdated := Self:tokenIsUpdated(jBody["token"])
+	If lTokenUpdated 
+		If !Self:tokenIsValid(jBody["token"])
+			lStatus        := .F.
+			aReturnData[1] := 400
+			aReturnData[2]["message"        ] := STR0001 //"Token inválido."
+			aReturnData[2]["detailedMessage"] := STR0002 //"Não foi possível obter comunicação com o DTA Proxy utilizando o token informado."
+		Else
+			aAdd(aParameters, "token")
+		EndIf
+	EndIf
+Return aReturnData
+
+/*/{Protheus.doc} tokenIsUpdated
+Verifica se o token recebido sofreu modificação
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@param 01 cToken, Character, Token recebido na requisição
+@return lUpdated, Logical, Identifica se o token sofreu alteração
+/*/
+Method tokenIsUpdated(cToken as Character) as Logical Class DTAParameters
+	Local cCurrentToken := ""  as Character
+	Local lUpdated      := .F. as Logical
+	
+	//verifica se o token está vazio, ou se o seu conteúdo possui apenas o caractere *
+	lUpdated := !Empty(cToken) .And. !Empty(StrTran(cToken, "*", ""))
+	If lUpdated
+		//Se teve alguma mudança no token, valida se ele é igual ao que já está registrado na base
+		cCurrentToken := DTAParameters():getParameter("token")
+		If cCurrentToken == cToken
+			lUpdated := .F.
+		EndIf
+	EndIf
+Return lUpdated
+
+/*/{Protheus.doc} tokenIsValid
+Verifica se o token recebido é válido para requisições ao DTA Proxy
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@param 01 cToken, Character, Token recebido na requisição
+@return lValid, Logical, Identifica se o token é válido
+/*/
+Method tokenIsValid(cToken as Character) as Logical Class DTAParameters
+	Local lValid    := .T. as Logical
+	Local jRequest  := Nil as Json
+	Local oDTAProxy := Nil as Object
+
+	Try
+		jRequest := JsonObject():New()
+		jRequest["content"] := STR0011 //"Que dia é hoje?"
+
+		oDTAProxy := DTAProxy():New(UUIDRandomSeq(), jRequest, .F.)
+		oDTAProxy:setToken(cToken)
+		lValid := !Empty(oDTAProxy:runProxyRequest())
+		oDTAProxy:destroy()
+		FreeObj(jRequest)
+	Catch oError
+		lValid := .F.
+	EndTry
+Return lValid
+
+/*/{Protheus.doc} loadDefaultParameters
+Carrega os parâmetros padrões do DTA
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return lParamsExists, Logical, Identifica se os parâmetros já existem. Se .T., indica que HZU já possui valores e não foi carregado nenhum parâmetro
+/*/
+Method loadDefaultParameters() as Logical Class DTAParameters
+	Local aDefaultParameters := {}  as Array
+	Local nIndex             := 0   as Numeric
+	Local lParamsExists      := .T. as Logical
+	
+	HZU->(dbSetOrder(1))
+	If HZU->(dbSeek(xFilial("HZU")))
+		//Se já possui parâmetros não faz a carga dos defaults novamente
+		Return lParamsExists
+	EndIf
+
+	lParamsExists := .F.
+	aAdd(aDefaultParameters, {"token"             , ""})
+	aAdd(aDefaultParameters, {"quantity_tools"    , 30})
+	aAdd(aDefaultParameters, {"loop_limit"        , 3})
+	aAdd(aDefaultParameters, {"max_tool_calls"    , 20})
+	aAdd(aDefaultParameters, {"model_chat"        , "gpt-4.1-mini"})
+	aAdd(aDefaultParameters, {"model_embedding"   , "text-embedding-3-small"})
+	aAdd(aDefaultParameters, {"model_temperature" , 0.5})
+	aAdd(aDefaultParameters, {"proxy_url"         , "https://proxy.dta.totvs.ai/"})
+	aAdd(aDefaultParameters, {"endpoint_chat"     , "v1/chat/completions"})
+	aAdd(aDefaultParameters, {"endpoint_embedding", "v1/embeddings"})
+	aAdd(aDefaultParameters, {"monitor_url", "https://events.dta.totvs.ai/v1"})
+	aAdd(aDefaultParameters, {"monitor_enabled", .F.})
+	aAdd(aDefaultParameters, {"monitor_public_key", ""})
+	aAdd(aDefaultParameters, {"monitor_secret_key", ""})
+
+	Begin Transaction
+		For nIndex := 1 To Len(aDefaultParameters)
+			DTAParameters():updateParameter(aDefaultParameters[nIndex][1], aDefaultParameters[nIndex][2])
+		Next nIndex
+	End Transaction
+	DTAParameters():clearGlobalCache()
+	aSize(aDefaultParameters, 0)
+Return lParamsExists
+
+/*/{Protheus.doc} getParametersFromTable
+Recupera os parâmetros da tabela HZU
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return jParameters, Json, JSON com os parâmetros obtidos da tabela HZU
+/*/
+Method getParametersFromTable() as Json Class DTAParameters
+	Local cParameter  := ""  as Character
+	Local jParameters := Nil as Json
+	
+	jParameters := JsonObject():New()
+	HZU->(dbSetOrder(1))
+	HZU->(dbSeek(xFilial("HZU")))
+	While HZU->(!Eof()) .And. HZU->HZU_FILIAL == xFilial("HZU")
+		cParameter := AllTrim(HZU->HZU_NOME)
+		jParameters[cParameter] := AllTrim(HZU->HZU_VALOR)
+		If "|"+cParameter+"|" $ NUMERIC_PARAMETERS
+			jParameters[cParameter] := Val(jParameters[cParameter])
+		EndIf
+		If "|"+cParameter+"|" $ LOGICAL_PARAMETERS
+			jParameters[cParameter] := jParameters[cParameter] == ".T."
+		EndIf
+		HZU->(dbSkip())
+	End
+Return jParameters
+
+/*/{Protheus.doc} getFieldsProperties
+Retorna as propriedades de exibição para os campos de parâmetros
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return aFields, Array, Array com as propriedades de exibição dos parâmetros
+/*/
+Method getFieldsProperties() as Array Class DTAParameters
+	Local aFields     := {}  as Array
+	Local jProperties := Nil as Json
+	Local nIndex      := 0   as Numeric
+
+	jProperties := JsonObject():New()
+	jProperties["property"     ] := "token"
+	jProperties["label"        ] := STR0012 //"Token Autenticação"
+	jProperties["container"    ] := STR0034 //"Parâmetros DTA"
+	jProperties["required"     ] := .T.
+	jProperties["gridColumns"  ] := 12
+	jProperties["order"        ] := ++nIndex
+	jProperties["disabled"     ] := .T.
+	jProperties["secret"       ] := .T.
+	jProperties["help"         ] := STR0013 //"Token necessário para autenticação com o DTA Proxy"
+	aAdd(aFields, jProperties)
+	jProperties := Nil
+Return aFields
+
+/*/{Protheus.doc} getEditableParameters
+Retorna um array com o nome dos parâmetros que podem ser alterados pelo usuário
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return aEditable, Array, Array com os parâmetros que podem ser editados
+/*/
+Method getEditableParameters() as Array Class DTAParameters
+	Local aEditable := {} as Array
+	
+	aAdd(aEditable, "token")
+Return aEditable
+
+/*/{Protheus.doc} getParameter
+Retorna o valor de um parâmetro do DTA
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@param 01 cParameter, Character, Nome do parâmetro
+@return xValue, Variant, Valor do parâmetro solicitado
+/*/
+Method getParameter(cParameter as Character) as Variant Class DTAParameters
+	Local jParameters := Nil as Json
+	Local xValue      := Nil as Variant
+
+	jParameters := DTAParameters():getGlobalParameters()
+	If jParameters:hasProperty(cParameter)
+		xValue := jParameters[cParameter]
+	EndIf
+	FreeObj(jParameters)
+Return xValue
+
+/*/{Protheus.doc} getGlobalParameters
+Recupera os parâmetros da variável global
+Se necessário, atualiza conforme dados existentes na tabela
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return jParameters, Json, Json com os parâmetros do DTA
+/*/
+Method getGlobalParameters() as Json Class DTAParameters
+	Local cSessionId  := ""  as Character
+	Local jParameters := Nil as Json
+	Local lRet        := .T. as Logical
+
+	cSessionId := DTAParameters():getGlobalSession()
+	lRet       := GetGlbVars(cSessionId, @jParameters)
+	If lRet
+		If jParameters["created_at"] > Seconds() .Or. Seconds() - jParameters["created_at"] >= DTA_CACHE_CHECK_UPDATE
+			lRet := .F.
+			FreeObj(jParameters)
+		EndIf
+	EndIf
+	
+	If !lRet
+		jParameters := DTAParameters():getParametersFromTable()
+		jParameters["created_at"] := Seconds()
+		If !Empty(jParameters["token"])
+			jParameters["token"] := DTAUtils():decryptData(RTrim(jParameters["token"]))
+		EndIf
+		PutGlbVars(cSessionId, jParameters)
+	EndIf
+Return jParameters
+
+/*/{Protheus.doc} getGlobalSession
+Retorna o nome da sessão global para cache de parâmetros do DTA
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return cSessionId, Character, Código da sessão global para cache de parâmetros
+/*/
+Method getGlobalSession() as Character Class DTAParameters
+	Local cSessionId := "" as Character
+
+	cSessionId := DTA_SESSION_PREFIX + cFilAnt
+Return cSessionId
+
+/*/{Protheus.doc} clearGlobalCache
+Limpa o cache registrado em memória global.
+
+@author lucas.franca/renan.roeder
+@since 23/04/2025
+@version P12
+@return Nil
+/*/
+Method clearGlobalCache() Class DTAParameters
+	ClearGlbValue(DTAParameters():getGlobalSession())
+Return
+
+/*/{Protheus.doc} hasToken
+Verifica se existe token configurado para o DTA
+
+@author lucas.franca/renan.roeder
+@since 20/05/2025
+@version P12
+@return lHasToken, Logical, Identifica se existe token configurado
+/*/
+Method hasToken() as Logical Class DTAParameters
+	Local lHasToken := .F. as Logical
+
+	If AliasInDic("HZV")
+		loadStatics()
+		HZU->(dbSetOrder(1))
+		lHasToken := HZU->(dbSeek(xFilial("HZU") + PadR("token", _nParameterSize))) .And. !Empty(HZU->HZU_VALOR)
+	EndIf
+Return lHasToken
+
+/*/{Protheus.doc} loadStatics
+Carrega valor nas variáveis statics deste fonte
+
+@type  Static Function
+@author lucas.franca/renan.roeder
+@since 20/05/2025
+@version P12
+@return Nil
+/*/
+Static Function loadStatics()
+	If Empty(_nParameterSize)
+		_nParameterSize := GetSX3Cache("HZU_NOME", "X3_TAMANHO")
+	EndIf
+Return

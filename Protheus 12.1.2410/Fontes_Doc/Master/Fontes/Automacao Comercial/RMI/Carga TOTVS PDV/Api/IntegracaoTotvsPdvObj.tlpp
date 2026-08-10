@@ -1,0 +1,615 @@
+#include "PROTHEUS.CH"
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+
+Class IngeracaoTotvsPdv
+
+	Public Method New()                     as Object
+    Public Method CloseEnvironment()        as Variant
+    Public Method GetRetornoIntg()          as Object
+    Public Method GetValidParam()           as Logical
+    Public Method BuscaDadosAtualizados()   as Variant
+    Public Method CadastraPontoIntegracao() as Logical
+    Public Method SetGrupoTabelas()         as Variant
+    Public Method GetTabelasGrupo()         as Character    
+
+    Private Method ValidaParamApi()         as Logical
+    Private Method OpenEnvironment()        as Variant
+    Private Method ValidaEmpFil()           as Logical  
+    Private Method ValidaPontoIntegracao()  as Logical
+    Private Method ValidaGrupoTabelas()     as Logical
+    Private Method PreparaRetorno()         As Variant
+    Private Method GeraTabelas()            as Array
+    Private Method GetNMxLote()             as Numeric
+    Private Method SetNMxLote()             as Variant   
+
+    Public Data lSemaforo      as Logical      // Indica se conseguiu reservar
+    Public Data lParamValidos  as Logical      // Indica se os parametro enviados para a API sao validos
+
+    Private Data lTestComunicacao       as Logical
+    Private Data oJRequestIntgPdv       as Object
+    Private Data cCodAss                as Character    // Codigo do Assinate
+    Private Data cPontoInteg            as Character    // Codigo do Ponto de Integraçao
+    Private Data cEmpresaPC             as Character    // Empresa do Ponto de Integraçao
+    Private Data cFilialPC              as Character    // Filial do Ponto de Integraçao
+    Private Data cGruposInteg           as Character    // Grupos de tabelas para Integraçao
+    Private Data cSemaforo              as Character    // Semaforo para controle
+    Private Data oJRetornoIntg          as Object       // Retorno com os dados da Integraçao 
+    Private Data cAliasIntegPDV         as Character    // Alias da query dos dados da Integraçao
+    Private Data nMaxLote               as Numeric      // Quantidade maxima de registros por lote (default 500)
+    Private Data cBanco                 as Character    // Banco de dados utilizado (SQL / ORACLE / Postgres)
+    Private Data aDadosStatus           as Array        // Array com o recno da MIP para atualização do status
+    Private Data aJGruposTabelas        as Array
+    Private data aJRegistro             as Array
+    Private Data aJTabelas              as Array
+    Private Data cFilOrig               as Character
+    Private Data cEmpOrig               as Character
+
+EndClass
+
+/*/{Protheus.doc} New
+Construtor da classe
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+/*/
+Method New(oRest as Object, cCodAssinante as Character, lTstComunicacao as Logical) As Object Class IngeracaoTotvsPdv
+
+Default lTstComunicacao := .F.
+
+Self:oJRequestIntgPdv   := JsonObject():New()
+Self:oJRequestIntgPdv:FromJson(oRest:getQueryRequest():ToJson())
+Self:oJRetornoIntg      := JsonObject():New()
+Self:cCodAss            := cCodAssinante                                    // Codigo do Assinate    
+Self:lTestComunicacao   := lTstComunicacao                                  // Informa se eh teste de comunicaçao
+Self:cPontoInteg        := AlLTrim(Self:oJRequestIntgPdv['CodPontoInteg'])  // Codigo do Ponto de Integraçao
+Self:cEmpresaPC         := AlLTrim(Self:oJRequestIntgPdv['EmpresaPC'])      // Empresa do Ponto de Integraçao
+Self:cFilialPC          := AlLTrim(Self:oJRequestIntgPdv['FilialPC'])       // Filial do Ponto de Integraçao
+
+If !lTstComunicacao
+    Self:cGruposInteg       := AllTrim(Self:oJRequestIntgPdv['GruposInteg'])    // Grupos de tabelas para Integraçao
+EndIf
+Self:lParamValidos      := .T.                                                  // Indica se os parametro enviados para a API sao validos
+Self:nMaxLote           := 1000                                                 // Quantidade maxima de registros por lote (default 500)
+Self:cBanco             := AllTrim( Upper( TcGetDB() ) )                        // Banco de dados utilizado (SQL / ORACLE / Postgres)
+Self:lSemaforo          := .T.
+Self:aDadosStatus       := {}                                                   // Dados para atualizaçao do status do registro da Integraçao na MIP
+Self:aJGruposTabelas    := {}
+Self:cSemaforo          := "IngeracaoTotvsPdv" + "_" + Self:cEmpresaPC + "_" + Self:cFilialPC + "_" + Self:cPontoInteg
+Self:aJRegistro         := {}                                                   // Registros da tabela
+Self:aJTabelas          := {}                                                   // Relaçao tabelas e seus registros
+Self:cFilOrig           := ""
+Self:cEmpOrig           := ""
+
+Self:OpenEnvironment()
+Self:ValidaParamApi()
+Self:SetNMxLote()
+
+Return Self
+
+/*/{Protheus.doc} OpenEnvironment
+Abre ambiente para uso
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+/*/
+Method OpenEnvironment() As Variant Class IngeracaoTotvsPdv
+
+Self:cEmpOrig := cEmpAnt
+Self:cFilOrig := cFilAnt
+
+If Self:ValidaEmpFil()    
+    cEmpAnt := Self:cEmpresaPC
+    cFilAnt := Self:cFilialPC   
+EndIf
+
+Return
+
+/*/{Protheus.doc} CloseEnvironment
+Fecha ambiente
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+/*/
+Method CloseEnvironment() As Variant Class IngeracaoTotvsPdv
+
+FwFreeObj(Self:oJRequestIntgPdv)
+Self:oJRequestIntgPdv := nIL
+FwFreeObj(Self:oJRetornoIntg)
+Self:oJRetornoIntg := Nil
+
+FwFreeArray(Self:aJRegistro)
+FwFreeArray(Self:aJTabelas)
+
+cEmpAnt := Self:cEmpOrig
+cFilAnt := Self:cFilOrig
+
+Return
+
+/*/{Protheus.doc} ValidaEmpFil
+Valida Empresa e Filial informadas pelo Ponto de Integraçao
+@author joao.marcos
+@since 09/04/2024
+@version 1.0
+/*/
+Method ValidaEmpFil() As Logical Class IngeracaoTotvsPdv
+Local lRet          := .T.                  as Logical
+Local aGrpCompany   := FWAllGrpCompany()    as Array
+Local aAllFilial    := FWLoadSM0()          as Array
+Local nX            := 0                    as Numeric
+Local lComanyOk     := .F.                  as Logical
+Local lFilialOk     := .F.                  as Logical
+
+For nX := 1 To Len(aGrpCompany)
+    If AllTrim( Self:cEmpresaPC ) == AllTrim( aGrpCompany[nX] )
+        lComanyOk := .T.
+        Exit
+    EndIf
+Next
+
+If lComanyOk
+    For nX := 1 To Len(aAllFilial)
+        If AllTrim( Self:cEmpresaPC ) == AllTrim( aAllFilial[nX][1] ) .AND. AllTrim( Self:cFilialPC ) == AllTrim( aAllFilial[nX][2] )
+            lFilialOk := .T.
+            Exit
+        EndIf
+    Next
+EndIf
+
+If !(lComanyOk .AND. lFilialOk)
+    Self:oJRetornoIntg['CodigoRetorno']    := "05"
+    Self:oJRetornoIntg['Erro']             := "Empresa e/ou Filial invalidos."
+    Self:lParamValidos                      := .F.
+    LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | Erro: Empresa ou Filial invalidos.", {"05",Self:cEmpresaPC, Self:cFilialPC})
+    Self:lParamValidos := .F.
+    lRet := .F.
+EndIf
+
+Return lRet
+
+/*/{Protheus.doc} ValidaParamApi
+Valida os parametros enviados para a API
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return lRet, logical, parametros validos ou nao
+/*/
+Method ValidaParamApi() As Logical Class IngeracaoTotvsPdv
+
+LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | ValidPamApi", {Self:cPontoInteg, Self:cEmpresaPC, Self:cFilialPC, Self:cGruposInteg})
+
+If Self:lParamValidos
+    // Valida Ponto de Integraçao
+    If !Self:ValidaPontoIntegracao(Self:cPontoInteg,Self:cEmpresaPC,Self:cFilialPC)
+        Self:oJRetornoIntg['CodigoRetorno']    := "02"
+        Self:oJRetornoIntg['Erro']             := "Ponto de Integraçao não cadastrado."
+        Self:lParamValidos                      := .F.
+        LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | Erro: Ponto de Integraçao não cadastrado.", {"02",Self:cPontoInteg})
+    EndIf
+
+    // Valida Grupos de tabelas
+    If !Self:lTestComunicacao .AND. Empty(Self:cGruposInteg)
+        Self:oJRetornoIntg['CodigoRetorno'] := "03"
+        Self:oJRetornoIntg['Erro']          := "Grupo de Tabelas não informado."
+        Self:lParamValidos                      := .F.
+        LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | Erro: Grupo de Tabelas não informado.", {"03",Self:cGruposInteg})
+    ElseIf !Self:lTestComunicacao .AND. !Self:ValidaGrupoTabelas(Self:cGruposInteg)
+        Self:oJRetornoIntg['CodigoRetorno'] := "04"
+        Self:oJRetornoIntg['Erro']          := "Grupo de Tabelas não cadastrado."
+        Self:lParamValidos                      := .F.
+        LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | Erro: Grupo de Tabelas não cadastrado.", {"04",Self:cGruposInteg})
+    EndIf
+EndIf
+
+Return
+
+/*/{Protheus.doc} GetValidParam
+Retorna se os parametros enviados para a API sao validos
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return lRet, logical, Ponto de Integraçao cadastrado ou nao
+/*/
+Method GetValidParam() As Logical Class IngeracaoTotvsPdv
+Return Self:lParamValidos
+
+/*/{Protheus.doc} ValidaPontoIntegracao
+Valida se o Ponto de Integraçao possui cadastro na Retaguarda
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return lRet, logical, Ponto de Integraçao cadastrado ou nao
+/*/
+Method ValidaPontoIntegracao() As Logical Class IngeracaoTotvsPdv
+Local lRet := .T.   as Logical
+//MIQ_FILIAL+MIQ_COD+MIQ_EMPPC+MIQ_FILPC                                                                                                                          
+If Empty( GetAdvFVal( "MIQ", "MIQ_COD", xFilial("MIQ") + PadR(Self:cPontoInteg,TamSx3("MIQ_COD")[1]) + PadR(Self:cEmpresaPC,TamSx3("MIQ_EMPPC")[1]) + PadR(Self:cFilialPC,TamSx3("MIQ_FILPC")[1]), 1, "" ) )
+    lRet := .F.
+EndIf
+
+Return lRet
+
+/*/{Protheus.doc} ValidaGrupoTabelas
+Valida se Grupo de Tabelas informado possui cadastro na Retaguarda
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return lRet, logical, Grupo de Tabelas cadastrado ou nao
+/*/
+Method ValidaGrupoTabelas() As Logical Class IngeracaoTotvsPdv
+Local lRet          := .T.                                  as Logical
+Local aGruposInteg  := StrToArray(Self:cGruposInteg,",")    as Array
+Local nX := 0                                               as Numeric
+
+For nX := 1 To Len(aGruposInteg)
+    //MIR_FILIAL+MIR_COD                                                                                                                         
+    If Empty( GetAdvFVal( "MIR", "MIR_COD", xFilial("MIR") + PadR(aGruposInteg[nX],TamSx3("MIR_COD")[1]), 1, "" ) )
+        lRet := .F.
+    EndIf
+Next
+
+Return lRet
+  
+/*/{Protheus.doc} BuscaDadosAtualizados
+Faz a query para busca de dados atualizados conforme parametros
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+/*/
+Method BuscaDadosAtualizados() As Variant Class IngeracaoTotvsPdv
+
+Local cQuery            := ""   as Character
+Local oQuery            := Nil  as Object
+Local aGruposInteg      := StrToArray(Self:cGruposInteg,",")     as Array   // Grupos para Integraçao
+Local cGruposIntegQuery := ""   as Character                                // Grupos para Integraçao formatados ex: '001','002','003'
+Local cCamposQuery      := ""   as Character
+Local nX                := 0    as Numeric
+Local nQtdMxLote        := Self:GetNMxLote()                        as Numeric      // Quantidade maxima do lote da dedos
+Local cNoLock           := Iif("MSSQL" $ Self:cBanco, "WITH (NOLOCK)", "")
+Local cTime             := Time()
+Local lMipTent          := MIP->( ColumnPos("MIP_TENTAT") ) > 0
+
+LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | BuscaDadosAtualizados - Inicio.", )
+
+If Self:lParamValidos
+
+    For nX := 1 To Len(aGruposInteg)
+        cGruposIntegQuery += "'" + aGruposInteg[nX] + "',"
+    Next
+
+    cGruposIntegQuery := cGruposIntegQuery + "'999'"
+
+    cCamposQuery += " MHN.MHN_CODGRP,"
+    cCamposQuery += " MHQ.MHQ_EVENTO,"
+    cCamposQuery += " MHQ.MHQ_CHVUNI,"
+    cCamposQuery += " MHN.MHN_TABELA,"
+    cCamposQuery += " MHN.MHN_CHAVE,"
+    cCamposQuery += " MIP.MIP_UUID,"
+    cCamposQuery += " MIP.R_E_C_N_O_ MIPRECNO,"
+    cCamposQuery += " MHQ.R_E_C_N_O_ MHQRECNO"
+
+    If lMipTent
+        cCamposQuery += " , MIP.MIP_TENTAT "
+    EndIf
+    
+    cQuery := " SELECT " + Iif( "MSSQL" $ Self:cBanco, "TOP " + cValToChar(nQtdMxLote), "") + cCamposQuery
+
+    cQuery += " FROM " + RetSQLName("MIP") + " MIP " + cNoLock
+
+    cQuery += " INNER JOIN " + RetSQLName("MHN") + " MHN " + cNoLock
+
+    cQuery += " ON MHN.MHN_FILIAL = ?"                                      // #1
+    cQuery +=       " AND MHN.MHN_COD = MIP.MIP_CPROCE"
+    cQuery +=       " AND MHN.MHN_CODGRP IN ( " + cGruposIntegQuery + " ) "
+    cQuery +=       " AND MHN.D_E_L_E_T_ = ? "                              // #2
+
+    cQuery += " INNER JOIN " + RetSQLName("MHQ") + " MHQ " + cNoLock
+
+    cQuery += " ON MHQ.MHQ_FILIAL = ?"                                      // #3  
+    cQuery +=       " AND MHQ.MHQ_CPROCE = MIP.MIP_CPROCE"
+    cQuery +=       " AND MHQ.MHQ_UUID = MIP.MIP_UIDORI"
+    cQuery +=       " AND MHQ.D_E_L_E_T_ = ?"                               // #4
+
+    cQuery += " WHERE MIP.MIP_FILIAL = ?"                                   // #5
+    cQuery +=       " AND MIP.MIP_PDV = ?"                                  // #6
+    cQuery +=       " AND ( MIP.MIP_STATUS = ?"                             // #7 
+    // Considera tentativas menor que 3
+    If lMipTent
+        cQuery +=           " OR (MIP.MIP_STATUS = '3' AND MIP.MIP_TENTAT < '3')"
+    EndIf
+    cQuery += " )"
+    cQuery +=       " AND MIP.D_E_L_E_T_ = ?"                               // #8
+
+    cQuery += " ORDER BY MIP.MIP_DATGER, MIP.MIP_HORGER"
+
+    If !("MSSQL" $ Self:cBanco)
+        // Retirado para banco SQL Server pois a ChangeQuery esta retirando a palavra NOLOCK
+        cQuery := ChangeQuery(cQuery)
+    EndIf
+
+    LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados | Antes de executar a FwExecStatement - Grupos: " + cGruposIntegQuery, Time())
+    oQuery := FwExecStatement():New(cQuery)
+    LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados | Depois de executar a FwExecStatement - Grupos: " + cGruposIntegQuery, Time())
+
+    oQuery:SetString(1, xFilial("MHN")  )   // #1
+    oQuery:SetString(2, " "             )   // #2
+    oQuery:SetString(3, xFilial("MHQ")  )   // #3
+    oQuery:SetString(4, " "             )   // #4
+    oQuery:SetString(5, xFilial("MIP")  )   // #5
+    oQuery:SetString(6, Self:cPontoInteg)   // #6
+    oQuery:SetString(7, "1"             )   // #7
+    oQuery:SetString(8, " "             )   // #8
+
+    LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados | Antes de executar a Query - Grupos: " + cGruposIntegQuery, Time())
+    Self:cAliasIntegPDV := oQuery:OpenAlias()
+    LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados | Depois de executar a Query - Grupos: " + cGruposIntegQuery, Time())
+
+    LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados - Tempo | Consulta: ", { ElapTime(cTime, Time()), oQuery:GetFixQuery() } )
+Else
+    LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | BuscaDadosAtualizados: Busca nao realizada, parametros invalidos.", )
+EndIf
+
+LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados | Antes de executar a PreparaRetorno - Grupos: " + cGruposIntegQuery, Time())
+Self:PreparaRetorno()
+LjGrvLog(Self:cSemaforo, "Metodo: BuscaDadosAtualizados | Depois de executar a PreparaRetorno- Grupos: " + cGruposIntegQuery, Time())
+
+LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | BuscaDadosAtualizados - Fim.", )
+
+Return
+
+/*/{Protheus.doc} PreparaRetorno
+Monta o objeto Json com o retorno da API, contendo os dados da Integração
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return oJRetornoIntg, object, objeto Json com os dados da Integração
+/*/
+Method PreparaRetorno() As Variant Class IngeracaoTotvsPdv
+
+Self:oJRetornoIntg['CodigoRetorno'] := "01"
+Self:oJRetornoIntg['Erro']          := ""
+
+LjGrvLog(Self:cSemaforo, "Metodo: PreparaRetorno | Antes de executar a GeraTabelas", Time())
+Self:oJRetornoIntg['Tabelas']       := Self:GeraTabelas()
+LjGrvLog(Self:cSemaforo, "Metodo: PreparaRetorno | Depois de executar a GeraTabelas", Time())
+
+If Empty(Self:oJRetornoIntg['Tabelas'])
+    Self:oJRetornoIntg['CodigoRetorno'] := "00"
+    Self:oJRetornoIntg['Erro']          := "Não existem registros para retornar."
+EndIf
+
+Return
+
+/*/{Protheus.doc} GetRetornoIntg
+Retorna o objeto Json com o retorno da API, contendo os dados da Integração
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return oJRetornoIntg, object, objeto Json com os dados da Integração
+/*/
+Method GetRetornoIntg() As Object Class IngeracaoTotvsPdv
+Return Self:oJRetornoIntg
+
+/*/{Protheus.doc} GeraTabelas
+Gera array Json com os dados de Integração de cada tabela do grupo de tabelas
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+@return aJTabelas!, array, array json com os dados de cada tabela do grupo de tabelas
+/*/
+Method GeraTabelas() As Array Class IngeracaoTotvsPdv
+Local nQtdMxLote    := Self:GetNMxLote()                as Numeric      // Quantidade maxima do lote da dedos
+Local nContaReg     :=  0                               as Numeric      // Contagem de registros
+Local cTabela       := ""                               as Character    // Tabela sendo executada
+Local nContRegTabela:= 0                                as Numeric      // Contagem de registros por tabela
+Local nContTabela   := 1                                as Numeric      // Contagem de numero de tabelas
+Local oJTabela      := JsonObject():New()               as Object
+Local lContinua     := .T.                              as Logical
+Local aAreaMHQ      := MHQ->(GetArea())                 as Array
+Local cTime := Time()
+
+LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | GeraTabelas - Inicio.", )
+
+Self:aJRegistro := {}
+Self:aJTabelas  := {}
+
+If (Self:cAliasIntegPDV)->(!Eof())
+    (Self:cAliasIntegPDV)->(dbGoTop())
+    cTabela := (Self:cAliasIntegPDV)->MHN_TABELA
+    oJTabela['Tabela']  := (Self:cAliasIntegPDV)->MHN_TABELA
+    oJTabela['Chave']   := AllTrim( (Self:cAliasIntegPDV)->MHN_CHAVE ) // "ChvUni"
+Else
+    lContinua := .F.
+EndIf
+
+If lContinua
+    While (Self:cAliasIntegPDV)->(!Eof())
+        nContRegTabela++
+        nContaReg++
+        
+        If nContaReg <= nQtdMxLote
+
+            If cTabela == (Self:cAliasIntegPDV)->MHN_TABELA    
+                Aadd( Self:aJRegistro , JsonObject():New() )
+
+                MHQ->( dbGoTo( (Self:cAliasIntegPDV)->MHQRECNO ) )
+                Self:aJRegistro[nContRegTabela]:FromJson( MHQ->MHQ_MENSAG )
+
+                Self:aJRegistro[nContRegTabela]['Del']   := IIF( (Self:cAliasIntegPDV)->MHQ_EVENTO == "1", .F., .T. ) // 1=Atualizaçao | 2=Exclusao
+                Self:aJRegistro[nContRegTabela]['UUID']  := (Self:cAliasIntegPDV)->MIP_UUID
+                If AlLTrim( (Self:cAliasIntegPDV)->MHN_CHAVE ) == "R_E_C_N_O_"
+                    Self:aJRegistro[nContRegTabela]['Recno']  := AllTrim((Self:cAliasIntegPDV)->MHQ_CHVUNI)
+                Else
+                    Self:aJRegistro[nContRegTabela]['Recno']  := "0"
+                EndIf
+                AADD(Self:aDadosStatus, (Self:cAliasIntegPDV)->MIPRECNO)
+            Else
+
+                oJTabela['Registro'] := Self:aJRegistro
+                Aadd( Self:aJTabelas, JsonObject():New() )
+                Self:aJTabelas[nContTabela] := oJTabela
+
+                oJTabela := JsonObject():New()  
+                cTabela := (Self:cAliasIntegPDV)->MHN_TABELA
+                oJTabela['Tabela']  := (Self:cAliasIntegPDV)->MHN_TABELA
+                oJTabela['Chave']   := AllTrim( (Self:cAliasIntegPDV)->MHN_CHAVE )
+
+                Self:aJRegistro := {}
+                Aadd( Self:aJRegistro , JsonObject():New() )
+                nContTabela++  
+                nContRegTabela := 1
+
+                MHQ->( dbGoTo( (Self:cAliasIntegPDV)->MHQRECNO ) )
+                Self:aJRegistro[nContRegTabela]:FromJson( MHQ->MHQ_MENSAG )
+              
+                Self:aJRegistro[nContRegTabela]['Del'] := IIF( (Self:cAliasIntegPDV)->MHQ_EVENTO == "1", .F., .T. ) // 1=Atualizaçao | 2=Exclusao 
+                Self:aJRegistro[nContRegTabela]['UUID']  := (Self:cAliasIntegPDV)->MIP_UUID
+                If AlLTrim( (Self:cAliasIntegPDV)->MHN_CHAVE ) == "R_E_C_N_O_"
+                    Self:aJRegistro[nContRegTabela]['Recno']  := AllTrim((Self:cAliasIntegPDV)->MHQ_CHVUNI)
+                Else
+                    Self:aJRegistro[nContRegTabela]['Recno']  :="0"
+                EndIf
+                AADD(Self:aDadosStatus, (Self:cAliasIntegPDV)->MIPRECNO)
+            EndIf
+        Else 
+            Exit
+        EndIf
+    
+        (Self:cAliasIntegPDV)->( DBSkip() )
+    EndDo
+
+    oJTabela['Registro'] := Self:aJRegistro
+    Aadd( Self:aJTabelas, JsonObject():New() )
+    Self:aJTabelas[nContTabela] := oJTabela
+
+EndIf
+
+(Self:cAliasIntegPDV)->( DBCloseArea() )
+RestArea(aAreaMHQ)
+
+LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | GeraTabelas - Fim.", )
+
+LjGrvLog(Self:cSemaforo, "Metodo: GeraTabelas | Tempo: ", ElapTime(cTime, Time()))
+
+Return Self:aJTabelas
+
+/*/{Protheus.doc} SetNMxLote
+Seta a quantidade maxima de registros por lote, configurado no cadastro de assinante
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+/*/
+Method SetNMxLote() As Variant Class IngeracaoTotvsPdv
+
+Local cQtdMxLt  := ""                       as Character
+Local oQtdMxLt  := JsonObject():New()       as Object
+
+// Pega a quantidade maxima do Lote configurado no Assinante
+cQtdMxLt  := GetAdvFVal( "MHO", "MHO_CONFIG", xFilial("MHO") + Self:cCodAss, 1, "" )
+
+If !Empty(cQtdMxLt)
+    oQtdMxLt:FromJson( cQtdMxLt )
+
+    If oQtdMxLt:HasProperty('nQtdMxLote') .AND. ( Val(oQtdMxLt['nQtdMxLote']) > 0 )
+        Self:nMaxLote := Val(oQtdMxLt['nQtdMxLote'])
+    EndIf
+EndIf
+    
+Return
+
+/*/{Protheus.doc} GetNMxLote
+Retorna a quantidade maxima de registros por lote
+@author joao.marcos
+@since 05/03/2024
+@version 1.0
+/*/
+Method GetNMxLote() As Numeric Class IngeracaoTotvsPdv
+Return Self:nMaxLote
+
+/*/{Protheus.doc} SetGrupoTabelas
+Popula o array aGrupos, com os grupos de tabelas
+@type  Method
+@author joao.marcos
+@since 12/03/2024
+@version 1.0
+@return aGrupos, array, grupos de tabelas existentes
+/*/
+Method SetGrupoTabelas() Class IngeracaoTotvsPdv
+Local aAreaMIR  := MIR->(GetArea()) as Array
+Local nCont     := 0                as Numeric
+Local cTime := Time()
+
+MIR->(dbSetOrder(1))
+MIR->(dbGoTop())
+
+While MIR->(!EOF())
+
+    If MIR->MIR_ATIVO == "1" .AND. MIR->MIR_COD <> "999"
+        nCont++
+        AADD(Self:aJGruposTabelas,JsonObject():New())
+
+        Self:aJGruposTabelas[nCont]['CodigoTabela']      := MIR->MIR_COD
+        Self:aJGruposTabelas[nCont]['DescricaoTabela']   := MIR->MIR_DESCRI
+        Self:aJGruposTabelas[nCont]['TabelasGrupos']     := Self:GetTabelasGrupo(MIR->MIR_COD)
+    EndIf
+
+    MIR->(dbSkip())
+EndDO
+
+RestArea(aAreaMIR)
+
+Self:oJRetornoIntg['CodigoRetorno'] := "01"
+Self:oJRetornoIntg['Erro']          := ""
+Self:oJRetornoIntg['GrupoTabelas']  := Self:aJGruposTabelas
+
+If Self:ValidaPontoIntegracao()
+    Self:oJRetornoIntg['CodPontoInteg'] := "OK"
+    LjGrvLog(Self:cSemaforo, "IngeracaoTotvsPdvObj | SetGrupoTabelas", Self:oJRetornoIntg['CodPontoInteg'] )
+EndIf
+
+LjGrvLog(Self:cSemaforo, "Metodo: SetGrupoTabelas | Tempo: ", ElapTime(cTime, Time()))
+
+Return
+
+/*/{Protheus.doc} GetTabelasGrupo
+Retorna uma string com as tabelas que pertencem ao grupo de tabelas (MHN)
+@type  Method
+@author joao.marcos
+@since 12/03/2024
+@version 1.0
+@param cCodGrupo, caracter, codigo do grupo de tabelas
+@return cTabelas, caracter, relaçao de tabelas que pertencem aos grupos
+/*/
+Method GetTabelasGrupo(cCodGrupo as character) as Character Class IngeracaoTotvsPdv
+Local cTabelas := "" as Character
+Local cQryMHN   := "" as Character
+Local oQryMHN   := NIL as Object
+Local cAliasMHN := "" as Character
+
+cQryMHN += " SELECT MHN_CODGRP, MHN_TABELA "
+cQryMHN += " FROM " + RetSQLName("MHN") + " "
+cQryMHN += " WHERE MHN_FILIAL = ? "                         // #1
+cQryMHN += " AND MHN_CODGRP = ? "                           // #2
+cQryMHN += " AND D_E_L_E_T_ = ? "                           // #3
+
+cQryMHN := ChangeQuery(cQryMHN)
+oQryMHN := FwExecStatement():New(cQryMHN)
+oQryMHN:SetString(1, xFilial("MHN") )                       // #1
+oQryMHN:SetString(2, cCodGrupo)                             // #2
+oQryMHN:SetString(3, " ")                                   // #3
+
+cAliasMHN := oQryMHN:OpenAlias()
+
+(cAliasMHN)->(dbGoTop())
+
+While (cAliasMHN)->(!EOF())
+    cTabelas += AllTrim((cAliasMHN)->MHN_TABELA) + " | "
+    (cAliasMHN)->(dbSkip())
+EndDo
+
+cTabelas := SubStr(cTabelas,1,Len(cTabelas)-3)
+
+(cAliasMHN)->(dbCloseArea())
+cAliasMHN := ""
+
+Return cTabelas

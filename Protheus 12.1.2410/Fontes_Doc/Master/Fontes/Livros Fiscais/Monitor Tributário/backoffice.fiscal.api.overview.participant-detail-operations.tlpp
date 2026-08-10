@@ -1,0 +1,597 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+#INCLUDE "FISA318.ch"
+
+Static oDetailOper  := Nil
+Static oLogisticMap := Nil
+Static oSimpleNac   := Nil
+
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTDetailOperationsPart
+API de Detalhe de Operações por participante.
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 26/02/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/overview/participant-detail-operations', description='API de detalhe de operações')
+Function MTDetailOperationsPart()
+Local oJsResponse         as json
+Local cbranches        := oRest:getQueryRequest()['branches']       as character
+Local cperiodStart     := oRest:getQueryRequest()['periodStart']    as character
+Local cperiodEnd       := oRest:getQueryRequest()['periodEnd']      as character
+Local cmovimentType    := oRest:getQueryRequest()['movimentType']   as character
+Local ctaxedMovements  := oRest:getQueryRequest()['taxedMovements'] as character
+
+If valtype(cmovimentType) != 'U' .and. !empty(cmovimentType) .and. valtype(cbranches) != 'U' .and. !empty(cbranches) .and. valtype(cperiodStart) != 'U' .and. !empty(cperiodStart) .and. valtype(cperiodEnd) != 'U' .and. !empty(cperiodEnd) .and. valtype(ctaxedMovements) != 'U' .and. !empty(ctaxedMovements)
+    oJsResponse := DetailOperationsPartFilter(cbranches, cperiodStart, cperiodEnd, cmovimentType, ctaxedMovements)
+Endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET DetailOperationsPartFilter
+Função responsável por preencher o Json com com informações referentes ao Detalhe de Operações por participante
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 26/02/2025
+-------------------------------------------------------------------*/
+Static Function DetailOperationsPartFilter(cbranches as character, cperiodStart as character, cperiodEnd as character, cmovimentType as character, ctaxedMovements as character)
+Local nPos         := 0                         as numeric
+Local nPageAux     := 0                         as numeric
+Local nPageSize    := 10                        as numeric
+Local nPage        := 1                         as numeric
+Local lHasNext     := .f.                       as logical
+Local oJsonResp    := JsonObject():New()        as object
+Local oJParams     := oRest:getQueryRequest()   as json
+Local cAlias       := getNextAlias()            as character
+
+If valtype(oJParams) == 'J'
+    If valtype( oJParams['page'] ) != 'U' .and. Val(oJParams['page']) > 0
+        nPage := Val(oJParams['page'])
+    EndIf
+    If valtype( oJParams['pageSize'] ) != 'U' .and. Val(oJParams['pageSize']) > 0
+        nPageSize := Val(oJParams['pageSize'])
+    EndIf
+EndIf
+
+GetDetailOperationsPart(@cAlias,nPage,nPageSize,cbranches, cperiodStart, cperiodEnd, cmovimentType, ctaxedMovements)  
+
+// Iniciando o While
+If (cAlias)->(!Eof())
+    While (cAlias)->(!Eof())
+        nPageAux++
+        If nPageAux == 1
+            oJsonResp["items"] := {}
+        Endif
+        If nPageAux <= nPageSize
+            aAdd( oJsonResp["items"], JsonObject():New() )
+            nPos++
+            oJsonResp["items"][nPos]["branch"]              :=   (cAlias)->FILIAL
+            oJsonResp["items"][nPos]["participant"]         :=   Alltrim((cAlias)->NOME)
+            oJsonResp["items"][nPos]["sn"]                  :=   (cAlias)->SIMPLESNAC
+            oJsonResp["items"][nPos]["country"]             :=   Alltrim((cAlias)->PAIS)
+            oJsonResp["items"][nPos]["countryCode"]         :=   (cAlias)->CODPAIS
+            oJsonResp["items"][nPos]["uf"]                  :=   (cAlias)->ESTADO
+            oJsonResp["items"][nPos]["city"]                :=   Alltrim((cAlias)->CIDADE)
+            oJsonResp["items"][nPos]["operationalValue"]    :=   (cAlias)->VALOROPER
+            oJsonResp["items"][nPos]["icms"]                :=   (cAlias)->ICMS
+            oJsonResp["items"][nPos]["iss"]                 :=   (cAlias)->ISS
+            oJsonResp["items"][nPos]["ipi"]                 :=   (cAlias)->IPI
+            oJsonResp["items"][nPos]["pis"]                 :=   (cAlias)->PIS
+            oJsonResp["items"][nPos]["cofins"]              :=   (cAlias)->COFINS
+        Else
+            lHasNext := .t.
+            Exit
+        EndIf
+    (cAlias)->(DbSkip())
+    EndDo
+    oJsonResp["hasNext"]    := lHasNext
+Else
+    oJsonResp['code'] := 400
+    oJsonResp['detailedMessage'] := 'value not found'
+    oJsonResp['message'] := "Dados não encontrados para o período e/ou filial informados."
+EndIf       
+FWFreeObj(oJParams)	
+(cAlias)->(DBCloseArea())
+Return oJsonResp:toJson()
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetDetailOperationsPart
+(Responsável por executar a consulta aos campos da tabela SFT)
+@author william.palma
+@since 26/02/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetDetailOperationsPart(cAlias as character, nPage as numeric, nPageSize as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character, cmovimentType as character, ctaxedMovements as character)
+Local cQuery    := ''  as character
+
+
+If cmovimentType == 'S'
+    If oDetailOper == Nil
+        cQuery := "SELECT FT_FILIAL AS FILIAL, A1_NOME AS NOME, A1_SIMPNAC AS SIMPLESNAC, "
+        cQuery += "CCH_PAIS AS PAIS, A1_CODPAIS AS CODPAIS, A1_EST AS ESTADO, A1_MUN AS CIDADE, "
+        cQuery += "SUM(FT_VALCONT) AS VALOROPER, SUM(CASE WHEN FT_TIPO = ? THEN ? ELSE FT_VALICM END) AS ICMS, SUM(CASE WHEN FT_TIPO = ? THEN FT_VALICM ELSE ? END) AS ISS, "
+        cQuery += "SUM(FT_VALIPI) AS IPI, SUM(FT_VALPIS) AS PIS, SUM(FT_VALCOF) AS COFINS "
+        cQuery += " FROM "+RetSQLName("SFT")+" SFT "
+        cQuery += " INNER JOIN ? SA1 ON ? AND A1_COD = FT_CLIEFOR AND A1_LOJA = FT_LOJA AND SA1.D_E_L_E_T_ = ? "
+        cQuery += " INNER JOIN ? CCH ON ? AND CCH_CODIGO = A1_CODPAIS AND CCH.D_E_L_E_T_ = ? "
+        cQuery += " WHERE FT_FILIAL IN (?) AND FT_TIPOMOV = ? AND FT_ENTRADA BETWEEN ? AND ? AND SFT.D_E_L_E_T_ = ?   "
+        If ctaxedMovements == "1"
+            cQuery += " AND (FT_VALICM > ? OR FT_VALIPI > ? OR FT_VALPIS > ? OR FT_VALCOF > ?) AND FT_VALCONT > ? "
+        ElseIF ctaxedMovements == "2"
+            cQuery += " AND (FT_VALICM  = ? AND FT_VALIPI  = ? AND FT_VALPIS = ? AND FT_VALCOF = ?) AND  FT_VALCONT > ? "
+        Else
+            cQuery += " AND FT_VALCONT > ? " 
+        EndIf
+        cQuery +="  AND FT_DTCANC = ? "
+        cQuery += " GROUP BY FT_FILIAL, A1_NOME, CCH_PAIS, A1_CODPAIS, A1_EST, A1_MUN, A1_SIMPNAC "
+        cQuery += " ORDER BY FT_FILIAL, A1_NOME, CCH_PAIS, A1_EST, A1_MUN "
+        cQuery += " OFFSET ( ? * ? ) ROWS "
+        cQuery += " FETCH NEXT ? ROWS ONLY "
+        oDetailOper := FwExecStatement():New()
+        oDetailOper:SetQuery(ChangeQuery(cQuery))
+    Endif
+
+    If oDetailOper != Nil
+        oDetailOper:setString(1, "S")
+        oDetailOper:SetNumeric(2, 0)
+        oDetailOper:setString(3, "S")
+        oDetailOper:SetNumeric(4, 0)
+        oDetailOper:SetUnsafe(5, RetSqlName("SA1"))
+        oDetailOper:SetUnsafe(6, FWJoinFilial("SA1", "SFT"))
+        oDetailOper:setString(7, ' ')
+        oDetailOper:SetUnsafe(8, RetSqlName("CCH"))
+        oDetailOper:SetUnsafe(9, FWJoinFilial("CCH", "SA1"))
+        oDetailOper:setString(10, ' ')
+        oDetailOper:SetIn(11, StrTokArr(cbranches, "," ))
+        oDetailOper:setString(12, cmovimentType)
+        oDetailOper:setString(13, StrTran(cperiodStart, "-", ""))
+        oDetailOper:setString(14, StrTran(cperiodEnd, "-", ""))
+        oDetailOper:setString(15, ' ')
+        If ctaxedMovements <> "3"
+            oDetailOper:SetNumeric(16, 0)
+            oDetailOper:SetNumeric(17, 0)
+            oDetailOper:SetNumeric(18, 0)
+            oDetailOper:SetNumeric(19, 0)
+            oDetailOper:SetNumeric(20, 0)
+            oDetailOper:setString(21, "")
+            oDetailOper:SetUnsafe(22, cValToChar(nPage-1))
+            oDetailOper:SetUnsafe(23, cValToChar(nPageSize))
+            oDetailOper:SetUnsafe(24, cValToChar(nPageSize+1))
+        Else
+            oDetailOper:SetNumeric(16, 0)
+            oDetailOper:setString(17, "")
+            oDetailOper:SetUnsafe(18, cValToChar(nPage-1))
+            oDetailOper:SetUnsafe(19, cValToChar(nPageSize))
+            oDetailOper:SetUnsafe(20, cValToChar(nPageSize+1))
+        EndIf
+        oDetailOper:CBASEQUERY := oDetailOper:GETFIXQUERY()
+        cAlias := oDetailOper:OpenAlias()
+    Endif
+Else
+    If oDetailOper == Nil
+        cQuery := "SELECT FT_FILIAL AS FILIAL, A2_NOME AS NOME, A2_SIMPNAC AS SIMPLESNAC, "
+        cQuery += "CCH_PAIS AS PAIS, A2_CODPAIS AS CODPAIS, A2_EST AS ESTADO, A2_MUN AS CIDADE, "
+        cQuery += "SUM(FT_VALCONT) AS VALOROPER, SUM(CASE WHEN FT_TIPO = ? THEN ? ELSE FT_VALICM END) AS ICMS, SUM(CASE WHEN FT_TIPO = ? THEN FT_VALICM ELSE ? END) AS ISS, "
+        cQuery += "SUM(FT_VALIPI) AS IPI, SUM(FT_VALPIS) AS PIS, SUM(FT_VALCOF) AS COFINS "
+        cQuery += " FROM "+RetSQLName("SFT")+" SFT "
+        cQuery += " INNER JOIN ? SA2 ON ? AND A2_COD = FT_CLIEFOR AND A2_LOJA = FT_LOJA AND SA2.D_E_L_E_T_ = ? "
+        cQuery += " INNER JOIN ? CCH ON ? AND CCH_CODIGO = A2_CODPAIS AND CCH.D_E_L_E_T_ = ? "
+        cQuery += " WHERE FT_FILIAL IN (?) AND FT_TIPOMOV = ? AND FT_ENTRADA BETWEEN ? AND ? AND SFT.D_E_L_E_T_ = ?   "
+        If ctaxedMovements == "1"
+            cQuery += " AND (FT_VALICM > ? OR FT_VALIPI > ? OR FT_VALPIS > ? OR FT_VALCOF > ?) AND FT_VALCONT > ? "
+        ElseIF ctaxedMovements == "2"
+            cQuery += " AND (FT_VALICM  = ? AND FT_VALIPI  = ? AND FT_VALPIS = ? AND FT_VALCOF = ?) AND  FT_VALCONT > ? "
+        Else
+            cQuery += " AND FT_VALCONT > ? " 
+        EndIf
+        cQuery +="  AND FT_DTCANC = ? "
+        cQuery += " GROUP BY FT_FILIAL, A2_NOME, CCH_PAIS, A2_CODPAIS, A2_EST, A2_MUN, A2_SIMPNAC "
+        cQuery += " ORDER BY FT_FILIAL, A2_NOME, CCH_PAIS, A2_EST, A2_MUN "
+        cQuery += " OFFSET ( ? * ? ) ROWS "
+        cQuery += " FETCH NEXT ? ROWS ONLY "
+        oDetailOper := FwExecStatement():New()
+        oDetailOper:SetQuery(ChangeQuery(cQuery))
+    Endif
+
+    If oDetailOper != Nil
+        oDetailOper:setString(1, "S")
+        oDetailOper:SetNumeric(2, 0)
+        oDetailOper:setString(3, "S")
+        oDetailOper:SetNumeric(4, 0)
+        oDetailOper:SetUnsafe(5, RetSqlName("SA2"))
+        oDetailOper:SetUnsafe(6, FWJoinFilial("SA2", "SFT"))
+        oDetailOper:setString(7, ' ')
+        oDetailOper:SetUnsafe(8, RetSqlName("CCH"))
+        oDetailOper:SetUnsafe(9, FWJoinFilial("CCH", "SA2"))
+        oDetailOper:setString(10, ' ')
+        oDetailOper:SetIn(11, StrTokArr(cbranches, "," ))
+        oDetailOper:setString(12, cmovimentType)
+        oDetailOper:setString(13, StrTran(cperiodStart, "-", ""))
+        oDetailOper:setString(14, StrTran(cperiodEnd, "-", ""))
+        oDetailOper:setString(15, ' ')
+        If ctaxedMovements <> "3"
+            oDetailOper:SetNumeric(16, 0)
+            oDetailOper:SetNumeric(17, 0)
+            oDetailOper:SetNumeric(18, 0)
+            oDetailOper:SetNumeric(19, 0)
+            oDetailOper:SetNumeric(20, 0)
+            oDetailOper:setString(21, "")
+            oDetailOper:SetUnsafe(22, cValToChar(nPage-1))
+            oDetailOper:SetUnsafe(23, cValToChar(nPageSize))
+            oDetailOper:SetUnsafe(24, cValToChar(nPageSize+1))
+        Else
+            oDetailOper:SetNumeric(16, 0)
+            oDetailOper:setString(17, "")
+            oDetailOper:SetUnsafe(18, cValToChar(nPage-1))
+            oDetailOper:SetUnsafe(19, cValToChar(nPageSize))
+            oDetailOper:SetUnsafe(20, cValToChar(nPageSize+1))
+        EndIf
+        oDetailOper:CBASEQUERY := oDetailOper:GETFIXQUERY()
+        cAlias := oDetailOper:OpenAlias()
+    Endif
+EndIf
+
+FWFreeObj(oDetailOper)
+Return 
+
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTLogisticMap
+API de Mapa Logístico.
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 26/05/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/overview/logistic-map', description='API de Mapa Logístico')
+Function MTLogisticMap()
+Local oJsResponse         as json
+Local cBranches        := oRest:getQueryRequest()['branches']       as character
+Local cPeriodStart     := oRest:getQueryRequest()['periodStart']    as character
+Local cPeriodEnd       := oRest:getQueryRequest()['periodEnd']      as character
+Local cMovimentType    := oRest:getQueryRequest()['movimentType']   as character
+Local ctaxedMovements  := oRest:getQueryRequest()['taxedMovements'] as character
+
+If valtype(cMovimentType) != 'U' .and. !empty(cMovimentType) .and. valtype(cBranches) != 'U' .and. !empty(cBranches) .and. valtype(cPeriodStart) != 'U' .and. !empty(cPeriodStart) .and. valtype(cPeriodEnd) != 'U' .and. !empty(cPeriodEnd) .and. valtype(ctaxedMovements) != 'U' .and. !empty(ctaxedMovements)
+    oJsResponse := LogisticMapFilter(cBranches, cPeriodStart, cPeriodEnd, cMovimentType, ctaxedMovements)
+Endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET LogisticMapFilter
+Função responsável por preencher o Json com com informações referentes ao Mapa Logístico.
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 26/05/2025
+-------------------------------------------------------------------*/
+Static Function LogisticMapFilter(cBranches as character, cPeriodStart as character, cPeriodEnd as character, cMovimentType as character, ctaxedMovements as character)
+Local nPos         := 0                         as numeric
+Local nPageAux     := 0                         as numeric
+Local nPageSize    := 10                        as numeric
+Local nPage        := 1                         as numeric
+Local lHasNext     := .f.                       as logical
+Local oJsonResp    := JsonObject():New()        as object
+Local oJParams     := oRest:getQueryRequest()   as json
+Local cAlias       := getNextAlias()            as character
+
+If valtype(oJParams) == 'J'
+    If valtype( oJParams['page'] ) != 'U' .and. Val(oJParams['page']) > 0
+        nPage := Val(oJParams['page'])
+    EndIf
+    If valtype( oJParams['pageSize'] ) != 'U' .and. Val(oJParams['pageSize']) > 0
+        nPageSize := Val(oJParams['pageSize'])
+    EndIf
+EndIf
+
+GetLogisticMap(@cAlias,nPage,nPageSize,cBranches, cPeriodStart, cPeriodEnd, cMovimentType, ctaxedMovements)  
+
+// Iniciando o While
+If (cAlias)->(!Eof())
+    While (cAlias)->(!Eof())
+        nPageAux++
+        If nPageAux == 1
+            oJsonResp["items"] := {}
+        Endif
+        If nPageAux <= nPageSize
+            aAdd( oJsonResp["items"], JsonObject():New() )
+            nPos++
+            oJsonResp["items"][nPos]["participant"]         :=   Alltrim((cAlias)->NOME)
+            If (cAlias)->ESTADO == "EX"
+                oJsonResp["items"][nPos]["locationId"]          :=   (cAlias)->CODPAIS
+            Else
+                oJsonResp["items"][nPos]["locationId"]          :=   (cAlias)->ESTADO
+            EndIF
+            oJsonResp["items"][nPos]["operationalValue"]    :=   (cAlias)->VALOROPER
+        Else
+            lHasNext := .t.
+            Exit
+        EndIf
+    (cAlias)->(DbSkip())
+    EndDo
+    oJsonResp["hasNext"]    := lHasNext
+Else
+    oJsonResp['code'] := 400
+    oJsonResp['detailedMessage'] := 'value not found'
+    oJsonResp['message'] := "Dados não encontrados para o período e/ou filial informados."
+EndIf       
+FWFreeObj(oJParams)	    
+(cAlias)->(DBCloseArea())
+Return oJsonResp:toJson()
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetDetailOperationsPart
+(Responsável por executar a consulta aos campos da tabela SFT)
+@author william.palma
+@since 26/05/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetLogisticMap(cAlias as character, nPage as numeric, nPageSize as numeric, cBranches as character, cPeriodStart as character, cPeriodEnd as character, cMovimentType as character, ctaxedMovements as character)
+Local cQuery    := ''  as character
+
+
+If cMovimentType == 'S'
+    If oLogisticMap == Nil
+        cQuery := " SELECT A1_NOME AS NOME, "
+        cQuery += " A1_CODPAIS AS CODPAIS, A1_EST AS ESTADO, "
+        cQuery += " SUM(FT_VALCONT) AS VALOROPER "
+        cQuery += " FROM "+RetSQLName("SFT")+" SFT "
+        cQuery += " INNER JOIN ? SA1 ON ? AND A1_COD = FT_CLIEFOR AND A1_LOJA = FT_LOJA AND SA1.D_E_L_E_T_ = ? "
+        cQuery += " WHERE FT_FILIAL IN (?) AND FT_TIPOMOV = ? AND FT_ENTRADA BETWEEN ? AND ? AND SFT.D_E_L_E_T_ = ?   "
+        If ctaxedMovements == "1"
+            cQuery += " AND (FT_VALICM > ? OR FT_VALIPI > ? OR FT_VALPIS > ? OR FT_VALCOF > ?) AND FT_VALCONT > ? "
+        ElseIF ctaxedMovements == "2"
+            cQuery += " AND (FT_VALICM  = ? AND FT_VALIPI  = ? AND FT_VALPIS = ? AND FT_VALCOF = ?) AND  FT_VALCONT > ? "
+        Else
+            cQuery += " AND FT_VALCONT > ? " 
+        EndIf
+        cQuery +="  AND FT_DTCANC = ? "
+        cQuery += " GROUP BY FT_FILIAL, A1_NOME, A1_CODPAIS, A1_EST "
+        cQuery += " ORDER BY FT_FILIAL, A1_NOME, A1_CODPAIS, A1_EST "
+        cQuery += " OFFSET ( ? * ? ) ROWS "
+        cQuery += " FETCH NEXT ? ROWS ONLY "
+        oLogisticMap := FwExecStatement():New()
+        oLogisticMap:SetQuery(ChangeQuery(cQuery))
+    Endif
+
+    If oLogisticMap != Nil
+        oLogisticMap:SetUnsafe(1, RetSqlName("SA1"))
+        oLogisticMap:SetUnsafe(2, FWJoinFilial("SA1", "SFT"))
+        oLogisticMap:setString(3, ' ')
+        oLogisticMap:SetIn(4, StrTokArr(cBranches, "," ))
+        oLogisticMap:setString(5, cMovimentType)
+        oLogisticMap:setString(6, StrTran(cPeriodStart, "-", ""))
+        oLogisticMap:setString(7, StrTran(cPeriodEnd, "-", ""))
+        oLogisticMap:setString(8, ' ')
+        If ctaxedMovements <> "3"
+            oLogisticMap:SetNumeric(9, 0)
+            oLogisticMap:SetNumeric(10, 0)
+            oLogisticMap:SetNumeric(11, 0)
+            oLogisticMap:SetNumeric(12, 0)
+            oLogisticMap:SetNumeric(13, 0)
+            oLogisticMap:setString(14, "")
+            oLogisticMap:SetUnsafe(15, cValToChar(nPage-1))
+            oLogisticMap:SetUnsafe(16, cValToChar(nPageSize))
+            oLogisticMap:SetUnsafe(17, cValToChar(nPageSize+1))
+        Else
+            oLogisticMap:SetNumeric(9, 0)
+            oLogisticMap:setString(10, "")
+            oLogisticMap:SetUnsafe(11, cValToChar(nPage-1))
+            oLogisticMap:SetUnsafe(12, cValToChar(nPageSize))
+            oLogisticMap:SetUnsafe(13, cValToChar(nPageSize+1))
+        EndIf
+        oLogisticMap:CBASEQUERY := oLogisticMap:GETFIXQUERY()
+        cAlias := oLogisticMap:OpenAlias()
+    Endif
+Else
+    If oLogisticMap == Nil
+        cQuery := " SELECT A2_NOME AS NOME, "
+        cQuery += " A2_CODPAIS AS CODPAIS, A2_EST AS ESTADO, "
+        cQuery += " SUM(FT_VALCONT) AS VALOROPER "
+        cQuery += " FROM "+RetSQLName("SFT")+" SFT "
+        cQuery += " INNER JOIN ? SA2 ON ? AND A2_COD = FT_CLIEFOR AND A2_LOJA = FT_LOJA AND SA2.D_E_L_E_T_ = ? "
+        cQuery += " WHERE FT_FILIAL IN (?) AND FT_TIPOMOV = ? AND FT_ENTRADA BETWEEN ? AND ? AND SFT.D_E_L_E_T_ = ?   "
+        If ctaxedMovements == "1"
+            cQuery += " AND (FT_VALICM > ? OR FT_VALIPI > ? OR FT_VALPIS > ? OR FT_VALCOF > ?) AND FT_VALCONT > ? "
+        ElseIF ctaxedMovements == "2"
+            cQuery += " AND (FT_VALICM  = ? AND FT_VALIPI  = ? AND FT_VALPIS = ? AND FT_VALCOF = ?) AND  FT_VALCONT > ? "
+        Else
+            cQuery += " AND FT_VALCONT > ? " 
+        EndIf
+        cQuery +="  AND FT_DTCANC = ? "
+        cQuery += " GROUP BY FT_FILIAL, A2_NOME, A2_CODPAIS, A2_EST "
+        cQuery += " ORDER BY FT_FILIAL, A2_NOME, A2_CODPAIS, A2_EST "
+        cQuery += " OFFSET ( ? * ? ) ROWS "
+        cQuery += " FETCH NEXT ? ROWS ONLY "
+        oLogisticMap := FwExecStatement():New()
+        oLogisticMap:SetQuery(ChangeQuery(cQuery))
+    Endif
+
+    If oLogisticMap != Nil
+        oLogisticMap:SetUnsafe(1, RetSqlName("SA2"))
+        oLogisticMap:SetUnsafe(2, FWJoinFilial("SA2", "SFT"))
+        oLogisticMap:setString(3, ' ')
+        oLogisticMap:SetIn(4, StrTokArr(cBranches, "," ))
+        oLogisticMap:setString(5, cMovimentType)
+        oLogisticMap:setString(6, StrTran(cPeriodStart, "-", ""))
+        oLogisticMap:setString(7, StrTran(cPeriodEnd, "-", ""))
+        oLogisticMap:setString(8, ' ')
+        If ctaxedMovements <> "3"
+            oLogisticMap:SetNumeric(9, 0)
+            oLogisticMap:SetNumeric(10, 0)
+            oLogisticMap:SetNumeric(11, 0)
+            oLogisticMap:SetNumeric(12, 0)
+            oLogisticMap:SetNumeric(13, 0)
+            oLogisticMap:setString(14, "")
+            oLogisticMap:SetUnsafe(15, cValToChar(nPage-1))
+            oLogisticMap:SetUnsafe(16, cValToChar(nPageSize))
+            oLogisticMap:SetUnsafe(17, cValToChar(nPageSize+1))
+        Else
+            oLogisticMap:SetNumeric(9, 0)
+            oLogisticMap:setString(10, "")
+            oLogisticMap:SetUnsafe(11, cValToChar(nPage-1))
+            oLogisticMap:SetUnsafe(12, cValToChar(nPageSize))
+            oLogisticMap:SetUnsafe(13, cValToChar(nPageSize+1))
+        EndIf
+        oLogisticMap:CBASEQUERY := oLogisticMap:GETFIXQUERY()
+        cAlias := oLogisticMap:OpenAlias()
+    Endif
+EndIf
+
+FWFreeObj(oLogisticMap)
+Return 
+
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTDetailSimpleNacional
+API de Valores Simples Nacional.
+@author william.palma
+@parâmetros de entrada do endpoint: cBranches, cPeriodStart, cPeriodEnd, cMovimentType
+@return Nil, nulo, não tem retorno.
+@since 04/08/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/overview/simple-national', description='API de Simples Nacional')
+Function MTDetailSimpleNacional()
+Local oJsResponse         as json
+Local cBranches        := oRest:getQueryRequest()['branches'] as character
+Local cPeriodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cPeriodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+Local cMovimentType    := oRest:getQueryRequest()['movimentType']  as character
+
+If !Empty(cBranches) .and. !Empty(cPeriodStart) .and. !Empty(cPeriodEnd) .and. !Empty(cMovimentType)
+    oJsResponse := DetailSimpleNacionalFilter(cBranches, cPeriodStart, cPeriodEnd, cMovimentType)
+ElseIf Empty(cBranches)
+    oJsResponse := JsonObject():new()
+    oJsResponse['code']             := 400
+    oJsResponse['message']          := STR0069  //"O parâmetro 'branches' é obrigatório e não foi informado."
+    oJsResponse['detailedMessage']  := STR0070  //"Informar Código de Filiais separadas por vírgula."
+    oRest:setStatusCode(400)
+ElseIf Empty(cPeriodStart)
+    oJsResponse := JsonObject():new()
+    oJsResponse['code']             := 400
+    oJsResponse['message']          := STR0071  //"Nenhuma Data foi informada no parâmetro 'periodStart'."
+    oJsResponse['detailedMessage']  := STR0072  //"Informar a data desejada para o período"
+    oRest:setStatusCode(400)
+ElseIF Empty(cPeriodEnd)
+    oJsResponse := JsonObject():new()
+    oJsResponse['code']             := 400
+    oJsResponse['message']          := STR0073  //"Nenhuma Data foi informada no parâmetro 'periodEnd'."
+    oJsResponse['detailedMessage']  := STR0072  //"Informar a data desejada para o período"
+    oRest:setStatusCode(400)
+Else
+    oJsResponse := JsonObject():new()
+    oJsResponse['code']             := 400
+    oJsResponse['message']          := STR0085  //"O parâmetro 'movimentType' é obrigatório e não foi informado."
+    oJsResponse['detailedMessage']  := STR0086  //"Informar S Para Movimentos de Saída ou E Para Movimentos de Entrada."
+    oRest:setStatusCode(400)
+Endif  
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET DetailSimpleNacionalFilter
+Função responsável por preencher o Json com com informações referentes a valores do Simples Nacional
+@author william.palma
+@parâmetros de entrada do endpoint: cBranches, cPeriodStart, cPeriodEnd, cMovimentType
+@return object, Objeto contendo a query a ser executada.
+@since 04/08/2025
+-------------------------------------------------------------------*/
+Static Function DetailSimpleNacionalFilter(cBranches as character, cPeriodStart as character, cPeriodEnd as character, cMovimentType as character)
+Local oJsonResp    := JsonObject():New()        as object
+Local cAlias       := getNextAlias()            as character
+
+GetDetailSimpleNacional(@cAlias, cBranches, cPeriodStart, cPeriodEnd, cMovimentType)  
+
+// Iniciando o While
+If (cAlias)->(!Eof()) .And. (cAlias)->QTDCLIFOR > 0
+    While (cAlias)->(!Eof())
+        oJsonResp["suppliersAmount"] := (cAlias)->QTDCLIFOR
+        oJsonResp["creditPotential"] := (cAlias)->TOTALIMP
+    (cAlias)->(DbSkip())
+    EndDo
+EndIf         
+
+(cAlias)->(DBCloseArea())
+Return oJsonResp:toJson()
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetDetailSimpleNacional
+(Responsável por executar a consulta aos campos da tabela SFT)
+@author william.palma
+@parâmetros de entrada do endpoint: cAlias, cBranches, cPeriodStart, cPeriodEnd, cMovimentType
+@return Nil, nulo, não tem retorno.
+@since 04/08/2025
+//-------------------------------------------------------------------*/
+Static Function GetDetailSimpleNacional(cAlias as character, cBranches as character, cPeriodStart as character, cPeriodEnd as character, cMovimentType as character)
+Local cQuery    := ''  as character
+
+
+If cmovimentType == 'S'
+    If oSimpleNac == Nil
+        cQuery := " SELECT ISNULL(SUM(FT_VALICM + FT_VALIPI + FT_VALPIS + FT_VALCOF) , 0) AS TOTALIMP, COUNT(DISTINCT(CONCAT(A1_COD, A1_LOJA))) AS QTDCLIFOR "
+        cQuery += " FROM "+RetSQLName("SFT")+" SFT "
+        cQuery += " INNER JOIN ? SA1 ON ? AND A1_COD = FT_CLIEFOR AND A1_LOJA = FT_LOJA AND SA1.D_E_L_E_T_ = ? AND A1_SIMPNAC = ? "
+        cQuery += " WHERE FT_FILIAL IN (?) AND FT_TIPOMOV = ? AND FT_ENTRADA BETWEEN ? AND ? AND SFT.D_E_L_E_T_ = ?   "
+        cQuery += " AND (FT_VALICM > ? OR FT_VALIPI > ? OR FT_VALPIS > ? OR FT_VALCOF > ?) AND FT_VALCONT > ? "
+        cQuery +="  AND FT_DTCANC = ? "
+        oSimpleNac := FwExecStatement():New()
+        oSimpleNac:SetQuery(ChangeQuery(cQuery))
+    Endif
+
+    If oSimpleNac != Nil
+        oSimpleNac:SetUnsafe(1, RetSqlName("SA1"))
+        oSimpleNac:SetUnsafe(2, FWJoinFilial("SA1", "SFT"))
+        oSimpleNac:setString(3, " ")
+        oSimpleNac:setString(4, "1")
+        oSimpleNac:SetIn(5, StrTokArr(cBranches, "," ))
+        oSimpleNac:setString(6, cMovimentType)
+        oSimpleNac:setString(7, StrTran(cPeriodStart, "-", ""))
+        oSimpleNac:setString(8, StrTran(cPeriodEnd, "-", ""))
+        oSimpleNac:setString(9, " ")
+        oSimpleNac:SetNumeric(10, 0)
+        oSimpleNac:SetNumeric(11, 0)
+        oSimpleNac:SetNumeric(12, 0)
+        oSimpleNac:SetNumeric(13, 0)
+        oSimpleNac:SetNumeric(14, 0)
+        oSimpleNac:setString(15, "")
+        oSimpleNac:CBASEQUERY := oSimpleNac:GETFIXQUERY()
+        cAlias := oSimpleNac:OpenAlias()
+    Endif
+Else
+    If oSimpleNac == Nil
+        cQuery := " SELECT ISNULL(SUM(FT_VALICM + FT_VALIPI + FT_VALPIS + FT_VALCOF), 0) AS TOTALIMP, COUNT(DISTINCT(CONCAT(A2_COD, A2_LOJA))) AS QTDCLIFOR "
+        cQuery += " FROM "+RetSQLName("SFT")+" SFT "
+        cQuery += " INNER JOIN ? SA2 ON ? AND A2_COD = FT_CLIEFOR AND A2_LOJA = FT_LOJA AND SA2.D_E_L_E_T_ = ? AND A2_SIMPNAC = ? "
+        cQuery += " WHERE FT_FILIAL IN (?) AND FT_TIPOMOV = ? AND FT_ENTRADA BETWEEN ? AND ? AND SFT.D_E_L_E_T_ = ?   "
+        cQuery += " AND (FT_VALICM > ? OR FT_VALIPI > ? OR FT_VALPIS > ? OR FT_VALCOF > ?) AND FT_VALCONT > ? "
+        cQuery +="  AND FT_DTCANC = ? "
+        oSimpleNac := FwExecStatement():New()
+        oSimpleNac:SetQuery(ChangeQuery(cQuery))
+    Endif
+
+    If oSimpleNac != Nil
+        oSimpleNac:SetUnsafe(1, RetSqlName("SA2"))
+        oSimpleNac:SetUnsafe(2, FWJoinFilial("SA2", "SFT"))
+        oSimpleNac:setString(3, " ")
+        oSimpleNac:setString(4, "1")
+        oSimpleNac:SetIn(5, StrTokArr(cBranches, "," ))
+        oSimpleNac:setString(6, cMovimentType)
+        oSimpleNac:setString(7, StrTran(cPeriodStart, "-", ""))
+        oSimpleNac:setString(8, StrTran(cPeriodEnd, "-", ""))
+        oSimpleNac:setString(9, " ")
+        oSimpleNac:SetNumeric(10, 0)
+        oSimpleNac:SetNumeric(11, 0)
+        oSimpleNac:SetNumeric(12, 0)
+        oSimpleNac:SetNumeric(13, 0)
+        oSimpleNac:SetNumeric(14, 0)
+        oSimpleNac:setString(15, "")
+        oSimpleNac:CBASEQUERY := oSimpleNac:GETFIXQUERY()
+        cAlias := oSimpleNac:OpenAlias()
+    Endif
+EndIf
+
+FWFreeObj(oSimpleNac)
+Return 

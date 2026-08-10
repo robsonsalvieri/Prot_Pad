@@ -1,0 +1,486 @@
+#include 'tlpp-core.th'
+
+NAMESPACE totvs.protheus.backoffice.fin.functions
+
+Static __cDBName := NIL
+Static __oLastExec := NIL
+Static __jCacheCurrencyQuote := NIL
+
+/*/{Protheus.doc} currencyMovements
+    Função responsavel por montar a query de soma dos movimentos em moeda estrangeira convertendo para 
+	moeda corrente do sistema conforme documentação - https://tdn.totvs.com/pages/releaseview.action?pageId=552097830
+    @type Function
+    @author Vitor Duca
+    @since 07/11/2022
+    @version 1.0
+    @param cWallet, Character, Carteira dos titulos que serão avaliados (R ou P)
+	@param cWhereBills, Character, Condicional especifica para os titulo que serão considerados no calculo
+    @return cQuery, Character, Select estruturado de acordo com a carteira
+/*/
+Function currencyMovements(cWallet As Character, cWhereBills As Character) As Numeric
+	Local cQuery := "" As Character
+	Local cTableFK := "FK1" As Character
+	Local cTableBills := "SE1" As Character
+	Local cPrefixField := ".E1_" As Character
+	Local cCharConcat := "+" As Character
+	Local cFieldPartner := "SE1.E1_CLIENTE"
+	Local cWalletEst := "P" As Character
+	Local cNameRealFK := RetSqlName(cTableFK) As Character
+	Local cNameRealFK7 := RetSqlName("FK7") As Character
+	Local cNameRealBills := RetSqlName(cTableBills) As Character
+	Local cJoinBillsToFK7 := "" As Character
+	Local cQueryNotExist := "" As Character
+	Local cIsNull := FunctionToDb("ISNULL") As Character
+	Local cWhere := "" As Character
+
+	If cWallet == "P"
+		cTableFK := "FK2"
+		cTableBills := "SE2"
+		cPrefixField := ".E2_"
+		cFieldPartner := "SE2.E2_FORNECE"
+		cWalletEst := "R"
+		cNameRealFK := RetSqlName(cTableFK)
+		cNameRealBills := RetSqlName(cTableBills)
+	Endif
+
+	//Query utilizada para eliminar os registros de estorno
+	cQueryNotExist := "SELECT EST."+cTableFK+"_IDDOC "
+	cQueryNotExist += 	"FROM " + cNameRealFK + " EST "
+	cQueryNotExist += "WHERE  EST."+cTableFK+"_FILIAL = "+cTableFK+"."+cTableFK+"_FILIAL "
+	cQueryNotExist += 	"AND EST."+cTableFK+"_IDDOC = "+cTableFK+"."+cTableFK+"_IDDOC "
+	cQueryNotExist += 	"AND EST."+cTableFK+"_SEQ = "+cTableFK+"."+cTableFK+"_SEQ "
+	cQueryNotExist += 	"AND EST."+cTableFK+"_RECPAG = '"+cWalletEst+"' "
+	cQueryNotExist += 	"AND EST."+cTableFK+"_TPDOC = 'ES' "
+	cQueryNotExist += 	"AND EST.D_E_L_E_T_ = ' ' "
+
+	// Montagem da regra de relacionamento entre SE1 ou SE2 e FK7
+	If __cDBName == 'POSTGRES'
+		cJoinBillsToFK7 := "INNER JOIN " + cNameRealBills + " "+cTableBills+" ON FK7.FK7_CHAVE = RTRIM(CONCAT("+cTableBills+cPrefixField+"FILIAL, '|', "
+		cJoinBillsToFK7 += cTableBills+cPrefixField+"PREFIXO, '|', " +cTableBills+cPrefixField+"NUM, '|', "
+		cJoinBillsToFK7 += cTableBills+cPrefixField+"PARCELA, '|', "+cTableBills+cPrefixField+"TIPO, '|', "
+		cJoinBillsToFK7 += cFieldPartner +", '|', " +cTableBills+cPrefixField+"LOJA)) "
+	Else
+		If __cDBName == 'ORACLE'
+			cCharConcat := "||"
+		Endif
+
+		cJoinBillsToFK7 := "INNER JOIN " + cNameRealBills + " "+cTableBills+" ON FK7.FK7_CHAVE = "+cTableBills+cPrefixField+"FILIAL "+cCharConcat+"'|'"
+		cJoinBillsToFK7 += cCharConcat+" "+cTableBills+cPrefixField+"PREFIXO "+cCharConcat+"'|'"+cCharConcat+" "+cTableBills+cPrefixField+"NUM "+cCharConcat+"'|'"
+		cJoinBillsToFK7 += cCharConcat+ " "+cTableBills+cPrefixField+"PARCELA "+cCharConcat+"'|'"+cCharConcat+" "+cTableBills+cPrefixField+"TIPO "+cCharConcat+"'|'"+cCharConcat
+		cJoinBillsToFK7 += cFieldPartner +" "+cCharConcat+"'|'"+cCharConcat+" "+cTableBills+cPrefixField+"LOJA "
+	Endif
+
+	//Condicional enviada por parametro para filtrar os titulos
+	If !Empty(cWhereBills)
+		cWhere += " AND " + cWhereBills
+	Endif
+
+	//Não considera titulos que foram geradores de desdobramento
+	cWhere +=     " AND NOT EXISTS (SELECT FI7.FI7_NUMORI "
+	cWhere +=                     " FROM "+RetSqlName("FI7")+" FI7 "
+	cWhere +=                     " WHERE  FI7.FI7_FILIAL = SE1.E1_FILIAL "
+	cWhere +=                             " AND FI7.FI7_PRFORI = SE1.E1_PREFIXO "
+	cWhere +=                             " AND FI7.FI7_NUMORI = SE1.E1_NUM "
+	cWhere +=                             " AND FI7.FI7_PARORI = SE1.E1_PARCELA "
+	cWhere +=                             " AND FI7.FI7_TIPORI = SE1.E1_TIPO "
+	cWhere +=                             " AND FI7.FI7_CLIORI = SE1.E1_CLIENTE "
+	cWhere +=                             " AND FI7.FI7_LOJORI = SE1.E1_LOJA "
+	cWhere +=                             " AND FI7.D_E_L_E_T_ = ' ' ) "
+
+	cQuery += "SELECT "+cIsNull+"(SUM(VAL),0) VLRBX "
+
+	//Select dos movimentos que ocorreram em moeda corrente
+	cQuery += "FROM ( SELECT "+cTableFK+"."+cTableFK+"_VALOR VAL FROM " + cNameRealFK + " " + cTableFK + " "
+	cQuery += 	"INNER JOIN " + cNameRealFK7 + " FK7 ON FK7.FK7_IDDOC = "+cTableFK+"."+cTableFK+"_IDDOC "
+	cQuery += 							"AND FK7.FK7_ALIAS = '"+ cTableBills + "' "
+	cQuery += 							"AND FK7.D_E_L_E_T_ = ' ' "
+	cQuery += 	cJoinBillsToFK7
+	cQuery += 							"AND "+cTableBills+".D_E_L_E_T_ = ' ' "
+	cQuery += 	"WHERE "
+	cQuery += 		"NOT EXISTS (" + cQueryNotExist + ")"
+	cQuery +=   	cWhere
+	cQuery += 		"AND "+cTableFK+"."+cTableFK+"_MOEDA = '01' "
+	cQuery += 		"AND "+cTableFK+"."+cTableFK+"_MOTBX <> 'LIQ' " //Não considera baixas geradas pela liquidação
+	cQuery += 		"AND "+cTableFK+".D_E_L_E_T_ = ' ' "
+
+	//Select dos movimentos que ocorreram em moeda estrangeira e o titulo é em moeda corrente
+	cQuery += "UNION ALL "
+	cQuery += 	"SELECT "+cTableFK+"."+cTableFK+"_VLMOE2 VAL FROM " + cNameRealFK + " " + cTableFK  + " "
+	cQuery += 	"INNER JOIN " + cNameRealFK7 + " FK7 ON FK7.FK7_IDDOC = "+cTableFK+"."+cTableFK+"_IDDOC "
+	cQuery += 							"AND FK7.FK7_ALIAS = '" + cTableBills + "' "
+	cQuery += 							"AND FK7.D_E_L_E_T_ = ' ' "
+	cQuery += 	cJoinBillsToFK7
+	cQuery += 							"AND "+cTableBills+cPrefixField+"MOEDA = 1 "
+	cQuery += 							"AND "+cTableBills+".D_E_L_E_T_ = ' ' "
+	cQuery += 	"WHERE "
+	cQuery += 		"NOT EXISTS (" + cQueryNotExist + ")"
+	cQuery +=   	cWhere
+	cQuery += 		"AND "+cTableFK+"."+cTableFK+"_MOEDA <> '01' "
+	cQuery += 		"AND "+cTableFK+"."+cTableFK+"_MOTBX <> 'LIQ' " //Não considera baixas geradas pela liquidação
+	cQuery += 		"AND "+cTableFK+".D_E_L_E_T_ = ' ' "
+
+	//Select dos movimentos que ocorreram em moeda estrangeira e o titulo é em moeda estrangeira
+	cQuery += "UNION ALL "
+	cQuery += 	"SELECT ("+cTableFK+"."+cTableFK+"_VALOR * "+cTableFK+"."+cTableFK+"_TXMOED) VAL FROM " + cNameRealFK + " " + cTableFK + " "
+	cQuery += 	"INNER JOIN " + cNameRealFK7 + " FK7 ON FK7.FK7_IDDOC = "+cTableFK+"."+cTableFK+"_IDDOC "
+	cQuery += 							"AND FK7.FK7_ALIAS = '" + cTableBills + "' "
+	cQuery += 							"AND FK7.D_E_L_E_T_ = ' ' "
+	cQuery += 	cJoinBillsToFK7
+	cQuery += 							"AND "+cTableBills+cPrefixField+"MOEDA > 1 "
+	cQuery += 							"AND "+cTableBills+".D_E_L_E_T_ = ' ' "
+	cQuery += 	"WHERE "
+	cQuery += 		"NOT EXISTS (" + cQueryNotExist + ")"
+	cQuery +=   	cWhere
+	cQuery += 		"AND "+cTableFK+"."+cTableFK+"_MOEDA <> '01' "
+	cQuery += 		"AND "+cTableFK+"."+cTableFK+"_MOTBX <> 'LIQ' " //Não considera baixas geradas pela liquidação
+	cQuery += 		"AND "+cTableFK+".D_E_L_E_T_ = ' '	) "
+	cQuery += cNameRealFK
+
+Return MpSysExecScalar(cQuery, "VLRBX")
+
+
+/*/{Protheus.doc} currencyBills
+	Função responsavel por montar a query de soma dos titulos abertos em moeda estrangeira convertendo para 
+	a moeda corrente do sistema 
+	@type  Function
+	@author Vitor Duca
+	@since 07/11/2022
+	@version 1.0
+	@param cTable, Character, Tabela que sera considerada na query SE1 ou SE2
+	@param cWhereBills, Character, Condicional especifica para os titulo que serão considerados no calculo
+	@return cQuery, Character, Select estruturado de acordo com a carteira
+/*/
+Function currencyBills(cTable As Character, cWhereBills As Character, cCampoSum As Character, cInnerJoin As Character) As Numeric
+	Local cQuery := "" As Character
+	Local cPrefixField := ".E1_" As Character
+	Local cRealNameTable := RetSqlName("SE1") As Character
+	Local nQuoteMoed2 := 0 As Numeric
+	Local nQuoteMoed3 := 0 As Numeric
+	Local nQuoteMoed4 := 0 As Numeric
+	Local nQuoteMoed5 := 0 As Numeric
+	Local cIsNull := FunctionToDb("ISNULL") As Character
+	Local aBindParams := {} As Array
+
+	Default cCampoSum 	:= cTable + cPrefixField + "SALDO"
+	Default cInnerJoin 	:= ""
+	Default cWhereBills	:= ""
+
+	If cTable == "SE2"
+		cPrefixField := ".E2_"
+		cRealNameTable := RetSqlName("SE2")
+	Endif
+
+	If __jCacheCurrencyQuote == NIL
+		__jCacheCurrencyQuote := JsonObject():new()
+	Endif
+
+	If !__jCacheCurrencyQuote:hasProperty(Dtos(dDataBase))
+		__jCacheCurrencyQuote[Dtos(dDataBase)] := {;
+			"moeda2": currencyLastQuote("2", Dtos(dDataBase)),;
+			"moeda3": currencyLastQuote("3",  Dtos(dDataBase)),;
+			"moeda4": currencyLastQuote("4",  Dtos(dDataBase)),;
+			"moeda5": currencyLastQuote("5",  Dtos(dDataBase));
+		}
+	Endif
+
+	nQuoteMoed2 := __jCacheCurrencyQuote[Dtos(dDataBase)]["moeda2"]
+	nQuoteMoed3 := __jCacheCurrencyQuote[Dtos(dDataBase)]["moeda3"]
+	nQuoteMoed4 := __jCacheCurrencyQuote[Dtos(dDataBase)]["moeda4"]
+	nQuoteMoed5 := __jCacheCurrencyQuote[Dtos(dDataBase)]["moeda5"]
+
+	If !Empty(cWhereBills)
+		cWhereBills := " AND " + cWhereBills
+	Endif
+
+	cQuery += " SELECT "+cIsNull+"(SUM(VALUERET), 0) VLRMOED "
+	cQuery += " FROM "
+
+	//Select dos titulos em moeda forte
+	cQuery += "( SELECT " + cCampoSum + " VALUERET "
+	cQuery += " FROM " + cRealNameTable + " " + cTable + " "
+	cQuery += cInnerJoin
+	cQuery += " WHERE "
+	cQuery += 	cTable+cPrefixField+"SALDO > ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"MOEDA = ? "
+	cQuery += 	" AND "+cTable + ".D_E_L_E_T_ = ? "
+	cQuery += 	cWhereBills
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, '1')
+	Aadd(aBindParams, ' ')
+
+	//Select dos titulos em moeda 2 que não possuem taxa contratada
+	cQuery += " UNION ALL SELECT (" + cCampoSum + " * " + cValToChar(nQuoteMoed2) + ") VALUERET "
+	cQuery += " FROM " + cRealNameTable + " " + cTable + " "
+	cQuery += cInnerJoin
+	cQuery += " WHERE "
+	cQuery += 	cTable+cPrefixField+"SALDO > ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"MOEDA = ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"TXMOEDA = ? "
+	cQuery += 	" AND "+cTable + ".D_E_L_E_T_ = ? "
+	cQuery += 	cWhereBills
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, '2')
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, ' ')
+
+	//Select dos titulos em moeda 3 que não possuem taxa contratada
+	cQuery += " UNION ALL SELECT (" + cCampoSum + " * " + cValToChar(nQuoteMoed3) + ") VALUERET "
+	cQuery += " FROM " + cRealNameTable + " " + cTable + " "
+	cQuery += cInnerJoin
+	cQuery += " WHERE "
+	cQuery += 	cTable+cPrefixField+"SALDO > ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"MOEDA = ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"TXMOEDA = ? "
+	cQuery += 	" AND "+cTable + ".D_E_L_E_T_ = ? "
+	cQuery += 	cWhereBills
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, '3')
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, ' ')
+
+	//Select dos titulos em moeda 4 que não possuem taxa contratada
+	cQuery += " UNION ALL SELECT (" + cCampoSum + " * " + cValToChar(nQuoteMoed4) + ") VALUERET "
+	cQuery += " FROM " + cRealNameTable + " " + cTable + " "
+	cQuery += cInnerJoin
+	cQuery += " WHERE "
+	cQuery += 	cTable+cPrefixField+"SALDO > ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"MOEDA = ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"TXMOEDA = ? "
+	cQuery += 	" AND "+cTable + ".D_E_L_E_T_ = ? "
+	cQuery += 	cWhereBills
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, '4')
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, ' ')
+
+	//Select dos titulos em moeda 5 que não possuem taxa contratada
+	cQuery += " UNION ALL SELECT (" + cCampoSum + " * " + cValToChar(nQuoteMoed5) + ") VALUERET "
+	cQuery += " FROM " + cRealNameTable + " " + cTable + " "
+	cQuery += cInnerJoin
+	cQuery += " WHERE "
+	cQuery += 	cTable+cPrefixField+"SALDO > ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"MOEDA = ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"TXMOEDA = ? "
+	cQuery += 	" AND "+cTable + ".D_E_L_E_T_ = ? "
+	cQuery += 	cWhereBills
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, '5')
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, ' ')
+
+	//Select dos titulos em moeda estrangeira que possuem taxa contratada
+	cQuery += " UNION ALL SELECT (" + cCampoSum + " * "+cTable+cPrefixField+"TXMOEDA) VALUERET "
+	cQuery += " FROM " + cRealNameTable + " " + cTable + " "
+	cQuery += cInnerJoin
+	cQuery += " WHERE "
+	cQuery += 	cTable+cPrefixField+"SALDO > ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"MOEDA <> ? "
+	cQuery += 	" AND "+cTable+cPrefixField+"TXMOEDA <> ? "
+	cQuery += 	" AND " + cTable + ".D_E_L_E_T_ = ? "
+	cQuery += 	cWhereBills
+	cQuery += ") " + cRealNameTable + " "
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, '1')
+	Aadd(aBindParams, '0')
+	Aadd(aBindParams, ' ')
+
+	cQuery := ChangeQuery(cQuery)
+
+Return MpSysExecScalar(cQuery, "VLRMOED", aBindParams)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } CurrencyLastQuote
+	busca a última cotação da moeda cadastrada na SM2
+
+	@param cCurrency as Character, moeda
+	@param cDate as Character, data
+	@return nQuote as Numeric , cotação da moeda
+
+	@author Renato Ito
+	@since 04/03/2021
+/*/
+//-------------------------------------------------------------------
+Function currencyLastQuote(cCurrency as Character, cDate as Character) as Numeric
+	Local cQuery      as Character
+	Local nQuote      as Numeric
+	Local cMoedaField as Character
+	nQuote := 1
+	If VAL(cCurrency) > 1
+		cMoedaField := "M2_MOEDA" + cCurrency
+		cQuery := "SELECT QUOTES.QUOTE AS VALUE FROM ("
+		cQuery += " SELECT ROW_NUMBER() OVER (ORDER BY SM2.M2_DATA DESC) AS LINHA,"
+		cQuery += " SM2." + cMoedaField + " AS QUOTE, SM2.M2_DATA FROM " + RetSqlName('SM2') + " SM2"
+		cQuery += " WHERE SM2.M2_DATA <= '" + cDate + "'"
+		cQuery += " AND SM2.D_E_L_E_T_ = ' ' "
+		cQuery += " AND SM2." + cMoedaField + " > 0 "
+		cQuery += " ) QUOTES "
+		cQuery += " WHERE QUOTES.LINHA <= 1 "
+		cQuery := ChangeQuery(cQuery)
+		nQuote := MpSysExecScalar(cQuery, "VALUE")
+	EndIf
+Return nQuote
+
+/*/{Protheus.doc} FunctionToDb
+	Converte a função/sintaxe que existe no SQL server para outros bancos
+	@type  Static Function
+	@author Vitor Duca
+	@since 28/04/2022
+	@version 1.0
+	@param cFunSQL, Character, Nome da função existente no SQL Server
+	@return cRet, Character , String que pode ser utilizada na montagem da query
+	@example
+	cFunction := FunctionToDb("DATEDIFF",{"BAIXA","VENCREA"})
+/*/
+Function FunctionToDb(cFunSQL As Character, cDBName as Character) As Character
+	Local cRet := "" As Character
+	If !Empty(cDBName)
+		__cDBName := cDBName
+	Else
+		Default __cDBName := Alltrim(TcGetDB())
+	EndIf
+	If !Empty(cFunSQL) .and. !Empty(__cDBName)
+		cFunSQL := UPPER(AllTrim(cFunSQL))
+		cRet := cFunSQL
+
+		Do CASE
+		CASE cFunSQL == "ISNULL"
+			If __cDBName == "ORACLE"
+				cRet := "NVL"
+			Elseif __cDBName == "POSTGRES"
+				cRet := "COALESCE"
+			ENDIF
+		CASE cFunSQL == "SUBSTRING"
+			If __cDBName $ "ORACLE|POSTGRES"
+				cRet := "SUBSTR"
+			Endif
+		CASE cFunSQL == "INSERT"
+			If __cDBName $ "ORACLE"
+				cRet := " INSERT /*+ APPEND */ "
+			Endif
+		End CASE
+	Endif
+Return cRet
+
+/*/{Protheus.doc} newDocument
+	Grava um documento/Arquivo no banco de conhecimento
+	@type  Function
+	@author Vitor Duca
+	@since 15/12/2022
+	@version 1.0
+	@param cFileName, Character, Nome do arquivo com extensão
+	@param cBase64, Character, Arquivo codificado em base 64
+	@param cKey, Character, Chave de relacionamento entre a entidade e o documento (AC9_CODENT)
+	@param cEntidade, Character, Entidade a ser vinculada
+	@example
+	newDocument(arquivo.txt, Encode64(Arquivo), "D MG 000001", "SE2")
+/*/
+Function newDocument(cFileName As Character, cBase64 As Character, cKey As Character, cEntidade As Character)
+	Local cCodObj := "" As Character
+	Local cValidName:= "" As Character
+	Local cFileDest := "" As Character
+	Local cExt		:= "" As Character
+	Local nY   := 0 As Numeric
+	Local nI   := 1 As Numeric
+	Local cDirDocs := Alltrim(MsDocPath()) As Character	//	Retorna Pasta do Banco de Conhecimentos
+
+	If !Empty(cFileName) .and. !Empty(cBase64) .and. !Empty(cKey) .and. !Empty(cEntidade)
+		cFileDest := Lower(cDirDocs + "\")
+
+		nY := At(".", cFileName)
+
+		If nY > 0
+			cExt	  := SubStr(cFileName,  nY, Len(cFileName))	// Guarda extensao
+			cFileName := Left(cFileName,  nY - 1)	//	Deixa Nome do Arquivo sem Extensão
+		EndIf
+
+		cValidName := cFileName
+
+		// Garante que o nome do arquivo não irá sobrepor nenhum outro
+		While .T.
+			If File(cFileDest+cValidName+cExt)
+				cValidName := cFileName+"("+cValToChar(nI)+")"
+			Else
+				If nI > 1
+					cFileName := cValidName
+				EndIf
+				Exit
+			EndIf
+			nI++
+		EndDo
+
+		Decode64( cBase64, cFileDest + "\" + cFileName+cExt)
+
+		If File( cFileDest + "\" + cFileName+cExt )  //Arquivo Transferido com sucesso para Banco de Conhecimentos
+
+			//	Grava Cabeçalho do Anexo
+			cCodObj := GetSXENum("ACB", "ACB_CODOBJ",, 1)
+
+			ACB->(RecLock("ACB", .T.))
+			ACB->ACB_FILIAL := xFilial("ACB")
+			ACB->ACB_CODOBJ := cCodObj
+			ACB->ACB_OBJETO := cFileName+cExt
+			ACB->ACB_DESCRI := cFileName
+			ACB->(msUnLock())
+
+			AC9->(RecLock("AC9", .T.))
+			AC9->AC9_FILIAL := xFilial("AC9")
+			AC9->AC9_CODOBJ := cCodObj
+			AC9->AC9_ENTIDA := cEntidade
+			AC9->AC9_FILENT := xFilial(cEntidade)
+			AC9->AC9_CODENT := cKey
+			AC9->(msUnLock())
+
+			ConfirmSx8()
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} LastExecSched
+	Retorna ultima execução do JOB (data e hora)
+
+	Obs: Foi solicitado ao frame atraves da issue https://jiraproducao.totvs.com.br/browse/DFRM1-31814
+	a criação de um componente de LIB que teria a mesma funcionalidade dessa função, enquanto esse componente
+	não for liberado, utilizar a função, após liberação colocar em desuso a função, pois estamos
+	executando consulta em tabelas do framework
+
+	@type  Function
+	@author Vitor Duca
+	@since 07/03/2023
+	@version 1.0
+	@param cTaskID, Character, ID da Rotina que será verificada no Schedule
+	@return cLastExec, Character, String contendo data e hora da ultima execução
+	@example
+	cExec := (LastExecSched("000001"))
+/*/
+Function LastExecSched(cTaskID As Character) As Character
+	Local cLastExec := "" 	As Character
+	Local cAliasTmp := ""	As Character
+	Local cQuery	:= ""	As Character
+
+	Default cTaskID := ""
+
+	If __oLastExec == NIL
+		cQuery := " SELECT TSK_DIA, TSK_HORA "
+		cQuery += " FROM SCHDTSK "
+		cQuery += " WHERE "
+		cQuery += 	" TSK_CODIGO = ? "
+		cQuery += 	" AND TSK_STATUS <> '0' "
+		cQuery += 	" AND D_E_L_E_T_ = ' ' "
+		cQuery += " ORDER BY R_E_C_N_O_ DESC "
+
+		__oLastExec := FWPreparedStatement():New( ChangeQuery(cQuery) )
+	Endif
+
+	__oLastExec:SetString(1, cTaskID)
+
+	cAliasTmp := MPSysOpenQuery( __oLastExec:GetFixQuery() )
+
+	If (cAliasTmp)->(!Eof())
+		cLastExec := Dtoc(Stod((cAliasTmp)->TSK_DIA)) + " - " + (cAliasTmp)->TSK_HORA
+	Endif
+
+	(cAliasTmp)->(DbCloseArea())
+
+
+Return cLastExec

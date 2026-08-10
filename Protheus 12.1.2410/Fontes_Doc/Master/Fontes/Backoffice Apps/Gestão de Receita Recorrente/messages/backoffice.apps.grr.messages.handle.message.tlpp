@@ -1,0 +1,296 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+
+namespace totvs.protheus.backoffice.apps.grr.messages
+using namespace totvs.protheus.backoffice.apps.grr.general
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HandleMessage
+    @description Classe genérica e abstrata para lidar com mensagens do Smart Link 
+    relacionadas à plataforma GRR - Gestão de Receita Recorrente.
+    Essa classe não deve implementar regras de negócio.
+
+    Existem dúvidas em relação à RpcSetEnv() na mesma thread. Ver apoio 
+    https://jiraproducao.totvs.com.br/browse/DFRM3-2549.
+
+    @author guilherme.sordi@totvs.com.br
+    @since 08/05/2025
+    @version 12.1.2410
+*/
+//-------------------------------------------------------------------
+class HandleMessage    
+    public method new() as object
+    public method canRead(cMessageType as character) as logical
+    public method read(oLinkMessage as object) as logical
+    public method clear()
+    
+    protected data jData as json
+    protected data jMandatoryProperties as json
+
+    private data oLinkMessage as object
+    private data jContent as json
+    private data aItems as array
+    private data cMessageCompany as character
+    private data cMessageBranch as character
+    private data cBackupCompany as character
+    private data cBackupBranch as character
+    private data cMessageType as character
+
+    protected method processMessage(jData as json) as logical //abstract
+    protected method setMandatoryProperties(jMandatoryProperties as json)
+    protected method getMessageType() as character
+    
+    private method setLinkMessage(oLinkMessage as object)
+    private method prepareEnvironment(jData as json)
+    private method resetEnvironment()
+    private method validateMessageStruct()
+endClass
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} new
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method new() as object class HandleMessage
+    self:jMandatoryProperties := JsonObject():new()
+    self:clear()
+return self
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} clear
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method clear() class HandleMessage
+    fwFreeArray(self:aItems)
+    self:aItems := {}
+
+    freeObj(self:jData)
+    self:jData := JsonObject():new()
+
+    self:cMessageCompany := ""
+    self:cMessageBranch := ""
+    self:cMessageType := ""
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} canRead
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method canRead(cMessageType as character) as logical class HandleMessage
+    local jMessageTypes := JsonObject():new() as json
+
+    jMessageTypes["BillAwaitingPaymentCreated"] := .T.
+    jMessageTypes["BillCanceledCreated"] := .T.
+    jMessageTypes["BillPaidCreated"] := .T.
+    jMessageTypes["ReceivableCreateStatus"] := .T.
+    jMessageTypes["ReceivableUpdateStatus"] := .T.
+    jMessageTypes["ReceivableCancelStatus"] := .T.
+
+return jMessageTypes:HasProperty(cMessageType)
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} read
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method read(oLinkMessage as object) as logical class HandleMessage
+    local lSuccess := .T. as logical
+    local nX as numeric
+
+    try
+        self:setLinkMessage(oLinkMessage)
+    catch oError
+        lSuccess := .F.
+        FlowControl():logErrorMessage(oError)
+    endTry
+    
+    for nX := 1 to len(self:aItems)
+        try
+            self:jData := self:aItems[nX]
+            self:validateMessageStruct()
+            self:prepareEnvironment(self:jData)
+            if !self:processMessage(self:jData)
+                throw FlowControl():newException("Message processing not completed")
+            endIf
+        catch oError
+            lSuccess := .F.
+            FlowControl():logErrorMessage(oError)
+        endTry
+    next
+    self:resetEnvironment()
+
+return lSuccess
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} method
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setLinkMessage(oLinkMessage as object) class HandleMessage
+    local jMessage := JsonObject():new() as json
+    local jData := JsonObject():new() as json
+    local cType as character
+    local cParseError as character
+
+    FlowControl():logDebug("MESSAGE")
+    FlowControl():logDebug(oLinkMessage:RawMessage())
+
+    self:oLinkMessage := oLinkMessage
+
+    jMessage:fromJson(self:oLinkMessage:RawMessage())
+
+    cType := valType(jMessage['data'])
+
+    if cType == "C"
+        cParseError := jData:fromJson(jMessage['data'])
+    else
+        if cType == "J"
+            cParseError := jData:fromJson(jMessage['data']:toJson())
+        endIf
+    endIf
+
+    if !(cType $ "CJ") .or. !empty(cParseError)    
+        throw FlowControl():newException("The message content is not valid JSON.")
+    endIf
+
+    if jData:hasProperty("items") .and. valType(jData["items"]) == "A"
+        self:aItems := jData["items"]
+    else
+        self:aItems := { jData }
+    endIf
+
+    self:cMessageType := jMessage['type']
+
+    jMessage:FromJSON("{}")
+    FreeObj(jMessage)
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} method
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method prepareEnvironment(jData as json) class HandleMessage
+    local aOrganization := StrTokArr2( jData['organizationIntegrationId'], '|' ) as array
+    local cNewEnvironmentCompany := aOrganization[1] as character
+    local cNewEnvironmentBranch := aOrganization[2] as character
+
+    if cNewEnvironmentCompany != self:cMessageCompany .or. cNewEnvironmentBranch != self:cMessageBranch
+        if empty(self:cBackupCompany)
+            self:cBackupCompany := cEmpAnt
+            self:cBackupBranch := cFilAnt
+        endIf
+        self:cMessageCompany := cNewEnvironmentCompany
+        self:cMessageBranch := cNewEnvironmentBranch
+        
+        RpcClearEnv()
+        GRRConnCompany( self:cMessageCompany, self:cMessageBranch )
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} method
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method resetEnvironment() class HandleMessage
+    if !empty(self:cBackupCompany)
+        RpcClearEnv()
+        GRRConnCompany( self:cBackupCompany, self:cBackupBranch )
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} method
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method setMandatoryProperties(jMandatoryProperties as json) class HandleMessage
+    if jMandatoryProperties != NIL
+        self:jMandatoryProperties := jMandatoryProperties
+    endIf
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} method
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method validateMessageStruct() class HandleMessage
+    local aProperties := {} as array
+    local nX as numeric
+    local cProperty as character
+
+    aProperties := self:jMandatoryProperties:getNames()
+
+    for nX := 1 to len(aProperties)
+        cProperty := aProperties[nX]
+        if !self:jData:HasProperty(cProperty)
+            FlowControl():logMessage({{"message", self:oLinkMessage:RawMessage()}})
+            throw FlowControl():newException("Mandatory property not found: " + cProperty)
+        endIf
+        if valType(self:jData[cProperty]) != self:jMandatoryProperties[cProperty]['type']
+            FlowControl():logMessage({{"message", self:oLinkMessage:RawMessage()}})
+            throw FlowControl():newException("Property type differs from expected: " + cProperty + " " + self:jMandatoryProperties[cProperty]['type'] + "->" + valType(self:jData[cProperty]) )
+        endIf
+        //to-do Validar propriedades obrigatórias (not empty) ??
+    next
+
+    aSize(aProperties, 0)
+    aProperties := NIL
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} method
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method processMessage(jData as json) as logical class HandleMessage
+return .T.
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getMessageType
+    @type method
+    @author guilherme.sordi@totvs.com.br
+	@since 08/05/2025
+    @version 12.1.2410
+/*/
+//-------------------------------------------------------------------
+method getMessageType() as character class HandleMessage
+    local cMessageType := "MESSAGE" as character
+    if !empty(self:cMesssageType)
+        cMessageType := self:cMessageType
+    endIf
+return cMessageType

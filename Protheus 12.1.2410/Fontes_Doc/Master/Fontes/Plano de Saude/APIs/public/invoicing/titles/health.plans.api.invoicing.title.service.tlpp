@@ -1,0 +1,470 @@
+#Include "tlpp-core.th"
+
+Namespace totvs.protheus.health.plans.api.invoicing.title
+
+Using Namespace totvs.protheus.health.plans.api.util
+
+/*/{Protheus.doc} TitleService
+Classe de serviço de Titulos - Regra de Negócio
+
+@type class
+@author Vinicius Queiros Teixeira
+@since 14/02/2023
+@version Protheus 12
+/*/
+Class TitleService From BaseService
+
+	Private Data oAdapter As Object
+
+	Public Method new() Constructor
+	Public Method getTitles() As Logical
+	Public Method getBankSlip() As Logical
+	Public Method getBankSlipBase64() As Logical
+	// Métodos do boleto bancário
+	Private Method setResultBankSlip(jBankSlipData As Json) As Logical
+	Private Method setBillingDetailsBankSlip(aDetails As Array) As Logical
+	Private Method setOpenMonthsBankSlip(aMonths As Array) As Logical
+	Private Method setUsersBankSlip(aBeneficiaries As Array) As Logical
+	Private Method setUserUsageBankSlip(aUsage As Array) As Logical
+
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 14/02/2023
+@version Protheus 12
+/*/
+Method new() Class TitleService
+
+	_Super:new()
+
+Return Self
+
+/*/{Protheus.doc} getTitles
+Método responsavel por retornar as paginas de títulos
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 14/02/2023
+@version Protheus 12
+/*/
+method getTitles(lTotals as logical) as logical class TitleService
+
+	local lSucess := .f. as logical
+	local aFields := {} as array
+	local lSeekSubscriberId := self:jParams:hasProperty("subscriberId") as logical
+	local lBeneficiaryOk := .T. as logical
+	local lHasLoginUser := self:jParams:hasProperty("loginUser") as logical
+
+	default lTotals := .F.
+
+	// Chaves do query param obrigatórios na api
+	aAdd(aFields, {"field" : "healthInsurerCode", "required" : !lSeekSubscriberId .and. !lHasLoginUser, "type" : "C"})
+	aAdd(aFields, {"field" : "companyCode", "required" : !lSeekSubscriberId .and. !lHasLoginUser, "type" : "C"})
+
+	if Self:checkBodyFields(aFields, "E001", self:jParams, nil, nil, "As chaves do query param estão inválidos")
+		if lSeekSubscriberId
+			BA1->(DBSetOrder(2))
+			if BA1->(msSeek(xFilial("BA1")+self:jParams["subscriberId"]))
+				self:jParams["healthInsurerCode"] := BA1->BA1_CODINT
+				self:jParams["companyCode"] := BA1->BA1_CODEMP
+				self:jParams["familyCode"] := BA1->BA1_MATRIC
+			else
+				lBeneficiaryOk := .f.
+				self:setError("E002", "Beneficiário não encontrado",;
+					"Não foi encontrado nenhum beneficiário com a matricula "+self:jParams["subscriberId"],;
+					404) // Not Found
+			endif
+		endif
+
+		if lBeneficiaryOk
+			Self:oAdapter := TitleAdapter():New()
+			Self:oAdapter:setQueryParams(Self:jParams)
+			Self:oAdapter:setLinks({"rel" : "bankSlip",;
+									"url" : "/totvsHealthPlans/invoicing/v1/titles",;
+									"paths" : {{"path" : {"title_id"}, "resource" : "bankSlip"}};
+									})
+			Self:oAdapter:setLinks({"rel" : "bankSlip/base64",;
+									"url" : "/totvsHealthPlans/invoicing/v1/titles",;
+									"paths" : {{"path" : {"title_id"}, "resource" : "bankSlip/base64"}};
+									})
+
+			if lTotals
+				self:jResult := self:oAdapter:getTotalTitles()
+				self:nCodeStatus := 200
+				lSucess := .T.
+			else
+				If Self:oAdapter:getPageTitles()
+					lSucess := .T.
+					Self:nCodeStatus := 200
+					Self:jResult := Self:oAdapter:getJsonResult()
+				EndIf
+			endif
+			
+		endif
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} getTitles
+Método responsavel por retornar o boleto bancário do título
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 16/02/2023
+@version Protheus 12
+/*/
+Method getBankSlip() As Logical Class TitleService
+
+	Local lSucess := .F. As Logical
+	Local aKeys := {} As Array
+	Local cFileName As Character
+	Local oBankSlip As Json
+	Local cDiretory := GetMV("MV_RELT")
+
+	// Chaves do query param obrigatórios na api
+	aAdd(aKeys, {"type" : "pathParams", "key" : "titleId"})
+
+	If Self:checkRequiredKeys(aKeys, "E002")
+		Self:jPath["titleId"] := StrTran(Self:jPath["titleId"], "+", " ")
+
+		SE1->(DbSetOrder(1))
+		If SE1->(MsSeek(FWXFilial("SE1")+Padr(Self:jPath["titleId"], TamSX3("E1_PREFIXO")[1]+TamSX3("E1_NUM")[1]+TamSX3("E1_PARCELA")[1]+TamSX3("E1_TIPO")[1])))
+			oBankSlip := {"type" : "1", "sucess" : .F.} // Tipo 1: Retorno dos dados do boleto na api
+
+			cFileName := PLSR580(Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil,;
+				Nil, Nil, Nil, Nil, Nil, Nil, 1, 1, Nil, 2, 2, 2, 2, 2, .T.,;
+				SE1->E1_PREFIXO, SE1->E1_NUM, SE1->E1_PARCELA, SE1->E1_TIPO,;
+				cDiretory, Nil, Nil, Nil, Nil, @oBankSlip)
+
+			If !Empty(cFileName) .And. oBankSlip["sucess"]
+				Self:setResultBankSlip(oBankSlip["bankSlipData"])
+				lSucess := .T.
+				Self:nCodeStatus := 200 // Ok
+			Else
+				Self:SetError("E004", "Boleto Bancário não disponível.",;
+					"O título "+Self:jPath["titleId"]+" se encontra na situação em Carteira no Financeiro.",;
+					400) // Bad Request
+			EndIf
+		Else
+			Self:SetError("E003", "Título não encontrado no Financeiro",;
+				"Não foi encontrada na tabela SE1 o título "+Self:jPath["titleId"]+" (E1_PREFIXO+E1_NUM+E1_PARCELA+E1_TIPO).",;
+				404) // Not found
+		EndIf
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} getBankSlipBase64
+Método responsavel por retornar o boleto bancário do título em Base 64
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 16/02/2023
+@version Protheus 12
+/*/
+Method getBankSlipBase64() As Logical Class TitleService
+
+	Local lSucess := .F. As Logical
+	Local aKeys := {} As Array
+	Local cFileName As Character
+	Local oBankSlip As Json
+	Local cDiretory := GetMV("MV_RELT")
+
+	if existDir(cDiretory)
+		// Chaves do query param obrigatórios na api
+		aAdd(aKeys, {"type" : "pathParams", "key" : "titleId"})
+
+		If Self:checkRequiredKeys(aKeys, "E002")
+			Self:jPath["titleId"] := StrTran(Self:jPath["titleId"], "+", " ")
+
+			SE1->(DbSetOrder(1))
+			If SE1->(MsSeek(FWXFilial("SE1")+Padr(Self:jPath["titleId"], TamSX3("E1_PREFIXO")[1]+TamSX3("E1_NUM")[1]+TamSX3("E1_PARCELA")[1]+TamSX3("E1_TIPO")[1])))
+				oBankSlip := {"type" : "2", "sucess" : .F.} // Tipo 2: Retorno do PDF do boleto em base 64
+
+				cFileName := PLSR580(Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil,;
+					Nil, Nil, Nil, Nil, Nil, Nil, 1, 1, Nil, 2, 2, 2, 2, 2, .T.,;
+					SE1->E1_PREFIXO, SE1->E1_NUM, SE1->E1_PARCELA, SE1->E1_TIPO,;
+					cDiretory, Nil, Nil, Nil, Nil, @oBankSlip)
+
+				If !Empty(cFileName) .And. File(cDiretory+cFileName)
+					Self:setAttributeJson({"attribute" : "fileName", "value" : Lower(cFileName), "type" : "C"})
+					Self:setAttributeJson({"attribute" : "file", "value" : Self:convertFileToBase64(cDiretory+cFileName), "type" : "C"})
+					lSucess := .T.
+					Self:nCodeStatus := 200 // Ok
+				Else
+					Self:SetError("E004", "Boleto Bancário não disponível.",;
+						"O título "+Self:jPath["titleId"]+" se encontra na situação em Carteira no Financeiro.",;
+						400) // Bad Request
+				EndIf
+			Else
+				Self:SetError("E003", "Título não encontrado no Financeiro",;
+					"Não foi encontrada na tabela SE1 o título "+Self:jPath["titleId"]+" (E1_PREFIXO+E1_NUM+E1_PARCELA+E1_TIPO).",;
+					404) // Not found
+			EndIf
+		EndIf
+	else
+		self:setError("E005", "Diretório para impressão do relatório não encontrado.",;
+			"Verifique se existe o diretório informado no parâmetro MV_RELT no servidor.",;
+			400) // Bad Request
+	endif
+
+Return lSucess
+
+/*/{Protheus.doc} setResultBankSlip
+Método responsavel por definir o json de resultado da api de boleto bancário
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 20/02/2023
+@version Protheus 12
+/*/
+Method setResultBankSlip(oBankSlipData As Json) As Logical Class TitleService
+
+	Local lSucess := .T. As Logical
+	Local aBillingDetails := {} As Array
+	Local aOpenMonths := {} As Array
+	Local aUsers := {} As Array
+	Local aUserUsage := {} As Array
+
+	Self:setAttributeJson({"attribute" : "digitableLine", "value" : sanitizeDigitableLine(oBankSlipData["CB_RN_NN"][2]), "type" : "C"}) // Linha digitável
+	Self:setAttributeJson({"attribute" : "dueDate", "value" : oBankSlipData["aDadosTit"][4], "type" : "D"}) // "Vencimento"
+	Self:setAttributeJson({"attribute" : "documentDate", "value" : oBankSlipData["aDadosTit"][3], "type" : "D"}) // "Data do Documento"
+	Self:setAttributeJson({"attribute" : "documentNumber", "value" : oBankSlipData["aDadosTit"][1], "type" : "C"}) // "Nro.Documento"
+	Self:setAttributeJson({"attribute" : "documentType", "value" : oBankSlipData["CB_RN_NN"][7], "type" : "C"}) // "Espécie Doc."
+	Self:setAttributeJson({"attribute" : "acceptance", "value" : oBankSlipData["CB_RN_NN"][8], "type" : "C"}) // "Aceite"
+	Self:setAttributeJson({"attribute" : "processingDate", "value" : oBankSlipData["aDadosTit"][2], "type" : "D"}) // "Data do Processamento"
+	Self:setAttributeJson({"attribute" : "documentValue", "value" : oBankSlipData["aDadosTit"][5], "type" : "N"}) // "(=)Valor do Documento"
+	Self:setAttributeJson({"attribute" : "otherAdditions", "value" : oBankSlipData["E1_SDACRES"], "type" : "N"}) // "(+)Outros Acréscimos"
+	Self:setAttributeJson({"attribute" : "discount", "value" : oBankSlipData["E1_SDDECRE"], "type" : "N"}) // "(-)Desconto/Abatimento"
+	Self:setAttributeJson({"attribute" : "competenceMonth", "value" : oBankSlipData["E1_MESBASE"], "type" : "C"}) // Mês Competencia
+	Self:setAttributeJson({"attribute" : "competenceYear", "value" : oBankSlipData["E1_ANOBASE"], "type" : "C"}) // Ano Competencia
+
+	// Operadora Saúde - Cedente do boleto
+	Self:setAttributeJson({"attribute" : "assignor", "value" : JsonObject():new(), "type" : "J"})
+	If Self:jResult:hasProperty("assignor")
+		Self:setAttributeJson({"attribute" : "name", "value" : oBankSlipData["aDadosEmp"][1], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Nome
+		Self:setAttributeJson({"attribute" : "address", "value" : oBankSlipData["aDadosEmp"][2], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Endereço
+		Self:setAttributeJson({"attribute" : "addressComplement", "value" : oBankSlipData["aDadosEmp"][11], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Complemento de Endereço
+		Self:setAttributeJson({"attribute" : "district", "value" : oBankSlipData["aDadosEmp"][8], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Bairro
+		Self:setAttributeJson({"attribute" : "cityCodeResidence", "value" : oBankSlipData["aDadosEmp"][9], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Cidade
+		Self:setAttributeJson({"attribute" : "stateAbbreviation", "value" : oBankSlipData["aDadosEmp"][10], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Estado
+		Self:setAttributeJson({"attribute" : "zipCode", "value" : oBankSlipData["aDadosEmp"][12], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // CEP
+		Self:setAttributeJson({"attribute" : "phoneNumber", "value" : oBankSlipData["aDadosEmp"][13], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Telefone
+		Self:setAttributeJson({"attribute" : "cnpj", "value" : oBankSlipData["aDadosEmp"][14], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // CNPJ
+		Self:setAttributeJson({"attribute" : "codeSusep", "value" : oBankSlipData["aDadosEmp"][15], "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // Código SUSEP - ANS
+		Self:setAttributeJson({"attribute" : "observation", "value" : Self:breakArrayString(oBankSlipData["aObservacoes"]), "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // "Observação"
+		Self:setAttributeJson({"attribute" : "instructions", "value" : Self:breakArrayString(oBankSlipData["aMsgBoleto"]), "type" : "C", "setResponse" : .T.}, Self:jResult["assignor"]) // "Instruções/Texto de responsabilidade do cedente"
+	EndIf
+
+	// Recibo do Sacado
+	Self:setAttributeJson({"attribute" : "drawee", "value" : JsonObject():new(), "type" : "J"})
+	If Self:jResult:hasProperty("drawee")
+		Self:setAttributeJson({"attribute" : "name", "value" : oBankSlipData["aDatSacado"][1], "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // Nome do Cliente
+		Self:setAttributeJson({"attribute" : "code", "value" : oBankSlipData["aDatSacado"][2], "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // Codigo do Cliente
+		Self:setAttributeJson({"attribute" : "cpf", "value" : IIf(Len(oBankSlipData["aDatSacado"][7]) <= 11, oBankSlipData["aDatSacado"][7], ""), "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // "CPF"
+		Self:setAttributeJson({"attribute" : "cnpj", "value" : IIf(Len(oBankSlipData["aDatSacado"][7]) > 11, oBankSlipData["aDatSacado"][7], ""), "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // "CNPJ"
+		Self:setAttributeJson({"attribute" : "address", "value" : oBankSlipData["aDatSacado"][8], "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // Endereço do Cliente
+		Self:setAttributeJson({"attribute" : "district", "value" : oBankSlipData["aDatSacado"][9], "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // Bairro do Cliente
+		Self:setAttributeJson({"attribute" : "cityCodeResidence", "value" : oBankSlipData["aDatSacado"][4], "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // Cidade
+		Self:setAttributeJson({"attribute" : "stateAbbreviation", "value" : oBankSlipData["aDatSacado"][5], "type" : "C", "setResponse" : .T.}, Self:jResult["drawee"]) // Estado
+		Self:setAttributeJson({"attribute" : "zipCode", "value" : oBankSlipData["aDatSacado"][6], "type" : "C", "setResponse" : .T., "removeSpecialChar" : .T.}, Self:jResult["drawee"]) // CEP
+	EndIf
+
+	// Banco
+	Self:setAttributeJson({"attribute" : "bank", "value" : JsonObject():new(), "type" : "J"})
+	If Self:jResult:hasProperty("bank")
+		Self:setAttributeJson({"attribute" : "name", "value" : oBankSlipData["aDadosBanco"][2], "type" : "C", "setResponse" : .T.}, Self:jResult["bank"]) // Nome do Banco
+		Self:setAttributeJson({"attribute" : "code", "value" : IIf(oBankSlipData["aDadosBanco"][1] == "104", "104-0", oBankSlipData["aDadosBanco"][1]+"-"+oBankSlipData["CB_RN_NN"][9]), "type" : "C", "setResponse" : .T.}, Self:jResult["bank"]) // Código do Banco
+		Self:setAttributeJson({"attribute" : "agencyAssignorCode", "value" : oBankSlipData["agencyAssignorCode"], "type" : "C", "setResponse" : .T.}, Self:jResult["bank"]) // "Agência/Código Cedente"
+		Self:setAttributeJson({"attribute" : "ourNumber", "value" : oBankSlipData["aDadosTit"][6], "type" : "C", "setResponse" : .T.}, Self:jResult["bank"]) // "Nosso Número"
+		Self:setAttributeJson({"attribute" : "walletCode", "value" : oBankSlipData["CB_RN_NN"][6], "type" : "C", "setResponse" : .T.}, Self:jResult["bank"]) // "Carteira"
+	EndIf
+
+	// Define os Atributos Expansíveis antes de setar
+	Self:addExpandables("billingDetails")
+	Self:addExpandables("openMonths")
+	Self:addExpandables("users")
+	Self:addExpandables("userUsage")
+
+	Self:setAttributeJson({"attribute" : "billingDetails", "value" : aBillingDetails, "type" : "A", "expandable" : .T.})
+	If Self:jResult:hasProperty("billingDetails") // Detalhes da Cobrança dos beneficiários
+		Self:setBillingDetailsBankSlip(oBankSlipData["aUsrVlr"])
+	EndIf
+
+	Self:setAttributeJson({"attribute" : "openMonths", "value" : aOpenMonths, "type" : "A", "expandable" : .T.})
+	If Self:jResult:hasProperty("openMonths") // Meses em aberto
+		Self:setOpenMonthsBankSlip(oBankSlipData["aOpenMonth"])
+	EndIf
+
+	Self:setAttributeJson({"attribute" : "users", "value" : aUsers, "type" : "A", "expandable" : .T.})
+	If Self:jResult:hasProperty("users") // Usuários (Beneficiários da Familia)
+		Self:setUsersBankSlip(oBankSlipData["aDependentes"])
+	EndIf
+
+	Self:setAttributeJson({"attribute" : "userUsage", "value" : aUserUsage, "type" : "A", "expandable" : .T.})
+	If Self:jResult:hasProperty("userUsage") // Detalhes da Utilização
+		Self:setUserUsageBankSlip(oBankSlipData["aUtilCob"])
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} setBillingDetailsBankSlip
+Método responsavel por definir o atributo billingDetails no json de retorno
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 23/02/2023
+@version Protheus 12
+/*/
+Method setBillingDetailsBankSlip(aDetails As Array) As Logical Class TitleService
+
+	Local lSucess := .F. As Logical
+	Local nCont As Numeric
+	Local nPosBen As Numeric
+	Local nPosComp As Numeric
+	Local aCompositions := {} As Array
+
+	If Len(aDetails) >= 2
+		For nCont := 1 To Len(aDetails) Step 2
+			nPosBen := 0
+
+			If nCont+1 <= Len(aDetails) // Verifica sempre se o contador + 1 existe, o aUsrVlr retorna uma linha com os dados do beneficiário e outra linha com a composição e assim em diante.
+				If Len(Self:jResult["billingDetails"]) > 0
+					nPosBen := Ascan(Self:jResult["billingDetails"], {|x| x["subscriberId"] == Alltrim(aDetails[nCont][1])})
+				EndIf
+
+				If nPosBen == 0
+					aCompositions := {}
+					aAdd(Self:jResult["billingDetails"], JsonObject():new())
+					nPosBen := Len(Self:jResult["billingDetails"])
+
+					Self:setAttributeJson({"attribute" : "subscriberId","value" : Alltrim(aDetails[nCont][1]), "type" : "C", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]) // Matricula do Beneficiário
+					Self:setAttributeJson({"attribute" : "name", "value" : Alltrim(aDetails[nCont][3]), "type" : "C", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]) // Nome do Beneficiário
+					Self:setAttributeJson({"attribute" : "compositions", "value" : aCompositions, "type" : "A", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]) // Composições do título do Beneficiário
+				EndIf
+
+				aAdd(Self:jResult["billingDetails"][nPosBen]["compositions"], JsonObject():new())
+				nPosComp := Len(Self:jResult["billingDetails"][nPosBen]["compositions"])
+
+				Self:setAttributeJson({"attribute" : "typeCode", "value" : aDetails[nCont+1][1], "type" : "C", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]["compositions"][nPosComp])
+				Self:setAttributeJson({"attribute" : "typeDescription", "value" : Alltrim(aDetails[nCont+1][2]), "type" : "C", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]["compositions"][nPosComp])
+				Self:setAttributeJson({"attribute" : "value", "value" : aDetails[nCont+1][3], "type" : "C", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]["compositions"][nPosComp])
+				Self:setAttributeJson({"attribute" : "numberANS", "value" : IIf(!Empty(aDetails[nCont+1][4]), Substr(aDetails[nCont+1][4], 6) , ""), "type" : "C", "setResponse" : .T.}, Self:jResult["billingDetails"][nPosBen]["compositions"][nPosComp])
+				lSucess := .T.
+			EndIf
+		Next nCont
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} setOpenMonthsBankSlip
+Método responsavel por definir o atributo openMonths no json de retorno
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 23/02/2023
+@version Protheus 12
+/*/
+Method setOpenMonthsBankSlip(aMonths As Array) As Logical Class TitleService
+
+	Local lSucess := .F. As Logical
+	Local nCont As Numeric
+	Local aOpenMonth As Array
+	Local nLen As Numeric
+
+	If Len(aMonths) > 0
+		For nCont := 1 To Len(aMonths)
+			aOpenMonth := StrToKarr(aMonths[nCont], "/")
+
+			If Len(aOpenMonth) >= 2 .And. !Empty(aOpenMonth[1])
+				aAdd(Self:jResult["openMonths"], JsonObject():new())
+				nLen := Len(Self:jResult["openMonths"])
+
+				Self:setAttributeJson({"attribute" : "month", "value" : aOpenMonth[1], "type" : "C", "setResponse" : .T.}, Self:jResult["openMonths"][nLen]) // Mês em aberto
+				Self:setAttributeJson({"attribute" : "year", "value" : aOpenMonth[2], "type" : "C", "setResponse" : .T.}, Self:jResult["openMonths"][nLen]) // Ano em aberto
+				lSucess := .T.
+			EndIf
+		Next nCont
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} setUsersBankSlip
+Método responsavel por definir o atributo users no json de retorno
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 23/02/2023
+@version Protheus 12
+/*/
+Method setUsersBankSlip(aBeneficiaries As Array) As Logical Class TitleService
+
+	Local lSucess := .F. As Logical
+	Local nCont As Numeric
+	Local nLen As Numeric
+
+	If Len(aBeneficiaries) > 0
+		For nCont := 1 To Len(aBeneficiaries)
+			aAdd(Self:jResult["users"], JsonObject():new())
+			nLen := Len(Self:jResult["users"])
+
+			Self:setAttributeJson({"attribute" : "recordType", "value" : aBeneficiaries[nCont][1], "type" : "C", "setResponse" : .T.}, Self:jResult["users"][nLen]) // Tipo de Registro do Beneficiário
+			Self:setAttributeJson({"attribute" : "name", "value" : aBeneficiaries[nCont][2], "type" : "C", "setResponse" : .T.}, Self:jResult["users"][nLen]) // Nome do Beneficiário
+			Self:setAttributeJson({"attribute" : "effectiveDate", "value" : CToD(aBeneficiaries[nCont][3]), "type" : "D", "setResponse" : .T.}, Self:jResult["users"][nLen]) // Data de Inclusão
+			lSucess := .T.
+		Next nCont
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} setUserUsageBankSlip
+Método responsavel por definir o atributo userUsage no json de retorno
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 23/02/2023
+@version Protheus 12
+/*/
+Method setUserUsageBankSlip(aUsage As Array) As Logical Class TitleService
+
+	Local lSucess := .F. As Logical
+	Local nCont As Numeric
+	Local nLen As Numeric
+
+	If Len(aUsage) > 0 .And. !Empty(aUsage[1][1])
+		For nCont := 1 To Len(aUsage)
+			aAdd(Self:jResult["userUsage"], JsonObject():new())
+			nLen := Len(Self:jResult["userUsage"])
+
+			Self:setAttributeJson({"attribute" : "subscriberName", "value" : aUsage[nCont][7], "type" : "C", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Nome do Beneficiário
+			Self:setAttributeJson({"attribute" : "healthProviderName", "value" : aUsage[nCont][8], "type" : "C", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Nome da Rede de Atendimento
+			Self:setAttributeJson({"attribute" : "procedureCode", "value" : aUsage[nCont][9], "type" : "C", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Código do Procedimento
+			Self:setAttributeJson({"attribute" : "procedureName", "value" : aUsage[nCont][10], "type" : "C", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Descrição do Procedimento
+			Self:setAttributeJson({"attribute" : "executionDate", "value" : CToD(aUsage[nCont][3]), "type" : "D", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Data Utilização
+			Self:setAttributeJson({"attribute" : "quantity", "value" : aUsage[nCont][11], "type" : "N", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Quantidade
+			Self:setAttributeJson({"attribute" : "coPaymentValue", "value" : aUsage[nCont][12], "type" : "N", "setResponse" : .T.}, Self:jResult["userUsage"][nLen]) // Valor Total
+			lSucess := .T.
+		Next nCont
+	EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} sanitizeDigitableLine
+Sanitiza a linha digitável, removendo espaços e pontos
+@type function
+@version 12.1.2510 
+@author vinicius.queiros
+@since 02/04/2025
+@param cDigitableLine, character, linha digitável a ser formatada
+@return cDigitableLine, linha digitável formatada
+/*/
+static function sanitizeDigitableLine(cDigitableLine as character) as character
+
+	cDigitableLine := strTran(cDigitableLine, ".", "")
+	cDigitableLine := strTran(cDigitableLine, " ", "")
+
+return cDigitableLine

@@ -1,0 +1,685 @@
+#Include "TOTVS.CH"
+#Include "tlpp-core.th"
+#Include "DTAUtils.ch"
+
+#DEFINE DTA_CRYPT_KEY "DTA_CRYPT_KEY"
+#DEFINE GENCODE_HTTP_ERROR 54258
+#DEFINE SIZE_ERROR_MESSAGE 100
+
+Static _oQueryGroups := Nil
+Static _jHTTPErrorResponse := JsonObject():New()
+
+/*/{Protheus.doc} DTAUtils
+Classe com métodos úteis para o uso do DTA
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+/*/
+Class DTAUtils
+	Static Method APIErrorMessage(nCode as Numeric, cMessage as Character, cDetailedMessage as Character) as Array
+	Static Method calculateVectorSimilarity(aVectorA as Array, aVectorB as Array) as Numeric
+	Static Method callToolFunction(cFunction as Character, cParams as Character, jSuggestions as Json) as Array
+	Static Method decodeUTF8(cText as Character) as Character
+	Static Method encodeUTF8(cText as Character) as Character
+	Static Method getEmbedding(aContent as Array) as Json
+	Static Method getEmbeddingVector(jEmbedding as Json, nIndex as Numeric) as Array
+	Static Method getLanguageName() as Character
+	Static Method getLoopLimit() as Numeric
+	Static Method getMaxToolCalls() as Numeric
+	Static Method getToolClassMethod(cFunctionName as Character) as Character
+	Static Method getToolGlossary(cFunctionName as Character) as Array
+	Static Method getToolsCatalog() as Array
+	Static Method getToolExamples(cFunction as Character) as Array
+	Static Method getLastHTTPError() as Character
+	Static Method logApplicationError(oError as Object, nCode as Numeric, cErrorMessage as Character)
+	Static Method setChatToolsSteps(aToolsHistory as Array) as Array
+	Static Method setSuggestions(jSuggestions as Json, cFunction as Character, aSuggestions as Array)
+	Static Method translateMessageToAssistant(cFunction as Character, cData as Character) as Character
+	Static Method userGroupHasToolAuthorization(cFunction as Character) as Logical
+	Static Method userHasToolAuthorization(cFunction as Character) as Logical
+	Static Method validateHTTPResponse(cAnswer as Character, cMethod as Character, cSendMessage as Character)
+	Static Method encryptData(cData as Character) as Character
+	Static Method decryptData(cData as Character) as Character
+	Static Method cleanTextEmbedd(cText as Character) as Character
+	Static Method cleanBreakLine(cText as Character)
+	Static Method initializeTables()
+EndClass
+
+/*/{Protheus.doc} translateMessageToAssistant
+Trata o retorno da ferramenta para enviar ao proxy
+- Substitui o nome das propriedades da ferramenta por suas traduções do cadastro de glossário
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cFunction, Character, Nome da ferramenta
+@param 02 cData    , Character, Retorno da ferramenta
+@return cData   , Character, Retorno da ferramenta traduzido para o proxy
+/*/
+Method translateMessageToAssistant(cFunction as Character, cData as Character) as Character Class DTAUtils
+	Local aGlossary := {} as Array
+	Local nIndex    := 0  as Numeric
+
+	aGlossary := DTAUtils():getToolGlossary(cFunction)
+	For nIndex := 1 To Len(aGlossary)
+		cData := StrTran(cData, '"'+aGlossary[nIndex]["property"]+'"', '"'+aGlossary[nIndex]["description"]+'"')
+		cData := StrTran(cData, "'"+aGlossary[nIndex]["property"]+"'", aGlossary[nIndex]["description"])
+	Next nIndex
+	FwFreeArray(aGlossary)
+Return cData
+
+/*/{Protheus.doc} setSuggestions
+Atribui ao objeto json as sugestões retornadas da ferramenta parametrizada
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 jSuggestions, Json Object, Objeto json com as sugestões das ferramentas (passado como referência)
+@param 02 cFunction   , Character  , Nome da ferramenta
+@param 03 aSuggestions, Array      , Sugestões do retorno da ferramenta em questão
+@return Nil
+/*/
+Method setSuggestions(jSuggestions as Json, cFunction as Character, aSuggestions as Array) Class DTAUtils
+	If !jSuggestions:hasProperty(cFunction)
+		If !Empty(aSuggestions)
+			jSuggestions[cFunction] := aSuggestions
+		EndIf
+	EndIf
+Return
+
+/*/{Protheus.doc} getToolGlossary
+Executa a consulta do glossário da ferramenta e retorna lista completa
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cFunctionName, Character, Nome da ferramenta
+@return aGlossary, Array, Lista de glossário da ferramenta
+/*/
+Method getToolGlossary(cFunctionName as Character) as Array Class DTAUtils
+	Local aGlossary := {} as Array
+	Local jData     := Nil as Json
+	Local cAlias    := GetNextAlias() as Character
+
+	BeginSql Alias cAlias
+		SELECT 
+			HZW.HZW_NOME,
+			HZW.HZW_DESCRI
+		FROM %Table:HZW% HZW
+		WHERE HZW.HZW_FILIAL = %xFilial:HZW%
+		  AND HZW.HZW_FUNCAO = %exp:cFunctionName%
+		  AND HZW.%NotDel%
+	EndSql
+	While (cAlias)->(!EoF())
+		jData := JsonObject():New()
+		jData["property"]    := RTRIM((cAlias)->HZW_NOME)
+		jData["description"] := RTRIM((cAlias)->HZW_DESCRI)
+		aAdd(aGlossary, jData)
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(dbCloseArea())
+	jData := Nil
+Return aGlossary
+
+/*/{Protheus.doc} getToolClassMethod
+Retorna a classe e método da ferramenta para ser executado
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cFunctionName, Character, Nome da ferramenta
+@return cClassMethodName, Character, Retorna classe e método no seguinte formato: CLASS():METHOD
+/*/
+Method getToolClassMethod(cFunctionName as Character) as Character Class DTAUtils
+	Local cClassMethodName := "" as Character
+
+	cFunctionName := PadR(cFunctionName, GetSX3Cache("HZV_FUNCAO", "X3_TAMANHO"))
+	HZV->(dbSetOrder(1))
+	If HZV->(dbSeek(xFilial("HZV") + cFunctionName))
+		cClassMethodName := RTrim(HZV->HZV_CLASSE) + "():" + RTrim(HZV->HZV_MDADOS)
+	EndIf
+Return cClassMethodName
+
+/*/{Protheus.doc} callToolFunction
+Executa a ferramenta solicitada pelo assistente e retorna string json com o retorno da execução
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cFunction   , Character  , Nome da ferramenta
+@param 02 cParams     , Character  , Parâmetros da ferramenta
+@param 03 jSuggestions, Json Object, Objeto json com as sugestões das ferramentas (passado como referência)
+@return aReturn, Array, [1] - Retorno da ferramenta traduzido para o proxy
+                        [2] - Retorno original da ferramenta
+/*/
+Method callToolFunction(cFunction as Character, cParams as Character, jSuggestions as Json) as Array Class DTAUtils
+	Local aReturn       := Nil as Array
+	Local aToolReturn   := Nil as Array
+	Local cFunctionName := ""  as Character
+	Local jParam        := Nil as Json
+
+	cFunctionName := DTAUtils():getToolClassMethod(cFunction)
+	aReturn       := Array(2)
+	jParam        := JsonObject():New()
+
+	If !Empty(cFunctionName)
+		If DTAUtils():userHasToolAuthorization(cFunction)
+			jParam:FromJson(cParams)
+			aToolReturn := &(cFunctionName + "(jParam)")
+		Else
+			aToolReturn := DTAUtils():APIErrorMessage(401, I18N(STR0001, {RTrim(cFunction)})) //"Usuário não possui permissão para executar a ferramenta '#1[FERRAMENTA]#'."
+		EndIf
+	Else
+		aToolReturn := DTAUtils():APIErrorMessage(404, I18N(STR0002, {RTrim(cFunction)})) //"A ferramenta '#1[FERRAMENTA]#' não existe. Utilize apenas as ferramentas disponibilizadas na requisição."
+	EndIf
+
+	If aToolReturn[1]
+		aReturn[1] := aToolReturn[2]:toJson()
+		aReturn[2] := DTAUtils():translateMessageToAssistant(cFunction, aReturn[1])
+		DTAUtils():setSuggestions(@jSuggestions, cFunction, aToolReturn[2]["suggestions"])
+	Else
+		aReturn[1] := ""
+		aReturn[2] := aToolReturn[2]:toJson()
+	EndIf
+	FreeObj(jParam)
+	FwFreeArray(aToolReturn)
+Return aReturn
+
+/*/{Protheus.doc} getToolsCatalog
+Realiza a consulta das ferramentas no banco de dados e retorna a lista completa
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@return aTools, Array, Array de objeto com a lista de ferramentas
+/*/
+Method getToolsCatalog()  as Array Class DTAUtils
+	Local cAlias   := ""  as Character
+	Local aTools   := {}  as Array
+	Local cCatalog := ""  as Character
+	Local jParams  := Nil as Json
+	Local jEmbedd  := Nil as Json
+	Local jTools   := Nil as Json
+
+	cCatalog := ArrTokStr(DTALoad():getListOfTools(), "','")
+	cAlias   := GetNextAlias()
+	BeginSql Alias cAlias
+		SELECT 
+			HZV.HZV_FUNCAO,
+			HZV.HZV_ESTRIT,
+			HZV.HZV_REGRAS,
+			HZV.HZV_DESCRI,
+			HZV.HZV_EMBEDD,
+			HZV.HZV_PARAM
+		FROM %Table:HZV% HZV
+		WHERE HZV.HZV_FILIAL = %xFilial:HZV%
+		  AND HZV.HZV_HABLTD = '1'
+		  AND HZV.HZV_CLASSE IN (%Exp:cCatalog%)
+		  AND HZV.%NotDel%
+	EndSql
+	While (cAlias)->(!EoF())
+		jTools := JsonObject():New()
+		jTools["name"       ] := RTRIM((cAlias)->HZV_FUNCAO)
+		jTools["description"] := RTRIM((cAlias)->HZV_DESCRI)
+		jTools["strict"     ] := (cAlias)->HZV_ESTRIT=="1"
+		jTools["rules"]       := RTRIM((cAlias)->HZV_REGRAS)
+		jParams := JsonObject():New()
+		jParams:FromJson((cAlias)->HZV_PARAM)
+		jTools["parameters" ] := jParams
+		jEmbedd := JsonObject():New()
+		jEmbedd:FromJson((cAlias)->HZV_EMBEDD)		
+		jTools["embedding"  ] := jEmbedd["embedding"]
+		jTools["score"      ] := 0
+		aAdd(aTools, jTools)
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(dbCloseArea())
+	jTools  := Nil
+	jParams := Nil
+	FreeObj(jEmbedd)
+Return aTools
+
+/*/{Protheus.doc} getToolExamples
+Busca os exemplos cadastrados de uma ferramenta
+
+@author lucas.franca / renan.roeder
+@since 14/04/2025
+@version P12
+@param 01 cFunction, Character, Código da ferramenta
+@return aExamples, Array, Exemplos da ferramenta
+/*/
+Method getToolExamples(cFunction as Character) as Array Class DTAUtils
+	Local aExamples := {} as Array
+	Local cKey      := "" as Character
+
+	cKey := xFilial("HZZ") + PadR(cFunction, GetSX3Cache("HZZ_FUNCAO", "X3_TAMANHO"))
+	HZZ->(dbSetOrder(1))
+	HZZ->(dbSeek(cKey))
+	While HZZ->(!Eof()) .And. HZZ->(HZZ_FILIAL+HZZ_FUNCAO) == cKey
+		aAdd(aExamples, {"sequence": RTrim(HZZ->HZZ_SEQUEN), "description": RTrim(HZZ->HZZ_DESCRI)})
+		HZZ->(dbSkip())
+	End
+Return aExamples
+
+/*/{Protheus.doc} APIErrorMessage
+Define um padrão de retorno para erros provenientes da execução das tools
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 nCode           , Numeric  , Status HTTP
+@param 02 cMessage        , Character, Mensagem de erro
+@param 03 cDetailedMessage, Character, Detalhe do erro
+@return aAPIReturn, Array, Array com três posições: 1-Status, 2-Mensagem, 3-Detalhe
+/*/
+Method APIErrorMessage(nCode as Numeric, cMessage as Character, cDetailedMessage as Character) as Array Class DTAUtils
+	Local aAPIReturn := {.F., Nil, nCode}  as Array
+	Local jMessage   := JsonObject():New() as Json
+
+	Default cDetailedMessage := cMessage
+
+	jMessage["code"           ] := nCode
+	jMessage["message"        ] := cMessage
+	jMessage["detailedMessage"] := cDetailedMessage
+	
+	aAPIReturn[2] := jMessage
+	jMessage := Nil
+Return aAPIReturn
+
+/*/{Protheus.doc} calculateVectorSimilarity
+Calculo do produto escalar do vetor A com vetor B que resultará num score de proximidade entre os embeddings
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 aVectorA, Array, Vetor com os embeddings
+@param 02 aVectorB, Array, Vetor com os embeddings
+@return nTotal, Numeric, Score de proximidade
+/*/
+Method calculateVectorSimilarity(aVectorA as Array, aVectorB as Array) as Numeric Class DTAUtils
+	Local nIndex := 0 as Numeric
+	Local nTotal := 0 as Numeric
+	Local nSize  := 0 as Numeric
+
+	nSize := Len(aVectorA)
+	If nSize == Len(aVectorB)
+		For nIndex := 1 To nSize
+			nTotal := nTotal + (aVectorA[nIndex] * aVectorB[nIndex])
+		Next nIndex
+		nTotal := nTotal * 100
+	EndIf
+Return nTotal
+
+/*/{Protheus.doc} getLanguageName
+Retorna o nome do idioma ativo
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@return cNameLanguage, Character, Nome do idioma
+/*/
+Method getLanguageName() as Character Class DTAUtils
+	Local cLanguage     := "" as Character
+	Local cNameLanguage := "" as Character
+
+	cLanguage := FwRetIdiom()
+	If cLanguage == "es"
+		cNameLanguage := STR0003 //"Espanhol"
+	ElseIf cLanguage == "en"
+		cNameLanguage := STR0004 //"Inglês"
+	ElseIf cLanguage == "ru"
+		cNameLanguage := STR0005 //"Russo"
+	ElseIf cLanguage == "pt-br"
+		cNameLanguage := STR0006 //"Português do Brasil"
+	ElseIf cLanguage == "pt-pt"
+		cNameLanguage := STR0007 //"Português de Portugal"
+	EndIf
+Return cNameLanguage
+
+/*/{Protheus.doc} setChatToolsSteps
+Retorna array de objetos com os dados das ferramentas executadas para repassar ao chat  (dta-chat-steps)
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 aToolsHistory, Array, Array com o histórico do chat
+@return aSteps, Array, Array de objetos com os nomes e argumentos das ferramentas executadas
+/*/
+Method setChatToolsSteps(aToolsHistory as Array) as Array Class DTAUtils
+	Local aSteps           := {} as Array
+	Local jArguments       := Nil as Json
+	Local jToolCall        := Nil as Json
+	Local nIndToolsHistory := 0 as Numeric
+	Local nIndCallsHistory := 0 as Numeric
+
+	For nIndToolsHistory := 1 To Len(aToolsHistory)
+		If aToolsHistory[nIndToolsHistory]["role"] == "assistant"
+			For nIndCallsHistory := 1 To Len(aToolsHistory[nIndToolsHistory]["tool_calls"])
+				jToolCall  := JsonObject():New()
+				jArguments := JsonObject():New()
+				jArguments:FromJson(aToolsHistory[nIndToolsHistory]["tool_calls"][nIndCallsHistory]["function"]["arguments"])
+				jToolCall["name"] := aToolsHistory[nIndToolsHistory]["tool_calls"][nIndCallsHistory]["function"]["name"]
+				jToolCall["args"] := jArguments
+				aAdd(aSteps, jToolCall)
+			Next nIndCallsHistory
+		EndIf
+	Next nIndToolsHistory
+	jArguments := Nil
+	jToolCall  := Nil
+Return aSteps
+
+/*/{Protheus.doc} validateHTTPResponse
+Verifica o status da execução do HTTPPOST para o DTA PROXY e gera exceção em caso de erro
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cAnswer     , Character, Retorno da requisição
+@param 02 cMethod     , Character, Nome do método executado
+@param 03 cSendMessage, Character, Body da requisição
+@return Nil
+/*/
+Method validateHTTPResponse(cAnswer as Character, cMethod as Character, cSendMessage as Character) Class DTAUtils
+	Local cStatusError := ""  as Character
+	Local nStatus      := 0   as Numeric
+	Local oException   := Nil as Object
+
+	nStatus := HTTPGetStatus(@cStatusError, .F.)
+	If !(nStatus >= 200 .And. nStatus <= 299)
+		cAnswer := Iif(Empty(cAnswer), "", cAnswer)
+		LogMsg(cMethod, 14, 3, 1, "", "", "["+cMethod+"] Erro ao executar requisição." + CHR(10) + CHR(10) +;
+		                                 "Status    : [" + cValToChar(nStatus) + "]. " + CHR(10) + CHR(10) +;
+		                                 "Requisição: [" + cSendMessage + "]." + CHR(10) + CHR(10) +;
+		                                 "Retorno   : [" + cAnswer + "].")
+		_jHTTPErrorResponse["status"  ] := nStatus
+		_jHTTPErrorResponse["request" ] := JsonObject():New()
+		_jHTTPErrorResponse["response"] := JsonObject():New()
+		_jHTTPErrorResponse["request"]:FromJson(DTAUtils():decodeUTF8(cSendMessage))
+		_jHTTPErrorResponse["response"]:FromJson(DTAUtils():decodeUTF8(cAnswer))
+		oException := ErrorClass():New()
+		oException:genCode := GENCODE_HTTP_ERROR
+		oException:Description := STR0008 //"Ocorreram erros ao executar a requisição. Contacte o administrador do sistema."
+		Throw oException
+	EndIf
+Return
+
+/*/{Protheus.doc} getLastHTTPError
+Retorna as informações do último erro HTTP que ocorreu nas requisições para o DTA Proxy
+
+@author lucas.franca / renan.roeder
+@since 25/09/2025
+@version P12
+@return _jHTTPErrorResponse, Json, Objeto json com os dados do último erro
+/*/
+Method getLastHTTPError() as Character Class DTAUtils
+Return _jHTTPErrorResponse
+
+/*/{Protheus.doc} getEmbedding
+Recebe a mensagem para executar a geração do embedding no DTA PROXY
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 aContent, Array, Array com as strings para geração do embedding
+@return jEmbedding, Json Object, Objeto json com os embeddings
+/*/
+Method getEmbedding(aContent as Array) as Json Class DTAUtils
+	Local cAnswer    := ""                 as Character
+	Local jEmbedding := JsonObject():New() as Json
+
+	cAnswer := DTAProxy():postDTAEmbedding(aContent)
+	jEmbedding:FromJson(cAnswer)
+Return jEmbedding
+
+/*/{Protheus.doc} getEmbeddingVector
+Retorna o array com os embeddings obtidos pelo método getEmbedding
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 jEmbedding, Json   , Embeddings obtidos no método getEmbedding
+@param 02 nIndex    , Numeric, Indice do embedding
+@return aVector     , Array  , Array com os embeddings gerados
+/*/
+Method getEmbeddingVector(jEmbedding as Json, nIndex as Numeric) as Array Class DTAUtils
+	Local aVector   := {} as Array
+	Local nPosition := 0  as Numeric
+	Default nIndex  := 0
+
+	nPosition := aScan(jEmbedding["data"], {|x| x["index"] == nIndex})
+	If nPosition > 0
+		aVector := jEmbedding["data"][nPosition]["embedding"]
+	EndIf
+Return aVector
+
+/*/{Protheus.doc} getLoopLimit
+Retorna o limite de loop que pode ocorrer na interação de completion e function_call
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@return LOOP_LIMIT, Numeric, Limite de chamadas
+/*/
+Method getLoopLimit() as Numeric Class DTAUtils
+Return DTAParameters():getParameter("loop_limit")
+
+/*/{Protheus.doc} getMaxToolCalls
+Retorna o limite de ferramentas que podem ser executadas de uma única vez
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@return MAX_TOOL_CALLS, Numeric, Limite de chamadas
+/*/
+Method getMaxToolCalls() as Numeric Class DTAUtils
+Return DTAParameters():getParameter("max_tool_calls")
+
+/*/{Protheus.doc} decodeUTF8
+Converte uma string em UTF8 para o formato CP1252
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cText, Character, Texto em UTF8 para converter.
+@return cText, Character, Texto convertido para CP1252
+/*/
+Method decodeUTF8(cText as Character) as Character Class DTAUtils
+	Local oUnicode := tUnicode():New()
+  	
+	oUnicode:ConvertEncoding(@cText, "utf-8", "cp1252")
+	FreeObj(oUnicode)
+Return cText
+
+/*/{Protheus.doc} encodeUTF8
+Converte uma string em CP1252 para o formato UTF-8
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 cText, Character, Texto em CP1252 para converter.
+@return cText, Character, Texto convertido para UTF8
+/*/
+Method encodeUTF8(cText as Character) as Character Class DTAUtils
+	Local oUnicode := tUnicode():New()
+  	
+	oUnicode:ConvertEncoding(@cText, "cp1252", "utf-8")
+	FreeObj(oUnicode)
+Return cText
+
+/*/{Protheus.doc} logApplicationError
+Registra log de erro no appserver
+
+@author lucas.franca / renan.roeder
+@since 20/12/2024
+@version P12
+@param 01 oError        , Object    , Objeto com o erro
+@param 02 nCode         , Numeric   , Retorna por referência o código do erro
+@param 03 cErrorMessage , Character , Retorna por referência a mensagem de erro
+@return Nil
+/*/
+Method logApplicationError(oError as Object, nCode as Numeric, cErrorMessage as Character) Class DTAUtils
+	nCode         := 500
+	cErrorMessage := oError:description
+	If oError:genCode != GENCODE_HTTP_ERROR .And. Len(cErrorMessage) > SIZE_ERROR_MESSAGE
+		//Corta mensagem de erro pra não ficar muito extensa para o usuário. No LOG imprime tudo.
+		cErrorMessage := PadR(cErrorMessage, SIZE_ERROR_MESSAGE) + "..."
+	EndIf
+	LogMsg("DTAConversation", 14, 2, 1, "", "", AllTrim(oError:Description) + CHR(10) + AllTrim(oError:ErrorStack) + CHR(10) + oError:ErrorEnv)
+Return
+
+/*/{Protheus.doc} userHasToolAuthorization
+Verifica se o usuário logado possui autorização para executar uma ferramenta
+
+@author lucas.franca
+@since 10/03/2025
+@version P12
+@param 01 cFunction, Character, Código da ferramenta
+@return lHasAuthorization, Logical, Indica se o usuário tem permissão para utilizar a ferramenta
+/*/
+Method userHasToolAuthorization(cFunction as Character) as Logical Class DTAUtils
+	Local lHasAuthorization := .F. as Logical
+	
+	HZY->(dbSetOrder(1))
+	lHasAuthorization := HZY->(dbSeek(DTATool():getKey(cFunction, RetCodUsr(), "1")))
+	If !lHasAuthorization
+		lHasAuthorization := DTAUtils():userGroupHasToolAuthorization(cFunction)
+	EndIf
+Return lHasAuthorization
+
+/*/{Protheus.doc} userGroupHasToolAuthorization
+Verifica se o usuário logado possui algum grupo com autorização para executar uma ferramenta
+
+@author lucas.franca
+@since 10/03/2025
+@version P12
+@param 01 cFunction, Character, Código da ferramenta
+@return lHasAuthorization, Logical, Indica se o usuário tem permissão para utilizar a ferramenta
+/*/
+Method userGroupHasToolAuthorization(cFunction as Character) as Logical Class DTAUtils
+	Local aUserGroups       := {}  as Array
+	Local cAlias            := ""  as Character
+	Local lHasAuthorization := .F. as Logical
+	
+	aUserGroups := FWSFUsrGrps(RetCodUsr())
+	
+	If Len(aUserGroups) > 0
+		If _oQueryGroups == Nil
+			_oQueryGroups := FwExecStatement():New(;
+				"SELECT 1"+;
+				 " FROM " + RetSqlName("HZY") + " HZY"+;
+				" WHERE HZY.HZY_FILIAL = ?"+;
+				  " AND HZY.HZY_FUNCAO = ?"+;
+				  " AND HZY.HZY_USUARI = ?"+;
+				  " AND HZY.HZY_GRPUSR IN (?)"+;
+				  " AND HZY.D_E_L_E_T_ = ?";
+			)
+			_oQueryGroups:setString(3, " ") //HZY_USUARI
+			_oQueryGroups:setString(5, " ") //D_E_L_E_T_
+		EndIf
+
+		_oQueryGroups:setString(1, xFilial("HZY")) //HZY_FILIAL
+		_oQueryGroups:setString(2, cFunction) //HZY_FUNCAO
+		_oQueryGroups:setIn(4, aUserGroups) //HZY_GRPUSR
+
+		cAlias := _oQueryGroups:openAlias()
+		lHasAuthorization := (cAlias)->(!Eof())
+		(cAlias)->(dbCloseArea())
+	EndIf
+	aUserGroups := Nil
+Return lHasAuthorization
+
+/*/{Protheus.doc} encryptData
+Criptografa conteúdo para gravar no base de dados
+
+@author lucas.franca
+@since 04/06/2025
+@version P12
+@param 01 cData, Character, Texto que deve ser criptografado
+@return cEncrypted, Character, Texto criptografado
+/*/
+Method encryptData(cData as Character) as Character Class DTAUtils
+Return RC4Crypt(cData, DTA_CRYPT_KEY, .T.)
+
+/*/{Protheus.doc} decryptData
+Descriptografa conteúdo para utilização
+
+@author lucas.franca
+@since 04/06/2025
+@version P12
+@param 01 cData, Character, Texto que deve ser descriptografado
+@return cDecrypted, Character, Texto descriptografado
+/*/
+Method decryptData(cData as Character) as Character Class DTAUtils
+Return RC4Crypt(cData, DTA_CRYPT_KEY, .F., .T.)
+
+/*/{Protheus.doc} cleanTextEmbedd
+Limpa o texto antes de gerar o embedding (pre process embedding)
+
+@author lucas.franca/renan.roeder
+@since 27/06/2025
+@version P12
+@param 01 cText, Character, Texto que deve ser processado
+@return cCleanText, Character, Texto processado
+/*/
+Method cleanTextEmbedd(cText as Character) as Character Class DTAUtils
+	Local cCleanText      := cText as Character
+	Local oRegexNumber    := tlpp.regex.Regex():New("\d+(?:\.\d+)?")
+	Local oRegexParameter := tlpp.regex.Regex():New("'([^']*)'")
+
+	oRegexNumber:replaceAll(@cCleanText, "#")
+	oRegexParameter:replaceAll(@cCleanText, "")
+	cCleanText := Lower(AllTrim(cCleanText))
+	cCleanText := " " + cCleanText + " "
+	cCleanText := FwNoAccent(cCleanText)
+	cCleanText := StrTran(cCleanText, ".", "")
+	cCleanText := StrTran(cCleanText, ",", "")
+	cCleanText := StrTran(cCleanText, "!", "")
+	cCleanText := StrTran(cCleanText, "?", "")
+	cCleanText := StrTran(cCleanText, ";", "")
+	cCleanText := StrTran(cCleanText, ":", "")
+	cCleanText := StrTran(cCleanText, "(", "")
+	cCleanText := StrTran(cCleanText, ")", "")
+	cCleanText := StrTran(cCleanText, "[", "")
+	cCleanText := StrTran(cCleanText, "]", "")
+	cCleanText := StrTran(cCleanText, '"', "")
+	cCleanText := StrTran(cCleanText, "'", "")
+	cCleanText := StrTran(cCleanText, "  ", " ")
+	cCleanText := AllTrim(cCleanText)
+	oRegexNumber    := Nil
+	oRegexParameter := Nil
+Return cCleanText
+
+/*/{Protheus.doc} cleanBreakLine
+Limpa o texto removendo as contra-barras sobressalentes do \n antes de fazer o completion
+
+@author lucas.franca/renan.roeder
+@since 19/08/2025
+@version P12
+@param 01 cText, Character, Texto que deve ser processado (passado como referência)
+@return Nil
+/*/
+Method cleanBreakLine(cText as Character) Class DTAUtils
+	Local oRegex := Nil as Object
+
+	oRegex := tlpp.regex.Regex():New("(\\+n)")
+	oRegex:ReplaceAll(@cText, "\\n")
+	oRegex := Nil
+Return
+
+/*/{Protheus.doc} initializeTables
+Força a inicialização das tabelas do DTA no banco de dados
+
+@author lucas.franca/renan.roeder
+@since 22/08/2025
+@version P12
+@return Nil
+/*/
+Method initializeTables() Class DTAUtils
+	dbSelectArea("HZU")
+	dbSelectArea("HZV")
+	dbSelectArea("HZW")
+	dbSelectArea("HZX")
+	dbSelectArea("HZY")
+	dbSelectArea("HZZ")
+Return

@@ -1,0 +1,464 @@
+#Include "TOTVS.CH"
+#Include "tlpp-core.th"
+
+/*/{Protheus.doc} DTAMonitor
+Classe utilizada para registrar os Logs de uso no monitor do DTA.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+/*/
+Class DTAMonitor
+	Private Data cTraceId   as Character
+	Private Data cSessionId as Character
+	Private Data jEvent     as Json
+	Private Data oSpanTemp  as Object
+
+	Public Method New(cThreadId, cSessionId) Constructor
+	Public Method destroy()
+	Public Method createErrorEvent(cInputContent as Character, oError as Object)
+	Public Method createGenerationEvent(cInputMessage as Character, cOutputMessage as Character, lEmbedding as Logical, jUsage as Json, cStartTime as Character, cEndTime as Character)
+	Public Method createSpanEvent(cFunction as Character, cArguments as Character, cOutput as Character, cStartTime as Character, cEndTime as Character, cMetadata as Character)
+	Public Method createSpanTempTable()
+	Public Method createTraceEvent(cInputMessage as Character, cOutputMessage as Character)
+	Public Method generateSpanObjectFromTempTable() as Character
+	Public Method getTraceId() as Character
+	Public Method getSessionId() as Character
+	Public Method isSpanTempTableLoaded() as Logical
+	Public Method postMonitorEvents()
+	
+	Static Method createEventDefaultData(cType as Character, cId as Character) as Json
+	Static Method getTraceTags() as Array
+	Static Method insertTempTableSpanEvent(cFunction as Character, cStartTime as Character, cEndTime as Character)
+	Static Method isMonitorEnabled() as Logical
+	Static Method postMonitorFeedback(cTraceId as Character, cContent as Character, cComment as Character)
+	Static Method setMonitorAuthorizationHeader(aHeader as Array)
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe. 
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cThreadId , Character, ID da thread recebido para controle dos eventos do monitor (log)
+@param 02 cSessionId, Character, ID da sessão, que é utilizado para identificar o chat do usuário
+@return Self, Object, Instância da classe
+/*/
+Method New(cThreadId as Character, cSessionId as Character) Class DTAMonitor
+	Self:cTraceId   := cThreadId
+	Self:cSessionId := cSessionId
+	Self:jEvent     := {"batch": Array(0)}
+Return Self
+
+/*/{Protheus.doc} destroy
+Limpa as propriedades/objetos da classe
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return Nil
+/*/
+Method destroy() Class DTAMonitor
+	FreeObj(Self:jEvent)
+	If Self:oSpanTemp != Nil
+		Self:oSpanTemp:Delete()
+		FreeObj(Self:oSpanTemp)
+	EndIf
+Return
+
+/*/{Protheus.doc} createEventDefaultData
+Cria o objeto padrão para registrar um evento do monitor
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cType, Character, Tipo do evento a ser registrado
+@param 02 cId  , Character, ID do evento
+@return jEvent, Json, Json com os dados padrões para registro do evento.
+/*/
+Method createEventDefaultData(cType as Character, cId as Character) as Json Class DTAMonitor
+	Local jEvent := Nil as Json
+	
+	jEvent := JsonObject():New()
+	jEvent["type"     ] := cType
+	jEvent["id"       ] := cId
+	jEvent["timestamp"] := FWTimeStamp(5, Date(), TimeFull())
+	jEvent["body"     ] := JsonObject():New()
+Return jEvent
+
+/*/{Protheus.doc} createTraceEvent
+Cria o evento de trace para registro dos eventos do monitor.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cInputMessage , Character, Mensagem de entrada que será registrada no monitor
+@param 02 cOutputMessage, Character, Mensagem de saída que será registrada no monitor
+@return Nil
+/*/
+Method createTraceEvent(cInputMessage as Character, cOutputMessage as Character) Class DTAMonitor
+	Local jTraceEvent := Nil as Json
+
+	jTraceEvent := DTAMonitor():createEventDefaultData("trace-create", Self:getTraceId())
+	jTraceEvent["body"]["id"       ] := Self:getTraceId()
+	jTraceEvent["body"]["sessionId"] := Self:getSessionId()
+	jTraceEvent["body"]["timestamp"] := FWTimeStamp(5, Date(), TimeFull())
+	jTraceEvent["body"]["name"     ] := "dta-protheus"
+	jTraceEvent["body"]["userId"   ] := UsrRetName(RetCodUsr())
+	jTraceEvent["body"]["input"    ] := cInputMessage
+	jTraceEvent["body"]["output"   ] := cOutputMessage
+	jTraceEvent["body"]["tags"     ] := DTAMonitor():getTraceTags()
+	aAdd(Self:jEvent["batch"], jTraceEvent)
+	jTraceEvent := Nil
+Return
+
+/*/{Protheus.doc} createGenerationEvent
+Cria o evento do tipo Generation. Cada requisição ao proxy gera um evento Generation.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cInputMessage , Character, Mensagem de entrada que será registrada no monitor
+@param 02 cOutputMessage, Character, Mensagem de saída que será registrada no monitor
+@param 03 lEmbedding    , Logical  , Se .T., indica que é um evento de geração de Embedding de um texto.
+@param 04 jUsage        , Json     , Json com os dados de uso de tokens consumidos na requisição
+@param 05 cStartTime    , Character, TimeStamp do tempo de inicio da requisição
+@param 06 cEndTime      , Character, TimeStamp do tempo de fim da requisição
+@return Nil
+/*/
+Method createGenerationEvent(cInputMessage as Character, cOutputMessage as Character, lEmbedding as Logical, jUsage as Json, cStartTime as Character, cEndTime as Character) Class DTAMonitor
+	Local cGenerationId    := ""  as Character
+	Local cModel           := ""  as Character
+	Local cName            := ""  as Character
+	Local cContent         := ""  as Character
+	Local nIndex           := 0   as Integer
+	Local jGenerationEvent := Nil as Json
+	Local jUsedTokens      := Nil as Json
+	Local jInputMessage    := Nil as Json
+	Local jOutputMessage   := Nil as Json
+
+	If lEmbedding
+		cName  := "proxy-call-embedding"
+		cModel := DTAProxy():getEmbeddingModel()
+	Else
+		cName  := "proxy-call-completion"
+		cModel := DTAProxy():getChatModel()
+		jInputMessage := JsonObject():New()
+		jInputMessage:fromJson(cInputMessage)
+		For nIndex := 1 To Len(jInputMessage["messages"])
+			If jInputMessage["messages"][nIndex]["role"] == "tool"
+				cContent := jInputMessage["messages"][nIndex]["content"]
+				jInputMessage["messages"][nIndex]["content"] := JsonObject():New()
+				jInputMessage["messages"][nIndex]["content"]:fromJson(cContent)
+			EndIf
+		Next nIndex
+	EndIf
+	jOutputMessage := JsonObject():New()
+	jOutputMessage:fromJson(cOutputMessage)
+
+	cGenerationId    := "generation_" + UUIDRandom()
+	jUsedTokens      := {"promptTokens": jUsage["prompt_tokens"], "completionTokens": jUsage["completion_tokens"], "totalTokens": jUsage["total_tokens"]}
+	jGenerationEvent := DTAMonitor():createEventDefaultData("generation-create", cGenerationId)
+	jGenerationEvent["body"]["traceId"  ] := Self:getTraceId()
+	jGenerationEvent["body"]["id"       ] := cGenerationId
+	jGenerationEvent["body"]["name"     ] := cName
+	jGenerationEvent["body"]["model"    ] := cModel
+	jGenerationEvent["body"]["input"    ] := Iif(lEmbedding, cInputMessage, jInputMessage)
+	jGenerationEvent["body"]["output"   ] := jOutputMessage
+	jGenerationEvent["body"]["startTime"] := cStartTime
+	jGenerationEvent["body"]["endTime"  ] := cEndTime
+	jGenerationEvent["body"]["usage"    ] := jUsedTokens
+	aAdd(Self:jEvent["batch"], jGenerationEvent)
+	jGenerationEvent := Nil
+	jUsedTokens      := Nil
+	jInputMessage    := Nil
+	jOutputMessage   := Nil
+Return
+
+/*/{Protheus.doc} createSpanEvent
+Cria o evento do tipo Span. Este evento é utilizado para registrar execuções ou atualizações de ferramentas.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cFunction , Character, Nome da função/ferramenta executada
+@param 02 cArguments, Character, Argumentos utilizados para execução da função
+@param 03 cOutput   , Logical  , Retorno obtido da função
+@param 04 cStartTime, Character, TimeStamp do tempo de inicio da execução da função
+@param 05 cEndTime  , Character, TimeStamp do tempo de fim da execução da função
+@param 06 cMetadata , Character, Metadados para registro no log
+@return Nil
+/*/
+Method createSpanEvent(cFunction as Character, cArguments as Character, cOutput as Character, cStartTime as Character, cEndTime as Character, cMetadata as Character) Class DTAMonitor
+	Local cEventId    := ""  as Character
+	Local jEventEvent := Nil as Json
+	Local jInput      := Nil as Json
+	Local jOutput     := Nil as Json
+	Local jMetadata   := Nil as Json
+
+	jInput      := {"function": cFunction, "arguments": cArguments}
+	jOutput     := JsonObject():New()
+	jOutput:fromJson(cOutput)
+	cEventId    := "event_" + UUIDRandom()
+	jEventEvent := DTAMonitor():createEventDefaultData("span-create", cEventId)
+	jEventEvent["body"]["traceId"  ] := Self:getTraceId()
+	jEventEvent["body"]["id"       ] := cEventId
+	jEventEvent["body"]["name"     ] := cFunction
+	jEventEvent["body"]["input"    ] := jInput
+	jEventEvent["body"]["output"   ] := jOutput
+	jEventEvent["body"]["startTime"] := cStartTime
+	jEventEvent["body"]["endTime"  ] := cEndTime
+	If !Empty(cMetadata)
+		jMetadata := JsonObject():New()
+		jMetadata:fromJson(cMetadata)
+		jEventEvent["body"]["metadata"] := jMetadata
+		jMetadata := Nil
+	EndIf
+	aAdd(Self:jEvent["batch"], jEventEvent)
+	jEventEvent := Nil
+	jInput      := Nil
+	jOutput     := Nil
+Return
+
+/*/{Protheus.doc} postMonitorEvents
+Executa a requisição para enviar os eventos do monitor para o Proxy
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return Nil
+/*/
+Method postMonitorEvents() Class DTAMonitor
+	Local aHeader  := {} as Array
+	Local cAnswer  := "" as Character
+	Local cMessage := "" as Character
+
+	If !DTAMonitor():isMonitorEnabled()
+		Return
+	EndIf
+	DTAMonitor():setMonitorAuthorizationHeader(@aHeader)
+	cMessage := DTAUtils():encodeUTF8(Self:jEvent:ToJson())
+	DTAUtils():cleanBreakLine(@cMessage)
+	cAnswer  := HTTPPost(DTAParameters():getParameter("monitor_url"), "", cMessage, , aHeader)
+	DTAUtils():validateHTTPResponse(cAnswer, "monitorEvents", cMessage)
+	aSize(aHeader, 0)
+Return
+
+/*/{Protheus.doc} getTraceId
+Recupera o ID da trace atual
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return Self:cTraceId, Character, ID do trace atual
+/*/
+Method getTraceId() as Character Class DTAMonitor
+Return Self:cTraceId
+
+/*/{Protheus.doc} getSessionId
+Recupera o ID da sessão atual
+
+@author lucas.franca/renan.roeder
+@since 28/04/2025
+@version P12
+@return Self:cSessionId, Character, ID da sessão atual
+/*/
+Method getSessionId() as Character Class DTAMonitor
+Return Self:cSessionId
+
+/*/{Protheus.doc} setMonitorAuthorizationHeader
+Adiciona os headers padrões para execução das requisições relacionadas ao Monitor.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 aHeader, Array, Retorna os headers por referência neste parâmetro.
+@return Nil
+/*/
+Method setMonitorAuthorizationHeader(aHeader as Array) Class DTAMonitor
+	aadd(aHeader, "Content-Type: application/json")
+	aAdd(aHeader, "Authorization: Basic " +  Encode64(DTAParameters():getParameter("monitor_public_key") + ":" + DTAParameters():getParameter("monitor_secret_key")))
+Return
+
+/*/{Protheus.doc} postMonitorFeedback
+Executa a requisição para registrar um feedback de uma interação.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cTraceId, Character, ID do trace para registrar o feedback
+@param 02 cContent, Character, Identificador do feedback, se é positivo ou negativo
+@param 03 cComment, Character, Comentario do feedback
+@return Nil
+/*/
+Method postMonitorFeedback(cTraceId as Character, cContent as Character, cComment as Character) Class DTAMonitor
+	Local aHeader     := {}  as Array
+	Local cAnswer     := ""  as Character
+	Local cFeedbackId := ""  as Character
+	Local cMessage    := ""  as Character
+	Local jBatch      := Nil as Json
+	Local jScoreEvent := Nil as Json
+
+	If !DTAMonitor():isMonitorEnabled()
+		Return
+	EndIf
+
+	cFeedbackId := "feedback_" + cTraceId
+	jBatch      := DTAMonitor():createEventDefaultData("score-create", cFeedbackId)
+	jBatch["body"]["traceId"] := cTraceId
+	jBatch["body"]["id"     ] := cFeedbackId
+	jBatch["body"]["name"   ] := "dta-protheus"
+	jBatch["body"]["value"  ] := Val(cContent)
+	jBatch["body"]["comment"] := cComment
+	
+	jScoreEvent := {"batch": Array(1)}
+	jScoreEvent["batch"][1] := jBatch
+
+	DTAMonitor():setMonitorAuthorizationHeader(@aHeader)
+	cMessage := DTAUtils():encodeUTF8(jScoreEvent:ToJson())
+	
+	cAnswer  := HTTPPost(DTAParameters():getParameter("monitor_url"), "", cMessage, , aHeader)
+	DTAUtils():validateHTTPResponse(cAnswer, "monitorEvents", cMessage)
+	aSize(aHeader, 0)
+	FreeObj(jBatch)
+	FreeObj(jScoreEvent)
+Return
+
+/*/{Protheus.doc} createSpanTempTable
+Cria a tabela temporária utilizada para registrar os eventos relacionados a atualização das ferramentas.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return Nil
+/*/
+Method createSpanTempTable() Class DTAMonitor
+	Local aFields := {}           as Array
+	Local cAlias  := "DTAMONITOR" as Character
+
+	aAdd(aFields, {"FNAME"    , "C", 64 ,0})
+	aAdd(aFields, {"STTIME"   , "C", 29 ,0})
+	aAdd(aFields, {"EDTIME"   , "C", 29 ,0})
+	Self:oSpanTemp := FWTemporaryTable():New(cAlias, aFields)
+	Self:oSpanTemp:Create()
+	aSize(aFields, 0)
+Return
+
+/*/{Protheus.doc} insertTempTableSpanEvent
+Insere na tabela temporária um evento de atualização de ferramenta.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@param 01 cFunction , Character, Nome da função
+@param 02 cStartTime, Character, TimeStamp do tempo de início da atualização da função
+@param 03 cEndTime  , Character, TimeStamp do tempo de término da atualização da função
+@return Nil
+/*/
+Method insertTempTableSpanEvent(cFunction as Character, cStartTime as Character, cEndTime as Character) Class DTAMonitor
+	RecLock("DTAMONITOR", .T.)
+	DTAMONITOR->FNAME  := cFunction
+	DTAMONITOR->STTIME := cStartTime
+	DTAMONITOR->EDTIME := cEndTime
+	MsUnLock()
+Return
+
+/*/{Protheus.doc} generateSpanObjectFromTempTable
+Cria um objeto para registrar o evento de log no monitor relacionado a atualização das ferramentas.
+Varre a tabela temporária e cria o objeto com os dados para envio da requisição ao DTA
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return jData:ToJson(), Character, Objeto JSON convertido em string para envio ao DTA
+/*/
+Method generateSpanObjectFromTempTable() as Character Class DTAMonitor
+	Local jData := JsonObject():New() as Json
+
+	DTAMONITOR->(dbGoTop())
+	While DTAMONITOR->(!Eof())
+		jData[RTrim(DTAMONITOR->FNAME)] := {"startTime": DTAMONITOR->STTIME, "endTime": DTAMONITOR->EDTIME}
+		DTAMONITOR->(dbSkip())
+	End
+Return jData:toJson()
+
+/*/{Protheus.doc} isSpanTempTableLoaded
+Verifica se a tabela temporária de eventos de atualização das ferramentas possui algum registro.
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return DTAMONITOR->(!Eof()), Logical, Se .T., identifica que existem registros na tabela
+/*/
+Method isSpanTempTableLoaded() as Logical Class DTAMonitor
+	DTAMONITOR->(dbGoTop())
+Return DTAMONITOR->(!Eof())
+
+/*/{Protheus.doc} isMonitorEnabled
+Verifica se o monitor está habilitado
+
+@author lucas.franca/renan.roeder
+@since 21/01/2025
+@version P12
+@return MONITOR_IS_ENABLED, Logical, Se .T., identifica que o monitor está habilitado
+/*/
+Method isMonitorEnabled() as Logical Class DTAMonitor
+Return DTAParameters():getParameter("monitor_enabled")
+
+/*/{Protheus.doc} getTraceTags
+Retorna as tags que serão registradas no monitor
+
+@author lucas.franca/renan.roeder
+@since 12/08/2025
+@version P12
+@return aTags, Array, Tags para registrar no monitor
+/*/
+Method getTraceTags() as Array Class DTAMonitor
+	Local aTags        := {} as Array
+	Local cCompanyName := "" as Character
+
+	cCompanyName := AllTrim(FWFilRazSocial())
+	If !Empty(cCompanyName)
+		aAdd(aTags, cCompanyName)
+	EndIf
+	aAdd(aTags, AllTrim(FWGrpName()) + " - " + AllTrim(FWFilialName()))
+Return aTags
+
+/*/{Protheus.doc} createErrorEvent
+Utilizado para registrar um erro de execução das funções. 
+Adiciona os dados de erro no log e executa a requisição para registro no DTA Monitor.
+
+@author lucas.franca/renan.roeder
+@since 25/09/2025
+@version P12
+@param 01 cInputContent, Character, Mensagem do usuário
+@param 02 oError       , Object   , Objeto com os dados do erro
+@return Nil
+/*/
+Method createErrorEvent(cInputContent as Character, oError as Object) Class DTAMonitor
+	Local cGenerationId    := ""  as Character
+	Local jGenerationEvent := Nil as Json
+	Local jMetadata        := Nil as Json
+
+	cGenerationId := "generation_" + UUIDRandom()
+	jMetadata := JsonObject():New()
+	jMetadata["error"] := AllTrim(oError:Description) + "\n" + AllTrim(oError:ErrorStack) + "\n" + oError:ErrorEnv
+	jMetadata["lastHTTPError"] := DTAUtils():getLastHTTPError()
+
+	jGenerationEvent := DTAMonitor():createEventDefaultData("generation-create", cGenerationId)
+	jGenerationEvent["body"]["traceId" ] := Self:getTraceId()
+	jGenerationEvent["body"]["id"      ] := cGenerationId
+	jGenerationEvent["body"]["name"    ] := "internal-error"
+	jGenerationEvent["body"]["model"   ] := DTAProxy():getChatModel()
+	jGenerationEvent["body"]["input"   ] := cInputContent
+	jGenerationEvent["body"]["output"  ] := oError:description
+	jGenerationEvent["body"]["metadata"] := jMetadata
+	jGenerationEvent["body"]["level"   ] := "ERROR"
+	aAdd(Self:jEvent["batch"], jGenerationEvent)
+	jGenerationEvent := Nil
+	jMetadata        := Nil
+
+	Self:createTraceEvent(cInputContent, oError:description)
+	Self:postMonitorEvents()
+Return

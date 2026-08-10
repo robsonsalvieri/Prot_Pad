@@ -1,0 +1,153 @@
+#INCLUDE "totvs.ch"
+#INCLUDE "tlpp-core.th"
+#INCLUDE "FwSchedule.ch"
+#include "InsightDefs.CH"
+#include 'BACKOFFICE.BA.INSIGHTS.CONSUMER.CH'
+
+NAMESPACE totvs.protheus.backoffice.ba.insights
+USING NAMESPACE Totvs.Framework.Schedule.Utils
+USING NAMESPACE totvs.protheus.backoffice.ba.insights.util
+
+Class InsightMessageConsumer
+    
+    Public Method New()
+    Public Method Read( oLinkMessage As Object ) As Logical
+ EndClass
+
+Method New() Class InsightMessageConsumer
+Return Self
+
+Method Read( oLinkMessage As Object) As Logical Class InsightMessageConsumer
+    Local aDictSX2                  As Array
+    Local aGrpCompany               As Array
+    Local cAliasI19                 As Character
+    Local cRawMsg                   As Character
+    Local cCompanyGroup             As Character
+    Local cInsightResolv            As Character
+    Local lReadOk                   As Logical
+    Local nStart                    As Numeric
+    Local nI                        As Numeric
+    Local oInsightMessage           As Object
+    Local oInsightConfig            As Object
+    Local oJsonMessage              As Object
+    Local xJsonParse                As Variant
+
+    nStart := Seconds()
+
+    Try
+
+        cRawMsg         := oLinkMessage:RawMessage()
+        oJsonMessage    := JsonObject():new()
+        xJsonParse      := oJsonMessage:fromJson( cRawMsg )
+        cInsightResolv  := oJsonMessage[ "data" ][ "insight" ]
+
+        // Trata excecao para permission - remover esse tipo de insight = ALL na nova estrutura
+        If cInsightResolv == "ALL"
+            cInsightResolv  := "Permission"
+            cCompanyGroup   := cEmpAnt
+        EndIf
+
+        if (!Empty(oJsonMessage['data']['companyGroup']))
+            cCompanyGroup := oJsonMessage['data']['companyGroup']
+        EndIf
+
+        If Empty( cInsightResolv )
+            pinsError( INSIGHTSERROR_PARAMETER_NOT_PRESENT, 'InsightMessageConsumer', { STR0001, { oJsonMessage["transactionid"] } } )    // "Mensagem [#1] não possui insight informado"            
+        EndIf
+       
+        If Empty( Alltrim( cCompanyGroup ) ) .And. cInsightResolv != "Permission"
+            pinsError( INSIGHTSERROR_PARAMETER_NOT_PRESENT, 'InsightMessageConsumer', { STR0002, { "Company Group", oJsonMessage["transactionid"] } } )   //"#1 não informado no payload da mensagem [#2]"
+        EndIf
+
+        //Se for diferente, limpa o ambiente e seta o novo company group
+        If FindFunction( "totvs.protheus.backoffice.ba.insights.util.settingEnvironment", .T. )
+            totvs.protheus.backoffice.ba.insights.util.settingEnvironment(cCompanyGroup, "" ,"" ,{ "I19", "I20", "I21" })
+        Endif
+
+        aDictSX2    := FwSX2Util():GetSX2Data("I19", {"X2_ARQUIVO"}, .T.)
+        cAliasI19   := Alltrim(aDictSX2[1][2])
+
+        If !Empty(cAliasI19) .And. AliasInDic( "I19" )
+            oInsightMessage                     := InsightMessage():New()
+            oInsightMessage:cMsgTransId         := oJsonMessage["transactionid"]
+            oInsightMessage:cMsgTenantId        := oJsonMessage["tenantid"]
+            oInsightMessage:cMsgInsight         := cInsightResolv
+            oInsightMessage:cMsgPayload         := oJsonMessage["data"]:toJson()
+            oInsightMessage:cMsgReceivedDate    := FWTIMESTAMP(5)
+            oInsightMessage:cMsgMessId          := iif(oJsonMessage["data"]:HasProperty("messageId"), oJsonMessage["data"]["messageId"], "")
+                        
+            oInsightConfig := InsightConfig():New()
+            oInsightConfig:LoadConfig(cInsightResolv)
+
+            //Salva a mensagem na tabela I19 e executa o processamento caso seja do tipo prioritária.
+            saveMessage( oInsightMessage, cCompanyGroup, oInsightConfig:lPrioritario )
+
+            If cInsightResolv == "Permission"
+                
+				//Cria o permission para as demais empresas
+                aGrpCompany := totvs.protheus.backoffice.ba.insights.util.loadCarolCompanies( )
+                For nI := 1 to len( aGrpCompany )
+                    If cCompanyGroup <> aGrpCompany[ nI ]
+                        
+						//Se for diferente, limpa o ambiente e seta o novo company group
+                        If FindFunction( "totvs.protheus.backoffice.ba.insights.util.settingEnvironment", .T. )
+                            totvs.protheus.backoffice.ba.insights.util.settingEnvironment( aGrpCompany[ nI ], "" ,"" , { "I19", "I20", "I21" } )
+                        EndIf
+
+                        //Salva a mensagem na tabela I19 e executa o processamento caso seja do tipo prioritária.
+                        saveMessage( oInsightMessage, aGrpCompany[ nI ], oInsightConfig:lPrioritario )
+                    EndIf
+                Next
+            Else
+                // Notificação da chegada de insights.
+                InsightsEvent( I18N( STR0005, { Alltrim( Str( len( oJsonMessage[ 'data' ][ 'data' ][ 'tenantInsights' ] ) ) ) } ), STR0006, "085" )    //"Há #1 novos insights para análise. Você pode visualizá-los pela Central de IA ( PINSA030 )."###"Alerta de novos insights"
+            EndIf
+        // TODO - BLOCO COMENTADO, POIS DIFICILMENTE TEREMOS PROBLEMAS PARA A ABERTURA DA TABELA I19, JÁ QUE ELA É CHAMADA AO EXECUTAR O RPCSETENV.
+        // Else
+        //     pinsError( INSIGHTSERROR_OPEN_TABLE_ERROR, 'InsightMessageConsumer', { STR0003 } )    //"Não foi possível abrir a tabela I19"
+        EndIf
+        
+        lReadOk := .T.
+
+    Catch oException
+        
+        FwLogMsg( "ERROR", Nil, "ProtheusInsights", "InsightMessageConsumer",, "", STR0004,, Seconds() - nStart, ;    //"Exceção ocorrida ao processar a mensagem de insight"
+            {;
+                { "Message", STR0004 },;   //"Exceção ocorrida ao processar a mensagem de insight"
+                { "ErrorCode", oException:genCode },;
+                { "ErrorMessage", oException:description };
+            })
+
+        lReadOk := .T. // Retorna verdadeiro para limpar a mensagem da fila
+
+    Finally
+        FWFreeArray( aGrpCompany )
+        FreeObj( oInsightMessage )
+        FreeObj( oJsonMessage )
+        FreeObj( oInsightConfig )
+    EndTry
+
+Return lReadOk
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} saveMessage
+Função responsável pela gravação da mensagem e processamento imediato, caso seja do tipo
+prioritário.
+
+@param oMessage, object, Objeto com as informações da mensagem
+@param cGroup, character, Grupo de empresas para gravação da mensagem
+@param cPriority, character, Se 'T' indica que o insight deve ser tratado como prioritário
+
+@author  Marcia Junko
+@since   28/08/2025
+/*/
+//-------------------------------------------------------------------------------------
+Static Function saveMessage( oMessage, cGroup, cPriority )
+    oMessage:InsertMessage()
+    oMessage:UpdateSchedule()
+
+    //Processa os insights prioritários
+    If cPriority == 'T'
+        StartJob( "totvs.protheus.backoffice.ba.insights.priorityInsight", Upper( GetEnvServer() ), .T., cGroup, oMessage:cMsgUuid )
+    EndIf
+Return

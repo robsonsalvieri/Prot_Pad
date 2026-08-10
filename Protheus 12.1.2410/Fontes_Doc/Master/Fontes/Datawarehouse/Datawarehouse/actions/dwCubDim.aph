@@ -1,0 +1,245 @@
+<%
+// ######################################################################################
+// Projeto: DATA WAREHOUSE
+// Modulo : Actions
+// Fonte  : dwCubDim - Manutenção das dimensões relacionadas à um cubo
+// ---------+-------------------+--------------------------------------------------------
+// Data     | Autor             | Descricao
+// ---------+-------------------+--------------------------------------------------------
+// 06.12.05 |2481-Paulo R Vieira| Versão 3
+// --------------------------------------------------------------------------------------
+
+#include "dwincs.ch"
+#include "dwCubManutConst.ch"
+#include "dwCubDim.ch"
+
+Local oDim 		:= InitTable(TAB_DIMENSAO)
+Local oDimCube	:= InitTable(TAB_DIM_CUBES)
+Local oCube		:= InitTable(TAB_CUBESLIST)
+Local oRoteiro  := InitTable(TAB_DSNCONF)
+Local oFactField := InitTable(TAB_FACTFIELDS)
+Local oDimField :=  InitTable(TAB_DIM_FIELDS)
+local lClose := .f.
+Local nIDCube
+Local aDimCubeKeys 	:= {}, aDimCube := {}, aDims := {}, nInd, nCount, aDimField := {}
+Local cNome := "", cDescricao := ""
+Local aFields	:= {}, aTargetDim
+Local cAction	:= AC_DIM_CUB_RECMAN
+Local cOper		:= OP_REC_CONF
+Local aButtons	:= {}
+Local lEdit		:= .T.
+local cComplText:= ""
+local lCont := .t.     
+//Lista as chaves duplicadas encontradas nas dimensões.
+Local aChavesDuplicadas := {} 
+
+// trata o id do cubo
+// se a ação for a ação de editar sem ser por steps
+HttpGet->Oper := DwVaL(HttpGet->Oper)
+if HttpGet->Oper == OP_REC_NO_STEPS
+	nIDCube := DwVal(HttpGet->ID)	// recupera do get
+
+	// trata a sessão aonde contêm o id do cubo
+	DwSetProp(ID_ID_CUBE, DwStr(nIDCube), ID_NAME_PRG_CUB)
+	DwSetProp(ID_TYPE_OPER, DwStr(OP_REC_NO_STEPS), ID_NAME_PRG_CUB)
+else								// em outro caso recupera da session
+	nIDCube := DwVal(DwGetProp(ID_ID_CUBE, ID_NAME_PRG_CUB))
+endif
+
+// verifica/valida o cubo assoaciado a este action 
+if !oCube:Seek(1, { nIDCube })
+	DwRaise(ERR_005, SOL_003, nIDCube)
+else
+	cNome := oCube:value("nome")
+	cDescricao := oCube:value("descricao")
+endif
+
+// realiza a submissão dos dados para gravação
+if HttpGet->Oper == OP_REC_CONF            
+	if valType(HttpPost->edTargList) == "U"
+		HttpPost->edTargList := ""
+	endif
+endif
+
+if valType(HttpPost->edTargList) == "C"
+	aTargetDim 		:= DwToken(HttpPost->edTargList, ",", .T.)
+	
+	// recupera as dimensões para o cubo em questão
+	oDimCube:Seek(2, { nIDCube })
+	nInd := 0
+	while !oDimCube:EoF() .and. oDimCube:value("id_cube") == nIDCube
+		aAdd(aDimCubeKeys, oDimCube:value("id_dim"))
+		aAdd(aDimCube, { "", oDimCube:value("id_dim"), oDimCube:value("seq") })
+		oDimField:Seek(4, { oDimCube:value("id_dim"), 1 })
+		aAdd(aDimField, {oDimField:value("id_dim")})
+		nInd++
+		while(!oDimField:Eof() .and. oDimField:value("id_dim") == oDimCube:value("id_dim") .and. oDimField:value("keyseq") != 0)
+			aAdd(aDimField[nInd], oDimField:value("nome"))
+			oDimField:_Next()
+		enddo
+		oDimCube:_Next()
+	enddo
+	
+	// se o usuário realizou alguma alteração, exclui os relacionamentos entre dimensões e cubo e insere as novas
+	if !(DwStr(aDimCubeKeys) == DwStr(aTargetDim))
+		
+		//tratamento para retirar da base somente as dimensões desassociadas
+		//e retirar do array as dimensões que continuam associadas, restando somente as novas
+		for nInd := 1 to len(aDimCubeKeys)
+			nPos := ascan(aTargetDim, { |x| x = aDimCubeKeys[nInd]})
+			if nPos == 0
+				if oDimCube:Seek(2, {nIDCube, aDimCubeKeys[nInd]})
+					oDimCube:Delete()
+				endif
+				nPos := ascan(aDimField, { |x| x[1] == aDimCubeKeys[nInd]})
+				if nPos > 0
+					for nCount := 1 to len(aDimField[nPos])
+						aDimField[nPos][nCount] := nil
+					next
+				endif
+			else
+				aTargetDim[nPos] := nil
+			endif
+		next
+		aTargetDim := PackArray(aTargetDim)
+		for nInd := 1 to len(aDimField)
+			aDimField[nInd] := PackArray(aDimField[nInd])
+		next
+		
+		// insere as novas
+		aValues := {}
+		for nInd := 1 to len(aTargetDim)
+			oDimField:Seek(4, { aTargetDim[nInd] })
+			
+			while !oDimField:eof() .and. oDimField:value("id_dim") == aTargetDim[nInd] .and. lCont
+				/*Verifica se o campo é chave de dimensão.*/
+				if oDimField:value("keyseq") != 0 
+					lEncont := .f.
+					
+					for nCount := 1 to len(aDimField)
+						/*Procura por CHAVES duplicadas entre as dimensões que compões o CUBO.
+						  A chave M0_CODIGO é ignorada nesta etapa.*/
+						if (aScan(aDimField[nCount], { |x| DWStr(x) == oDimField:value("nome"); 
+							.And.; 
+							!(DWStr(x)== ATT_M0_CODIGO_NOME) }) > 0)   
+							/*Marca o flag indicando que foi encontrado campos chave com o mesmo nome em dimensões diferentes.*/							
+							lEncont := .t.
+						endif
+					next 
+					
+					if (oDimField:value("nome") == ATT_M0_CODIGO_NOME .or. (ascan(aValues, { |x| x[1] == oDimField:value("nome")} ) == 0)) .and. !lEncont
+						aAdd(aValues, {  oDimField:value("nome"), {;
+						{ "ID_CUBES" , nIDCube } , ;
+						{ "nome"     , oDimField:value("nome") } , ;
+						{ "descricao", oDimField:value("descricao") } , ;
+						{ "tipo"     , oDimField:value("tipo") } , ;
+						{ "tam"      , oDimField:value("tam") } , ;
+						{ "ndec"     , oDimField:value("ndec") } , ;
+						{ "classe"   , "D" } , ;
+						{ "dimensao" , aTargetDim[nInd] } , ;
+						{ "mascara"  , oDimField:value("mascara") } } } )
+					else
+						lCont := .f.  
+						/*Alimenta o array com as chaves duplicadas encontradas para serem exibidos.*/
+						aAdd(aChavesDuplicadas, oDimField:value("nome")) 						
+					endif 
+					
+				endif
+				oDimField:_Next()
+			enddo
+		next
+		
+		if lCont
+			for nInd := 1 to len(aTargetDim)
+				oDimCube:Append({ { "id_cube", nIDCube }, { "id_dim", aTargetDim[nInd] }, { "seq", nInd } })
+			next
+			
+			for nInd := 1 to len(aValues)
+				oFactField:Append(aValues[nInd, 2])
+			next                                                   
+		else  
+			/*Mantém apenas uma ocorrência de cada chave no array.*/
+			DplItems(aChavesDuplicadas,.T.)
+			/*Exibe a mensagem de erro ao usuário e fecha a janela.*/
+			MakeCustomField(aFields, STR0010, buildAutoClose(,STR0011 + '<br>' + dwConcatWSep("-" , aChavesDuplicadas ),,4000)) //###"Mensagem"###"Atenção: Dimensões com chave duplicada. Por favor altere o nome da chave nas dimensões para prosseguir"
+		endif
+	endif
+endif
+
+
+// recupera as dimensões para o cubo em questão
+oDimCube:Seek(2, { nIDCube })
+while !oDimCube:EoF() .and. oDimCube:value("id_cube") == nIDCube
+	aAdd(aDimCubeKeys, oDimCube:value("id_dim"))
+	aAdd(aDimCube, { "", oDimCube:value("id_dim"), oDimCube:value("seq") })
+	oDimCube:_Next()
+enddo
+
+// recupera todas as dimensões, excetuando-se os já associados ao cubo
+//__DWIDTemp := oSigaDW:DWCurrID()
+oDim:Seek(2, { "" })
+while !oDim:EoF() .and. oDim:value("id_dw") == oSigaDW:DWCurrID()
+	if (nInd := aScan(aDimCubeKeys, oDim:value("id"))) > 0
+		aDimCube[nInd][1] := oDim:value("descricao")+" ("+oDim:value("nome")+")"
+	elseif oDimField:seek(4, {oDim:value("id"), 1})
+		aAdd(aDims, { oDim:value("descricao")+" ("+oDim:value("nome")+")", oDim:value("id") })
+	endif
+	
+	oDim:_Next()
+enddo
+//__DWIDTemp := -1
+
+// ordena o array de dimensões associadas pelo seq
+aSort(aDimCube, , , {|x, y| x[3] < y[3]})
+
+makeShow(aFields, 	'edNome'       , STR0001     , cNome) //'Nome'
+makeShow(aFields, 	'edDescricao'  , STR0002     , cDescricao) //'Descrição'
+makeDualList(aFields, STR0003, STR0004, "edSrcList", aDims, STR0005, "edTargList", aDimCube, .t.) //"Dimensões"###"Disponíveis"###"Associadas ao Cubo"
+
+if !(DwVal(DwGetProp(ID_TYPE_OPER, ID_NAME_PRG_CUB)) == OP_REC_NO_STEPS)
+//	makeButton(aButtons, BT_SUBMIT, STR0006) //"finalizar"
+//	makeButton(aButtons, BT_PREVIOUS, , AC_QUERY_VIRTFLD)
+// 	makeButton(aButtons, BT_CANCEL, STR0009)              
+	makeButton(aButtons, BT_NEXT)// {"oper", OP_REC_NO_STEPS}, ,  }
+ 	makeButton(aButtons, BT_PREVIOUS,, AC_QUERY_VIRTFLD)
+ 	makeButton(aButtons, BT_CANCEL)
+else
+ 	makeButton(aButtons, BT_SUBMIT)
+ 	makeButton(aButtons, BT_CANCEL)
+endif
+
+// se a operação foi a de edição fecha a janela
+if dwVal(HttpGet->Oper) == OP_REC_CONF 
+	lClose := .t.
+endif
+
+// verifica privilégio para dar manutenção (CASO não seja administrador)
+if !oUserDW:UserIsAdm()
+	lEdit := oUserDW:GetCubMaintPerm(HttpSession->CurrentDW, nIDCube)
+	// exibe msg de que o usuário não possui permissão
+	if !lEdit
+		HttpSession->DWErrMsg := STR0008 //"Atenção: usuário não possui privilégio de manutenção deste cubo."
+		aButtons := {}
+		makeButton(aButtons, BT_CLOSE)
+		cOper := OP_NONE
+	endif
+endif
+
+%>
+	
+<%= buildForm('frmDimCub', STR0009 + cNome + "<small>" + cComplText + '</small>', cAction, cOper, aButtons, aFields, lEdit, , , , , , 'width:100%') %> <% /*'Dimensões '*/%>
+
+<%if lClose .and. lCont%>
+  <%if !(DwVal(DwGetProp(ID_TYPE_OPER, ID_NAME_PRG_CUB)) == OP_REC_NO_STEPS)%>
+		<%= buildAutoAction(AC_SHOW_SCHEMA, { {"oper", DwGetProp(ID_TYPE_OPER, ID_NAME_PRG_CUB)}, { "w", CHKBOX_ON}, { "ObjType", OBJ_CUBE }, { "tipo", EX_CUBE }, { "id", dwGetProp(ID_ID_CUBE, ID_NAME_PRG_CUB) }}, , .f.) %>
+  <%else%>
+		<%= buildAutoClose() %>
+  <%endif%>
+<%endif%>
+
+<%=tagJS()%>
+function u_setWindowPosSize()
+{
+  setWindowSize(850, 425); 
+}
+</script>

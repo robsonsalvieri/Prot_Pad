@@ -1,0 +1,1483 @@
+#include "tlpp-core.th"
+#include "backoffice.ngf.recurrence.bb.ch"
+#include "protheus.ch"
+#INCLUDE "TOTVS.CH"
+#Include "FWLIBVERSION.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+NAMESPACE totvs.protheus.backoffice.ngf.bills.recurrence.bb
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+USING NAMESPACE totvs.protheus.backoffice.ngf.bills.functions
+USING NAMESPACE totvs.backoffice.fin.banks.webhook.functions
+
+Static __oRecnoEA  	As Object
+Static __oRecnoEE  	As Object
+Static __oRecnoF7A 	As Object
+Static __oRecnoFK1 	As Object
+Static __oF79Cod 	As Object
+Static __lExecSX1  	As Logical
+Static __cErrorF79  As Character
+Static __lSX1070  	:= .T. 	As Logical
+Static __lSX1060  	:= .T. 	As Logical
+Static __lF7A_FOR 	:= .T.	As Logical
+Static __lExecSt	:= .T.	As Logical
+
+
+/*/{Protheus.doc} LoadBx001()
+	Função para Buscar os tiulos retornados pelo banco BB
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 06/04/2022
+	@return Logical
+/*/
+
+Function LoadBx001(jLayout As Json, cParamAux As Character)
+
+	Local aEstTit	  	As Array
+	Local aF79			As Array
+	Local lRet          As Logical
+	Local lCont			As Logical
+	Local nY            As Numeric
+	Local nIndice		As Numeric
+	Local cHora			As Character
+	Local jList			As Json
+
+	initStatic()
+
+	jList	:= JsonObject():new()
+	aF79	:= {}
+	aEstTit	:= EstTitCob()
+	lRet	:= .T.
+
+	/*
+		Consulta e grava Lista
+	*/	
+	For nY := 1 To Len(aEstTit)
+		nIndice		:= 0
+		lCont		:= .T.
+		cHora 		:= Time() // Acumular mesmo EstCob por hora para apresentar no front
+
+		While lCont
+			jList	:= getBaiBB(jLayout, aEstTit[nY], cParamAux, nIndice)
+			if !(jList:hasProperty('error')) .or. !(jList['error'] == 0)
+				If jList:hasProperty('response')
+					AADD( aF79 , GrvF79(jList, aEstTit[nY], cHora)  )
+					nIndice	 := jList['response']['proximoIndice']
+					lCont := Iif(jList['response']['indicadorContinuidade'] == "N", .F., .T.)
+				Else
+					lCont	 := .F.
+					GrvF79(jList, aEstTit[nY], cHora)	// Grava log caso erro na requisição
+				Endif
+			Else
+				lCont := .F.
+			Endif	
+		Enddo
+	Next nY
+
+	FwLogMsg('INFO',, "FINA715", "FINA715", "", 'EndList', 'List recording finished' )
+
+	/*
+		Processa F79
+	*/	
+	For nY := 1 To Len(aF79)
+		ProcessaF79(aF79[nY],jLayout)
+	Next nY
+
+	FwLogMsg('INFO',, "FINA715", "FINA715", "", 'EndList', 'Finished processing the list' )
+
+Return lRet
+
+/*/{Protheus.doc} getBaiBB
+	Função para realizar a conexão com o banco do Brasil para listar os boletos movimentados.
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 29/03/2022
+	@return JSon
+/*/
+
+Function getBaiBB(jLayout As Json, cEstCob As Character, cParamAux As Character, nIndice As Numeric) As Json
+
+	Local aHeaders    As Array
+	Local cAppKey     As Character
+	Local cPath       As Character
+	Local cUrl        As Character
+	Local lResponse   As Logical
+	Local oRestBank   As Object
+	Local oObjToken   As Object
+	Local jRespBank	  As Json
+	Local jPatch      As Json
+
+	lResponse   := .F.
+	cPath       := '/cobrancas/v2/boletos'
+	jRespBank	:= JsonObject():new()
+
+	oObjToken  := &("gfin.job.bills.bills():new()")
+
+	If (ValType(jLayout) == 'J' .or. ValType(jLayout) == 'O') .And. jLayout['credentials'] <> Nil
+		cUrl    := Iif(jLayout['credentials', 'environment'] == '1', 'https://api.bb.com.br', 'https://api.hm.bb.com.br')
+		cAppKey := Alltrim(jLayout['credentials']['appKey'])
+
+		oObjToken:setCredentials(jLayout['credentials']:ToJSON())
+		oObjToken:token001()
+
+		If !Empty(cAppKey)
+			Iif(jLayout['credentials', 'environment'] == '1', cPath += '?' + 'gw-dev-app-key' + '=' + cAppKey, cPath += '?' + 'gw-app-key' + '=' + cAppKey )
+		Endif
+
+		jPatch := getJsonBB(cParamAux)
+
+		cPath += jPatch['indicadorSituacao'] // Obrigatorio
+		cPath += jPatch['agenciaBeneficiario'] // Obrigatorio
+		cPath += jPatch['contaBeneficiario'] // Obrigatorio
+		cPath += jPatch['dataInicioMovimento'] // Não obrigatorio mas necessario para filtragem dos titulos movimentados
+		cPath += jPatch['dataFimMovimento'] // Não obrigatorio mas necessario para filtragem dos titulos movimentados
+
+		cPath += '&codigoEstadoTituloCobranca=' + cEstCob // Não obrigatorio mas necessario para filtragem dos titulos movimentados
+
+		cPath += '&indice=' + cValToChar(nIndice) // Representa o índice da listagem pelo qual sua pesquisa se iniciará, podendo retornar até 300 registros por chamada
+
+		If (ValType(oObjToken:oToken) == 'J' .or. ValType(oObjToken:oToken) == 'O') //.and. (ValType(::oBody) == 'J' .or. ValType(::oBody) == 'O') .and. !Empty(::oBody:toJson())
+
+			aHeaders := {}
+			aadd(aHeaders, 'Content-Type: application/json')
+			aadd(aHeaders, 'Authorization: Bearer ' + oObjToken:oToken['access_token'])
+
+			oRestBank := FwRest():New(cUrl)
+			oRestBank:SetPath(cPath)
+
+			If oRestBank:Get(aHeaders)
+				jRespBank['response'] := JsonObject():new()
+				jRespBank['response']:FromJSON(oRestBank:GetResult())
+			Else
+				If !Empty(oRestBank:GetResult())
+					jRespBank:FromJSON(oRestBank:GetResult())
+				Else
+					jRespBank['error']		:= 0				//	Alinhado que não vamos logar esse erro na F79
+					jRespBank['message']	:= STR0001 + cEstCob // "Títulos não encontardos para codigo Estado Titulo Cobranca "
+				Endif
+			Endif
+		Else
+			jRespBank['error']   := 400
+			jRespBank['message'] := STR0002  // "Dados com valor(es)  e/ou formato(s) inválido(s)."
+		EndIf
+	Else
+		jRespBank['error']   := 400
+		jRespBank['message'] := STR0003  // "Credenciais não foram informadas."
+	EndIf
+
+Return jRespBank
+
+/*/{Protheus.doc} getJsonBB
+	Função para devolver Json com os QueryParams necessarios para a conexão com o banco do Brasil para listar os boletos movimentados.
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 29/03/2022
+	@return JSon
+/*/
+
+Function getJsonBB(cParamAux As Character)
+	Local jRetorn	As Object
+	Local dDataIni	As Character
+	Local dDataFim	As Character
+
+	jRetorn := JsonObject():New()
+
+	jRetorn['indicadorSituacao'] 		:= '&indicadorSituacao=B'
+	jRetorn['agenciaBeneficiario'] 		:= '&agenciaBeneficiario=' + Alltrim(getAgenciaSEE()) // AGENCIA DO BENEFCIARIO
+	jRetorn['contaBeneficiario'] 		:= '&contaBeneficiario='   + Alltrim(getContaSEE()) // CONTA CORRENTE DO BENEFICIARIO
+
+	dDataIni := cParamAux
+	dDataIni := SubStr(dDataIni, 7, 2) + '.' + SubStr(dDataIni, 5, 2) + '.' + SubStr(dDataIni, 1, 4)
+	jRetorn['dataInicioMovimento']		:= '&dataInicioMovimento=' + dDataIni
+
+	dDataFim := Dtos(Date())
+	dDataFim := SubStr(dDataFim, 7, 2) + '.' + SubStr(dDataFim, 5, 2) + '.' + SubStr(dDataFim, 1, 4)
+	jRetorn['dataFimMovimento']		:= '&dataFimMovimento=' + dDataFim
+
+Return jRetorn
+
+/*/{Protheus.doc} EstTitCob
+	Função para devolver Array com os Estados de Cobrança necessarios para a conexão com o banco do Brasil para listar os boletos movimentados.
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 29/03/2022
+	@return JSon
+/*/
+
+Static Function EstTitCob()
+
+	Local aEstTit	As Array
+
+	aEstTit	:= {}
+
+	Aadd(aEstTit, '05' ) // 05 - PROTESTADO ELETRONICO
+	Aadd(aEstTit, '06' ) // 06 - LIQUIDADO
+	Aadd(aEstTit, '07' ) // 07 - BAIXADO
+	Aadd(aEstTit, '09' ) // 09 - TITULO PROTESTADO MANUAL
+
+Return aEstTit
+
+
+/*/{Protheus.doc} getRecSEA()
+	Função para query com retorno do RECNO SEA
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 05/04/2022
+	@return Logical
+/*/
+
+Function getRecSEA(cFilOrig, cPrefix, cNum, cParcel, cTipo, cNumBor) As Numeric
+
+	Local cQuery	:= '' As Character
+	Local nRecRet	:= 0  As Numeric
+
+	If __oRecnoEA == NIl
+
+		cQuery := "  SELECT R_E_C_N_O_ AS RECSEA"
+		cQuery += "FROM "  + RetSqlName("SEA") + " SEA "
+		cQuery += "WHERE "
+		cQuery += "EA_FILORIG  	= ? AND "
+		cQuery += "EA_NUMBOR   	= ? AND "
+		cQuery += "EA_CART   	= 'R' AND "
+		cQuery += "EA_PREFIXO  	= ? AND "
+		cQuery += "EA_NUM      	= ? AND "
+		cQuery += "EA_PARCELA  	= ? AND "
+		cQuery += "EA_TIPO     	= ? AND "
+		cQuery += "D_E_L_E_T_  	= ' ' "
+
+		cQuery	:= ChangeQuery(cQuery)
+
+		If __lExecSt
+			__oRecnoEA := FwExecStatement():new(cQuery)
+		Else
+			__oRecnoEA := FWPreparedStatement():New(cQuery)
+		Endif	
+
+	Endif
+
+	__oRecnoEA:SetString(1,cFilOrig)
+	__oRecnoEA:SetString(2,cNumBor)
+	__oRecnoEA:SetString(3,cPrefix)
+	__oRecnoEA:SetString(4,cNum)
+	__oRecnoEA:SetString(5,cParcel)
+	__oRecnoEA:SetString(6,cTipo)
+
+	If __lExecSt
+		nRecRet := __oRecnoEA:ExecScalar('RECSEA')
+	Else
+		nRecRet := MPSysExecScalar(__oRecnoEA:GetFixQuery(), "RECSEA")
+	Endif	
+
+Return nRecRet
+
+/*/{Protheus.doc} ExecBxSE1()
+	Função para posicionar registro SE1 para baixa
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 05/04/2022
+	@return Logical
+/*/
+
+Function ExecBxSE1(jBolBB As Json, jLayout As Json, nOpc, jTitulo As Json) As Json
+
+	Local cDtMovi	 := ''  As Character
+	Local cDtCred	 := ''  As Character
+	Local cTexBaixa	 := ''  As Character
+	Local cSituaca	 := ''  As Character
+	Local cBanco     := ""  As Character
+	Local cAgencia   := ""  As Character
+	Local cConta     := ""  As Character
+	Local cNumBco    := ""  As Character
+	Local lEstCobr	 := .T. As Logical
+	Local aVetor	 := {}  As Array
+ 	Local jErrBaixa	        As Json
+	
+	Private lMsErroAuto 	:= .F. As Logical
+	Private lMsHelpAuto 	:= .T. As Logical
+	Private lAutoErrNoFile	:= .T. As Logical
+
+	Default nOpc	:= 3
+
+	jErrBaixa	:= JsonObject():New()
+
+	lEstCobr := cValToChar(jBolBB['codigoEstadoTituloCobranca']) $ "5|7|9"
+
+	cDtMovi := jBolBB['dataMovimento']
+	cDtMovi := StoD(SubStr(cDtMovi, 7, 4) + SubStr(cDtMovi, 4, 2) + SubStr(cDtMovi, 1, 2))
+
+	cDtCred := jBolBB['dataCredito']
+	cDtCred := StoD(SubStr(cDtCred, 7, 4) + SubStr(cDtCred, 4, 2) + SubStr(cDtCred, 1, 2))
+
+	lMsErroAuto := .F.
+
+	cBanco      := SEA->EA_PORTADO
+	cAgencia    := SEA->EA_AGEDEP
+	cConta      := SEA->EA_NUMCON
+	cNumBco     := ""
+
+	//Chave do título
+
+	AAdd(aVetor, { "E1_PREFIXO", PadR(SE1->E1_PREFIXO, TamSX3("E1_PREFIXO")[1]), Nil })
+	AAdd(aVetor, { "E1_NUM"    , PadR(SE1->E1_NUM    , TamSX3("E1_NUM")[1])    , Nil })
+	AAdd(aVetor, { "E1_PARCELA", PadR(SE1->E1_PARCELA, TamSX3("E1_PARCELA")[1]), Nil })
+	AAdd(aVetor, { "E1_TIPO"   , PadR(SE1->E1_TIPO   , TamSX3("E1_TIPO")[1])   , Nil })
+	AAdd(aVetor, { "E1_CLIENTE", PadR(SE1->E1_CLIENTE, TamSX3("E1_CLIENTE")[1]), Nil })
+	AAdd(aVetor, { "E1_LOJA"   , PadR(SE1->E1_LOJA   , TamSX3("E1_LOJA")[1])   , Nil })
+
+	//Informações bancárias
+
+	If lEstCobr
+		If jBolBB['codigoEstadoTituloCobranca'] == 7
+			cSituaca := "0"
+		Else
+			cSituaca := jLayout['retornoBancario']['protestos']
+		Endif
+
+		cBanco   := " "
+		cAgencia := " "
+		cConta   := " "
+		cNumBco  := " "
+
+		AAdd(aVetor, { "AUTSITUACA"  , PadR(cSituaca, TamSX3("E1_SITUACA")[1]), Nil })
+		AAdd(aVetor, { "AUTNUMBCO"   , PadR(cNumBco , TamSX3("E1_NUMBCO")[1]) , Nil })
+		AAdd(aVetor, { "AUTGRVFI2"   , .T.                                    , Nil })
+		AAdd(aVetor, { "AUTDATAMOV"  , cDtMovi                                , Nil })
+	Else
+		cTexBaixa	:= jLayout['retornoBancario']['historicoBaixa']
+
+		AAdd(aVetor, { "AUTHIST"     , cTexBaixa , Nil })
+		AAdd(aVetor, { "AUTMOTBX"    , "NOR"     , Nil })
+		AAdd(aVetor, { "AUTDTBAIXA"  , cDtMovi   , Nil })
+		AAdd(aVetor, { "AUTDTCREDITO", cDtCred   , Nil })
+
+		jTitulo := separaMultaJurosBB(jTitulo)    // Separa multa e juros no mesmo campo.
+
+		AAdd(aVetor, { "AUTDESCONT"  , jTitulo['response']['valorDescontoUtilizado']         , Nil,	.T.})
+		AAdd(aVetor, { "AUTMULTA"    , jTitulo['multaSeparada'] 						     , Nil,	.T.})
+		AAdd(aVetor, { "AUTJUROS"    , jTitulo['juroSeparado'] 						    	 , Nil,	.T.})
+		AAdd(aVetor, { "AUTOUTGAS"   , 0	     , Nil })
+		AAdd(aVetor, { "AUTVLRPG"    , 0         , Nil })
+		AAdd(aVetor, { "AUTVLRME"    , 0	     , Nil })
+
+		AAdd(aVetor, { "AUTVALREC" , jBolBB['valorPago'], Nil })
+	Endif
+
+	AAdd(aVetor, { "AUTBANCO"  , PadR(cBanco  , TamSX3("EA_PORTADO")[1]), Nil })
+	AAdd(aVetor, { "AUTAGENCIA", PadR(cAgencia, TamSX3("EA_AGEDEP")[1]) , Nil })
+	AAdd(aVetor, { "AUTCONTA"  , PadR(cConta  , TamSX3("EA_NUMCON")[1]) , Nil })
+
+	If lEstCobr
+		If __lSX1060
+			setParam060Recurrence(jLayout)
+			__lSX1060	:= .F.
+		Endif
+		MsExecAuto({|x,y| FINA060(x,y)}, 2, aVetor)
+	Else
+		If __lSX1070
+			setParam070Recurrence(jLayout)
+			__lSX1070	:= .F.
+		Endif
+		MSExecAuto({|x,y| Fina070(x,y)}, aVetor, 3)
+	Endif
+
+	jErrBaixa['baixouExecAuto']	:= 'sim'
+
+	//Em caso de erro na baixa
+	If lMsErroAuto
+			
+		jErrBaixa['baixouExecAuto']	:= 'nao'
+		jErrBaixa['filial']			:= ''
+		jErrBaixa['filori']			:= SE1->E1_FILORIG
+		jErrBaixa['prefixo']		:= SE1->E1_PREFIXO
+		jErrBaixa['numero']			:= SE1->E1_NUM
+		jErrBaixa['parcela']		:= SE1->E1_PARCELA
+		jErrBaixa['tipo']			:= SE1->E1_TIPO
+		jErrBaixa['cliente']		:= SE1->E1_CLIENTE
+		jErrBaixa['loja']			:= SE1->E1_LOJA
+		jErrBaixa['emissao']		:= SE1->E1_EMISSAO
+		jErrBaixa['valor']			:= SE1->E1_VALOR
+		jErrBaixa['multa']			:= jTitulo['response']['valorMultaRecebido']
+		jErrBaixa['desconto']		:= jTitulo['response']['valorDescontoUtilizado']
+		jErrBaixa['juros']			:= jTitulo['response']['valorJuroMoraRecebido']
+		jErrBaixa['bordero']		:= SE1->E1_NUMBOR
+		jErrBaixa['estadocobranca']	:= jBolBB['codigoEstadoTituloCobranca']
+		jErrBaixa['status']			:= "1"
+		jErrBaixa['msgexecauto']	:= totvs.protheus.backoffice.ngf.util.GetError()
+		jErrBaixa['consultaTitulo']	:= jTitulo
+
+	EndIf
+
+Return jErrBaixa
+
+/*/{Protheus.doc} GetBxFK1()
+	Função para retornar se o registro da SE1 já foi logado
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 06/04/2022
+	@return Logical
+/*/
+
+Static Function GetBxFK1()
+
+	Local cQuery	:= ''  As Character
+	Local cChaveTit	:= ''  As Character
+	Local cIdDocFK7	:= ''  As Character
+	Local lRet		:= .T. As Logical
+
+	cChaveTit := SE1->E1_FILIAL+ "|" + SE1->E1_PREFIXO + "|" + SE1->E1_NUM + "|" +SE1->E1_PARCELA + "|" +SE1->E1_TIPO + "|" + SE1->E1_CLIENTE + "|" + SE1->E1_LOJA
+	cIdDocFK7 := FINGRVFK7("SE1", cChaveTit)
+
+	If __oRecnoFK1 == NIl
+
+		cQuery := "  SELECT "
+		cQuery += "FK1_ORIGEM "
+		cQuery += "FROM "  + RetSqlName("FK1") + " FK1 "
+		cQuery += "WHERE "
+		cQuery += "RTRIM(LTRIM(FK1_ORIGEM)) IN ('FINA715','WEBHOOK') AND "
+		cQuery += "FK1_IDDOC = ? AND "
+		cQuery += "0 = (SELECT COUNT(*) "
+		cQuery += "FROM "  + RetSqlName("FK1") + " FK1EST "
+		cQuery += "WHERE "
+		cQuery += "FK1EST.FK1_IDDOC = FK1.FK1_IDDOC AND "
+		cQuery += "FK1EST.FK1_SEQ = FK1.FK1_SEQ AND "
+		cQuery += "FK1EST.FK1_TPDOC = 'ES' ) "
+
+		cQuery	:= ChangeQuery(cQuery)
+
+		If __lExecSt
+			__oRecnoFK1 := FwExecStatement():new(cQuery)
+		Else
+			__oRecnoFK1 := FWPreparedStatement():New(cQuery)
+		Endif
+
+	Endif
+
+	__oRecnoFK1:SetString(1, cIdDocFK7)
+
+	If __lExecSt
+		lRet := !Empty(__oRecnoFK1:ExecScalar('FK1_ORIGEM'))
+	Else
+		lRet := !Empty(MPSysExecScalar(__oRecnoFK1:GetFixQuery(), "FK1_ORIGEM"))
+	Endif	
+
+Return lRet
+
+/*/{Protheus.doc} ConBBTit
+	Função consulta de 1 título, para buscar valores de multa, juros, desconto
+	@type function
+	@version 12.1.33
+	@author rafael.rondon
+	@since 29/08/2022
+	@return JSon
+/*/
+
+Function ConBBTit(jFromList As Json, jLayout As Json, cConvenio As Character, jRespMock As Json ) As Json
+
+	Local aHeaders    As Array
+	Local cAppKey     As Character
+	Local cPath       As Character
+	Local cUrl        As Character
+	Local lResponse   As Logical
+	Local oRestBank   As Object
+	Local oObjToken   As Object
+	Local jTitulo	  As Json
+	
+	DEFAULT cConvenio := SEE->EE_CODEMP
+	DEFAULT jRespMock := JsonObject():new()
+	
+	lResponse   := .F.
+	cPath       := '/cobrancas/v2/boletos'
+	jTitulo	:= JsonObject():new()
+
+	oObjToken  := &("gfin.job.bills.bills():new()")
+
+	If (ValType(jLayout) == 'J' .or. ValType(jLayout) == 'O') .And. jLayout['credentials'] <> Nil
+		cUrl    := Iif(jLayout['credentials', 'environment'] == '1', 'https://api.bb.com.br', 'https://api.hm.bb.com.br')
+		cAppKey := Alltrim(jLayout['credentials']['appKey'])
+
+		oObjToken:setCredentials(jLayout['credentials']:ToJSON())
+		oObjToken:token001()
+
+		// Id Consulta
+		cPath += '/' + jFromList['numeroBoletoBB']
+
+		If !Empty(cAppKey)
+			cPath += '?' + 'gw-dev-app-key' + '=' + cAppKey
+		Endif
+
+		cPath += '&numeroConvenio' + '=' + AllTrim(cConvenio)
+
+		If (ValType(oObjToken:oToken) == 'J' .or. ValType(oObjToken:oToken) == 'O')
+
+			aHeaders := {}
+			aadd(aHeaders, 'Content-Type: application/json')
+			aadd(aHeaders, 'Authorization: Bearer ' + oObjToken:oToken['access_token'])
+
+			oRestBank := FwRest():New(cUrl)
+			oRestBank:SetPath(cPath)
+
+			If oRestBank:Get(aHeaders)
+				jTitulo['response'] := JsonObject():new()
+				jTitulo['response']:FromJSON(oRestBank:GetResult())
+			Else
+				jTitulo:FromJSON(oRestBank:GetResult())
+			Endif
+		Else
+			jTitulo['error']   := 400
+			jTitulo['message'] := STR0002  // "Dados com valor(es)  e/ou formato(s) inválido(s)."
+		EndIf
+	Else
+		jTitulo['error']   := 400
+		jTitulo['message'] := STR0003  // "Credenciais não foram informadas."
+	EndIf
+	
+	//Realiza o mock da resposta para automação
+	If Len(jRespMock:getNames()) > 0
+		jTitulo := JsonObject():new()
+		jTitulo["response"] := JsonObject():new()
+		jTitulo["response"]:FromJson(jRespMock:ToJson()) 
+	Endif
+
+Return jTitulo
+
+
+/*/{Protheus.doc} GrvF79
+	Grava F79
+	@type function
+	@version 12.1.33
+	@author rafael.rondon
+	@since 29/08/2022
+	@return JSon
+/*/
+Static Function GrvF79(jList As Json , cEstCob As Character , cHora As Character) As Array
+
+	Local aF79	:= {}	As Array
+	Local cList := jList:ToJson() As Character
+	Local jApiMsg := JsonObject():new() As Json
+	Local cListDecode := "" As Character
+	
+	//Corrigi os problemas de encode da requisição (Caracteres especiais ou acentuação)
+	If (cListDecode := DecodeUTF8(cList)) == NIL
+		cListDecode := cList
+	Endif
+
+	jApiMsg:FromJson(cListDecode)
+
+	BEGIN TRANSACTION 
+		RecLock('F79', .T.)
+			F79->F79_FILIAL := xFilial('F79')
+			F79->F79_CODIGO := GetSxENum("F79", "F79_CODIGO",,3)
+			F79->F79_ESTCOB	:= cEstCob
+			F79->F79_BANCO  := SA6->A6_BCOOFI
+			F79->F79_AGENCI := SA6->A6_AGENCIA
+			F79->F79_CONTA  := SA6->A6_NUMCON
+			F79->F79_DTPROC := Date()
+			F79->F79_HRPROC := cHora
+			F79->F79_QTDTIT := IIF(jApiMsg:hasProperty('response'), cValToChar(jApiMsg['response']['quantidadeRegistros']), '0')
+			F79->F79_NBAIXA := '0'
+			F79->F79_QTPROC := '0'
+			F79->F79_RECPAG := 'R'
+			F79->F79_JSON   := jApiMsg:ToJSON()
+		F79->(MsUnLock())
+		ConfirmSX8()
+	END  TRANSACTION 
+
+	AADD( aF79 , F79->F79_FILIAL)
+	AADD( aF79 , F79->F79_CODIGO)
+	AADD( aF79 , F79->F79_ESTCOB)
+
+Return aF79
+
+/*/{Protheus.doc} GrvF7A
+	Grava F79
+	@type function
+	@version 12.1.33
+	@author rafael.rondon
+	@since 29/08/2022
+	@return JSon
+/*/
+Function GrvF7A(jDadosLog As Json)
+	Local jDataF7A	:= JsonObject():new()	as Json
+	Local aKeysDadosLog := {}				as Array
+	Local nX := 0							as Numeric
+	Local cWallet := "R"					as Character
+
+	Default jDadosLog	:= JsonObject():new()
+
+	If jDadosLog:hasProperty("cliente") .and. !Empty(jDadosLog["cliente"])
+		jDataF7A["clifor"] := jDadosLog["cliente"]
+	Endif
+
+	If jDadosLog:hasProperty("fornecedor") .and. !Empty(jDadosLog["fornecedor"])
+		cWallet := "P"
+		jDataF7A["clifor"] := jDadosLog["fornecedor"]
+	Endif
+
+	aKeysDadosLog := jDadosLog:GetNames()
+
+	jDataF7A["filial"] := ""
+	jDataF7A["codigo"] := ""
+	jDataF7A["prefixo"] := ""
+	jDataF7A["numero"] := ""
+	jDataF7A["parcela"] := ""
+	jDataF7A["tipo"] := ""
+	jDataF7A["cliente"] := ""
+	jDataF7A["fornecedor"] := ""
+	jDataF7A["loja"] := ""
+	jDataF7A["bordero"] := ""
+	jDataF7A["estadocobranca"] := 0
+	jDataF7A["status"] := ""
+	jDataF7A["msgexecauto"] := ""
+	jDataF7A["filori"] := ""
+	jDataF7A["emissao"] := cToD("")
+	jDataF7A["valor"] := 0
+	jDataF7A["multa"] := 0
+	jDataF7A["desconto"] := 0
+	jDataF7A["juros"] := 0
+	jDataF7A["consultaTitulo"] := JsonObject():new()
+	
+	For nX := 1 to Len(aKeysDadosLog)
+		If jDataF7A:hasProperty(aKeysDadosLog[nX])
+			jDataF7A[aKeysDadosLog[nX]] := jDadosLog[aKeysDadosLog[nX]]
+		Endif
+	Next nX
+
+	If getRecnoF7A(jDataF7A, cWallet) == 0
+		BEGIN TRANSACTION 
+			RecLock('F7A', .T.)
+				F7A->F7A_FILIAL := jDataF7A["filial"]
+				F7A->F7A_CODIGO := jDataF7A["codigo"]
+				F7A->F7A_PREFIX := jDataF7A["prefixo"]	
+				F7A->F7A_NUMERO := jDataF7A["numero"]
+				F7A->F7A_PARCEL := jDataF7A["parcela"]
+				F7A->F7A_TIPO   := jDataF7A["tipo"]
+				F7A->F7A_CLIENT := jDataF7A["cliente"]
+				If __lF7A_FOR
+					F7A->F7A_FORNEC := jDataF7A["fornecedor"]
+				EndIf
+				F7A->F7A_LOJA   := jDataF7A["loja"]
+				F7A->F7A_BORDER := jDataF7A["bordero"]
+				
+				If jDataF7A["estadocobranca"] > 0
+					F7A->F7A_ESTCOB := StrZero(jDataF7A["estadocobranca"], 2)
+				Endif
+
+				F7A->F7A_STATUS := jDataF7A["status"]
+				F7A->F7A_ERREXE := jDataF7A["msgexecauto"]
+				F7A->F7A_FILORI := jDataF7A["filori"]
+				F7A->F7A_EMISSA := jDataF7A["emissao"]
+				F7A->F7A_VALOR  := jDataF7A["valor"]
+				F7A->F7A_MULTA  := jDataF7A["multa"]
+				F7A->F7A_DESCON := jDataF7A["desconto"]
+				F7A->F7A_JUROS  := jDataF7A["juros"]
+				F7A->F7A_JSON	:= jDataF7A["consultaTitulo"]:ToJson()
+			F7A->(MsUnLock())
+		END  TRANSACTION 
+	Endif
+Return 
+
+
+/*/{Protheus.doc} ProcessaF79
+
+	Processa a lista de titulos no jSon de 1 registro F79 passado por parâmetro.
+	Precisa estar posicionado SA6, SEE
+	
+	@version 12.1.33
+	@author rafael.rondon
+	@since 29/08/2022
+	@param aF79Proc		, array		, array com dados da F79 a ser processada: aF79Proc[1] = F79_FILIAL ; aF79Proc[2] = F79_CODIGO
+	@param jLayout		, json		, json do layout do banco (A6_CFGBOL)
+	@return .T.			, logical
+
+/*/
+Function ProcessaF79(aF79Proc As Array , jLayout As Json) As Logical
+
+Local nX			:= 0					As Numeric
+Local nRecnoSEA		:= 0					As Numeric
+Local lBaixou		:= .F.					As Logical
+Local jList 								As Json
+Local jTitulo								As Json
+Local jGravarF7A							As Json
+Local cFilbkp		:= cFilAnt 				As Character
+Local cF7ANum		:= ''	 				As Character
+Local bError								As CodeBlock
+Local cConvenio	    := ""					As Character
+Local nRecSEE		:= 0					As Numeric
+Local cMsgErro 		:= ""					As Character
+Local aAreaSEE		:= SEE->(FwGetArea())	As Array
+Local jConsultMock	:= JsonObject():new()	As Json
+Local jEA_APIMSG	:= JsonObject():new()	As Json
+
+bError	:= Errorblock({|e| ErrorF79(e) })
+jList	:= JsonObject():New()
+
+DbSelectArea("SEA")
+DbSelectArea("SE1")
+DbSelectArea("SA1")
+SA1->(DbSetOrder(1))
+
+DbSelectArea('F79')
+F79->(DbSetOrder(3)) //F79_FILIAL+F79_CODIGO
+DbSelectArea('F7A')
+
+If F79->(DbSeek(aF79Proc[1] + aF79Proc[2]))
+	jList:FromJson(F79->F79_JSON)
+	If jList:hasProperty('response') .AND. jList['response']:hasProperty('boletos')
+				
+		cF7ANum			:= Space(Len(F7A->F7A_NUMERO))
+
+		For nX := 1 To Len(jList['response']['boletos'])
+
+			BEGIN SEQUENCE
+				
+				lBaixou			:= .F.
+				jGravarF7A		:= JsonObject():New()
+				jTitulo 		:= JsonObject():New()
+				jConsultMock	:= JsonObject():new() 
+				cMsgErro 		:= ""
+				nRecSEE 		:= 0
+				cConvenio		:= ""
+
+				/*
+					Consulta Título individual
+				*/			
+				If jList['response']['boletos'][nX]:hasproperty('lautomato') // Utilizado para automação de testes
+					jConsultMock := jList['response']['boletos'][nX]['lautomato']
+				Endif
+
+				cConvenio := SubStr(jList['response']['boletos'][nX]['numeroBoletoBB'], 4, 7)
+				If AllTrim(cConvenio) == AllTrim(SEE->EE_CODEMP) .AND. AllTrim(SEE->EE_RETAUT) == '4'
+					nRecSEE := SEE->(Recno())
+				Else
+					nRecSEE := getRecnoSEE(cConvenio)
+					If nRecSEE > 0
+						SEE->(DbGoto(nRecSEE))
+					EndIf
+				EndIf
+
+				If nRecSEE > 0					
+
+					jTitulo := ConBBTit(jList['response']['boletos'][nX], jLayout, cConvenio, jConsultMock)
+
+					If jTitulo:hasProperty('response')
+
+						If !Empty(jTitulo['response']['textoCampoUtilizacaoCedente']) // IDCNAB
+							/*
+								Posiciona SE1
+							*/
+							If FINA715SE1(jTitulo['response']['textoCampoUtilizacaoCedente']) // IDCNAB
+
+								cFilAnt := SE1->E1_FILORIG
+								/*
+									Posiciona SEA
+								*/
+								nRecnoSEA := getRecSEA(SE1->E1_FILORIG, SE1->E1_PREFIXO, SE1->E1_NUM, SE1->E1_PARCELA, SE1->E1_TIPO, SE1->E1_NUMBOR)
+								If nRecnoSEA > 0
+									SEA->(DbGoTo(nRecnoSEA))
+									// validar se a instrucao se refere ao bordero
+									If Empty(jEA_APIMSG:fromJson(SEA->EA_APIMSG)) .And. jEA_APIMSG:hasProperty('response') .And. jEA_APIMSG['response']:hasProperty('numero')
+										If jEA_APIMSG['response']['numero'] == jList['response']['boletos'][nX]['numeroBoletoBB']
+											If SE1->E1_SALDO > 0
+												jGravarF7A := ExecBxSE1(jList['response']['boletos'][nX], jLayout, 3, jTitulo)
+												If jGravarF7A['baixouExecAuto'] == 'sim'
+													lBaixou := .T.
+												Else
+													/*
+														Gravar Log erro execauto
+													*/
+													jGravarF7A['filial'] := F79->F79_FILIAL
+													jGravarF7A['codigo'] := F79->F79_CODIGO
+													GrvF7A(jGravarF7A)
+												EndIf
+											Else
+												If GetBxFK1() // Título sofreu baixa pelo FINA715/WEBHOOK?
+													lBaixou := .T.
+												Else
+													/*
+														Título baixado por outro meio.
+													*/
+													jGravarF7A['baixouExecAuto']	:= 'nao'
+													jGravarF7A['filial'] 			:= F79->F79_FILIAL
+													jGravarF7A['codigo'] 			:= F79->F79_CODIGO
+													jGravarF7A['filori']			:= SE1->E1_FILORIG
+													jGravarF7A['prefixo']			:= SE1->E1_PREFIXO
+													jGravarF7A['numero']			:= SE1->E1_NUM
+													jGravarF7A['parcela']			:= SE1->E1_PARCELA
+													jGravarF7A['tipo']				:= SE1->E1_TIPO
+													jGravarF7A['cliente']			:= SE1->E1_CLIENTE
+													jGravarF7A['loja']				:= SE1->E1_LOJA
+													jGravarF7A['emissao']			:= SE1->E1_EMISSAO
+													jGravarF7A['valor']				:= SE1->E1_VALOR
+													jGravarF7A['multa']				:= jTitulo['response']['valorMultaRecebido']
+													jGravarF7A['desconto']			:= jTitulo['response']['valorDescontoUtilizado']
+													jGravarF7A['juros']				:= jTitulo['response']['valorJuroMoraRecebido']
+													jGravarF7A['bordero']			:= SE1->E1_NUMBOR
+													jGravarF7A['estadocobranca']	:= jList['response']['boletos'][nX]['codigoEstadoTituloCobranca']
+													jGravarF7A['status']			:= "1"
+													jGravarF7A['msgexecauto']		:= STR0008		// 'O título em questão não possui saldo'
+													jGravarF7A['consultaTitulo']	:= jTitulo
+
+													GrvF7A(jGravarF7A)										
+												Endif
+											Endif
+										Else
+											/*
+												Gravar log que nao encontrou o titulo
+											*/
+											jGravarF7A['baixouExecAuto']	:= 'nao'
+											jGravarF7A['filial'] 			:= F79->F79_FILIAL
+											jGravarF7A['codigo'] 			:= F79->F79_CODIGO
+											jGravarF7A['filori']			:= SE1->E1_FILORIG
+											jGravarF7A['prefixo']			:= SE1->E1_PREFIXO
+											jGravarF7A['numero']			:= SE1->E1_NUM
+											jGravarF7A['parcela']			:= SE1->E1_PARCELA
+											jGravarF7A['tipo']				:= SE1->E1_TIPO
+											jGravarF7A['cliente']			:= SE1->E1_CLIENTE
+											jGravarF7A['loja']				:= SE1->E1_LOJA
+											jGravarF7A['emissao']			:= SE1->E1_EMISSAO
+											jGravarF7A['valor']				:= SE1->E1_VALOR
+											jGravarF7A['multa']				:= jTitulo['response']['valorMultaRecebido']
+											jGravarF7A['desconto']			:= jTitulo['response']['valorDescontoUtilizado']
+											jGravarF7A['juros']				:= jTitulo['response']['valorJuroMoraRecebido']
+											jGravarF7A['bordero']			:= SE1->E1_NUMBOR
+											jGravarF7A['estadocobranca']	:= jList['response']['boletos'][nX]['codigoEstadoTituloCobranca']
+											jGravarF7A['status']			:= "1"
+											jGravarF7A['msgexecauto']		:= STR0017 //"A instrução não pertence ao borderô."
+											jGravarF7A['consultaTitulo']	:= jTitulo
+											GrvF7A(jGravarF7A)
+										EndIf
+									EndIf
+
+								Else
+									/*
+										Não logar F7A caso o cancelamento foi solicitado pelo sistema
+									*/
+									If (FindFunction('F713VldAlCa') .AND. F713VldAlCa() .AND. IsFI2Canc())
+										lBaixou := .T.
+									Else
+										/*
+											Gravar log que nao encontrou o borderô SEA
+										*/
+										jGravarF7A['filial'] 			:= F79->F79_FILIAL
+										jGravarF7A['codigo'] 			:= F79->F79_CODIGO
+										jGravarF7A['filori']			:= SE1->E1_FILORIG
+										jGravarF7A['prefixo']			:= SE1->E1_PREFIXO
+										jGravarF7A['numero']			:= SE1->E1_NUM
+										jGravarF7A['parcela']			:= SE1->E1_PARCELA
+										jGravarF7A['tipo']				:= SE1->E1_TIPO
+										jGravarF7A['cliente']			:= SE1->E1_CLIENTE
+										jGravarF7A['loja']				:= SE1->E1_LOJA
+										jGravarF7A['emissao']			:= SE1->E1_EMISSAO
+										jGravarF7A['valor']				:= SE1->E1_VALOR
+										jGravarF7A['multa']				:= jTitulo['response']['valorMultaRecebido']
+										jGravarF7A['desconto']			:= jTitulo['response']['valorDescontoUtilizado']
+										jGravarF7A['juros']				:= jTitulo['response']['valorJuroMoraRecebido']
+										jGravarF7A['bordero']			:= SE1->E1_NUMBOR
+										jGravarF7A['estadocobranca']	:= jList['response']['boletos'][nX]['codigoEstadoTituloCobranca']
+										jGravarF7A['status']			:= "1"
+										jGravarF7A['msgexecauto']		:= STR0012		// 'Não foi possível localizar o borderô.'
+										jGravarF7A['consultaTitulo']	:= jTitulo
+										GrvF7A(jGravarF7A)
+									EndIf
+								EndIf							
+									
+								cFilAnt := cFilbkp
+							Else
+								/*
+									Gravar log que nao encontrou o titulo
+								*/
+								jGravarF7A['filial'] := F79->F79_FILIAL
+								jGravarF7A['codigo'] := F79->F79_CODIGO
+								cF7ANum := Soma1(cF7ANum) 
+								jGravarF7A['numero'] := cF7ANum
+								jGravarF7A['status']	:= "1"
+								jGravarF7A['msgexecauto'] := STR0004 + jTitulo['response']['textoCampoUtilizacaoCedente'] // "Título não encontrado pelo (E1_IDCNAB): "						
+								jGravarF7A['consultaTitulo'] := jTitulo
+								GrvF7A(jGravarF7A)
+							EndIf
+						Else
+							/*
+								Logar caso o textoCampoUtilizacaoCedente (IDCNAB) estiver em branco
+							*/
+							jGravarF7A['filial'] := F79->F79_FILIAL
+							jGravarF7A['codigo'] := F79->F79_CODIGO
+							cF7ANum := Soma1(cF7ANum) 
+							jGravarF7A['numero'] := cF7ANum
+							jGravarF7A['status']	:= "1"
+							jGravarF7A['msgexecauto'] := STR0009 + CRLF + STR0010 +	jList['response']['boletos'][nX]['numeroBoletoBB'] // 'Não foi possível localizar o título.'  #  'O campo textoCampoUtilizacaoCedente (E1_IDCNAB) está em branco para o numeroBoletoBB: '
+							jGravarF7A['consultaTitulo'] := jTitulo
+							GrvF7A(jGravarF7A)	
+						EndIf
+					Else
+						/*
+							Logar caso nao consiga consultar titulo
+						*/
+						jGravarF7A['filial'] := F79->F79_FILIAL
+						jGravarF7A['codigo'] := F79->F79_CODIGO
+						cF7ANum := Soma1(cF7ANum) 
+						jGravarF7A['numero'] := cF7ANum
+						jGravarF7A['status']	:= "1"
+						jGravarF7A['msgexecauto'] := STR0005	// "Falha na consulta individual do boleto no Banco do Brasil"				
+						jGravarF7A['consultaTitulo'] := jTitulo
+						GrvF7A(jGravarF7A)				
+					EndIf
+				Else
+					lBaixou := .T.
+					FwLogMsg('INFO',, "FINA715", "FINA715", "", 'SEENotFound', STR0013 + cConvenio + STR0014 ) // "Não foi possível encontrar o parâmetro de banco do convenio "#" e/ou o parâmetro de banco não esta configurado para retorno automático (EE_RETAUT = 4)"
+				EndIf	
+
+				RecLock('F79', .F.)
+
+					F79->F79_QTPROC := cValToChar( Val(F79->F79_QTPROC) + 1 )
+					If !lBaixou
+						F79->F79_NBAIXA := cValToChar( Val(F79->F79_NBAIXA) + 1 )
+					EndIf
+
+				F79->(MsUnlock())
+
+			RECOVER
+			
+				/*
+					Logar caso ocorra erro no processamento
+				*/
+				jGravarF7A['msgexecauto'] := STR0011			//'Erro no processamento: '
+				If jList['response']['boletos'][nX]:HasProperty('numeroBoletoBB') .AND. jList['response']['boletos'][nX]['numeroBoletoBB'] <> Nil
+					jGravarF7A['msgexecauto'] += CRLF + 'numeroBoletoBB: ' + jList['response']['boletos'][nX]['numeroBoletoBB'] + ' - '
+				EndIf
+				jGravarF7A['msgexecauto'] += CRLF + __cErrorF79				
+				FwLogMsg('ERROR',, "FINA715", "FINA715", "", 'ErrorF79', jGravarF7A['msgexecauto'] )
+
+				jGravarF7A['filial'] := F79->F79_FILIAL
+				jGravarF7A['codigo'] := F79->F79_CODIGO
+				cF7ANum := Soma1(cF7ANum) 
+				jGravarF7A['numero'] := cF7ANum
+				jGravarF7A['status']	:= "1"				
+				jGravarF7A['consultaTitulo'] := jTitulo				
+				GrvF7A(jGravarF7A)	
+
+			END SEQUENCE
+
+			ErrorBlock( bError )
+
+		Next nX
+
+	EndIf
+EndIf
+
+FwRestArea(aAreaSEE)
+
+Return .T.
+
+/*/{Protheus.doc} ErrorF79(
+
+	Bloco executado quando ocorre erro no processamento da F79
+	
+	@type function
+	@version 12.1.33
+	@author rafael.rondon
+	@since 29/08/2022
+	@param cFilF79 , character, código da filial
+	@return 
+/*/
+Static Function ErrorF79(e)
+
+
+	__cErrorF79 := e:Description + e:ErrorStack
+
+	Break(e)
+
+Return
+
+/*-------------------------------------------------------------
+
+	PROCESSO API PAGAR 
+
+---------------------------------------------------------------*/
+/*/{Protheus.doc} processWriteOff
+	processa a baixa do titulo
+	@type  Function
+	@author jailton.urbano
+	@since 10/01/2023
+	@param jResponse, Json, Json contendo a resposta da API
+	@param cLayout, Character, Layout do banco A6_CFGBOLP
+	@return lBaixou, Logical, Define se baixou corretamente o titulo
+/*/
+Function processWriteOff(jResponse as Json, cLayout as Character) As Logical
+	Local jTitulo      	:= JsonObject():New() as Json
+	Local jPagamento    := JsonObject():New() as Json
+	Local lBaixou   	:= .F.	As Logical
+	Local nMulta 		:= 0	As Numeric
+	Local nJuros 		:= 0	As Numeric
+	Local nDesconto 	:= 0	As Numeric
+	Local cDataPagamento := ""	As Character
+
+	initStatic()
+	
+	jPagamento['filial'] 			:= F79->F79_FILIAL
+	jPagamento['codigo'] 			:= F79->F79_CODIGO
+	jPagamento['filori']			:= SE2->E2_FILORIG
+	jPagamento['prefixo']			:= SE2->E2_PREFIXO
+	jPagamento['numero']			:= SE2->E2_NUM
+	jPagamento['parcela']			:= SE2->E2_PARCELA
+	jPagamento['tipo']				:= SE2->E2_TIPO
+	jPagamento['fornecedor']		:= SE2->E2_FORNECE
+
+	// Esse campo será gravado com o fornecedor para manter a integridade dos dados
+	// pois a chave unica da tabela é essa 
+	// F7A_FILIAL, F7A_FILORI, F7A_CODIGO, F7A_PREFIX, F7A_NUMERO, F7A_PARCEL, F7A_TIPO, F7A_CLIENT, F7A_LOJA
+	jPagamento['cliente']			:= SE2->E2_FORNECE
+	
+	jPagamento['loja']				:= SE2->E2_LOJA
+	jPagamento['emissao']			:= SE2->E2_EMISSAO
+	jPagamento['bordero']			:= SEA->EA_NUMBOR
+	jPagamento['status']			:= "1"
+	jPagamento['codigoAutenticacaoPagamento'] := ""
+
+	//Recupera os valores que serão utilizados na baixa de acordo com o modelo do layout
+	If jResponse['statusCode'] == 200
+		jTitulo:FromJson(jResponse["response"])
+
+		If jTitulo:hasProperty("codigoAutenticacaoPagamento")
+			jPagamento['codigoAutenticacaoPagamento'] := jTitulo["codigoAutenticacaoPagamento"]
+		Endif
+
+		If jTitulo:hasProperty("autenticacaoPagamento")
+			jPagamento['codigoAutenticacaoPagamento'] := jTitulo["autenticacaoPagamento"]
+		Endif	
+
+		If SEA->EA_MODELO $ '30|31' //BOLETO
+			nMulta := jTitulo['listaPagamentos'][1]['valorMoraMulta']
+			nDesconto := jTitulo['listaPagamentos'][1]['valorDesconto']
+		Elseif SEA->EA_MODELO $ '16|18' //DARF'
+			nMulta := jTitulo['listaPagamentos'][1]['valorMulta']
+			nJuros := jTitulo['listaPagamentos'][1]['valorJuroEncargo']
+		Elseif SEA->EA_MODELO $ '17' //GPS
+			nMulta := jTitulo['listaPagamentos'][1]['valorAtualizacaoMonetaria']
+		EndIf
+
+		jPagamento['valor']				:= jTitulo['valorPagamento']
+		jPagamento['multa']				:= nMulta
+		jPagamento['desconto']			:= nDesconto
+		jPagamento['juros']				:= nJuros
+		jPagamento['consultaTitulo']	:= jTitulo
+		cDataPagamento := cValToChar(jTitulo['dataPagamento'])
+
+		// Caso a data venha com apenas 1 digito no dia, por exemplo "1032023"
+		// A função GetDtoDate não consegue converter corretamente, nesses casos sera 
+		// incrementado um zero a esquerada deixando o valor correto "01032023"
+		If Len(cDataPagamento) == 7
+			cDataPagamento := "0" + cDataPagamento
+		Endif
+		
+		jPagamento['datapagamento']		:= GetDtoDate(cDataPagamento)
+
+		If jTitulo['estadoPagamento'] == 'PAGO' .Or. jTitulo['estadoPagamento'] == 'DEBITADO'
+			If !Empty(Alltrim(jPagamento['codigoAutenticacaoPagamento']))
+				lBaixou  := processaBaixaSE2(@jPagamento, cLayout)
+			Else
+				jPagamento['msgexecauto'] := STR0016 //"Pagamento ainda não possui o código de autorização, sendo assim, o titulo não poderá ser baixado"
+			Endif
+		Else
+			jPagamento['msgexecauto'] := jResponse["error"]
+		EndIf
+	EndIf
+	
+	If !lBaixou
+		GrvF7A(jPagamento)
+	Endif	
+
+	FreeObj(jTitulo)
+	FreeObj(jPagamento)
+Return lBaixou
+
+/*/{Protheus.doc} processaBaixaSE2()
+	processa a baixa do titulo
+	@type function
+	@version 12.1.2210
+	@author jailton.urbano
+	@since 16/12/2022
+	@return Logical
+/*/
+Static Function processaBaixaSE2(jPagamento As Json, cLayout as Character) As Logical
+	Local cBanco     := ""  				As Character
+	Local cAgencia   := ""  				As Character
+	Local cConta     := ""  				As Character
+	Local cNumBco    := ""  				As Character
+	Local aTitBx	 := {}  				As Array
+	Local jLayout	 := JsonObject():new() 	As Json
+	Local cFilBkp	 := cFilAnt 			As Character
+	Local cMotBx	 := "NOR"				As Character
+	Local aAreaSE2	 := SE2->(FwGetArea())	As Array
+	Local aAreaSEA	 := SEA->(FwGetArea())	As Array	
+	
+	Private lMsErroAuto 	:= .F. 	As Logical
+	Private lMsHelpAuto 	:= .T. 	As Logical
+	Private lAutoErrNoFile	:= .T. 	As Logical
+	Private cAutentica 		:= ""	As Character //Utilizado no FINA080 para gravar o campo E5_AUTBCO
+	
+	jLayout:FromJson(cLayout)
+
+	__lExecSX1 := .t.
+
+	lMsErroAuto := .F.
+
+	cBanco      := SEA->EA_PORTADO
+	cAgencia    := SEA->EA_AGEDEP
+	cConta      := SEA->EA_NUMCON
+	cNumBco     := ""
+	cFilAnt		:= jPagamento['filori'] //Garante que a baixa do titulo ocorra na filial de criação do titulo
+	cAutentica	:= jPagamento['codigoAutenticacaoPagamento']
+
+	If jLayout:hasProperty("motivoBaixa")
+		cMotBx := jLayout['motivoBaixa']
+	Endif
+
+	If SE2->E2_TIPO $ MVPAGANT+"|"+MVTXA
+		advancePayment(@jPagamento, jLayout)
+	Else
+		AAdd(aTitBx, {"E2_PREFIXO"		, PadR(jPagamento['prefixo'], TamSX3("E2_PREFIXO")[1])		, Nil })
+		AAdd(aTitBx, {"E2_NUM"    		, PadR(jPagamento['numero'], TamSX3("E2_NUM")[1])    		, Nil })
+		AAdd(aTitBx, {"E2_PARCELA"		, PadR(jPagamento['parcela'], TamSX3("E2_PARCELA")[1])		, Nil })
+		AAdd(aTitBx, {"E2_TIPO"   		, PadR(jPagamento['tipo'], TamSX3("E2_TIPO")[1])   			, Nil })
+		AAdd(aTitBx, {"E2_FORNECE"		, PadR(jPagamento['fornecedor'], TamSX3("E2_FORNECE")[1])	, Nil })
+		AAdd(aTitBx, {"E2_LOJA"   		, PadR(jPagamento['loja'], TamSX3("E2_LOJA")[1])   			, Nil })
+		AADD(aTitBx, {"AUTMOTBX" 		, cMotBx	 												, Nil }) 
+		AADD(aTitBx, {"AUTBANCO" 		, PadR(cBanco, TamSX3("EA_PORTADO")[1])						, Nil })
+		AADD(aTitBx, {"AUTAGENCIA" 		, PadR(cAgencia, TamSX3("EA_AGEDEP")[1]) 					, Nil })
+		AADD(aTitBx, {"AUTCONTA" 		, PadR(cConta  , TamSX3("EA_NUMCON")[1]) 					, Nil })
+		AADD(aTitBx, {"AUTDTBAIXA" 		, jPagamento['datapagamento'] 								, Nil }) 
+		AADD(aTitBx, {"AUTDTDEB" 		, jPagamento['datapagamento']								, Nil }) 
+		AADD(aTitBx, {"AUTHIST" 		, jLayout['historicoBaixa']									, Nil })
+		AADD(aTitBx, {"AUTDESCONT" 		, jPagamento['desconto'] 									, Nil }) 
+		AADD(aTitBx, {"AUTMULTA" 		, jPagamento['multa'] 										, Nil }) 
+		AADD(aTitBx, {"AUTJUROS" 		, jPagamento['juros'] 										, Nil }) 
+		AADD(aTitBx, {"AUTVLRPG"		, jPagamento['valor']										, NIL }) 
+
+		If jLayout:hasProperty("tipoDesconto") .and. !Empty(jLayout["tipoDesconto"])
+			AADD(aTitBx, {"AUTTPDESC", jLayout["tipoDesconto"], NIL })
+		Endif
+
+		If __lExecSX1
+			SetParam080(cLayout)
+		Endif
+		
+		MsExecAuto({|x, y| FINA080(x, y)}, aTitBx, 3)
+		
+		If lMsErroAuto
+			jPagamento['baixouexecauto'] := .f.
+			jPagamento['msgexecauto']	 := totvs.protheus.backoffice.ngf.util.GetError()
+		else
+			jPagamento['baixouexecauto'] := .t.
+		EndIf
+	Endif
+	
+	FreeObj(jLayout)
+	
+	FwRestArea(aAreaSE2)
+	FwRestArea(aAreaSEA)
+	cFilAnt := cFilBkp
+
+Return jPagamento['baixouexecauto']
+
+/*/{Protheus.doc} SetParam080()
+	Seta as variaveis publicas MV_PAR com novos valores.
+	@type function
+	@version 12.1.33
+	@author francisco.oliveira
+	@since 06/04/2022
+	@return Logical
+/*/
+Static Function SetParam080(cLayout as Character)
+	Local jLayout := JsonObject():new() as Json
+	
+	jLayout:FromJson(cLayout)
+	__lExecSX1	:= .F.
+
+	SetMVValue("FIN080", "MV_PAR03", jLayout['contabilizaOnLine'])
+	PERGUNTE("FIN080", .F.)
+
+	FreeObj(jLayout)
+Return
+
+/*/{Protheus.doc} getRecnoSEE
+	Busca SEE pelo convênio
+	@type function JOB
+	@param 		cNumeroConvenio		, Character		, Numero convenio (vem no payload)
+	@version 12.1.33
+	@author rafael.rondon
+	@since 10/02/2023
+	@return 	nRecSEE		numeric - recno da SEE configurada para retorno 
+/*/
+Function getRecnoSEE(cNumeroConvenio As Character ) As Numeric
+
+	Local cQuery 	As Character
+	Local nRecSEE	As Numeric
+
+	Default cNumeroConvenio := ""
+
+	nRecSEE := 0
+
+	If __oRecnoEE == NIl
+
+		cQuery := " SELECT SEE.R_E_C_N_O_ AS RECNOSEE FROM " + RetSqlName("SEE") + " SEE "
+		cQuery += " WHERE SEE.D_E_L_E_T_  = ' ' "	
+		cQuery += " AND SEE.EE_RETAUT = '4' "
+		cQuery += " AND LTRIM(RTRIM(SEE.EE_CODEMP)) = ? "
+		cQuery += " ORDER BY SEE.EE_FILIAL, SEE.EE_CODIGO, SEE.EE_AGENCIA, SEE.EE_CONTA, SEE.EE_SUBCTA "
+
+		cQuery	:= ChangeQuery(cQuery)
+		If __lExecSt
+			__oRecnoEE := FwExecStatement():new(cQuery)
+		Else
+			__oRecnoEE := FWPreparedStatement():New(cQuery)
+		Endif	
+
+	EndIf
+
+	__oRecnoEE:SetString(1,AllTrim(cNumeroConvenio))
+
+	If __lExecSt
+		nRecSEE := __oRecnoEE:ExecScalar('RECNOSEE')
+	Else
+		nRecSEE := MPSysExecScalar(__oRecnoEE:GetFixQuery(), "RECNOSEE")
+	Endif	
+
+Return nRecSEE
+
+
+/*/{Protheus.doc} separaMultaJurosBB
+	Separa multa e juros dos campos bb, BB manda os dois valores juntos somados no campo "valorJuroMoraRecebido"
+	@type function JOB
+	@param 		jTitulo		, Json		, Json de consulta detalhes do boleto bb
+	@version 12.1.33
+	@author rafael.rondon
+	@since 10/02/2023
+	@return 	jTitulo		Json 		, Json de consulta detalhes do boleto bb com multa e juros separados
+/*/
+Function separaMultaJurosBB( jTitulo As Json ) As Json
+
+	Local dDtMov 	 	As Date
+	Local dDtMulta		As Date
+	Local lTemJuros		As Logical
+	Local lTemMulta		As Logical
+
+	if jTitulo['response']:hasProperty('valorOutroRecebido') .and. jTitulo['response']['valorOutroRecebido'] > 0
+		jTitulo['response']['valorJuroMoraRecebido'] += jTitulo['response']['valorOutroRecebido']
+	endIf
+
+	jTitulo['juroSeparado'] := jTitulo['response']['valorJuroMoraRecebido']
+	jTitulo['multaSeparada'] := jTitulo['response']['valorMultaRecebido']
+
+	// Cenario onde o BB envia no campo valorJuroMoraRecebido o valor de juros e multa somados
+	If jTitulo['juroSeparado'] > 0 .and. jTitulo['multaSeparada'] == 0
+
+		dDtMov 		:= CToD(StrTran(jTitulo['response']['dataRecebimentoTitulo'],".","/"))
+		dDtMulta	:= CToD(StrTran(jTitulo['response']['dataMultaTitulo'],".","/"))
+
+
+		lTemJuros := jTitulo['response']['percentualJuroMoraTitulo'] > 0 .OR. jTitulo['response']['valorJuroMoraTitulo'] > 0 
+		lTemMulta := dDtMulta <= dDtMov .AND. ( jTitulo['response']['percentualMultaTitulo'] > 0 .OR. jTitulo['response']['valorMultaTituloCobranca'] > 0 )
+
+		Do Case
+			Case lTemJuros .AND. !lTemMulta
+
+				jTitulo['juroSeparado'] := jTitulo['response']['valorJuroMoraRecebido']
+				jTitulo['multaSeparada'] := 0
+
+			Case !lTemJuros .AND. lTemMulta
+
+				jTitulo['juroSeparado'] := 0
+				jTitulo['multaSeparada'] := jTitulo['response']['valorJuroMoraRecebido']			
+
+			Case lTemJuros .AND. lTemMulta
+				
+				If jTitulo['response']['valorMultaTituloCobranca'] > 0 // Multa Valor (Único)
+
+					jTitulo['juroSeparado'] := jTitulo['response']['valorJuroMoraRecebido'] - jTitulo['response']['valorMultaTituloCobranca']
+					jTitulo['multaSeparada'] := jTitulo['response']['valorMultaTituloCobranca']
+
+				Else // Multa Percentual
+
+					jTitulo['multaSeparada'] := NoRound(jTitulo['response']['valorAtualTituloCobranca'] * jTitulo['response']['percentualMultaTitulo'] / 100 , 2)
+					jTitulo['juroSeparado'] := jTitulo['response']['valorJuroMoraRecebido'] - jTitulo['multaSeparada']
+
+				EndIf									
+
+		EndCase
+
+	EndIf
+
+Return jTitulo
+
+/*/{Protheus.doc} advancePayment
+	Realiza a geração de movimentação bancaria para pagamento antecipado
+	@type  Function
+	@author Vitor Duca
+	@since 25/05/2023
+	@version 1.0
+	@param jPagamento, Json, Json que contem as informações do pagamento
+	@param jLayout, Json, Layout de configuração do banco A6_BOLAPIP
+/*/
+Function advancePayment(jPagamento As Json, jLayout As Json)
+	Local cBanco      	:= SEA->EA_PORTADO as Character
+	Local cAgencia    	:= SEA->EA_AGEDEP as Character
+	Local cConta      	:= SEA->EA_NUMCON as Character
+	Local lAchouSE5   	:= .F. as Logical
+	Local aArea       	:= FwGetArea() as Array
+	Local cChaveTit   	:= "" as Character
+	Local cIDDoc      	:= "" as Character
+	Local cCamposE5   	:= "" as Character
+	Local oModelMov		:= NIL as Object
+	Local oSubFK5		:= NIL as Object
+	Local oSubFKA		:= NIL as Object
+
+	SE5->(DbSetOrder(7))
+	SE5->(DbGoTop())
+	lAchouSE5 := SE5->(DbSeek(xFilial("SE5")+SE2->(E2_PREFIXO+E2_NUM+E2_PARCELA+E2_TIPO+E2_FORNECE+E2_LOJA)))
+
+	//Busca movimentação já existente para este PAGAMENTO ANTECIPADO
+	If !lAchouSE5 .Or. (lAchouSE5 .And. SE5->E5_TIPODOC == "BA" .And. SE5->E5_MOTBX == "PCC" .And. SE2->(E2_PIS+E2_COFINS+E2_CSLL+E2_IRRF) > 0)
+
+		cCamposE5 := "{"
+		cCamposE5 += " {'E5_DTDIGIT', dDataBase  }"
+		//cCamposE5 += ",{'E5_LOTE'	, '" + cLoteFin	 + "'}" //Não possui tratamento de lote nas baixas
+		cCamposE5 += ",{'E5_TIPO'	, '" + SE2->E2_TIPO	+ "'}"
+		cCamposE5 += ",{'E5_BENEF'  , '" + RemoveAsp(SE2->E2_NOMFOR) + "'   }"
+		cCamposE5 += ",{'E5_PREFIXO', '" + SE2->E2_PREFIXO	+ "'}"
+		cCamposE5 += ",{'E5_NUMERO'	, '" + SE2->E2_NUM		+ "'}"
+		cCamposE5 += ",{'E5_PARCELA', '" + SE2->E2_PARCELA	+ "'}"
+		cCamposE5 += ",{'E5_CLIFOR'	, '" + SE2->E2_FORNECE	+ "'}"
+		cCamposE5 += ",{'E5_FORNECE', '" + SE2->E2_FORNECE	+ "'}"
+		cCamposE5 += ",{'E5_LOJA'	, '" + SE2->E2_LOJA		+ "'}"
+
+		If jLayout:hasProperty("tipoDesconto") .and. !EMPTY(jLayout["tipoDesconto"])
+			cCamposE5 += ",{'E5_TPDESC'  , '"+ jLayout["tipoDesconto"] +"'}"
+		Endif
+
+		If !Empty(jPagamento['codigoAutenticacaoPagamento'])
+			cCamposE5 += ",{'E5_AUTBCO'  , '"+ jPagamento['codigoAutenticacaoPagamento'] +"'}"
+		Endif
+
+		cCamposE5 += ",{'E5_MOTBX'	, 'NOR'}"
+		cCamposE5 += "}"
+
+		oModelMov := FWLoadModel("FINM030")					
+		oModelMov:SetOperation( MODEL_OPERATION_INSERT )
+		oModelMov:Activate()
+		oModelMov:SetValue( "MASTER", "E5_GRV"		,.T.		)//Informa se vai gravar SE5 ou não
+		oModelMov:SetValue( "MASTER", "NOVOPROC"	,.T.		)//Informa que a inclusão será feita com um novo número de processo
+		oModelMov:SetValue( "MASTER", "E5_CAMPOS"	,cCamposE5 )//Informa os campos da SE5 que serão gravados indepentes de FK5
+		oSubFK5 := oModelMov:GetModel("FK5DETAIL")
+		oSubFKA := oModelMov:GetModel("FKADETAIL")
+		oSubFKA:SetValue( "FKA_IDORIG", FWUUIDV4() )
+		oSubFKA:SetValue( "FKA_TABORI", "FK5" )
+
+		cChaveTit := xFilial("SE2")+"|"+SE2->E2_PREFIXO+"|"+SE2->E2_NUM+"|"+SE2->E2_PARCELA+"|"+SE2->E2_TIPO+"|"+SE2->E2_FORNECE+"|"+SE2->E2_LOJA
+		cIDDoc    := FINGRVFK7("SE2", cChaveTit)
+
+		oSubFK5:SetValue( "FK5_ORIGEM"	, FunName() )
+		oSubFK5:SetValue( "FK5_DATA"	, jPagamento['datapagamento'] )
+		oSubFK5:SetValue( "FK5_VALOR"	, SE2->E2_VLCRUZ )
+		oSubFK5:SetValue( "FK5_VLMOE2"	, SE2->E2_VALOR )
+		oSubFK5:SetValue( "FK5_MOEDA"	, StrZero(SE2->E2_MOEDA,2))
+		oSubFK5:SetValue( "FK5_NATURE"	, SE2->E2_NATUREZ	)
+		oSubFK5:SetValue( "FK5_RECPAG"	, "P" )
+		oSubFK5:SetValue( "FK5_TPDOC"	, "PA" )
+		oSubFK5:SetValue( "FK5_HISTOR"	, jLayout['historicoBaixa'] )
+		oSubFK5:SetValue( "FK5_BANCO"	, cBanco )
+		oSubFK5:SetValue( "FK5_AGENCI"	, cAgencia )
+		oSubFK5:SetValue( "FK5_CONTA"	, cConta )
+		oSubFK5:SetValue( "FK5_DTDISP"	, jPagamento['datapagamento'] )
+		oSubFK5:SetValue( "FK5_FILORI"	, cFilAnt )
+		oSubFK5:SetValue( "FK5_IDDOC"   , cIDDoc )
+		oSubFK5:SetValue( "FK5_LA"	    , "N")
+		oSubFK5:SetValue( "FK5_CCUSTO"  , SE2->E2_CCUSTO)
+
+		If SE2->E2_RATEIO == "S"
+			oSubFK5:SetValue( "FK5_RATEIO",  "1" )
+		Else
+			oSubFK5:SetValue( "FK5_RATEIO",  "2" )
+		EndIf
+
+		If oModelMov:VldData()
+			jPagamento['baixouexecauto'] := .T.
+			oModelMov:CommitData()
+			SE5->(dbGoto(oModelMov:GetValue( "MASTER", "E5_RECNO" )))
+			AtuSalBco(cBanco, cAgencia, cConta, SE5->E5_DTDISPO, SE5->E5_VALOR, "-")
+		Else
+			jPagamento['baixouexecauto'] := .F.
+			jPagamento['msgexecauto'] := cValToChar(oModelMov:GetErrorMessage()[4]) + ' - '
+			jPagamento['msgexecauto'] += cValToChar(oModelMov:GetErrorMessage()[5]) + ' - '
+			jPagamento['msgexecauto'] += cValToChar(oModelMov:GetErrorMessage()[6])
+		Endif
+
+		oModelMov:DeActivate()
+		oModelMov:Destroy()
+		oModelMov := Nil
+		oSubFK5   := Nil
+		oSubFKA	  := Nil
+
+	Endif
+
+	FwRestArea(aArea)
+Return
+
+/*/{Protheus.doc} setParam070Recurrence()
+	Seta as variaveis publicas MV_PAR conforme layout - FINA070.
+	@type function
+	@version 12.1.2210
+	@author vinicius.prado
+	@since 12/06/2023
+	@param jLayout (json) - Layout do banco A6_CFGBOL
+	@return Nil
+/*/
+Function setParam070Recurrence(jLayout As Json)
+	SetMVValue("FIN070","MV_PAR03",jLayout['retornoBancario']['abateDescontoComissao'])
+	SetMVValue("FIN070","MV_PAR04",jLayout['retornoBancario']['contabilizaOnline'])
+	SetMVValue("FIN070","MV_PAR05",jLayout['retornoBancario']['consideraJurosComissao'])
+
+	PERGUNTE("FIN070", .F.)
+
+Return Nil
+
+/*/{Protheus.doc} setParam060Recurrence()
+	Seta as variaveis publicas MV_PAR conforme layout - FINA060.
+	@type function
+	@version 12.1.2210
+	@author vinicius.prado
+	@since 12/06/2023
+	@param jLayout (json) - Layout do banco A6_CFGBOL
+	@return Nil
+/*/
+Function setParam060Recurrence(jLayout As Json)
+	SetMVValue("FIN060","MV_PAR03",jLayout['retornoBancario']['contabilizaTransferencia'])
+	SetMVValue("FIN060","MV_PAR10",jLayout['retornoBancario']['retencaoBancariaTransferência'])
+	SetMVValue("FIN060","MV_PAR14",jLayout['retornoBancario']['contabilizaOnline'])
+
+	PERGUNTE("FIN060", .F.)
+
+Return Nil
+
+//------------------------------
+/*/{Protheus.doc} initStatic
+Inicializa as variáveis estáticas.
+
+@author vinicius.prado
+@since 12/06/2023
+@version 12.1.2210
+/*/
+//------------------------------
+Static Function initStatic()
+	__lSX1070  	:= .T. 								
+	__lSX1060  	:= .T. 								
+	__lF7A_FOR 	:= F7A->(FieldPos("F7A_FORNEC")) > 0
+	__lExecSt	:= FwLibVersion() >= "20211116"		
+Return Nil
+

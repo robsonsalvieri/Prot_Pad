@@ -1,0 +1,3490 @@
+#include "PROTHEUS.CH"
+#include "ERROR.CH"
+#include "XMLXFUN.CH"
+#include "fileIO.ch"
+
+#define CRLF chr( 13 ) + chr( 10 )
+#define G_CONSULTA  "01"
+#define G_SADT "02"
+#define G_RES_INTER "05"
+#define G_HONORARIO "06"
+#define G_ODONTO "13"
+#define F_BLOCK  512
+
+#INCLUDE "RESTFUL.CH"
+#INCLUDE "TOTVS.CH"
+
+static lExPERetP	:= ExistBlock("PLS500RP")
+static lExtPERDA	:= ExistBlock("PLCDPRE") 
+static oObjCompOD	:= JsonObject():New()
+static lVarCarreg	:= .f.
+static cFilBA0		:= ""
+static cFilBA1		:= ""
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} tissLoteGuias 
+WebService Lote Guias
+
+@author  Lucas Nonato
+@version P12
+@since   05/10/2018 
+/*/
+//-------------------------------------------------------------------
+function tissLoteGuias(cAuto)
+
+local cSoap     := ""
+local cErro     := ""
+local cVerArq   := ""
+local cRet 		:= ""
+local cXml      := HttpOtherContent()
+local aRetObj   := {}
+local lRetObj   := .F.
+local cEnv      := GetEnvServer()
+local cEmp      := AllTrim(GetPvProfString(cEnv,"JEMP","",GetADV97()))
+local cFil      := AllTrim(GetPvProfString(cEnv,"JFIL","",GetADV97()))
+
+private ctime   := time()
+private cNS     := ""
+
+default cAuto 	:= ""
+
+if !empty(cAuto)
+    cXml := cAuto
+endif
+
+if empty(cXml)
+    return ProcOnLine("protocoloRecebimento")
+endif
+
+if !empty(cEmp) 
+     
+	RpcSetEnv( cEmp,cFil,,,cEnv,,) 
+   
+    HttpCtType( "text/xml; charset="+'UTF-8' )
+
+	cVerArq	:= Substr(cXml,At("Padrao>", cXml) + Len("Padrao>"),7)
+     
+	aRetObj := VldWSLoteG(cXml,"tissWebServicesV" + StrTran(cVerArq, ".", "_") + ".xsd")
+
+	if ExistBlock("PLLTGUIA") 
+		cRet := ExecBlock("PLLTGUIA",.F.,.F.,{cXml,aRetObj})
+		return cRet
+	endif
+	 
+	lRetObj := aRetObj[1]
+    cErro   := aRetObj[2]
+	cXml    := aRetObj[3] 
+	cNS     := aRetObj[4]
+	// Se tudo ok, processa o arquivo	
+	if lRetObj
+	
+		cSoap += '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">' + Chr(10)
+   		cSoap += '<s:Body>' + chr(10)
+		cSoap += '<ans:protocoloRecebimentoWS xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas">' + chr(10)
+	
+		cSoap += ProcLoteGui(cXml) + chr(10)
+		
+		cSoap += '</ans:protocoloRecebimentoWS>' + chr(10)
+		cSoap += '</s:Body>' + chr(10)
+		cSoap += '</s:Envelope>'
+        
+		//PtLogPTWeb("530",cSoap,"Gerando Resposta a530","Soap de resposta:")
+	else
+		cSoap := "Erro ao carregar o Soap: " + cErro 
+	endif  
+else
+    cSoap := "A ENVIRONMENT [" + cEnv + "] não tem declarada as variaveis cEmp e cFil." 
+endif
+//cSoap += "Teste retorno - Demorou: " + ElapTime(ctime, time())
+return cSoap 
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ProcLoteGui
+WebService Lote Guias
+
+@author  Lucas Nonato
+@version P12
+@since   05/10/2018
+/*/
+//-------------------------------------------------------------------
+static function ProcLoteGui(cSoapXml)
+
+local aNS       := {}
+local aCriticas := {}
+local aAreasBKP	:= {BA1->(GetArea()), BA3->(GetArea()), BFG->(GetArea()), BAU->(GetArea()), BR8->(GetArea()), BA0->(GetArea()),;
+					BEA->(GetArea()), BB0->(GetArea())}
+local cSoapPt1  := ""
+local cSoapPt2  := ""
+
+local nPos      := 0
+local oXml      := nil
+local oLote     := nil
+local cQtd  := ""
+Local cRetCri := ""
+Local cPathTag := addNS("/loteGuiasWS/cabecalho")
+Local lResInt := .F.
+Local cRegANS := ""
+Local cRDAOri := ""
+Local cVerArq := ""
+
+oXML := TXmlManager():New()
+if empty(cNS)
+    // Removo da tag loteGuiasWS os URL's pois estava dando falha no parse.
+    nPos := At(">",Upper(cSoapXml))      
+    cSoapPt1 := Substr(cSoapXml,1,nPos-1)
+    cSoapPt2 := Substr(cSoapXml,nPos,len(cSoapXml))
+    cSoapXml := "      <loteGuiasWS" + cSoapPt2
+endif
+ 
+lRet := oXML:Parse(cSoapXml)
+ 
+if lRet 	
+    aNS := oXML:XPathGetRootNsList()
+    nPos := ascan(aNS,{|x| upper(alltrim(x[1])) == upper(cNS) })
+    If nPos > 0
+		oXML:XPathRegisterNs( aNS[ nPos ][ 1 ],aNS[ nPos ][ 2 ] )		
+	EndIf		
+	oLote := getCabecalho( oXML )	
+
+	cVerArq := oXML:XPathGetNodeValue( cPathTag + addNS("/Padrao" ))
+    cRegANS := oXML:XPathGetNodeValue( cPathTag + addNs("/destino/registroANS"))
+
+    if oXML:XPathChildCount( addNS("/loteGuiasWS/loteGuias/guiasTISS") ) > 1
+        cQtd  := "[1]" //Na TISS, um lote só pode conter um tipo de guia, por isso só vemos a primeira
+    endif
+
+	lResInt := oXml:XPathHasNode( addNS("/loteGuiasWS/loteGuias/guiasTISS/guiaResumoInternacao")+cQtd )
+
+	cRDAOri := getOrigem(oXML,cPathTag)
+	
+	cRetCri := PlVldCrBvn(cSoapXml, aNS, cVerArq, .F., lResInt, cRegANS, cRDAOri, oLote)
+	
+	if !empty(cRetCri)
+		return cRetCri
+	endif
+
+	if oLote:cTipoGuia == G_CONSULTA
+		cSoap := PlsVlCabConsulta (@oLote) //silvia
+		if ! Empty(cSoap)
+    		return cSoap
+    	Endif	
+		
+        cSoap := procConsulta(oXML, oLote, aCriticas, cSoapXml)
+         
+    elseif oLote:cTipoGuia == G_SADT 
+		cSoap := PlVlTCabSADT (@oLote)  //Validação igual a de consulta
+		if ! Empty(cSoap)
+    		return cSoap
+    	Endif
+		
+		cSoap := procSADT(oXML, oLote, aCriticas, cSoapXml) 
+        
+    elseif oLote:cTipoGuia == G_RES_INTER
+		cSoap := PlVlTCabSADT (@oLote)  //Validação igual a de consulta
+		if ! Empty(cSoap)
+    		return cSoap
+    	Endif
+       
+		cSoap := procResInt(oXML, oLote, aCriticas, cSoapXml)
+   
+        //procGRI()
+    elseif oLote:cTipoGuia == G_HONORARIO
+		cSoap := PlVlTCabSADT (@oLote) //Validação igual a de consulta
+		if ! Empty(cSoap)
+    		return cSoap
+    	Endif		
+		cSoap := procHonorarios(oXML, oLote, aCriticas, cSoapXml)
+
+    elseif oLote:cTipoGuia == G_ODONTO 
+		cSoap := PlVlTCabSADT (@oLote)  //Validação igual a de consulta
+		if ! Empty(cSoap)
+    		return cSoap
+    	Endif
+		
+		cSoap := procOdonto(oXML, oLote, aCriticas, cSoapXml) 
+
+	endif
+
+	//Vamos gravar os dados na B1R
+	PLSLoteVal(cSoapXml, cSoap, oLote)
+
+else
+	return oXML:Error()
+endif
+
+freeObj(oXml)
+oXml := nil
+freeObj(oLote)
+oLote := nil
+
+for nPos := 1 to len(aAreasBKP)
+	restarea(aAreasBKP[nPos])
+next
+
+return cSoap 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlVldCrBvn
+Valida criticas BVN
+
+@version P12
+@since   30/11/2023
+/*/
+//-------------------------------------------------------------------
+Function PlVldCrBvn(cXMLString, aNS, cVerArq, lOdonto, lResInt, cRegANS, cRDAOri, oDadoCab)
+
+	Local aRet := {.F.}
+	Local cCodrda := ""
+	Local cTipGui := ""
+	Local cLotgui := ""
+	Local nTotEve := 0
+	Local ntotgui := 0
+	Local nValTot := 0
+	Local l974 := .F.
+	Local cSeqBXX := ''
+	Local cDirAlt := ''
+	Local cTisVerBXX := ''
+	Local _oProcess := nil 
+	Local cRet := ""
+	Local nI := 0
+	Local cIDXML := ""
+	Local lCalend := iif(GetNewPar("MV_PLCALPG","1") == "2", .t., .f.)
+	Local dDataH		:= Date()
+	Local cCritica := ""
+	Local cDesCrit := ""
+	Local nX := 0
+
+	Local lCritCab := .F.
+	Local cCodInt := PlsIntPad()
+	Local aRetCrit := {}
+
+	Default cXMLString := ''
+	Default aNS := {}
+	Default cVerArq := ""
+	Default lOdonto := .F.
+	Default lResInt := .F.
+	Default cRegANS := ''
+	Default cRDAOri := ''
+
+	For nI := 1 To Len(aNS)
+		cXMLString := StrTran(cXMLString, aNS[nI][1]+':', "")
+	Next
+
+	If upper("numeroLote") $ upper(cXMLString)
+		cIDXML 	:= SubStr(cXMLString, AT("numeroLote>", cXMLString) + Len("numeroLote") + 1, RAT("</ans:numeroLote>", cXMLString) - AT("numeroLote>", cXMLString) - Len("numeroLote") - 1)
+		If empty(cIDXML)
+			cIDXML 	:= SubStr(cXMLString, AT("numeroLote>", cXMLString) + Len("numeroLote") + 1, RAT("</numeroLote>", cXMLString) - AT("numeroLote>", cXMLString) - Len("numeroLote") - 1)
+		EndIf
+	Endif
+
+	If !(empTy(cIDXML))
+		cIDXML := cIdXML + space( TamSX3("BXX_IDXML")[1] - Len(cIdXML) )
+	EndIf
+
+	BA0->( DbSetOrder(5) ) //BA0_FILIAL+BA0_SUSEP
+
+	If !Empty(cRegAns)
+				
+		If !BA0->( MsSeek( xFilial("BA0")+ alltrim(cRegAns) ) )
+			lCritCab := .T.
+			aRet := {.T., '', {"5027", "REGISTRO ANS DA OPERADORA INVÁLIDO"}}
+		EndIf
+
+	Endif
+
+	If !(empty(cRDAOri))
+		
+		If vldDesPres(cRDAOri, @cCodRDA)
+			lCritCab := .T.
+			aRet := {.T., '', {"1203", "CÓDIGO PRESTADOR INVÁLIDO"}}
+		EndIf
+
+	EndIf
+
+	If !aRet[1] .AND. !lCritCab
+		BXX->(DbSetOrder(8)) //BXX_FILIAL+BXX_CODINT+BXX_CODRDA+BXX_IDXML 
+		If BXX->(MsSeek(xFilial("BXX") + cCodInt + cCodRda + cIdXML))
+			lCritCab := .t.
+			aRet := {.T., '', {"5053" ,"IDENTIFICADOR JÁ INFORMADO - N.Lote: " + cIdXML}}
+		EndIf
+	EndIf
+
+	//Validar Calendário de Pagamento
+	If !aRet[1] .AND. lCalend .and. !lCritCab
+		aResult := PLSXVLDCAL(dDataH,cCodInt,.f.,'','',.t.,cCodRda,.f.,.f.)
+		If !aResult[1]
+			lCritCab := .T.
+			aRet := {.T., '', {"3091", "COBRANÇA FORA DO PRAZO ESTIPULADO NO CONTRATO - ENTRE EM CONTATO COM A OPERADORA - CALENDARIO NAO CADASTRADO"}}
+		EndIf
+	EndIf
+
+	If !lCritCab
+		//processar submissão (Validação de críticas no XML)
+		aRet := PVldXML('',@cCodRda,@cTipGui,@cLotGui,@nTotEve,@nTotGui,@nValTot,l974,cSeqBXX,cDirAlt,@cTisVerBXX,_oProcess,cXMLString,cVerArq)	
+	EndIf
+
+	//Depois vem o retorno do arquivo ou retorno das críticas
+	If aret[1]
+		cCritica := ''
+		//Buscando o código e descrição da TUSS referente à essa glosa.
+		BTU->(dbSetOrder(6)) //BTU_FILIAL+BTU_ALIAS+BTU_VLRSIS
+		BTQ->(dbSetOrder(1)) //BTQ_FILIAL+BTQ_CODTAB+BTQ_CDTERM
+		For nX := 1 To Len(aRet[3])
+			If !lCritCab
+				If At('** ERRO ',aret[3][nX]) > 0
+					//cbusca := substr(aret[3][nx],At('[',aret[3][nX]) + 1, At(']',aret[3][nX]) - 1 - At('[',aret[3][nX]) )
+					cbusca := Alltrim(strTran(StrTran(strTran(StrTran(aret[3][nx],"*",''),"ERRO",''),"[",''),']',''))
+					If BTU->(MsSeek(xFilial("BTU")+"BCT"+xFilial("BCT")+cbusca))
+						cCritica := BTU->BTU_CDTERM
+						If BTQ->(MsSeek(xFilial("BTQ")+"38"+cCritica))
+							cDesCrit := BTQ->BTQ_DESTER
+						EndIf
+					Else
+						cCritica := aRet[3][nX]
+						If nX < Len(aret[3])
+							cDesCrit := aRet[3][nX+1]
+						EndIf
+					EndIf
+					aadd(aRetCrit, {cCritica, cDesCrit})
+					exit
+				EndIf
+			Else
+				cCritica := aRet[3][1]
+				cDesCrit := aRet[3][2]
+			EndIf
+			aadd(aRetCrit, {cCritica, cDesCrit})
+		Next
+	EndIf
+
+	if !(empty(aRetCrit))
+		cRet := PLSTISSNWL( oDadoCab, {},  {{1, 0, "", aRetCrit[1][1], aRetCrit[1][2]}} )
+	endif
+
+Return cRet
+//-------------------------------------------------------------------
+/*/{Protheus.doc} procResInt
+
+@author  Daniel Silva 
+@version P12
+@since   05/04/2023
+
+/*/
+//------------------------------------------------------------------- 
+
+static function procResInt(oXML, oLote, aCriticas, cSoapXml)
+
+Local oGuia     	:= nil
+Local cResp     	:= ""
+Local cPath     	:= addNS("/loteGuiasWS/loteGuias/guiasTISS")
+Local cPathTag     	:= ""
+Local nGuias    	:= 1
+Local nProcs		:= 1
+Local nX        	:= 1
+Local nJ			:= 1
+Local aGuias    	:= {}
+Local nValTotal	    := 0
+Local cNewPath	    := ""
+Local atmp			:={}
+local nTotEve		:= 0
+
+
+nGuias := oXML:XPathChildCount( cPath )   
+
+    
+for nX := 1 to nGuias
+    cPathTag := cPath + addNS("/guiaResumoInternacao")
+    if nGuias > 1
+        cPathTag += "["+ allTrim( str( nX ) ) +"]" 
+    endif
+    oGuia := GConsulta():new()
+
+	//Cabeçalho da guia 
+    oGuia:cRegAnsCab            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/registroANS") )
+    oGuia:cNumGuiPre            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/numeroGuiaPrestador") )   
+
+	//Número guia solicitação 
+	oGuia:cNGuiSoInt			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/numeroGuiaSolicitacaoInternacao") )
+
+	//Dados autorização
+    oGuia:cNumGuiOpe            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/numeroGuiaOperadora" ))
+    oGuia:cDatAutori            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/dataAutorizacao" ))
+    oGuia:cSenha                := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/senha" ))
+    oGuia:cDatVldSen            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/dataValidadeSenha" ))
+	
+	//Dados Beneficiario
+	oGuia:oBenef:cCarteirinha   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numeroCarteira" ))
+    oGuia:oBenef:cAtendRN       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/atendimentoRN" ))
+    oGuia:oBenef:cIndBenef      := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/identificadorBeneficiario" ))
+    oGuia:oBenef:cNome          := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/nomeBeneficiario" ))
+
+
+	//Dados executante 
+	oGuia:oRDAExecutante:cCodRda     := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/codigoPrestadorNaOperadora" ))
+	
+	if( oXml:XPathHasNode( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/cpfContratado" )) )
+    	oGuia:oRDAExecutante:cCgc    := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/cpfContratado" ))
+	else
+    	oGuia:oRDAExecutante:cCgc    := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/cnpjContratado" )) 
+	endif
+
+	//Bloco para informar o código da rede de atendimento
+	if (lExtPERDA) .and. !empty(oGuia:oRDAExecutante:cCodRda) // tratamento ponto de entrada para manipular CodigoPrestadorNaOperadora
+		oGuia:oRDAExecutante:cCodRda := ExecBlock("PLCDPRE",.F.,.F.,{oGuia:oRDAExecutante:cCodRda})
+	endif
+	oGuia:oRDAExecutante:cCodRda := buscaCRede(oGuia:oRDAExecutante:cCgc ,oGuia:oRDAExecutante:cCgc ,oGuia:oRDAExecutante:cCodRda)
+	
+	oGuia:oRDAExecutante:cCnes  	 := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/CNES" ))
+
+	//dadosInternacao
+	oGuia:oDadInternacao:cCaracAten := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/caraterAtendimento" ))
+	oGuia:oDadInternacao:cTipFat    := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/tipoFaturamento" ))
+    oGuia:oDadInternacao:cDatIniFat := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/dataInicioFaturamento" ))
+    oGuia:oDadInternacao:cDatFimFat := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/dataFinalFaturamento" ))
+	oGuia:oDadInternacao:cHorIniFat := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/horaInicioFaturamento" ))
+	oGuia:oDadInternacao:cHorFimFat := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/horaFinalFaturamento" ))
+	oGuia:oDadInternacao:cTipIntern := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/tipoInternacao" ))
+	oGuia:oDadInternacao:cRegIntern := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/regimeInternacao" ))
+
+	//Dados Saída internação
+	oGuia:oSaidaInte:cIndAciden  := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSaidaInternacao/indicadorAcidente" ))
+	oGuia:oSaidaInte:cMotEnce    := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSaidaInternacao/motivoEncerramento" ))
+
+	//Procedimentos executados
+	nProcs := oXML:XPathChildCount(cPathTag + addNs("/procedimentosExecutados") )
+	aTmp := {}
+	
+	for nJ := 1 to nProcs 
+	    cNewPath := cPathTag + addNS("/procedimentosExecutados/procedimentoExecutado")
+	    if nProcs > 1
+	        cNewPath += "["+ allTrim( str( nJ ) ) +"]" 
+	    endif
+	    aadd(atmp, {	cDatExec		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/dataExecucao" )),;	    
+ 						cHoraIni		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/horaInicial" )),;
+				 		cHoraFim		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/horaFinal" )),;
+				 		cCodTab		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/codigoTabela" )),;
+				 		cCodPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/codigoProcedimento" )),;
+				 		cDescPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/descricaoProcedimento" )),;
+				 		nQtdExe		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/quantidadeExecutada" )),;
+				 		nViaAce		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/viaAcesso" )),;
+				 	 	cTecUti		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/tecnicaUtilizada" )),;
+				 		nRedAcr		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/reducaoAcrescimo" )),;
+				 		nVlrPro		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/valorUnitario" ))),;
+				 		nVlrTot		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/valorTotal" ))),;
+						cSeqItem		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/sequencialItem" )) })
+
+		oGuia:oProced:cDatExec		:= cDatExec
+		oGuia:oProced:cHoraIni		:= cHoraIni
+		oGuia:oProced:cHoraFim		:= cHoraFim
+		oGuia:oProced:cCodTab		:= cCodTab
+		oGuia:oProced:cCodPro		:= cCodPro
+		oGuia:oProced:cDescPro		:= cDescPro
+		oGuia:oProced:nQtdExe		:= nQtdExe
+		oGuia:oProced:nViaAce		:= nViaAce
+		oGuia:oProced:cTecUti		:= cTecUti
+		oGuia:oProced:nRedAcr		:= nRedAcr
+		oGuia:oProced:nVlrPro		:= nVlrPro
+		oGuia:oProced:nVlrTot		:= nVlrTot
+		oGuia:oProced:cSeqItem		:= cSeqItem
+
+		nValTotal += nVlrTot
+		 	
+		PlVlTGuiSADT(oLote,oGuia,@aCriticas,nX) 
+ 	next
+
+	nTotEve += nProcs
+ 	
+ 	//Outras Despesas 
+ 	nProcs := 0
+ 	nProcs := oXML:XPathChildCount(cPathTag + addNS("/outrasDespesas" ))
+ 	
+	for nJ := 1 to nProcs 
+		cNewPath := cPathTag + addNS("/outrasDespesas/despesa")
+		if nProcs > 1
+	        cNewPath += "["+ allTrim( str( nJ ) ) +"]"
+	    endif
+		aadd(atmp, {  	cDatExec	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/dataExecucao")),; 	
+				 		cHoraIni	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/horaInicial")),; 	
+				 		cHoraFim	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/horaFinal")),; 	
+				 		cCodTab	 	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoTabela")),; 	
+				 		cCodPro	 	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoProcedimento")),; 				
+				 		cUnMedida	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/unidadeMedida")),;
+				 		nQtdExe	 	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/quantidadeExecutada")),;  	 		
+				 		nRedAcr	 	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/reducaoAcrescimo")),; 	
+				 	 	cDescPro	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/descricaoProcedimento")),; 	
+				 		cRegAnvisa	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/registroANVISA")),; 	
+				 		nVlrPro	 	 := val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/valorUnitario"))),; 	
+				 		nVlrTot	 	 := val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/valorTotal"))),;
+						cSeqItem	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/sequencialItem" )),;  	
+						cCodFabric	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoRefFabricante")),; 
+						cCodDesp	 := oXML:XPathGetNodeValue( cNewPath  + addNS( "/codigoDespesa")),; 		
+						cAutoriFunc  := oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/autorizacaoFuncionamento"))  })
+
+		oGuia:oProcedOutDesp:cDatExec	 := cDatExec
+		oGuia:oProcedOutDesp:cHoraIni	 := cHoraIni	
+		oGuia:oProcedOutDesp:cHoraFim	 := cHoraFim
+		oGuia:oProcedOutDesp:cCodTab	 := cCodTab
+		oGuia:oProcedOutDesp:cCodPro	 := cCodPro
+		oGuia:oProcedOutDesp:cUnMedida	 := cUnMedida
+		oGuia:oProcedOutDesp:nQtdExe	 := nQtdExe 		
+		oGuia:oProcedOutDesp:nRedAcr	 := nRedAcr
+		oGuia:oProcedOutDesp:cDescPro	 := cDescPro
+		oGuia:oProcedOutDesp:cRegAnvisa	 := cRegAnvisa
+		oGuia:oProcedOutDesp:nVlrPro	 := nVlrPro	
+		oGuia:oProcedOutDesp:nVlrTot	 := nVlrTot
+		oGuia:oProcedOutDesp:cSeqItem	 := cSeqItem
+		oGuia:oProcedOutDesp:cCodFabric	 := cCodFabric 
+		oGuia:oProcedOutDesp:cCodDesp	 := cCodDesp		
+		oGuia:oProcedOutDesp:cAutoriFunc := cAutoriFunc
+
+		nValTotal += nVlrTot
+		
+ 	next  
+
+	nTotEve += nProcs   
+
+	//Observação 	
+	oGuia:cObs             := oXML:XPathGetNodeValue( cPathTag  + addNS( "/observacao" ))
+
+	//Valores totais
+	oGuia:oXMLTotais:nVlrProcedimento	:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorProcedimentos" ))) 
+	oGuia:oXMLTotais:nVlrDiarias		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorDiarias" )))  
+	oGuia:oXMLTotais:nVlrTaxAlug		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorTaxasAlugueis" )))  
+	oGuia:oXMLTotais:nVlrMateriais		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorMateriais" )))  
+	oGuia:oXMLTotais:nVlrMedicamentos	:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorMedicamentos" )))  
+	oGuia:oXMLTotais:nVlrOPME			:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorOPME" )))  
+	oGuia:oXMLTotais:nVlrGasesMed		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorGasesMedicinais" )))  
+	oGuia:oXMLTotais:nVlrTotalGeral		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorTotalGeral" )))  
+    
+    oGuia:aProcimp := aClone(atmp)
+    limpaArray(aTmp)
+    aadd(aGuias,oGuia)    
+
+next
+
+oLote:nValTotal := nValTotal
+oLote:nQtdGuias := nGuias 	
+
+cResp := PLSTISSNWL(oLote, aGuias, aCriticas, cSoapXml)
+freeObj(oGuia)               
+oGuia := nil
+limpaArray(aGuias)
+limpaArray(aTmp)
+
+return cResp
+
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} VldWSLoteG
+Ajusta um soap de recebimento para montagem do objeto de trabalho
+
+@author  Lucas Nonato
+@version P12
+@since   05/10/2018
+
++17/05/2019 - Adicionado parametro cTagUm para utilização em outra function
+/*/
+//------------------------------------------------------------------- 
+function VldWSLoteG(cSoap,cSchema,cTagUm,lXml)
+local cSoapAux   := ""   
+local cMsg       := ""
+local cErro      := ""
+local cAviso     := ""
+local cNameSpace := ""
+local nPos       := 0
+local nX         := 0
+local lRet       := .T. 
+default cTagUm   := "LOTEGUIASWS"
+default lXml	 := .F.
+
+if lXml
+	cSoapAux := cSoap
+Else
+	nPos := At("BODY",Upper(cSoap))
+	cSoapAux := Substr(cSoap,nPos+4,len(cSoap))    
+	nPos := At(">",Upper(cSoapAux))
+	cSoapAux := Substr(cSoapAux,nPos+1,len(cSoapAux)) 
+	If Substr(cSoapAux,1,1) <> '<'
+		While Substr(cSoapAux,1,1) <> '<'
+			cSoapAux := Substr(cSoapAux,2,len(cSoapAux))
+		endDo
+	endIf 
+
+	nPos := RAt("BODY",Upper(cSoapAux)) 
+	for nX := 1 to nPos 
+		if Substr(cSoapAux,nPos-nX,1) == "<"
+			cSoapAux := Substr(cSoapAux,1,nPos-(nX+1))
+			Exit
+		endif   
+	next
+	if nPos == 0 .Or. empty(cSoap)
+		cErro := "Erro com o pacote Soap recebido" 
+	endif
+
+	//Acrescenta a definição de namespace que veio no envelope
+	nPos1 := At("XMLNS",Upper(cSoap))
+	If nPos1 > 0
+		nPos2 := At(">",Upper(cSoap),nPos1) 
+		cXmlns := subString(cSoap, nPos1, nPos2 - nPos1)
+		nPos1 := At(">",Upper(cSoapAux))
+		cSoapPt1 := Substr(cSoapAux,1,nPos1-1)
+		cSoapPt2 := Substr(cSoapAux,nPos1,len(cSoapAux))
+		cSoapAux := cSoapPt1 + " " + cXmlns + cSoapPt2
+	endIf
+
+endif
+
+// Cria diretorios
+if !ExistDir("\tiss\online")
+	if MakeDir(GetSrvProfString ("ROOTPATH","")+"\tiss\online") == 3  
+		cErro := "Não foi possivel criar o diretorio \tiss\online"    
+	endif      
+endif
+
+if !ExistDir("\tiss\online\caixaentrada")
+	if MakeDir(GetSrvProfString ("ROOTPATH","")+"\tiss\online\caixaentrada") == 3  
+		cErro := "Não foi possivel criar o diretorio \tiss\online\caixaentrada"    
+	endif      
+endif
+
+if !ExistDir("\tiss\online\caixasaida")
+	if MakeDir(GetSrvProfString ("ROOTPATH","")+"\tiss\online\caixasaida") == 3  
+		cErro := "Não foi possivel criar o diretorio \tiss\online\caixasaida"    
+	endif      
+endif
+
+if !ExistDir("\tiss\online\processados")
+	if MakeDir(GetSrvProfString ("ROOTPATH","")+"\tiss\online\processados") == 3  
+		cErro := "Não foi possivel criar o diretorio \tiss\online\processados"    
+	endif      
+endif
+
+if !ExistDir("\tiss\online\naoprocessados")
+	if MakeDir(GetSrvProfString ("ROOTPATH","")+"\tiss\online\naoprocessados") == 3
+		cErro := "Não foi possivel criar o diretorio \tiss\online\naoprocessados"    
+	endif      
+endif 
+
+// Se houve erro fatal finaliza operação 
+if !empty(cErro)
+	return {.F.,cErro,"",""}
+endif
+
+nPos := At(cTagUm,Upper(cSoapAux))   
+If Substr(cSoapAux,nPos-1,1) == ":"
+	nPosNamSpc := nPos-2
+	For nX := 1 to nPosNamSpc
+		If Substr(cSoapAux,nPosNamSpc-nX,1) == "<"     
+			cNameSpace := Substr(cSoapAux,nPosNamSpc - nX +1,nPosNamSpc - (nPosNamSpc - nX))
+			Exit
+		EndIf   
+	next
+EndIf
+
+// Monta texto para montagem do arquivo para validacao.
+//Atenção: alguns prestadores enviam o XML em formato estranho, que faz cair o encodeutf8, mas que contem arquivo válido.
+cSoapXml := EncodeUTF8(cSoapAux)
+if empty(cSoapXml) .or. valtype(cSoapXml) == "U"
+	cSoapXml := cSoapAux
+endif	
+
+// Faz a validacao do XML com o XSD
+if !XmlSVldSch( cSoapXml, "\tiss\schemas\" + cSchema, @cErro,@cAviso)
+	cMsg := Iif( !empty(cErro),"Erro: " +cErro,"") 
+	cMsg += Iif( !empty(cAviso),"Aviso: "+cAviso,"") 
+ 	lRet := .F.
+endif
+
+return {lRet,cMsg,cSoapXml,cNameSpace}
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getCabecalho
+Retorna os dados do cabeçalho da guia
+
+@author  Lucas Nonato
+@version P12
+@since   05/10/2018
+/*/
+//-------------------------------------------------------------------
+static function getCabecalho( oXML )
+local oLote := nil
+local cQtd  := ""
+
+cPathTag := addNS("/loteGuiasWS/cabecalho")
+if( oXml:XPathHasNode( cPathTag ) )
+	oLote := loteGuias():new()	
+	  
+    oLote:cTpTran  := oXML:XPathGetNodeValue( cPathTag + addNS("/identificacaoTransacao/tipoTransacao"))
+    oLote:cSeqTran := oXML:XPathGetNodeValue( cPathTag + addNS("/identificacaoTransacao/sequencialTransacao"))
+    oLote:cDataTran := oXML:XPathGetNodeValue( cPathTag + addNS("/identificacaoTransacao/dataRegistroTransacao" ))
+    oLote:cHoraTran := oXML:XPathGetNodeValue( cPathTag + addNS("/identificacaoTransacao/horaRegistroTransacao" ))    
+
+    if( oXml:XPathHasNode( cPathTag + addNS("/origem/identificacaoPrestador/CNPJ" )))
+        oLote:cCgcOri := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/identificacaoPrestador/CNPJ" ))
+    endif	
+
+    if( oXml:XPathHasNode( cPathTag + addNS("/origem/identificacaoPrestador/CPF" )))
+        oLote:cCgcOri := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/identificacaoPrestador/CPF" ))
+    endif	   
+    
+    oLote:cCodRDA := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/identificacaoPrestador/codigoPrestadorNaOperadora" ))
+
+	if (lExtPERDA) .and. !empty( oLote:cCodRDA) // tratamento ponto de entrada para manipular CodigoPrestadorNaOperadora
+		 oLote:cCodRDA := ExecBlock("PLCDPRE",.F.,.F.,{ oLote:cCodRDA})
+	endif
+	oLote:cCodRDA:= buscaCRede(oLote:cCgcOri, oLote:cCgcOri,oLote:cCodRDA)
+
+    oLote:cRegAns := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/registroANS" ))
+    
+    if( oXml:XPathHasNode( cPathTag + addNs("/destino/identificacaoPrestador/CNPJ" )))
+        oLote:cCgcDes := oXML:XPathGetNodeValue( cPathTag + addNs("/destino/identificacaoPrestador/CNPJ" ))
+    endif
+
+    if( oXml:XPathHasNode( cPathTag + addNs("/destino/identificacaoPrestador/CPF" )))
+        oLote:cCgcDes := oXML:XPathGetNodeValue( cPathTag + addNs("/destino/identificacaoPrestador/CPF" ))
+    endif	   
+    oLote:cRegDes := oXML:XPathGetNodeValue( cPathTag + addNs("/destino/registroANS" ))
+    
+    oLote:cVerTiss := oXML:XPathGetNodeValue( cPathTag + addNS("/Padrao" ))
+    oLote:cNumLote := oXML:XPathGetNodeValue( addNS("/loteGuiasWS/loteGuias/numeroLote" ))
+
+    if oXML:XPathChildCount( addNS("/loteGuiasWS/loteGuias/guiasTISS") ) > 1
+        cQtd  := "[1]"
+    endif
+
+    if( oXml:XPathHasNode( addNS("/loteGuiasWS/loteGuias/guiasTISS/guiaConsulta")+cQtd ) )
+        oLote:cTipoGuia := G_CONSULTA
+    elseif ( oXml:XPathHasNode( addNS("/loteGuiasWS/loteGuias/guiasTISS/guiaSP-SADT")+cQtd ) )
+        oLote:cTipoGuia := G_SADT
+    elseif( oXml:XPathHasNode( addNS("/loteGuiasWS/loteGuias/guiasTISS/guiaResumoInternacao")+cQtd ) )
+        oLote:cTipoGuia := G_RES_INTER
+    elseif( oXml:XPathHasNode( addNS("/loteGuiasWS/loteGuias/guiasTISS/guiaHonorarios")+cQtd ) )
+        oLote:cTipoGuia := G_HONORARIO
+    elseif ( oXml:XPathHasNode( addNS("/loteGuiasWS/loteGuias/guiasTISS/guiaOdonto")+cQtd ) )
+        oLote:cTipoGuia := G_ODONTO
+    endif
+endif    
+	
+return oLote
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} procConsulta
+Processa as guias de consulta
+
+@author  Lucas Nonato
+@version P12
+@since   05/10/2018
+/*/
+//-------------------------------------------------------------------
+static function procConsulta(oXML, oLote, aCriticas, cSoapXml)
+local oGuia     := nil
+local cResp     := ""
+local cPath     := addNS("/loteGuiasWS/loteGuias/guiasTISS")
+local nGuias    := 1
+local nX        := 1
+local aGuias    := {}
+local nValTotal	:= 0
+
+nGuias := oXML:XPathChildCount( cPath )    
+    
+for nX := 1 to nGuias
+    cPathTag := cPath + addNS("/guiaConsulta")
+    if nGuias > 1
+        cPathTag += "["+ allTrim( str( nX ) ) +"]"
+    endif
+    oGuia := GConsulta():new()
+    oGuia:cNumGuiPre            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoConsulta/numeroGuiaPrestador") )    
+    oGuia:cRegAnsCab            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoConsulta/registroANS") )   
+    oGuia:cNumGuiOpe            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/numeroGuiaOperadora" ))
+    oGuia:cIndAcid              := oXML:XPathGetNodeValue( cPathTag  + addNS( "/indicacaoAcidente" ))
+    oGuia:cObs                  := oXML:XPathGetNodeValue( cPathTag  + addNS( "/observacao" ))
+    oGuia:cDataAtend            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/dataAtendimento" ))
+    oGuia:cTpConsult            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/tipoConsulta" ))
+
+    oGuia:oBenef:cCarteirinha   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numeroCarteira" ))
+    oGuia:oBenef:cAtendRN       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/atendimentoRN" ))
+    oGuia:oBenef:cNome          := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/nomeBeneficiario" ))
+    oGuia:oBenef:ccNS           := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numerocNS" ))
+    oGuia:oBenef:cIndBenef      := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/identificadorBeneficiario" ))
+
+    oGuia:oRDA:cCodRda          := oXML:XPathGetNodeValue( cPathTag  + addNS( "/contratadoExecutante/codigoPrestadorNaOperadora" ))
+ 
+
+	if( oXml:XPathHasNode( cPathTag  + addNS( "/contratadoExecutante/cpfContratado" )) )
+        oGuia:oRDA:cCgc         := oXML:XPathGetNodeValue( cPathTag  + addNS( "/contratadoExecutante/cpfContratado" ))
+    else
+        oGuia:oRDA:cCgc         := oXML:XPathGetNodeValue( cPathTag  + addNS( "/contratadoExecutante/cnpjContratado" ))
+    endif
+
+	//Bloco para informar o código da rede de atendimento
+	if (lExtPERDA) .and. !empty(oGuia:oRDA:cCodRda) // tratamento ponto de entrada para manipular CodigoPrestadorNaOperadora
+		oGuia:oRDA:cCodRda  := ExecBlock("PLCDPRE",.F.,.F.,{oGuia:oRDA:cCodRda})
+	endif
+	oGuia:oRDA:cCodRda:= buscaCRede(oGuia:oRDA:cCgc, oGuia:oRDA:cCgc,oGuia:oRDA:cCodRda)
+
+    oGuia:oRDA:cNome            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/contratadoExecutante/nomeContratado" ))
+    oGuia:oRDA:cCnes            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/contratadoExecutante/CNES" ))
+
+    oGuia:oProfExec:cNome       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/profissionalExecutante/nomeProfissional" ))
+    oGuia:oProfExec:cConselho   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/profissionalExecutante/conselhoProfissional" ))
+    oGuia:oProfExec:cNumCons    := oXML:XPathGetNodeValue( cPathTag  + addNS( "/profissionalExecutante/numeroConselhoProfissional" ))
+    oGuia:oProfExec:cUF         := oXML:XPathGetNodeValue( cPathTag  + addNS( "/profissionalExecutante/UF" ))
+    oGuia:oProfExec:cCBOS       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/profissionalExecutante/CBOS" ))
+    
+    //nProc := oXML:XPathChildCount( addNS("/loteGuiasWS/loteGuias/guiasTISS/dadosAtendimento/procedimento") ) 
+    oGuia:oProced:cCodTab       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/procedimento/codigoTabela" ))
+    oGuia:oProced:cCodPro       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/procedimento/codigoProcedimento" ))
+    oGuia:oProced:nVlrPro       := val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/procedimento/valorProcedimento" )))
+    
+    nValTotal += oGuia:oProced:nVlrPro
+    
+    aadd(aGuias,oGuia)    
+    PlsVlGuiConsulta(oLote,oGuia,@aCriticas,nX) //silvia
+
+next
+
+oLote:nValTotal := nValTotal //silvia
+oLote:nQtdGuias := nGuias //silvia
+
+//cResp := "Teste retorno - Demorou: " + ElapTime(ctime, time())
+cResp := PLSTISSNWL(oLote, aGuias, aCriticas, cSoapXml)
+freeObj(oGuia)               
+oGuia := nil
+limpaArray(aGuias)
+return cResp
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} limpaArray
+Limpa de maneira correta o array para evitar estouro de memória
+
+@author  Lucas Nonato
+@version P11
+@since   04/11/16
+/*/
+//------------------------------------------------------------------- 
+static function limpaArray(aArray)
+
+while len(aArray) > 0
+	adel(aArray,len(aArray))
+	asize(aArray, len(aArray)-1)	
+enddo
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlgeraXML
+Transforma o soap lote guias em xml para importação no PLSA973
+Essa função tem que ser substituida para gravação automatica no futuro
+
+@author  Lucas Nonato
+@version P12
+@since   08/10/2018
+/*/
+//------------------------------------------------------------------- 
+function PlgeraXML(cSoap, oLote)
+local cTag 		:= addNS("/loteGuiasWS")
+local cErro 	:= ""
+local cAviso	:= ""
+local cXml  	:= "" 
+local cDir  	:= GetNewPar( "MV_TISSDIR","\TISS\" )
+local nArq  	:= 0
+local cArq		:= ""
+local cCam		:= ""
+local cCmpB1R	:= ""
+
+if empty(cNS)
+	cSoap	:= strtran(cSoap, "</"	, "###")
+	cSoap	:= strtran(cSoap, "<" 	, "<ans:")
+	cSoap	:= strtran(cSoap, "###"	, "</ans:")
+	cNS		:= "ans"
+	cTag	:= addNS("/loteGuiasWS")
+endif
+
+cXml := "<?xml version='1.0' encoding='iso-8859-1'?> " + CRLF
+cXml += "<"+cNS+":mensagemTISS xmlns:xsi='http://www.w3.org/2001/XMLSchema-instance' xsi:schemaLocation='http://www.ans.gov.br/padroes/tiss/schemas http://www.ans.gov.br/padroes/tiss/schemas/tissV"+allTrim( strTran( PGetTISVer(),".","_" ) )+".xsd' xmlns:ans='http://www.ans.gov.br/padroes/tiss/schemas'"
+
+nPos := At(">",cSoap)      
+cSoapPt1 := Substr(cSoap,1,nPos-1)
+cSoapPt2 := Substr(cSoap,nPos,len(cSoap))
+cSoap 	 := cXml + cSoapPt2
+
+if cTag $ cSoap
+    cSoap := strtran(cSoap,cTag,addNS("/mensagemTISS"))
+else
+    cSoap := strtran(upper(cSoap),upper(cTag),upper(addNS("/mensagemTISS")))
+endif
+
+cSoap := strtran(cSoap,retTag("loteGuias"), retTag("prestadorParaOperadora") + retTag("loteGuias"))
+cSoap := strtran(cSoap,retTag("loteGuias",.t.),  retTag("loteGuias",.t.) + retTag("prestadorParaOperadora",.t.))
+cSoap := strtran(cSoap,retTag("hash"),  retTag("epilogo") + retTag("hash"))
+cSoap := strtran(cSoap,retTag("hash",.t.),  retTag("hash",.t.) + retTag("epilogo",.t.))
+
+// Faz a validacao do XML com o XSD
+if !XmlSVldSch( cSoap, "\tiss\schemas\tissV"+allTrim( strTran( PGetTISVer(),".","_" ) )+".xsd", @cErro,@cAviso)
+	cMsg := Iif( !empty(cErro),"Erro: " +cErro,"") 
+	cMsg += Iif( !empty(cAviso),"Aviso: "+cAviso,"") 
+ 	lRet := .F.
+endif
+
+cCam := plsmudsis(cDir + "online\caixaentrada\")
+
+if !empty(oLote:cNumB1R)
+	cCmpB1R	:= "B1R_" + oLote:cNumB1R + "_"
+endif
+
+if empty(oLote:cCodRda)
+	cArq := cCmpB1R + oLote:cCGCOri + oLote:cNumLote + oLote:cDataTran + strtran(time(), ":","") + ".xml"
+else
+	cArq := cCmpB1R + oLote:cCodRda + oLote:cNumLote + oLote:cDataTran + strtran(time(), ":","") + ".xml"
+endif
+nArq := fCreate( cCam+cArq )
+if nArq > 0 		
+	fWrite( nArq,cSoap )
+    fClose( nArq )
+endif
+
+return {cCam,cArq}
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} retTag
+Retorna a tag com namespace
+
+@author  Lucas Nonato
+@version P12
+@since   08/10/2018
+/*/
+//-------------------------------------------------------------------
+static function retTag(cTag, lFecha)
+default lFecha := .f.
+
+if empty(cNS)
+    cTag := "<" + iif(lFecha,"/","") + cTag + ">"
+else
+    cTag := "<" + iif(lFecha,"/","") + cNS + ":" + cTag + ">"
+endif
+
+return cTag
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} addNS
+Adiciona o namespace dinamicamente nas tags.
+
+@author  Lucas Nonato
+@version P12
+@since   08/10/2018
+/*/
+//-------------------------------------------------------------------
+static function addNS(cTag)
+
+if !empty(cNS)
+    cTag := strtran(cTag, "/", "/" + cNS + ":")
+endif
+
+return cTag
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} procSADT
+Processa as guias de SADT - Separado para não misturar os temas e manutenção futura sem prejudicar as demais.
+
+@author  Lucas Nonato
+@version P12
+@since   05/10/2018
+/*/
+//-------------------------------------------------------------------
+static function procSADT(oXML, oLote, aCriticas, cSoapXml)
+local oGuia     	:= nil
+local cResp     	:= ""
+local cPath     	:= addNS("/loteGuiasWS/loteGuias/guiasTISS")
+local nGuias    	:= 1
+local nProcs		:= 1
+local nX        	:= 1
+local nJ			:= 1
+local aGuias    	:= {}
+local nValTotal		:= 0
+local cNewPath		:= ""
+local atmp			:={}
+local nTotEve		:= 0
+local cSeqItem		:= ""
+
+nGuias := oXML:XPathChildCount( cPath )    
+    
+for nX := 1 to nGuias
+    cPathTag := cPath + addNS("/guiaSP-SADT")
+    if nGuias > 1
+        cPathTag += "["+ allTrim( str( nX ) ) +"]"
+    endif
+    oGuia := GConsulta():new()
+    
+    //Cabeçalho da guia 
+    oGuia:cRegAnsCab            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/registroANS") )
+    oGuia:cNumGuiPre            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/numeroGuiaPrestador") )   
+    oGuia:cNumGuiPri            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/guiaPrincipal") )
+
+    //dados da autorização - Opcional
+    oGuia:cNumGuiOpe            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/numeroGuiaOperadora" ))
+    oGuia:cDatAutori            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/dataAutorizacao" ))
+    oGuia:cSenha                := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/senha" ))
+    oGuia:cDatVldSen            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAutorizacao/dataValidadeSenha" ))
+    
+    //Dados beneficiário
+    oGuia:oBenef:cCarteirinha   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numeroCarteira" ))
+    oGuia:oBenef:cAtendRN       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/atendimentoRN" ))
+    oGuia:oBenef:cNome          := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/nomeBeneficiario" ))
+    oGuia:oBenef:ccNS           := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numeroCNS" ))
+    oGuia:oBenef:cIndBenef      := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/identificadorBeneficiario" ))
+    
+    //Dados Solicitante 
+    oGuia:oRDASolicitante:cCodRda       	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/contratadoSolicitante/codigoPrestadorNaOperadora" ))
+    if( oXml:XPathHasNode( cPathTag  + addNS( "/dadosSolicitante/contratadoSolicitante/cpfContratado" )) )
+    	oGuia:oRDASolicitante:cCgc       	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/contratadoSolicitante/cpfContratado" ))
+    else
+    	oGuia:oRDASolicitante:cCgc       	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/contratadoSolicitante/cnpjContratado" ))
+    endif
+    oGuia:oRDASolicitante:cNome  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/contratadoSolicitante/nomeContratado" ))
+
+	oGuia:oProfSolicitante:cNome  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/profissionalSolicitante/nomeProfissional" ))
+	oGuia:oProfSolicitante:cConselho		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/profissionalSolicitante/conselhoProfissional" ))    
+	oGuia:oProfSolicitante:cNumCons  		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/profissionalSolicitante/numeroConselhoProfissional" ))
+	oGuia:oProfSolicitante:cUF  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/profissionalSolicitante/UF" ))	
+	oGuia:oProfSolicitante:cCBOS  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/profissionalSolicitante/CBOS" ))	    
+    
+	//Dados da Solicitação  
+	oGuia:oDadosSolicitacao:cDataSol  		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitacao/dataSolicitacao" ))
+	oGuia:oDadosSolicitacao:cCartAtend  	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitacao/caraterAtendimento" ))
+	oGuia:oDadosSolicitacao:cIndClinica  	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitacao/indicacaoClinica" ))
+    
+	//Dados Executante  
+	oGuia:oRDAExecutante:cCodRda       	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/codigoPrestadorNaOperadora" ))
+	
+	if( oXml:XPathHasNode( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/cpfContratado" )) )
+    	oGuia:oRDAExecutante:cCgc       	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/cpfContratado" ))
+	else
+    	oGuia:oRDAExecutante:cCgc       	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/cnpjContratado" ))
+	endif
+
+	if (lExtPERDA) .and. !empty(oGuia:oRDAExecutante:cCodRda) // tratamento ponto de entrada para manipular CodigoPrestadorNaOperadora
+		oGuia:oRDAExecutante:cCodRda := ExecBlock("PLCDPRE",.F.,.F.,{oGuia:oRDAExecutante:cCodRda})
+	endif
+	oGuia:oRDAExecutante:cCodRda := buscaCRede(oGuia:oRDAExecutante:cCgc,oGuia:oRDAExecutante:cCgc,oGuia:oRDAExecutante:cCodRda)
+
+	oGuia:oRDAExecutante:cNome  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/contratadoExecutante/nomeContratado" ))
+	oGuia:oRDAExecutante:cCnes  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosExecutante/CNES" ))
+ 
+ 	//Dados Atendimento
+	oGuia:oDadosAtendimento:cTipoAtend		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/tipoAtendimento" ))
+	oGuia:oDadosAtendimento:cIndicAcid		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/indicacaoAcidente" )) 
+	oGuia:oDadosAtendimento:cTipoConsl		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/tipoConsulta" )) 
+	oGuia:oDadosAtendimento:cMotEncerr		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosAtendimento/motivoEncerramento" ))  
+    
+	//for de novo, pois podemos ter vários procedimentos na guia.....
+	nProcs := oXML:XPathChildCount(cPathTag + addNs("/procedimentosExecutados") )
+	aTmp := {}
+	
+	for nJ := 1 to nProcs 
+	    cNewPath := cPathTag + addNS("/procedimentosExecutados/procedimentoExecutado")
+	    if nProcs > 1
+	        cNewPath += "["+ allTrim( str( nJ ) ) +"]"
+	    endif
+	    aadd(atmp, {	cDatExec	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/dataExecucao" )),;	    
+ 						cHoraIni	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/horaInicial" )),;
+				 		cHoraFim	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/horaFinal" )),;
+				 		cCodTab		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/codigoTabela" )),;
+				 		cCodPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/codigoProcedimento" )),;
+				 		cDescPro	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/descricaoProcedimento" )),;
+				 		nQtdExe		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/quantidadeExecutada" )),;
+				 		nViaAce		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/viaAcesso" )),;
+				 	 	cTecUti		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/tecnicaUtilizada" )),;
+				 		nRedAcr		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/reducaoAcrescimo" )),;
+				 		nVlrPro		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/valorUnitario" ))),;
+				 		nVlrTot		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/valorTotal" ))),;
+						cSeqItem	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/sequencialItem" )) })
+    
+ 		oGuia:oProced:cDatExec		:= cDatExec
+ 		oGuia:oProced:cHoraIni		:= cHoraIni
+ 		oGuia:oProced:cHoraFim		:= cHoraFim
+ 		oGuia:oProced:cCodTab		:= cCodTab
+ 		oGuia:oProced:cCodPro		:= cCodPro
+ 		oGuia:oProced:cDescPro		:= cDescPro
+ 		oGuia:oProced:nQtdExe		:= nQtdExe
+ 		oGuia:oProced:nViaAce		:= nViaAce
+ 	 	oGuia:oProced:cTecUti		:= cTecUti
+ 		oGuia:oProced:nRedAcr		:= nRedAcr
+ 		oGuia:oProced:nVlrPro		:= nVlrPro
+ 		oGuia:oProced:nVlrTot		:= nVlrTot
+		oGuia:oProced:cSeqItem		:= cSeqItem
+ 		
+		nValTotal += nVlrTot
+		PlVlTGuiSADT(oLote,oGuia,@aCriticas,nX) 
+ 	next
+ 	
+ 	nTotEve += nProcs
+ 	
+ 	//for de OUTRAS DESPESAS - validar apenas tabela e procedimento
+ 	nProcs := 0
+ 	nProcs := oXML:XPathChildCount(cPathTag + addNS("/outrasDespesas" ))
+ 	
+	for nJ := 1 to nProcs 
+		cNewPath := cPathTag + addNS("/outrasDespesas/despesa")
+		if nProcs > 1
+	        cNewPath += "["+ allTrim( str( nJ ) ) +"]"
+	    endif
+		aadd(atmp, {  cDatExec		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/dataExecucao")),; 	
+				 		cHoraIni	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/horaInicial")),; 	
+				 		cHoraFim	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/horaFinal")),; 	
+				 		cCodTab		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoTabela")),; 	
+				 		cCodPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoProcedimento")),; 				
+				 		cUnMedida	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/unidadeMedida")),;
+				 		nQtdExe		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/quantidadeExecutada")),;  	 		
+				 		nRedAcr		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/reducaoAcrescimo")),; 	
+				 	 	cDescPro	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/descricaoProcedimento")),; 	
+				 		cRegAnvisa	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/registroANVISA")),; 	
+				 		nVlrPro		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/valorUnitario"))),; 	
+				 		nVlrTot		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/valorTotal"))),; 
+						cSeqItem	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/sequencialItem" )),; 	
+						cCodFabric	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoRefFabricante")),; 
+						cCodDesp	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/codigoDespesa")),; 		
+						cAutoriFunc	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/autorizacaoFuncionamento"))  })
+		
+		
+ 		oGuia:oProcedOutDesp:cCodDesp		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/codigoDespesa")) 	    
+		oGuia:oProcedOutDesp:cDatExec		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/dataExecucao")) 	
+ 		oGuia:oProcedOutDesp:cHoraIni		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/horaInicial")) 	
+ 		oGuia:oProcedOutDesp:cHoraFim		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/horaFinal")) 	
+ 		oGuia:oProcedOutDesp:cCodTab		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoTabela")) 	
+ 		oGuia:oProcedOutDesp:cCodPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoProcedimento")) 	
+ 		oGuia:oProcedOutDesp:nQtdExe		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/quantidadeExecutada")) 			
+ 		oGuia:oProcedOutDesp:cUnMedida		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/unidadeMedida")) 	 		
+ 		oGuia:oProcedOutDesp:nRedAcr		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/reducaoAcrescimo"))
+		oGuia:oProcedOutDesp:nVlrPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/valorUnitario")) 	
+ 		oGuia:oProcedOutDesp:nVlrTot		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/valorTotal"))  
+		oGuia:oProcedOutDesp:cSeqItem	 	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/sequencialItem" ))
+ 	 	oGuia:oProcedOutDesp:cDescPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/descricaoProcedimento")) 	
+ 		oGuia:oProcedOutDesp:cRegAnvisa		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/registroANVISA")) 	
+		oGuia:oProcedOutDesp:cCodFabric		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/codigoRefFabricante")) 		
+		oGuia:oProcedOutDesp:cAutoriFunc	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/servicosExecutados/autorizacaoFuncionamento"))  		
+
+		nValTotal += nVlrTot
+
+ 	next    
+   
+    nTotEve += nProcs   
+    
+   //Observação 	
+	oGuia:cObs                  		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/observacao" ))
+   
+	//Valores totais
+	oGuia:oXMLTotais:nVlrProcedimento	:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorProcedimentos" ))) 
+	oGuia:oXMLTotais:nVlrDiarias		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorDiarias" )))  
+	oGuia:oXMLTotais:nVlrTaxAlug		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorTaxasAlugueis" )))  
+	oGuia:oXMLTotais:nVlrMateriais		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorMateriais" )))  
+	oGuia:oXMLTotais:nVlrMedicamentos	:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorMedicamentos" )))  
+	oGuia:oXMLTotais:nVlrOPME			:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorOPME" )))  
+	oGuia:oXMLTotais:nVlrGasesMed		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorGasesMedicinais" )))  
+	oGuia:oXMLTotais:nVlrTotalGeral		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotal/valorTotalGeral" )))  
+    
+    oGuia:aProcimp := aClone(atmp)
+    limpaArray(aTmp)
+    
+    aadd(aGuias,oGuia)    
+
+next
+
+oLote:nValTotal := nValTotal
+oLote:nQtdGuias := nGuias 	
+
+cResp := PLSTISSNWL(oLote, aGuias, aCriticas, cSoapXml)
+freeObj(oGuia)               
+oGuia := nil
+limpaArray(aGuias)
+limpaArray(aTmp)
+return cResp
+
+
+//------------------------------------------------------------------- 
+/*/{Protheus.doc} tissRecursoGlosa
+WebService Lote Recurso Glosa
+@author  Eduardo Bento
+@version P12
+@since   02/07/2019 
+/*/
+//-------------------------------------------------------------------
+function tissRecursoGlosa(cAuto)
+
+local cSoap     := "" 					// response 
+local cErro     := "" 					// descrição erro
+local cVerArq   := "" 				    // versão tiss
+local cXml      := HttpOtherContent() 	// request
+local aRetObj   := {} 					// array retorno da validacao
+local lRetObj   := .F.					// bandeira que sinaliza sucesso na leitura do xml
+local cEnv      := GetEnvServer()		// servidor
+local cEmp      := AllTrim(GetPvProfString(cEnv,"JEMP","",GetADV97()))	// Cógigo da empresa
+local cFil      := AllTrim(GetPvProfString(cEnv,"JFIL","",GetADV97()))	// Código da filial
+local cTagUm  	:= "LOTERECURSOGLOSAWS"	// Primeira tag do corpo do xml para validação do namespace 
+private cNS     := ""					// namespace  
+default cAuto 	:= ""
+
+if !empty(cAuto) //Automatizacao
+    cXml := cAuto
+endif
+
+if empty(cXml)
+    return ProcOnLine("protocoloRecebimentoRecurso") // Processamento via browser
+endif
+
+if !empty(cEmp) //Exige código da empresa 
+     
+	RpcSetEnv( cEmp,cFil,,,cEnv,,) //Abertura do ambiente em rotinas automáticas
+    HttpCtType( "text/xml; charset="+'UTF-8' )
+	cVerArq	:= Substr(cXml,At("Padrao>", cXml) + Len("Padrao>"),7)
+	aRetObj := VldWSLoteG(cXml,"tissWebServicesV" + StrTran(cVerArq, ".", "_") + ".xsd",cTagUm) // valida xml, retornos {sucesso,erroDescricao,request,namespace}
+	 
+	lRetObj := aRetObj[1] // Sucesso da validação
+    cErro   := aRetObj[2] // Descricao do erro se existir
+	cXml    := aRetObj[3] // Xml ja tratado
+	cNS     := aRetObj[4] // Namespace
+	// Se tudo ok, processa o arquivo	
+	if lRetObj
+		
+		cSoap += '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">' + Chr(10) //Montando request, obs.: Chr(10) = quebra de linha
+   		cSoap += '<s:Body>' + chr(10)
+		cSoap += '<ans:protocoloRecebimentoRecursoWS xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas">' + chr(10)
+		
+		cSoap += WSRecursoGlosa(cXml,cNS) + chr(10) // Chamada do processamento
+		
+		cSoap += '</ans:protocoloRecebimentoRecursoWS>' + chr(10)
+		cSoap += '</s:Body>' + chr(10)
+		cSoap += '</s:Envelope>'
+        
+	else
+		cSoap := "Erro ao carregar o Soap: " + cErro 
+	endif  
+else
+    cSoap := "A ENVIRONMENT [" + cEnv + "] não tem declarada as variaveis cEmp e cFil." 
+endif
+
+return cSoap
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} WSRecursoGlosa
+Processamento do recurso de glosa via WebService e importação via XML
+
+@author  Eduardo Bento
+@version P12
+@since   10/07/2019
+Argumentos	-> (xml,nameSpace,portal,sequencialBXX)
+Retorno		-> response ou array para xml
+/*/
+//-------------------------------------------------------------------
+static function WSRecursoGlosa(cSoapXml,cNS,lPortalXml,cSeqBXX)
+  
+local cSoap   		:= ""	//Retorno
+local cjustificat	:= "" 	//Justificativa que sera mandada ao processamento
+local cOperador 	:= "" 	//Operador - Se Recurso Protocolo = 1, se Recurso Guia = 3, se Recurso Item = 5
+local cItens		:= ""   //String armazem dos itens. Modelo 'xx|xx|xx' onde xx é dados de um evento    
+local cMsgErro		:= "" 	//Mensagem erro para uso futuro (nao eh usado no response)
+local cXmlInit		:= "      <loteRecursoGlosaWS" //tag inicial
+local cICodTabela	:= "" 	//Codigo protheus da tabela
+local cICodProc		:= "" 	//Codigo protheus do procedimento
+local cOrigEnt      := "3"  //Code origem 1=Remote;2=Portal;3=WSDL;4=XML 
+local cSeqItem      := ""   //Sequencial do item recebido no arquivo
+
+local oXml      	:= nil
+local oJsonCab		:= JsonObject():new() //Json com info do cabecalho
+local oJsonBody		:= JsonObject():new() //Json com info do protocolo
+local oJsonGuia		:= JsonObject():new() //Json com info de cada Guia 
+local oJsonItem		:= JsonObject():new() //Json com info de cada Item
+local aRetGlosa		:= {}	//Retorno do processamento 
+local aErro			:= {}	//cod e descricao do erro
+local aInfoGlosa    := {}	//Conjunto para armazenar informações de uma mesma guia - {codigo Peg, Rede de atendimento, Numero da guia, Justificativa, Operador, Dados do envento, Origem}
+
+local nGuias 		:= 1 	//num. de guias
+local nItens		:= 1 	//num. de itens
+local nX 			:= 1 	//contador para guias
+local nXi			:= 1 	//contador para itens
+local lRetXml 		:= .F.	//Sinaliza sucesso no parse do xml
+
+//Rotas
+local cPath     	:= addNS("/loteRecursoGlosaWS/loteRecurso/guiaRecursoGlosa")
+local cPathGuia   	:= addNS("/loteRecursoGlosaWS/loteRecurso/guiaRecursoGlosa/opcaoRecurso")
+local cPathItem		:= ""
+
+//Construtor do Json
+local cChave 		:= ""
+local cValor 		:= ""
+local cValTmp		:= ""
+
+default lPortalXml  := .F. //Flag para setar origem por XML no portal
+default cSeqBXX  	:= ""  //Sequencial da tabela BXX para inclusao por xml
+
+//Ajustando para receber o xml
+if lPortalXml
+	cPath     		:= addNS("/mensagemTISS/prestadorParaOperadora/recursoGlosa/guiaRecursoGlosa")
+	cPathGuia  		:= addNS("/mensagemTISS/prestadorParaOperadora/recursoGlosa/guiaRecursoGlosa/opcaoRecurso")
+	cXmlInit		:= "      <mensagemTISS"
+	if !empty(cSeqBXX)
+		cChave 		:= "sequencialBXX"
+		cValor		:= cSeqBXX
+		oJsonBody[cChave] := cValor //oJsonBody["sequencialBXX"] 
+	endif
+endif
+
+oXML := TXmlManager():New()
+cSoapXml := removeURL(cSoapXml,cNS,cXmlInit)
+
+//verifica codificação.
+cValTmp := cSoapXml
+
+cSoapXml := DecodeUTF8(cSoapXml, "cp1252")
+lRetXml  := oXML:Parse(cSoapXml)
+if !lRetXml
+	lRetXml  := oXML:Parse(cValTmp)
+endif
+
+if lRetXml
+	aNS := oXML:XPathGetRootNsList()
+	nPos := ascan(aNS,{|x| upper(alltrim(x[1])) == upper(cNS) })
+	If nPos > 0
+		oXML:XPathRegisterNs( aNS[ nPos ][ 1 ],aNS[ nPos ][ 2 ] )		
+	EndIf	
+	
+	oJsonCab := getCabRecGlo (oXML,lPortalXml) //Recebe informacoes do cabecalho
+
+	//Dados default
+	oJsonBody["sucesso"] := "s"
+	oJsonBody["erroCodigoGlosa"] := ""
+	oJsonBody["erroDescricaoGlosa"] := ""
+
+	//Bloco para informar o código da rede de atendimento
+	if (lExtPERDA) .and. !empty(oJsonCab["origemCodigoPrestadorNaOperadora"]) // tratamento ponto de entrada para manipular CodigoPrestadorNaOperadora
+		oJsonCab["origemCodigoPrestadorNaOperadora"] := ExecBlock("PLCDPRE",.F.,.F.,{oJsonCab["origemCodigoPrestadorNaOperadora"]})
+	endif
+	oJsonCab["origemCodigoPrestadorNaOperadora"] := buscaCRede(oJsonCab["origemCNPJ"],oJsonCab["origemCPF"],oJsonCab["origemCodigoPrestadorNaOperadora"])
+	if oJsonCab["origemCodigoPrestadorNaOperadora"] == "prestadorInvalido"
+		aErro := mensErro("prestadorInvalido")
+		oJsonBody["sucesso"] == "n" 
+	endif
+
+	//Bloco para validar o destino/origem
+	If Empty(oJsonCab["destinoRegistroANS"])
+		oJsonCab["destinoRegistroANS"] := buscRegAns(oJsonCab["destinoCNPJ"],oJsonCab["destinoCPF"],oJsonCab["destinoCodigoPrestadorNaOperadora"])
+	endif
+	if !Empty(oJsonCab["origemRegistroANS"]) .or. !Empty(oJsonCab["destinoCPF"]) .or. !ValDestino(oJsonCab["destinoRegistroANS"])
+		oJsonBody["sucesso"] := "n"
+		cMsgErro := "Existe inconsistências na identificação de origem ou destino."
+	endif
+
+	//Coleta de dados
+	cChave 	:= "numeroProtocolo"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/numeroProtocolo" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["numeroProtocolo"] 
+
+	cChave 	:= "dataRecebimento"
+	cValor	:= convDataXML( date() )
+	oJsonBody[cChave] := cValor //oJsonBody["dataRecebimento"] 
+
+	cChave 	:= "dataEnvioRecurso"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/dataRecurso" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["dataEnvioRecurso"]
+
+	cChave 	:= "numeroLote"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/numeroLote" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["numeroLote"]
+
+	cChave 	:= "registroANS"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/registroANS" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["registroANS"]
+
+	cChave 	:= "cpfContratado"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/dadosContratado/cpfContratado" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["cpfContratado"]
+
+	cChave 	:= "cnpjContratado"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/dadosContratado/cnpjContratado" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["cnpjContratado"]
+
+	cChave 	:= "codigoPrestadorNaOperadoraContratado"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/dadosContratado/codigoPrestadorNaOperadora" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["codigoPrestadorNaOperadoraContratado"]
+
+	
+	cChave 	:= "nomeContratado"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/dadosContratado/nomeContratado" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["nomeContratado"]
+
+	cChave 	:= "valorTotalRecursado"
+	cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/valorTotalRecursado" ) ) 
+	oJsonBody[cChave] := cValor //oJsonBody["valorTotalRecursado"]
+
+	//Define numero de guias
+	if (oXml:XPathHasNode( cPathGuia + addNS("/recursoProtocolo"))) //Excessao para protocolos, ja que nao possuem guias
+		cOperador := "1"
+	else		
+		nGuias	:= oXML:XPathChildCount( cPathGuia )
+	endif
+
+	cChave 	:= "qtGuiasRecurso"
+	cValor	:= str( nGuias )
+	oJsonBody[cChave] := cValor //oJsonBody["qtGuiasRecurso"]
+
+	//Percorrimento das guias 
+	for nX := 1 to nGuias
+		cPathGuia 	:= cPath + addNS("/opcaoRecurso/recursoGuia")
+		if nGuias > 1
+			cPathGuia += "["+ allTrim( str( nX ) ) +"]"
+		endif  
+
+		//Controla cOperador em caso de guias glosadas integrais e eventos glosados em uma mesma PEG  
+		if cOperador != "1"
+			if (oXML:XPathHasNode( cPathGuia + addNS( "/opcaoRecursoGuia/recursoGuiaCompleta/justificativaGuia")))
+				cOperador 	:= "3"
+			Elseif (oXML:XPathHasNode( cPathGuia + addNS( "/opcaoRecursoGuia/itensGuia/justificativaItem"))) .OR. (oXML:XPathHasNode( cPathGuia + addNS( "/opcaoRecursoGuia/itensGuia["+ allTrim( str( nX ) ) +"]/justificativaItem")))
+				cOperador	:= "5"
+			Else
+				cMsgErro := "Erro: a estrutura do XML não foi respeitada na guia " + allTrim( str( nX ) )
+				aErro := mensErro()
+				oJsonBody["sucesso"] == "n" 
+			endif
+		else
+			cChave 	:= "qtGuiasRecurso"
+			cValor	:= "0"
+			oJsonBody[cChave] := cValor //oJsonBody["qtGuiasRecurso"] - Usado para construcao do response 
+		endif
+
+		cChave 	:= "numeroGuiaOrigem"+allTrim( str( nX ) )
+		cValor	:= oXML:XPathGetNodeValue( cPathGuia + addNS( "/numeroGuiaOrigem" ) )
+		oJsonGuia[cChave] := cValor //oJsonGuia["numeroGuiaOrigem+(Numero da guia)"]
+
+		cChave 	:= "numeroGuiaOperadora"+allTrim( str( nX ) )
+		cValor	:= oXML:XPathGetNodeValue( cPathGuia + addNS( "/numeroGuiaOperadora" ) )
+		oJsonGuia[cChave] := cValor //oJsonGuia["numeroGuiaOperadora+(Numero da guia)"]
+
+		cChave 	:= "senha"+allTrim( str( nX ) )
+		cValor	:= oXML:XPathGetNodeValue( cPathGuia + addNS( "/senha" ) )
+		oJsonGuia[cChave] := cValor //oJsonGuia["senha+(Numero da guia)"]
+
+		if cOperador == "1"
+
+			cChave 	:= "justificativaProtocolo"
+			cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/opcaoRecurso/recursoProtocolo/justificativaProtocolo" ) ) 
+			oJsonBody[cChave] := cValor //oJsonBody["justificativaProtocolo"]
+			cjustificat := oJsonBody["justificativaProtocolo"] 
+
+			cChave 	:= "codigoGlosaProtocolo"
+			cValor	:= oXML:XPathGetNodeValue( cPath + addNS( "/opcaoRecurso/recursoProtocolo/codigoGlosaProtocolo" ) ) 
+			oJsonBody[cChave] := cValor //oJsonBody["codigoGlosaProtocolo"]
+
+		elseif cOperador == "3"
+
+			cChave 	:= "justificativaGuia"+allTrim( str( nX ) )
+			cValor	:= oXML:XPathGetNodeValue( cPathGuia + addNS( "/opcaoRecursoGuia/recursoGuiaCompleta/justificativaGuia" ) ) 
+			oJsonGuia[cChave] := cValor //oJsonGuia["justificativaGuia"+allTrim( str( nX ) )] 
+			cjustificat := oJsonGuia["justificativaGuia"+allTrim( str( nX ) )]
+
+			cChave 	:= "codGlosaGuia"+allTrim( str( nX ) )
+			cValor	:= oXML:XPathGetNodeValue( cPathGuia + addNS( "/opcaoRecursoGuia/recursoGuiaCompleta/codGlosaGuia" ) ) 
+			oJsonGuia[cChave] := cValor //oJsonGuia["codGlosaGuia"+allTrim( str( nX ) )] 
+
+		elseif cOperador == "5"
+
+			nItens		:= oXML:XPathChildCount( cPathGuia + addNS( "/opcaoRecursoGuia" ) )
+			cPathGuia 	:= cPathGuia + addNS("/opcaoRecursoGuia/itensGuia") 
+			cItens 		:= ''
+
+			cChave 	:= "qtEventos" + allTrim( str( nX ) )
+			cValor	:= str( nItens )
+			oJsonGuia[cChave] := cValor //oJsonGuia["qtEventos"]
+			
+			for nXi := 1 to nItens 
+				oJsonItem := JsonObject():new()
+				if nItens > 1
+					cPathItem := cPathGuia + "["+ allTrim( str( nXi ) ) +"]"
+				else
+					cPathItem := cPathGuia
+				endif
+
+				cChave 	:= "justificativaItem"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/justificativaItem" ))
+				if empty(cValor )
+					cValor  := PLCarEspWS(oXML:XPathGetNodeValue( cPathItem + addNS( "/justificativaItem" ), .F. ))
+				endif
+				oJsonItem[cChave] := cValor //oJsonItem["justificativaItem"+allTrim( str( nXi ) )]
+				cjustificat := oJsonItem["justificativaItem"+allTrim( str( nXi ) )]
+				
+				cChave 	:= "valorRecursado"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/valorRecursado" ) )
+				oJsonItem[cChave] := cValor //oJsonItem["valorRecursado"+allTrim( str( nXi ) )]
+				
+				cChave 	:= "codigoTabela"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/procRecurso/codigoTabela" ) ) 
+				oJsonItem[cChave] := cValor //oJsonItem["codigoTabela"+allTrim( str( nXi ) )]
+				cICodTabela	:= alltrim(PLSGETVINC("BTU_CDTERM", "BR4", .T., "87" , oJsonItem["codigoTabela"+allTrim( str( nXi ) )],.T.)) //depara
+				
+				cChave 	:= "codigoProcedimento"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/procRecurso/codigoProcedimento" ) )	
+				cICodTabela := valCodTab( cICodTabela,"BR8",oJsonItem["codigoTabela"+allTrim( str( nXi ) )], cValor )
+				oJsonItem[cChave] := cValor //oJsonItem["codigoProcedimento"+allTrim( str( nXi ) )]
+				cICodProc	:= alltrim(PLSGETVINC("BTU_CDTERM", "BR8", .T., cICodTabela, oJsonItem["codigoProcedimento"+allTrim( str( nXi ) )] , .T. )) //depara
+	
+				cChave 	:= "sequencialItem"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/sequencialItem" ) )	
+				oJsonItem[cChave] := cValor //oJsonItem["sequencialItem"+allTrim( str( nXi ) )]
+				cSeqItem := oJsonItem["sequencialItem"+allTrim( str( nXi ) )]
+
+				cChave 	:= "dataInicio"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/dataInicio" ) )	
+				oJsonItem[cChave] := cValor //oJsonItem["dataInicio"+allTrim( str( nXi ) )]
+
+				cChave 	:= "dataFim"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/dataFim" ) )	
+				oJsonItem[cChave] := cValor //oJsonItem["dataFim"+allTrim( str( nXi ) )]
+
+				cChave 	:= "descricaoProcedimento"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/procRecurso/descricaoProcedimento" ) )	
+				oJsonItem[cChave] := cValor //oJsonItem["descricaoProcedimento"+allTrim( str( nXi ) )]
+
+				cChave 	:= "codGlosaItem"+allTrim( str( nXi ) )
+				cValor	:= oXML:XPathGetNodeValue( cPathItem + addNS( "/codGlosaItem" ) )	
+				oJsonItem[cChave] := cValor //oJsonItem["codGlosaItem"+allTrim( str( nXi ) )]
+				
+				cItens 		+= oJsonItem["valorRecursado"+allTrim( str( nXi ) )] +"-_Sep_-"+cjustificat+"-_Sep_-"+cICodTabela+"-_Sep_-"+cICodProc+"-_Sep_-"+cSeqItem+"-_Sep_-"+oJsonItem["codigoTabela"+allTrim( str( nXi ) )]
+				
+				cItens += iif(nXi < nItens,"-_xIt_-","")
+
+				oJsonGuia["guia"+allTrim( str( nX ) )+"-item"+allTrim( str( nXi ) )] := oJsonItem
+			
+			next
+		
+		endif
+		
+		aadd(aInfoGlosa,{oJsonBody["numeroProtocolo"], oJsonCab["origemCodigoPrestadorNaOperadora"], oJsonGuia["numeroGuiaOrigem"+allTrim( str( nX ) )], cjustificat, cOperador, cItens, cOrigEnt, oJsonGuia["numeroGuiaOperadora"+allTrim( str( nX ) )],oXML:XPathGetNodeValue( cPath + addNS( "/objetoRecurso" ) )})
+
+	next
+
+	if oJsonBody["sucesso"] == "s" 
+		aRetGlosa := mdIncRecGlosa(aInfoGlosa,@oJsonBody,@aErro,lPortalXml) //Chamada para o processamento
+	endif
+	
+	//bloco para tratamento de sucesso ou erro
+	if oJsonBody["sucesso"] == "s" 
+		cChave 	:= "protocoloRecursoGlosa"
+		cValor	:= aRetGlosa[1][2]
+		oJsonBody[cChave] := cValor //oJsonBody["protocoloRecursoGlosa"]
+	else
+		if empty(aErro)
+			if empty(aRetGlosa)
+				aErro := mensErro()
+			else
+				aErro := mensErro(,aRetGlosa[1][2])
+			endif
+		endif
+		cChave 	:= "erroCodigoGlosa"
+		cValor	:= aErro[2]
+		oJsonBody[cChave] := cValor //oJsonBody["erroCodigoGlosa"]
+		
+		cChave 	:= "erroDescricaoGlosa"
+		cValor	:= aErro[1]
+		oJsonBody[cChave] := cValor //oJsonBody["erroDescricaoGlosa"]
+	endif
+	
+	if !lPortalXml
+		cSoap	:= geraArquivo(oJsonBody,oJsonCab,oJsonGuia)
+	else
+		aRet 	:= retornoXml( aRetGlosa,oJsonBody["sucesso"],cMsgErro )
+	endif
+
+else
+	if lPortalXml
+		aRet := {.T.,"",{oXML:Error()}}
+		return aRet
+	else
+		return oXML:Error()
+	endif
+endif
+
+freeObj(oXml)
+oXml := nil
+freeObj(oJsonCab)
+oJsonCab := nil
+freeObj(oJsonBody)
+oJsonBody := nil
+freeObj(oJsonGuia)
+oJsonGuia := nil
+freeObj(oJsonItem)
+oJsonItem := nil
+freeObj(aRetGlosa)
+aRetGlosa := nil
+freeObj(aErro)
+aErro := nil
+freeObj(aInfoGlosa)
+aInfoGlosa := nil
+
+if !lPortalXml
+	return cSoap
+else 
+	return aRet
+endif
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mdIncRecGlosa
+Peca media que orquestra o processamento/retorno
+
+@author  Eduardo Bento
+@version P12
+@since   10/07/2019
+Argumentos	-> (Informacoes do recurso, inforcoes do response, array para erros)
+Retorno 	-> informacoes do sucesso ou erro
+/*/
+//-------------------------------------------------------------------
+
+function mdIncRecGlosa (aInfoGlosa,oJsonBody,aErro,lPortalXml)
+
+local nX := 1
+local nY := 1
+local nFinal := len(aInfoGlosa)
+local lOk := .T.	
+local nOpc := 3
+
+local aControle := {}	//Recebe o retorno do processamento
+local aPreComit := {}	//Recebe o modelo de dados
+local aRetDados	:= {}	//Retorno da validacao ou commit dos dados
+local aRetornoMd:= {}	//Retorna sucesso ou falha
+local aGuiaValid:= {}	//Armazena o numero da guia para controle
+local aParAux   := {}	//Auxiliar para gerar o par Guia/Status
+local aPrevalid	:= {}
+
+
+for nX := 1 to nFinal
+	aadd(aGuiaValid,aInfoGlosa[nX][3])
+	aPrevalid := VldPEG(aInfoGlosa[nX][1], aInfoGlosa[nX][2], aInfoGlosa[nX][7])
+	If !(aPrevalid[1])
+		aadd(aControle, {aPrevalid[2][2] + " " + CRLF + aPrevalid[2][3]})
+	else
+		if !Empty(aInfoGlosa[nX][3])
+			aPrevalid := VldGuia(aInfoGlosa[nX][1], aInfoGlosa[nX][3], aInfoGlosa[nX][7])
+			If !(aPrevalid[1])
+				aadd(aControle, {aPrevalid[2][2] + " " + CRLF + aPrevalid[2][3]})		 
+			endIf
+		EndIf
+	endIf
+
+	If (aPrevalid[1])
+						//		    {[1]-codigo Peg   ,[2]-Rd.Atendimento, [3]-Numero guia	Origem , [4]-Justificativa, [5]-Operador	   , [6]-Det.Envento  , [7]-Origem , [8]-Numero guia Operadora, nOpc{inclusão/alteração}		 }
+		aadd(aControle,callIncRec(aInfoGlosa[nX][1], aInfoGlosa[nX][2], aInfoGlosa[nX][3], aInfoGlosa[nX][4], aInfoGlosa[nX][5], aInfoGlosa[nX][6], aInfoGlosa[nX][7], @aPreComit, aInfoGlosa[nX][8], nil,aInfoGlosa[nX][9], nOpc))
+
+	EndIf
+next
+
+nFinal := len(aControle) //Numero de chamadas para processamento 
+
+for nX := 1 to nFinal
+	aParAux := {}
+	if aControle[nX][1] != "" //Verifica se houve erro estrutural no processamento
+		lOk  := .F.
+		aadd(aParAux,aGuiaValid[nX])
+		aadd(aParAux,aControle[nX][1])
+		aadd(aRetornoMd,aParAux)
+		if aControle[nX][1] == "A identificação do prestador origem não coincide com o número de protocolo: " + aInfoGlosa[nX][1] .and. empty(aErro)
+			aErro := mensErro("cpfCnpjInvalido",aControle[nX][1])
+		endif
+		Exit
+	elseif !aPreComit[nX]:VldData()	//Verifica se ha erro de validacao nos dados 
+		lOk  := .F.
+		aRetDados := aPreComit[nX]:GetErrorMessage()		
+		aadd(aParAux,aGuiaValid[nX])
+		if !Empty(aGuiaValid[nX])
+			if empty(aRetDados[6])
+				aadd(aParAux,"Houve um erro na validação dos dados na Guia " + aGuiaValid[nX] )
+			else 	
+				aadd(aParAux, aRetDados[6] + " " + aGuiaValid[nX]  )
+			endif 
+		else
+			aadd(aParAux,"Houve um erro na validação dos dados" )
+		endif
+		aadd(aRetornoMd,aParAux)
+		Exit
+	endif	
+next
+
+aParAux := {}
+if lOk
+	for nX := 1 to nFinal
+		if nX == 1
+			aPreComit[nX]:getmodel("MasterB4D"):loadValue("B4D_PROTOC", GETSX8NUM("B4D","B4D_PROTOC","B4D_PROTOC",8)) //Gera protocolo do recurso
+			aadd(aParAux,"Recurso gravado com sucesso")
+			aadd(aParAux,aPreComit[nX]:getModel('MasterB4D'):getValue('B4D_PROTOC'))
+		else
+			aPreComit[nX]:getModel('MasterB4D'):setValue('B4D_PROTOC',aParAux[2]) //seta o mesmo protocolo para as demais guias
+		endif
+		if lPortalXml
+			aPreComit[nX]:getmodel('MasterB4D'):loadValue("B4D_ORIENT", "4")
+		endif
+		aRetDados := aPreComit[nX]:CommitData()
+	next
+	oJsonBody["protocoloRecurso"] := aParAux[2]
+	aadd(aRetornoMd,aParAux)
+
+	//Grava protocolo do recurso de glosa na bxx em caso de entrada por xml.
+	if lPortalXml
+		BXX->( DbSetOrder(7) )
+		if BXX->( MsSeek( xFilial("BXX") + oJsonBody["sequencialBXX"]  ) )
+			BXX->( RecLock("BXX",.F.) )
+			if BXX->(FieldPos("BXX_PROGLO")) > 0
+				BXX->BXX_PROGLO := oJsonBody["protocoloRecurso"]
+			endif
+			BXX->( MsUnLock() )
+		endif
+	endif
+	
+else
+	oJsonBody["sucesso"] := "n"
+endif
+
+return aRetornoMd
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} removeURL
+Remoção da URL para evitar falha no parse
+
+@author  Eduardo Bento
+@version P12
+@since   02/07/2019
+Argumentos	-> (xml,nameSpace,parte da primeira tag)
+Retorno 	-> xml tratado
+/*/
+//-------------------------------------------------------------------
+function removeURL (cSoapXml,cNS,cXmlInit)
+
+local nPos     	:= 0
+local cSoapNoUrl:= ""
+
+if empty(cNS)
+    nPos := At(">",Upper(cSoapXml))      
+    cSoapNoUrl := Substr(cSoapXml,nPos,len(cSoapXml))
+    cSoapXml   := cXmlInit + cSoapNoUrl
+endif
+
+return cSoapXml
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} mensErro
+Tratamento para responder erros
+
+@author  Eduardo Bento
+@version P12
+@since   10/07/2019
+Argumentos	-> (descricao do erro)
+Retorno 	-> Codigo e descricao do erro
+/*/ 
+//-------------------------------------------------------------------
+function mensErro (cDescErro,cErroProc)
+
+local cMsg 	:= ""
+local cCod	:= ""
+local aErro := {}
+default cDescErro := "invalida"
+default cErroProc := ""
+
+Do Case
+	Case cDescErro == "valorTotal"
+		cMsg := "VALOR TOTAL DO PROTOCOLO DIFERENTE DO VALOR TOTAL DAS GUIAS"
+		cCod := "1104"
+	Case cDescErro == "prestadorInvalido"
+		cMsg := "CODIGO PRESTADOR INVALIDO"
+		cCod := "1203"
+	Case cDescErro == "cpfCnpjInvalido"
+		cMsg := "CPF / CNPJ INVALIDO"
+		cCod := "1206"
+	Case cDescErro == "guiaInexiste"
+		cMsg := "NAO EXISTE O NUMERO GUIA PRINCIPAL INFORMADO"
+		cCod := "1303"
+	Case cDescErro == "naoExisteValor"
+		cMsg := "NAO EXISTE VALOR PARA O PROCEDIMENTO REALIZADO"
+		cCod := "1708"
+	Case cDescErro == "invalida" //Mensagem default atual
+		cMsg := "REVISAO DE GLOSA INVALIDA"
+		cCod := "2901"
+		if !Empty(cErroProc)
+			cMsg := cMsg + " - " + FwNoAccent(cErroProc)
+		endif
+	Case cDescErro == "semJustificativa"
+		cMsg := "PEDIDO DE REVISAO SEM JUSTIFICATIVA"
+		cCod := "2903"
+	Case cDescErro == "jaRecursado"
+		cMsg := "MAIS DE UM RECURSO DE GLOSA PARA A MESMA GUIA/PROTOCOLO"
+		cCod := "2904"
+	Case cDescErro == "padrao"
+		cMsg := "MENSAGEM ELETRONICA FORA DO PADRAO TISS"
+		cCod := "5001"
+	Case cDescErro == "validacaoXml"
+		cMsg := "NAO FOI POSSIVEL VALIDAR O ARQUIVO XML"
+		cCod := "5002"
+	Case cDescErro == "mensIncon" 
+		cMsg := "MENSAGEM INCONSISTENTE OU INCOMPLETA"
+		cCod := "5007"
+	Case cDescErro == "hashInvalido"
+		cMsg := "CODIGO HASH INVALIDO. MENSAGEM PODE ESTAR CORROMPIDA."
+		cCod := "5014"
+	OTHERWISE
+		cMsg := "OCORREU UM ERRO"
+		cCod := "---"
+EndCase
+
+aadd(aErro,cMsg)
+aadd(aErro,cCod)
+
+return aErro
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getCabRecGlo
+Retorna os dados do cabeçalho do recurso da glosa
+
+@author  Eduardo Bento
+@version P12
+@since   26/06/2019
+/*/
+//-------------------------------------------------------------------
+static function getCabRecGlo( oXML, lPortalXml )
+local oJsonCab 	:= JsonObject():new()
+local cPathCab 	:= addNS("/loteRecursoGlosaWS/cabecalho")
+local cChave	:= ""
+local cValor	:= ""
+
+if lPortalXml
+	cPathCab 	:= addNS("/mensagemTISS/cabecalho")
+endif
+
+if( oXml:XPathHasNode( cPathCab ) )
+
+	cChave 	:= "tipoTransacao"
+	cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/identificacaoTransacao/tipoTransacao"))
+	oJsonCab[cChave] := cValor
+
+	cChave 	:= "sequencialTransacao"
+	cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/identificacaoTransacao/sequencialTransacao"))
+	oJsonCab[cChave] := cValor
+
+	cChave 	:= "dataRegistroTransacao"
+	cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/identificacaoTransacao/dataRegistroTransacao"))
+	oJsonCab[cChave] := cValor
+
+	cChave 	:= "horaRegistroTransacao"
+	cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/identificacaoTransacao/horaRegistroTransacao")) 
+	oJsonCab[cChave] := cValor
+
+    if( oXml:XPathHasNode( cPathCab + addNS("/origem/identificacaoPrestador/CNPJ")))
+        cChave 	:= "origemCNPJ"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/origem/identificacaoPrestador/CNPJ"))
+		oJsonCab[cChave] := cValor
+    endif	
+
+    if( oXml:XPathHasNode( cPathCab + addNS("/origem/identificacaoPrestador/CPF")))
+        cChave 	:= "origemCPF"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/origem/identificacaoPrestador/CPF"))
+		oJsonCab[cChave] := cValor
+    endif	
+
+    if( oXml:XPathHasNode( cPathCab + addNS("/origem/identificacaoPrestador/codigoPrestadorNaOperadora")))
+        cChave 	:= "origemCodigoPrestadorNaOperadora"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/origem/identificacaoPrestador/codigoPrestadorNaOperadora"))
+		oJsonCab[cChave] := cValor
+    endif
+
+	if( oXml:XPathHasNode( cPathCab + addNS("/origem/registroANS")))
+        cChave 	:= "origemRegistroANS"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/origem/registroANS"))
+		oJsonCab[cChave] := cValor
+    endif	
+
+    if( oXml:XPathHasNode( cPathCab + addNS("/destino/identificacaoPrestador/CNPJ")))
+        cChave 	:= "destinoCNPJ"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/destino/identificacaoPrestador/CNPJ"))
+		oJsonCab[cChave] := cValor
+    endif	
+
+    if( oXml:XPathHasNode( cPathCab + addNS("/destino/identificacaoPrestador/CPF")))
+        cChave 	:= "destinoCPF"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/destino/identificacaoPrestador/CPF"))
+		oJsonCab[cChave] := cValor
+    endif	
+
+    if( oXml:XPathHasNode( cPathCab + addNS("/destino/identificacaoPrestador/codigoPrestadorNaOperadora")))
+        cChave 	:= "destinoCodigoPrestadorNaOperadora"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/destino/identificacaoPrestador/codigoPrestadorNaOperadora"))
+		oJsonCab[cChave] := cValor
+    endif
+
+	if( oXml:XPathHasNode( cPathCab + addNS("/destino/registroANS")))
+        cChave 	:= "destinoRegistroANS"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/destino/registroANS"))
+		oJsonCab[cChave] := cValor
+    endif
+
+	cChave 	:= "Padrao"
+	cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/Padrao"))
+	oJsonCab[cChave] := cValor
+
+	if oJsonCab["Padrao"]==""
+		oJsonCab["Padrao"] := oXML:XPathGetNodeValue( cPathCab + addNS("/versaoPadrao"))
+	endif
+
+	if( oXml:XPathHasNode( cPathCab + addNS("/falhaNegocio")))
+        cChave 	:= "falhaNegocio"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/falhaNegocio"))
+		oJsonCab[cChave] := cValor
+    endif
+
+	if( oXml:XPathHasNode( cPathCab + addNS("/loginSenhaPrestador")))
+        cChave 	:= "loginPrestador"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/loginSenhaPrestador/loginPrestador"))
+		oJsonCab[cChave] := cValor
+		cChave 	:= "senhaPrestador"
+		cValor	:= oXML:XPathGetNodeValue( cPathCab + addNS("/loginSenhaPrestador/senhaPrestador"))
+		oJsonCab[cChave] := cValor
+    endif
+endif    
+	
+return oJsonCab
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraArquivo 
+Gerador do response para o WS recurso de glosa
+
+@author  Eduardo Bento
+@version P12
+@since   28/06/2019 
+/*/
+//-------------------------------------------------------------------
+Static Function geraArquivo(oJsonBody,oJsonCab,oJsonGuia)
+Local cCodInt	:= PlsIntPad() //Retorna Operadora
+Local cCodPeg 	:= oJsonBody["numeroProtocolo"]
+Local cFileXML	:= ""
+Local cFileHASH := ""
+Local cPathXML	:= "" 
+Local nCabXml	:= 0
+Local nArqFull	:= 0
+Local nBytes	:= 0
+Local cCabTMP	:= ""
+Local cDetTMP	:= ""
+Local cXmlTMP	:= ""
+Local cBuffer	:= ""
+Local lFinal	:= .F.
+Local cRet		:= ""
+Local cVersao := ""
+Private nArqHash := 0
+
+cFileXML	:= cCodInt +"_"+ dtos(date()) + (allTrim(time()),":","") +"_"+ cCodPeg + ".tmp"
+cFileHASH 	:= CriaTrab(NIL,.F.) + ".tmp"
+cPathXML 	:= PLSMUDSIS( GetNewPar("MV_TISSDIR","\TISS\")+"online\TEMP\" ) //formatação
+
+If( !existDir( cPathXML ) )
+	If( MakeDir( cPathXML ) <> 0 )
+		cRet := "Não foi possível criar o diretorio no servidor:"+cPathXML
+		Return(cRet)
+	EndIf
+EndIf
+
+nArqFull := fCreate( cPathXML+cFileXML,FC_NORMAL,,.F. )
+
+If nArqFull > 0	
+
+	nArqHash := fCreate( Lower( cPathXML+cFileHASH ),FC_NORMAL,,.F.)
+	cVersao := oJsonCab["Padrao"]
+	cCabTMP := geraCabRecGlosa( cPathXML , oJsonCab)
+	nCabXml := fOpen( cCabTMP,FO_READ )
+
+	If( nCabXml <= 0 )
+		cRet := "Não foi possível abrir o arquivo: " + cCabTMP
+		FErase(cPathXML+cFileXML) 
+		Return(cRet)
+	Else
+		lFinal	:= .F.
+		nBytes	:= 0
+		cBuffer	:= ""
+		Do While !lFinal
+			nBytes := fRead( nCabXml,@cBuffer,F_BLOCK )		
+			If( fWrite( nArqFull,cBuffer,nBytes ) < nBytes )
+				lFinal := .T.
+			Else
+				lFinal := ( nBytes == 0 )
+			EndIf
+		EndDo
+		fClose( nCabXml )
+		fErase( cCabTMP )
+	EndIf
+	
+	cDetTMP := geraBodRecGlosa(cPathXML,oJsonBody,oJsonGuia, cVersao)
+	nTmpXml := fOpen( cDetTMP,FO_READ )
+
+	If( nTmpXml <= 0 )
+		cRet := "Não foi possível abrir o arquivo: " + cDetTMP
+		FErase(cPathXML+cFileXML)
+		Return(cRet)
+	Else
+		lFinal	:= .F.
+		nBytes	:= 0
+		cBuffer	:= ""
+			
+		Do While !lFinal
+			nBytes := fRead( nTmpXml,@cBuffer,F_BLOCK )
+			If( fWrite( nArqFull,cBuffer,nBytes ) < nBytes )
+				lFinal := .T.
+			Else
+				lFinal := ( nBytes == 0 )
+			EndIf
+		EndDo
+	
+		fClose( nTmpXml )
+		fErase( cDetTMP )
+	EndIf
+	
+	//--< Calculo e inclusao do HASH no arquivo >--	 				
+	fClose( nArqHash )				
+	cHash := A270Hash( cPathXML+cFileHASH,nArqHash )
+	cXmlTMP += A270Tag( 1,"ans:hash",lower( cHash )	,.T.,.T.,.T. )
+	
+	fWrite( nArqFull,cXmlTMP )
+	fClose( nArqFull )
+	
+	//--< Append GERAL para retorno >--
+	cBuffer	:= ""
+	cRet 	:= ""	
+	nBytes := FT_FUse( cPathXML+cFileXML )
+	FT_FGotop()
+	While ( !FT_FEof() )
+	    cBuffer := FT_FREADLN()
+		cRet 	+= cBuffer
+		FT_FSkip()
+		If !FT_FEof()
+			cRet 	+= CRLF
+		EndIf
+	EndDo
+		
+	FT_FUse() // Fecha o arquivo
+	
+	fClose( nTmpXml )
+	fErase( cPathXML+cFileXML )
+	
+Else
+	cRet := "Nao foi possivel criar o arquivo: " + AllTrim( cFileXML )
+EndIf
+
+Return(cRet)
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} geraCabRecGlosa
+Compoe os dados do cabecalho do arquivo
+
+@author    Eduardo Bento
+@version   P12
+@since     28/06/2019
+
+/*/
+//------------------------------------------------------------------------------------------
+Static Function  geraCabRecGlosa( cPathXML, oJsonCab )
+Local cXML 		:= ""
+Local cHorComp	:= AllTrim( time() )
+Local cFileCAB	:= cPathXML + criatrab( nil,.F. ) + ".tmp"
+Local nArqCab	:= fCreate( cFileCAB,FC_NORMAL,,.F. )
+
+If( nArqCab <> -1 )
+					
+	cXML += A270Tag( 1,"ans:cabecalho",'',.T.,.F.,.T. )
+	cXML += A270Tag( 2,"ans:identificacaoTransacao",'',.T.,.F.,.T. )
+	cXML += A270Tag( 3,"ans:tipoTransacao","RECEBIMENTO_RECURSO_GLOSA",.T.,.T.,.T.,.F. )
+	cXML += A270Tag( 3,"ans:sequencialTransacao",oJsonCab["sequencialTransacao"],.T.,.T.,.T. )
+	cXML += A270Tag( 3,"ans:dataRegistroTransacao",convDataXML( dDataBase ),.T.,.T.,.T. )
+	cXML += A270Tag( 3,"ans:horaRegistroTransacao",cHorComp,.T.,.T.,.T.,.F. )
+	cXML += A270Tag( 2,"ans:identificacaoTransacao",'',.F.,.T.,.T. )
+	
+	If !EMPTY(oJsonCab["origemRegistroANS"])
+		cXML += A270Tag( 2,"ans:origem",'',.T.,.F.,.T. )
+		cXML += A270Tag( 3,"ans:registroANS",oJsonCab["origemRegistroANS"],.T.,.T.,.T. )
+		cXML += A270Tag( 2,"ans:origem",'',.F.,.T.,.T. )
+	ElseIf !EMPTY(oJsonCab["origemCodigoPrestadorNaOperadora"]) .OR. !EMPTY(oJsonCab["origemCPF"]) .OR. !EMPTY(oJsonCab["origemCNPJ"])
+		cXML += A270Tag( 2,"ans:origem",'',.T.,.F.,.T. )
+		cXML += A270Tag( 3,"ans:identificacaoPrestador",'',.T.,.F.,.T. )
+		If !EMPTY(oJsonCab["origemCPF"])
+			cXML += A270Tag( 4,"ans:CPF",oJsonCab["origemCPF"],.T.,.T.,.T. )
+		Elseif !EMPTY(oJsonCab["origemCNPJ"])
+			cXML += A270Tag( 4,"ans:CNPJ",oJsonCab["origemCNPJ"],.T.,.T.,.T. )
+		Else
+			cXML += A270Tag( 4,"ans:codigoPrestadorNaOperadora",oJsonCab["origemCodigoPrestadorNaOperadora"],.T.,.T.,.T. )
+		EndIf
+		cXML += A270Tag( 3,"ans:identificacaoPrestador",'',.F.,.T.,.T. )
+		cXML += A270Tag( 2,"ans:origem",'',.F.,.T.,.T. )
+	EndIf
+
+	If !EMPTY(oJsonCab["destinoRegistroANS"])
+		cXML += A270Tag( 2,"ans:destino",'',.T.,.F.,.T. )
+		cXML += A270Tag( 3,"ans:registroANS",oJsonCab["destinoRegistroANS"],.T.,.T.,.T. )
+		cXML += A270Tag( 2,"ans:destino",'',.F.,.T.,.T. )
+	ElseIf !EMPTY(oJsonCab["destinoCodigoPrestadorNaOperadora"]) .OR. !EMPTY(oJsonCab["destinoCPF"]) .OR. !EMPTY(oJsonCab["destinoCNPJ"])
+		cXML += A270Tag( 2,"ans:destino",'',.T.,.F.,.T. )
+		cXML += A270Tag( 3,"ans:identificacaoPrestador",'',.T.,.F.,.T. )
+		If !EMPTY(oJsonCab["destinoCPF"])
+			cXML += A270Tag( 4,"ans:CPF",oJsonCab["destinoCPF"],.T.,.T.,.T. )
+		Elseif !EMPTY(oJsonCab["destinoCNPJ"])
+			cXML += A270Tag( 4,"ans:CNPJ",oJsonCab["destinoCNPJ"],.T.,.T.,.T. )
+		Else
+			cXML += A270Tag( 4,"ans:codigoPrestadorNaOperadora",oJsonCab["destinoCodigoPrestadorNaOperadora"],.T.,.T.,.T. )
+		EndIf
+		cXML += A270Tag( 3,"ans:identificacaoPrestador",'',.F.,.T.,.T. )
+		cXML += A270Tag( 2,"ans:destino",'',.F.,.T.,.T. )
+	EndIf
+	
+	cXML += A270Tag( 2,"ans:Padrao",oJsonCab["Padrao"],.T.,.T.,.T.,.F. )
+	cXML += A270Tag( 1,"ans:cabecalho",'',.F.,.T.,.T. )
+	
+	fWrite( nArqCab,cXML )
+	fClose( nArqCab )
+EndIf
+
+Return(cFileCAB)
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} geraBodRecGlosa
+Compoe os dados do response do arquivo
+
+@author    Eduardo Bento
+@version   P12
+@since     28/06/2019
+/*/
+//------------------------------------------------------------------------------------------
+Static Function geraBodRecGlosa( cPathXML, oJsonBody, oJsonGuia, cVersao )
+
+Local cFileRecGl:= cPathXML + criaTrab( nil,.F. ) + ".tmp"
+Local cXMLAux	:= "" 
+Local nArqGui	:= fCreate( cFileRecGl,FC_NORMAL,,.F. )
+Local nX 		:= 1
+Local nXi 		:= 1
+Local nGuias	:= VAL(oJsonBody["qtGuiasRecurso"])
+Local nItens	:= 1
+
+If( nArqGui == -1 )
+	msgAlert( "Nao foi possivel criar o arquivo: "  + cFileRecGl )
+Else
+	
+	cXMLAux += A270Tag( 1,"ans:recebimentoRecurso",'',.T.,.F.,.T. )
+	
+	If oJsonBody["sucesso"] == "s"		
+
+		cXMLAux += A270Tag( 2,"ans:protocoloRecebimento",'',.T.,.F.,.T. )
+		cXMLAux += A270Tag( 3,"ans:nrProtocoloRecursoGlosa",oJsonBody["protocoloRecursoGlosa"],.T.,.T.,.T. )
+		cXMLAux += A270Tag( 3,"ans:dataEnvioRecurso",oJsonBody["dataEnvioRecurso"],.T.,.T.,.T. )
+		cXMLAux += A270Tag( 3,"ans:dataRecebimentoRecurso",oJsonBody["dataRecebimento"],.T.,.T.,.T. )
+		cXMLAux += A270Tag( 3,"ans:numeroLote",oJsonBody["numeroLote"],.T.,.T.,.T. )
+		cXMLAux += A270Tag( 3,"ans:registroANS",oJsonBody["registroANS"],.T.,.T.,.T. )
+		cXMLAux += A270Tag( 3,"ans:dadosPrestador",'',.T.,.F.,.T. )
+		If !EMPTY(AllTrim(oJsonBody["cpfContratado"]))
+			cXMLAux += A270Tag( 4,"ans:cpfContratado",AllTrim(oJsonBody["cpfContratado"]),.T.,.T.,.T. )
+		Elseif !EMPTY(AllTrim(oJsonBody["cnpjContratado"]))
+			cXMLAux += A270Tag( 4,"ans:cnpjContratado", AllTrim(oJsonBody["cnpjContratado"]),.T.,.T.,.T. )
+		ElseIf !EMPTY(AllTrim(oJsonBody["codigoPrestadorNaOperadoraContratado"]))
+			cXMLAux += A270Tag( 4,"ans:codigoPrestadorNaOperadora",AllTrim(oJsonBody["codigoPrestadorNaOperadoraContratado"]),.T.,.T.,.T. )
+		EndIf
+
+		if cVersao < "4.00.00"
+			cXMLAux += A270Tag( 4,"ans:nomeContratado",AllTrim(oJsonBody["nomeContratado"]),.T.,.T.,.T. )
+		endif
+
+		cXMLAux += A270Tag( 3,"ans:dadosPrestador",'',.F.,.T.,.T. )
+		cXMLAux += A270Tag( 3,"ans:nrProtocoloRecursado",oJsonBody["numeroProtocolo"],.T.,.T.,.T. )
+		If !Empty(oJsonBody["codigoGlosaProtocolo"])
+			cXMLAux += A270Tag( 3,"ans:recursoProtocolo",'',.T.,.F.,.T. )
+			cXMLAux += A270Tag( 4,"ans:codigoGlosaProtocolo",oJsonBody["codigoGlosaProtocolo"],.T.,.T.,.T. )
+			cXMLAux += A270Tag( 4,"ans:justificativaProtocolo",oJsonBody["justificativaProtocolo"],.T.,.T.,.T.,.F. )
+			cXMLAux += A270Tag( 3,"ans:recursoProtocolo",'',.F.,.T.,.T. )
+		endif
+		If !Empty(oJsonBody["qtGuiasRecurso"]) .and. Empty(oJsonBody["codigoGlosaProtocolo"])
+			cXMLAux += A270Tag( 3,"ans:qtGuiasRecurso",oJsonBody["qtGuiasRecurso"],.T.,.T.,.T. )
+		endif
+
+		for nX := 1 to nGuias 
+			cXMLAux += A270Tag( 3,"ans:guiasRecurso",'',.T.,.F.,.T. )
+			cXMLAux += A270Tag( 4,"ans:numeroGuiaOrigem",oJsonGuia["numeroGuiaOrigem"+allTrim(str(nX))],.T.,.T.,.T. )
+			If !Empty(oJsonGuia["numeroGuiaOperadora"+allTrim(str(nX))])
+				cXMLAux += A270Tag( 4,"ans:numeroGuiaOperadora",oJsonGuia["numeroGuiaOperadora"+allTrim(str(nX))],.T.,.T.,.T. )
+			endif
+			If !Empty(oJsonGuia["senha"+allTrim(str(nX))])
+				cXMLAux += A270Tag( 4,"ans:senha",oJsonGuia["senha"+allTrim(str(nX))],.T.,.T.,.T. )
+			endif
+			cXMLAux += A270Tag( 4,"ans:opcaoRecursoGuia",'',.T.,.F.,.T. )
+			If !Empty(oJsonGuia["codGlosaGuia"+allTrim(str(nX))])
+				cXMLAux += A270Tag( 5,"ans:recursoGuia",'',.T.,.F.,.T. )
+				cXMLAux += A270Tag( 6,"ans:codGlosaGuia",oJsonGuia["codGlosaGuia"+allTrim(str(nX))],.T.,.T.,.T. )
+				cXMLAux += A270Tag( 6,"ans:justificativaGuia",oJsonGuia["justificativaGuia"+allTrim(str(nX))],.T.,.T.,.T.,.F. )
+				cXMLAux += A270Tag( 5,"ans:recursoGuia",'',.F.,.T.,.T. )
+			else
+				nItens := VAL(oJsonGuia["qtEventos"+allTrim(str(nX))])
+
+				for nXi:= 1 to nItens
+					cXMLAux += A270Tag( 5,"ans:itensGuia",'',.T.,.F.,.T. )
+					cXMLAux += A270Tag( 6,"ans:sequencialItem",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["sequencialItem"+allTrim(str(nXi))],.T.,.T.,.T. )
+					cXMLAux += A270Tag( 6,"ans:dataInicio",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["dataInicio"+allTrim(str(nXi))],.T.,.T.,.T. )
+					If !Empty(oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["dataFim"+allTrim(str(nXi))])
+						cXMLAux += A270Tag( 6,"ans:dataFim",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["dataFim"+allTrim(str(nXi))],.T.,.T.,.T. )
+					endif
+					cXMLAux += A270Tag( 6,"ans:procRecurso",'',.T.,.F.,.T. )
+					cXMLAux += A270Tag( 7,"ans:codigoTabela",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["codigoTabela"+allTrim(str(nXi))],.T.,.T.,.T. )
+					cXMLAux += A270Tag( 7,"ans:codigoProcedimento",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["codigoProcedimento"+allTrim(str(nXi))],.T.,.T.,.T. )
+					cXMLAux += A270Tag( 7,"ans:descricaoProcedimento",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["descricaoProcedimento"+allTrim(str(nXi))],.T.,.T.,.T.,.F. )
+					cXMLAux += A270Tag( 6,"ans:procRecurso",'',.F.,.T.,.T. )
+					cXMLAux += A270Tag( 6,"ans:codGlosaItem",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["codGlosaItem"+allTrim(str(nXi))],.T.,.T.,.T. )
+					cXMLAux += A270Tag( 6,"ans:valorRecursado",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["valorRecursado"+allTrim(str(nXi))],.T.,.T.,.T.,.F. )
+					cXMLAux += A270Tag( 6,"ans:justificativaItem",oJsonGuia["guia"+allTrim(str(nX))+"-item"+allTrim(str(nXi))]["justificativaItem"+allTrim(str(nXi))],.T.,.T.,.T.,.F. )
+					cXMLAux += A270Tag( 5,"ans:itensGuia",'',.F.,.T.,.T. )
+				next
+
+			endif 
+			cXMLAux += A270Tag( 4,"ans:opcaoRecursoGuia",'',.F.,.T.,.T. )
+			cXMLAux += A270Tag( 3,"ans:guiasRecurso",'',.F.,.T.,.T. )
+
+		next
+
+		If !Empty(oJsonBody["observacao"])
+			cXMLAux += A270Tag( 3,"ans:observacao",oJsonBody["observacao"],.T.,.T.,.T.,.F. )
+		endif
+		cXMLAux += A270Tag( 3,"ans:valorTotalRecursado",oJsonBody["valorTotalRecursado"],.T.,.T.,.T.,.F. )
+		cXMLAux += A270Tag( 2,"ans:protocoloRecebimento",'',.F.,.T.,.T. )
+		fWrite( nArqGui,cXMLAux )
+		cXMLAux := ""
+	else
+		cXMLAux += A270Tag( 2,"ans:mensagemErro",'',.T.,.F.,.T. )
+		cXMLAux += A270Tag( 3,"ans:codigoGlosa",oJsonBody["erroCodigoGlosa"],.T.,.T.,.T. )
+		If !Empty(oJsonBody["erroDescricaoGlosa"])
+			cXMLAux += A270Tag( 3,"ans:descricaoGlosa",oJsonBody["erroDescricaoGlosa"],.T.,.T.,.T.,.F.)
+		endif
+		cXMLAux += A270Tag( 2,"ans:mensagemErro",'',.F.,.T.,.T. )
+	endif
+	cXMLAux += A270Tag( 1,"ans:recebimentoRecurso",'',.F.,.T.,.T. )
+
+	fWrite( nArqGui,cXMLAux )
+	fClose( nArqGui )
+
+endif			
+	
+Return cFileRecGl
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} envRecGlXml(cFileXml)
+Recebe o xml do portal e envia para processamento
+
+@author    Eduardo Bento
+@version   P12
+@since     22/07/2019
+/*/
+//------------------------------------------------------------------------------------------
+function envRecGlXml(cFileXml, cSeqBXX, cAuto, cTissVer)
+
+local aret		:= {,,} //Retorno da function {Sucesso=.F.,"",{criticas}}
+local aRetObj   := {} //Retorno da validacao
+
+local nArquivo	:= 0  //Id do arquivo
+
+local cXml		:= "" //Recebe a adaptação do xml para o processamento
+local cLinha	:= "" //Aux que recebe cada linha
+local cTagUm  	:= "MENSAGEMTISS"	// Primeira tag do corpo do xml para validação do namespace
+local cVersao	:= ""
+
+default cAuto	:= ""
+default cTissVer:= ""
+
+if versaoInvalida(cTissVer) //Verifico se na tabela BVV, a operadora bloqueou a versão do arquivo
+	aRet := {.T.,"",}
+	aRet[3] := {"A versao TISS do arquivo (" + cTissVer + ") nao aceita pela operadora."}
+	return aRet
+endif
+
+if empty(cAuto)
+	nArquivo := FT_FUse(cFileXml)
+	While !FT_FEOF() .and. nArquivo > 0
+		cLinha := alltrim( FT_FREADLN() )
+		FT_FSKIP()
+		cXml+=cLinha
+	Enddo
+	FT_FUse()
+else
+    cXml := cAuto
+endif
+
+cVersao := "tissV"+StrTran( cTissVer,".","_")+".xsd"
+
+HttpCtType( "text/xml; charset="+'UTF-8' )
+aRetObj := VldWSLoteG(cXml,cVersao,cTagUm,.T.) // valida xml, retornos {sucesso,erroDescricao,request,namespace}
+	
+lRetObj := aRetObj[1] // Sucesso da validação
+cErro   := aRetObj[2] // Descricao do erro se existir
+cXml    := aRetObj[3] // Xml ja tratado
+cNS     := aRetObj[4] // Namespace 
+
+if lRetObj	
+	aret := WSRecursoGlosa(cXml,cNS,.T.,cSeqBXX) // Chamada do processamento 
+else
+	aRet[1]	:= .T.
+	aRet[2]	:= ""
+	aRet[3]	:= {"Erro ao carregar o xml: " + cErro }
+endif
+
+if aRet[1]==.T. .and. empty(aret[3])
+	aRet[3]	:= {"Houve um erro no processamento do arquivo"}
+endif
+
+Return aret
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} retornoXml( aErros,cSucesso )
+Gera o retorno para a entrada por XML
+
+Argumentos: aErros 	 -> array com os erros, caso houver sucesso contera o numero do protocolo
+			cSucesso -> Flag de sucesso
+
+Retorno: Array de estrutura [1]-boolean de sucesso
+							[2]-vazio
+							[3]-array com criticas
+
+@author    Eduardo Bento
+@version   P12
+@since     24/07/2019
+/*/
+//------------------------------------------------------------------------------------------
+Static Function retornoXml( aErros,cSucesso,cMsgErro )
+
+local aRet := {,,}
+local aCriticas :={}
+local nX := 1
+
+if cSucesso == "s"
+	aRet[1]	:= .F.
+else
+	for nX:= 1 to len(aErros)
+		aadd(aCriticas,fwnoaccent(aErros[nX][2]))
+	next
+	if cMsgErro != ""
+		aadd(aCriticas,fwnoaccent(cMsgErro))
+	endif
+	aRet[1]	:= .T.
+endif
+
+aRet[2]	:= ""
+aRet[3]	:= aCriticas	
+
+Return aRet
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} Busca codigo de rede(cCnpj,cCpf)
+Recebe o cpf ou cnpj para retornar o codigo de rede
+
+@author    Eduardo Bento
+@version   P12
+@since     06/08/2019
+/*/
+//------------------------------------------------------------------------------------------
+Function buscaCRede(cCnpj,cCpf,cCodPres)
+
+local cRede			:= "prestadorInvalido" //valor default
+
+default cCnpj		:= ""
+default cCpf		:= ""
+default cCodPres	:= ""
+
+If cCnpj != "" .Or. Len(Alltrim(cCodPres))==14
+	cCnPj:= Iif(Empty(cCnpj), Alltrim(cCodPres), cCnpj)
+	BAU->(DbSetOrder(4))
+	if BAU->(MsSeek(xFilial("BAU")+cCnpj))
+		cRede := BAU->BAU_CODIGO
+	endif	
+Elseif cCpf != "" .Or. Len(Alltrim(cCodPres))==11
+	cCpf:= Iif(Empty(cCpf), Alltrim(cCodPres), cCpf)
+	BAU->(DbSetOrder(4))
+	if BAU->(MsSeek(xFilial("BAU")+cCpf))
+		cRede := BAU->BAU_CODIGO
+	endif
+Elseif cCodPres != ""
+	cCodPres := StrZero(Val(cCodPres),6)
+	BAU->(DbSetOrder(1))
+	if BAU->(MsSeek(xFilial("BAU")+cCodPres))
+		cRede := BAU->BAU_CODIGO
+	endif
+Else
+	cRede := "prestadorInvalido"
+EndIf
+
+return cRede
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} RegistroAns
+Retorna o registroAns
+
+@author    Eduardo Bento
+@version   P12
+@since     26/09/2019
+/*/
+//------------------------------------------------------------------------------------------
+Function buscRegAns(cCnpj,cCpf,cRede)
+
+local cRegAns	:= "" //valor default
+
+default cCnpj	:= ""
+default cCpf	:= ""
+default cRede	:= ""
+
+If cRede != ""
+	BA0->(DbSetOrder(6))
+	if BA0->(MsSeek(xFilial("BA0")+cRede))
+		cRegAns := BA0->BA0_SUSEP
+	endif
+Elseif cCnpj != ""
+	BA0->(DbSetOrder(4))
+	if BA0->(MsSeek(xFilial("BA0")+cCnpj))
+		cRegAns := BA0->BA0_SUSEP
+	endif
+Elseif cCpf != ""
+	BA0->(DbSetOrder(4))
+	if BA0->(MsSeek(xFilial("BA0")+cCpf))
+		cRegAns := BA0->BA0_SUSEP
+	endif
+Else
+	cRegAns := "Sem registroANS"
+endif
+
+return cRegAns
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} ValDestino
+Valida o registroANS destino
+
+@author    Eduardo Bento
+@version   P12
+@since     26/09/2019
+/*/
+//------------------------------------------------------------------------------------------
+Function ValDestino(cRegAns)
+
+local lOk := .F.
+local cIntpad := PLSINTPAD()
+
+default cRegAns	:= ""
+
+BA0->(DbSetOrder(5))
+if BA0->(MsSeek(xFilial("BA0")+cRegAns))
+	if cIntpad == BA0->BA0_CODIDE+BA0->BA0_CODINT
+		lOk := .T.
+	endif
+endif
+
+return lOk
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} convDataXML
+Formatador de datas para o arquivo XML
+
+@author    Jonatas Almeida
+@version   1.xx
+@since     5/09/2016
+@param     cDataAnt	= Data nao formatada
+@Return    cNovaData = Data formatada para o XML
+
+/*/
+//------------------------------------------------------------------------------------------
+Static Function convDataXML( cDataAnt )
+	Local cNovaData := ""
+	
+	If( cDataAnt <> nil )
+		If( valType( cDataAnt ) == "D" )
+			cDataAnt := DtoS( cDataAnt )
+		Else
+			cDataAnt := AllTrim( cDataAnt )
+		EndIf
+		
+		If(! empty( cDataAnt ))
+			cNovaData := subStr( cDataAnt,1,4 ) + "-"
+			cNovaData += subStr( cDataAnt,5,2 ) + "-"
+			cNovaData += subStr( cDataAnt,7,2 )
+		EndIf
+	EndIf
+Return cNovaData
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} A270Tag
+Formata a TAG XML a ser escrita no arquivo
+
+@author    Jonatas Almeida
+@version   1.xx
+@since     02/09/2016
+
+@param nSpc    = quantidade de tabulacao para identar o arquivo
+@param cTag    = nome da tab
+@param cVal    = valor da tag
+@param lIni    = abertura de tag
+@param lFin    = fechamento de tag
+@param lPerNul = permitido nulo na tag
+@param lRetPto = retira caracteres especiais
+@param lEnvTag = retorna o conteudo da tag
+
+@Return cRetTag= tag ou vazio
+/*/
+//------------------------------------------------------------------------------------------
+Static Function A270Tag( nSpc,cTag,cVal,lIni,lFin,lPerNul,lRetPto,lEnvTag )
+	Local	cRetTag := "" // Tag a ser gravada no arquivo texto
+	
+	Default lRetPto	:= .T.
+	Default lEnvTag	:= .T.
+
+	If( !empty( cVal ) .or. lPerNul )
+		If( lIni ) // Inicializa a tag ?
+			cRetTag += '<' + cTag + '>'
+			cRetTag += AllTrim( iIf( lRetPto,PlRetPonto( cVal ),cVal ) )
+		EndIf
+
+		If( lFin ) // Finaliza a tag ?
+			cRetTag += '</' + cTag + '>'
+		EndIf
+		
+		If lEnvTag .And. ( nArqHash > 0 ) // Escreve conteudo da tag no temporario pra calculo do hash 
+			FWrite(nArqHash,AllTrim(IIf(lRetPto,PlRetPonto(cVal),cVal))) 
+		EndIf
+
+		cRetTag := replicate( "	", nSpc ) + cRetTag + CRLF // Identa o arquivo
+	EndIf
+Return iIf( lEnvTag,cRetTag,"" )
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} A270Hash
+Calculo do hash
+
+@author    Jonatas Almeida
+@version   1.xx
+@since     1/09/2016
+@param     cHashFile	= nome do arquivo
+@param     nArqFull		= Arquivo de hash
+@Return    cRetHash		= Codigo Hash
+
+/*/
+//------------------------------------------------------------------------------------------
+Static Function A270Hash( cHashFile,nArqFull )
+	Local cRetHash    := ""			// Hash calculado do arquivo SBX
+	Local cBuffer	  := ""			// Buffer lido
+	Local cHashBuffer := ""			// Buffer do hash calculado
+	Local cFnHash     := "MD5File"	// Definicao da função MD5File
+	Local nBytesRead  := 0			// Quantidade de bytes lidos no arquivo
+	Local nTamArq	  := 0			// Tamanho do arquivo em bytes
+	Local nFileHash	  := nArqFull	// Arquivo de hash
+	Local aPatch      := { }		// Conteudo do diretorio
+
+	aPatch := directory( cHashFile,"F" )
+
+	If( len( aPatch ) > 0 )
+		nTamArq := aPatch[1,2]/1048576
+
+		If( nTamArq > 0.9 )
+			// Utilizado a macro-execucao por solicitacao da tecnologia, para evitar  
+			// erro na funcao MD5File decorrente a utilizacao de binarios mais antigos
+			cRetHash := &( cFnHash + "('" + cHashFile + "')" )
+		Else
+			cBuffer   := space( F_BLOCK )
+			nFileHash := fOpen( lower( cHashFile),FO_READ )
+			nTamArq   := aPatch[ 1,2 ]	//Tamanho em bytes
+
+			do while nTamArq > 0
+				nBytesRead	:= fRead( nFileHash,@cBuffer,F_BLOCK )
+				nTamArq		-= nBytesRead
+				cHashBuffer	+= cBuffer
+			endDo
+			
+			fClose( nFileHash )
+			fErase( lower( cHashFile ) )
+			cRetHash := md5( cHashBuffer,2 )
+		EndIf
+	Else
+		msgInfo( "O arquivo não foi encontrado ou não está acessível:" + cHashFile + CRLF + "Hash do arquivo não pode ser calculado!" )
+	EndIf
+Return cRetHash
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} PlRetPonto
+Tratamento de caracteres
+
+@author    Jonatas Almeida
+@version   1.xx
+@since     1/09/2016
+@Return    cExp = sem tratamento
+@param     cExp = tratado
+/*/
+//------------------------------------------------------------------------------------------
+Function PlRetPonto( cExp )
+	cExp := StrTran( cExp,"."," " )
+	cExp := StrTran( cExp,"´"," " )
+	cExp := StrTran( cExp,","," " )
+	cExp := StrTran( cExp,"("," " )
+	cExp := StrTran( cExp,")"," " )
+	cExp := StrTran( cExp,"/"," " )
+	cExp := StrTran( cExp,"\"," " )
+	cExp := StrTran( cExp,":"," " )
+	cExp := StrTran( cExp,"^"," " )
+	cExp := StrTran( cExp,"*"," " )
+	cExp := StrTran( cExp,"$"," " )
+	cExp := StrTran( cExp,"#"," " )
+	cExp := StrTran( cExp,"!"," " )
+	cExp := StrTran( cExp,"["," " )
+	cExp := StrTran( cExp,"]"," " )
+	cExp := StrTran( cExp,"?"," " )
+	cExp := StrTran( cExp,";"," " )
+	cExp := StrTran( cExp,"ç","c" )
+	cExp := StrTran( cExp,"`"," " )
+	cExp := StrTran( cExp,Chr( 166)," " )
+	cExp := StrTran( cExp,Chr( 167)," " )
+	cExp := StrTran( cExp,"á","a" )
+	cExp := StrTran( cExp,"ã","a" )
+	cExp := StrTran( cExp,"à","a" )
+	cExp := StrTran( cExp,"â","a" )
+	cExp := StrTran( cExp,"é","e" )
+	cExp := StrTran( cExp,"è","e" )
+	cExp := StrTran( cExp,"ê","e" )
+	cExp := StrTran( cExp,"í","i" )
+	cExp := StrTran( cExp,"ì","i" )
+	cExp := StrTran( cExp,"ó","o" )
+	cExp := StrTran( cExp,"ò","o" )
+	cExp := StrTran( cExp,"õ","o" )
+	cExp := StrTran( cExp,"ô","o" )
+	cExp := StrTran( cExp,"ú","u" )
+	cExp := StrTran( cExp,"ù","u" )
+	cExp := StrTran( cExp,"Á","A" )
+	cExp := StrTran( cExp,"À","A" )
+	cExp := StrTran( cExp,"Â","A" )
+	cExp := StrTran( cExp,"Ã","A" )
+	cExp := StrTran( cExp,"É","E" )
+	cExp := StrTran( cExp,"È","E" )
+	cExp := StrTran( cExp,"Ê","E" )
+	cExp := StrTran( cExp,"Í","I" )
+	cExp := StrTran( cExp,"Ì","I" )
+	cExp := StrTran( cExp,"Ó","O" )
+	cExp := StrTran( cExp,"Ò","O" )
+	cExp := StrTran( cExp,"Õ","O" )
+	cExp := StrTran( cExp,"Ô","O" )
+	cExp := StrTran( cExp,"Ú","U" )
+	cExp := StrTran( cExp,"Ç","C" )
+	cExp := StrTran( cExp,"@"," " )
+	cExp := StrTran( cExp,"%"," " )
+	cExp := StrTran( cExp,"~"," " )
+	cExp := StrTran( cExp,"¨"," " )
+	cExp := StrTran( cExp,"{"," " )
+	cExp := StrTran( cExp,"}"," " )
+	cExp := StrTran( cExp,"+"," " )
+	cExp := StrTran( cExp,"="," " )
+	cExp := StrTran( cExp,"_"," " )
+	cExp := StrTran( cExp,"<"," " )
+	cExp := StrTran( cExp,">"," " )
+	cExp := StrTran( cExp,"&"," " )
+	cExp := StrTran( cExp,"|"," " )
+	cExp := StrTran( cExp,"°"," " ) 
+	cExp := StrTran( cExp,"ª"," " )
+	cExp := StrTran( cExp,"•"," " )
+	cExp := StrTran( cExp,"º"," " )
+	cExp := StrTran( cExp,"¬"," " )
+	cExp := StrTran( cExp,"¢"," " )
+	cExp := StrTran( cExp,"£"," " )
+	cExp := StrTran( cExp,"¿"," " )
+	cExp := StrTran( cExp,"”"," " )
+	cExp := StrTran( cExp,"©"," " )
+	cExp := StrTran( cExp,"	"," " ) //TAB
+	cExp := StrTran( cExp,"§"," " )
+	cExp := StrTran( cExp,"•"," " ) 
+	
+	If lExPERetP
+		cExp := ExecBlock("PLS500RP",.F.,.F.,{cExp})  
+	Endif   
+
+Return( cExp )
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} tissLoteGuias 
+Utilizado para manter compatibilidade
+A versão inicial do webservice utilizava a função tissLoteR'ecursoGlosa, foi alterado para tissRecursoGlosa para manter o padrão ANS.
+
+@author  Lucas Nonato
+@version P12
+@since   24/03/2020
+/*/
+Function tissLoteRecursoGlosa(cAuto)
+default cAuto := ""
+Return tissRecursoGlosa(cAuto)
+
+static function VldPEG(cCodPeg, cCodRDA, cOrigEnt)
+Local aValid := {}
+Local aRet := {.T., {}}
+
+	aValid := callPegExi(cCodPeg, cCodRDA, .T., cOrigEnt, .T.)
+	If !(empty(avalid[1][1]))
+		aRet[1] := .F.
+		aret[2] := aclone(aValid[1])
+	endIf
+
+return aRet
+
+static function VldGuia(cCodPeg, cGuiaNum, cOrigEnt)
+Local aValid := {}
+Local aRet := {.T., {}}
+
+	aValid := callGuiExi(cCodPeg, cGuiaNum, .T., cOrigEnt,.T.)
+	If !(empty(avalid[1][1]))
+		aRet[1] := .F.
+		aret[2] := aclone(aValid[1])
+	endIf
+
+return aRet
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLSWSTISSHON
+Processamento do WebService LOTEGUIAS para guias de honorários
+
+@author  Eduardo Bento
+@version P12
+@since   28/10/2020
+/*/
+//-------------------------------------------------------------------
+Function ProcHonorarios(oXML, oLote, aCriticas, cSoapXml)
+Local oGuia     	:= nil
+Local cResp     	:= ""
+Local cPath     	:= addNS("/loteGuiasWS/loteGuias/guiasTISS")
+Local cPathTag     	:= ""
+Local nGuias    	:= 1
+Local nProcs		:= 1
+Local nX        	:= 1
+Local nJ			:= 1
+Local aGuias    	:= {}
+Local nValTotal	    := 0
+Local cNewPath	    := ""
+Local atmp			:={}
+Local nProf         := 0
+Local nP            := 0
+Local cPathProf     := ""
+Local cSeqItem		:= ""
+
+nGuias := oXML:XPathChildCount( cPath )    
+    
+for nX := 1 to nGuias
+    cPathTag := cPath + addNS("/guiaHonorarios")
+    if nGuias > 1
+        cPathTag += "["+ allTrim( str( nX ) ) +"]"
+    endif
+    oGuia := GConsulta():new()
+    
+    //Cabeçalho da guia 
+    oGuia:cRegAnsCab            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/registroANS") )
+    oGuia:cNumGuiPre            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/cabecalhoGuia/numeroGuiaPrestador") )   
+
+    //guiaHonorario (raiz)
+    oGuia:cGuiaSolInt            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/guiaSolicInternacao") )
+    oGuia:cSenha                := oXML:XPathGetNodeValue( cPathTag  + addNS( "/senha" )) //Opcional
+    oGuia:cNumGuiOpe            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/numeroGuiaOperadora" )) //Opcional
+   
+    //beneficiário
+    oGuia:oBenef:cCarteirinha   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/beneficiario/numeroCarteira" ))
+    oGuia:oBenef:cAtendRN       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/beneficiario/atendimentoRN" ))
+    oGuia:oBenef:cNome          := oXML:XPathGetNodeValue( cPathTag  + addNS( "/beneficiario/nomeBeneficiario" ))
+  
+    //localContratado
+    oGuia:oLocContratado:cCodRda:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/localContratado/codigoContratado/codigoNaOperadora" ))
+    oGuia:oLocContratado:cCgc   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/localContratado/codigoContratado/cnpjLocalExecutante" ))
+    oGuia:oLocContratado:cNome  := oXML:XPathGetNodeValue( cPathTag  + addNS( "/localContratado/nomeContratado" ))
+	oGuia:oLocContratado:cCnes  := oXML:XPathGetNodeValue( cPathTag  + addNS( "/localContratado/cnes" ))
+
+    //dadosContratadoExecutante
+    oGuia:oRDAExecutante:cCodRda:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosContratadoExecutante/codigonaOperadora" ))
+	
+	if (lExtPERDA) .and. !empty(oGuia:oRDAExecutante:cCodRda) // tratamento ponto de entrada para manipular CodigoPrestadorNaOperadora
+		oGuia:oRDAExecutante:cCodRda:= ExecBlock("PLCDPRE",.F.,.F.,{oGuia:oRDAExecutante:cCodRda})
+	endif
+	oGuia:oRDAExecutante:cCodRda := buscaCRede(oGuia:oLocContratado:cCgc ,oGuia:oLocContratado:cCgc ,oGuia:oRDAExecutante:cCodRda)
+    oGuia:oRDAExecutante:cNome 	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosContratadoExecutante/nomeContratadoExecutante" ))
+    oGuia:oRDAExecutante:cCnes  := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosContratadoExecutante/cnesContratadoExecutante" ))
+
+    //dadosInternacao
+    oGuia:oDadInternacao:cDatIniFat := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/dataInicioFaturamento" ))
+    oGuia:oDadInternacao:cDatFimFat := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosInternacao/dataFimFaturamento" ))
+
+    //procedimentosRealizados
+	nProcs  := oXML:XPathChildCount(cPathTag + addNs("/procedimentosRealizados") )
+	aTmp := {}
+	
+	for nJ := 1 to nProcs 
+	    cNewPath := cPathTag + addNS("/procedimentosRealizados/procedimentoRealizado")
+	    if nProcs > 1
+	        cNewPath += "["+ allTrim( str( nJ ) ) +"]"
+	    endif
+	    aadd(atmp, {	cDatExec	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/dataExecucao" )),;	    
+ 						cHoraIni	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/horaInicial" )),;
+				 		cHoraFim	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/horaFinal" )),;
+				 		cCodTab		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/codigoTabela" )),;
+				 		cCodPro		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/codigoProcedimento" )),;
+				 		cDescPro	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/procedimento/descricaoProcedimento" )),;
+				 		nQtdExe		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/quantidadeExecutada" )),;
+				 		nViaAce		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/viaAcesso" )),;
+				 	 	cTecUti		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/tecnicaUtilizada" )),;
+				 		nRedAcr		:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/reducaoAcrescimo" )),;
+				 		nVlrPro		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/valorUnitario" ))),;
+				 		nVlrTot		:= val(oXML:XPathGetNodeValue( cNewPath  + addNS( "/valorTotal" ))),;
+						cSeqItem	:= oXML:XPathGetNodeValue( cNewPath  + addNS( "/sequencialItem" )) })
+
+ 		oGuia:oProced:cDatExec		:= cDatExec
+ 		oGuia:oProced:cHoraIni		:= cHoraIni
+ 		oGuia:oProced:cHoraFim		:= cHoraFim
+ 		oGuia:oProced:cCodTab		:= cCodTab
+ 		oGuia:oProced:cCodPro		:= cCodPro
+ 		oGuia:oProced:cDescPro		:= cDescPro
+ 		oGuia:oProced:nQtdExe		:= nQtdExe
+ 		oGuia:oProced:nViaAce		:= nViaAce
+ 	 	oGuia:oProced:cTecUti		:= cTecUti
+ 		oGuia:oProced:nRedAcr		:= nRedAcr
+ 		oGuia:oProced:nVlrPro		:= nVlrPro
+ 		oGuia:oProced:nVlrTot		:= nVlrTot
+		oGuia:oProced:cSeqItem		:= cSeqItem
+
+		nValTotal += oGuia:oProced:nVlrTot
+
+        //profissionais
+        nProf   := oXML:XPathChildCount(cNewPath) - 7 //7 nós filhos obrigatórios
+        if( oXml:XPathHasNode( cNewPath  + addNS( "/horaInicial" )) )
+            nProf := nProf - 1
+        endif
+        if( oXml:XPathHasNode( cNewPath  + addNS( "/horaFinal")) )
+            nProf := nProf - 1
+        endif
+        if( oXml:XPathHasNode( cNewPath  + addNS( "/viaAcesso" )) )
+            nProf := nProf - 1
+        endif
+        if( oXml:XPathHasNode( cNewPath  + addNS( "/tecnicaUtilizada" )) )
+            nProf := nProf - 1
+        endif
+        for nP := 1 to nProf 
+            cPathProf := cNewPath + addNS("/profissionais")
+            if nProf > 1
+                cPathProf += "["+ allTrim( str( nP ) ) +"]"
+            endif
+            oGuia:oProfExecSadt:cGrauPart   := oXML:XPathGetNodeValue( cPathProf  + addNS( "/grauParticipacao" ))
+            if( oXml:XPathHasNode( cPathProf  + addNS( "/codProfissional/cpfContratado" )) )
+                oGuia:oProfExecSadt:cCodProf    := oXML:XPathGetNodeValue( cPathProf  + addNS( "/codProfissional/cpfContratado" ))
+            else
+                oGuia:oProfExecSadt:cCodProf    := oXML:XPathGetNodeValue( cPathProf  + addNS( "/codProfissional/codigoPrestadoraNaOperadora" ))
+            endif
+            oGuia:oProfExecSadt:cNome       := oXML:XPathGetNodeValue( cPathProf  + addNS( "/nomeProfissional" ))
+            oGuia:oProfExecSadt:cConselho   := oXML:XPathGetNodeValue( cPathProf  + addNS( "/conselhoProfissional" ))
+            oGuia:oProfExecSadt:cNumCons    := oXML:XPathGetNodeValue( cPathProf  + addNS( "/numeroConselhoProfissional" ))
+            oGuia:oProfExecSadt:cUF         := oXML:XPathGetNodeValue( cPathProf  + addNS( "/UF" ))
+            oGuia:oProfExecSadt:cCBOS       := oXML:XPathGetNodeValue( cPathProf  + addNS( "/CBO" ))
+        next
+   
+		PlVlTGuiSADT(oLote,oGuia,@aCriticas,nX)
+ 	next
+     
+    //guiaHonorario (raiz)
+	oGuia:cObs                  		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/observacao" ))
+   	oGuia:oXMLTotais:nVlrTotalGeral		:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotalHonorarios" )))  
+    oGuia:cDtEmiGuia                  	:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dataEmissaoGuia" ))
+
+    oGuia:aProcimp := aClone(atmp)
+    limpaArray(aTmp)
+    
+    aadd(aGuias,oGuia)    
+
+next
+
+oLote:nValTotal := nValTotal
+oLote:nQtdGuias := nGuias 	
+
+cResp := PLSTISSNWL(oLote, aGuias, aCriticas, cSoapXml)
+freeObj(oGuia)               
+oGuia := nil
+limpaArray(aGuias)
+limpaArray(aTmp)
+return cResp
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} versaoInvalida
+Verifica se a versão do recurso de glosa é válida
+
+@author  Eduardo Bento
+@version P12
+@since   19/11/2021
+/*/
+//-------------------------------------------------------------------
+Function versaoInvalida(cVersao)
+
+Local lInvalido := .F.
+
+Default cVersao := ""
+
+If !Empty(cVersao)
+	BVV->(DbSetOrder(1))
+	If BVV->( Fieldpos("BVV_ACEITA")) > 0 .AND. BVV->( MsSeek( xFilial("BVV") + cVersao  ) )
+		If BVV->BVV_ACEITA == "2" 
+			lInvalido := .T.
+		Endif
+	Endif
+Endif
+
+Return lInvalido
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} procOdonto
+Guias odontológicas
+@version P12
+@since   19/11/2021
+/*/
+//-------------------------------------------------------------------
+static function procOdonto(oXML, oLote, aCriticas, cSoapXml)
+local oGuia     	:= nil
+local cResp     	:= ""
+local cPath     	:= addNS("/loteGuiasWS/loteGuias/guiasTISS")
+local nGuias    	:= 1
+local nProcs		:= 1
+local nX        	:= 1
+local nJ			:= 1
+local aGuias    	:= {}
+local nValTotal	:= 0
+local cNewPath	:= ""
+local atmp			:={}
+local nTotEve		:= 0
+local cSeqItem		:= ""
+
+//carrega variáveis estáticas
+PlVarCarreg()
+
+nGuias := oXML:XPathChildCount( cPath )    
+    
+for nX := 1 to nGuias
+    cPathTag := cPath + addNS("/guiaOdonto")
+    if nGuias > 1
+        cPathTag += "["+ allTrim( str( nX ) ) +"]"
+    endif
+    oGuia := GConsulta():new()
+    
+    //Cabeçalho da guia 
+    oGuia:cRegAnsCab            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/registroANS") )
+    oGuia:cNumGuiPre            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/numeroGuiaPrestador") )   
+    oGuia:cNumGuiPri            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/guiaPrincipal") )
+
+    
+    //dados da autorização - Opcional
+    oGuia:cNumGuiOpe            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/numeroGuiaOperadora" ))
+    oGuia:cDatAutori            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dataAutorizacao" ))
+    oGuia:cSenha                := oXML:XPathGetNodeValue( cPathTag  + addNS( "/senha" ))
+    oGuia:cDatVldSen            := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dataValidadeSenha" ))
+    
+   
+    //Dados beneficiário
+    oGuia:oBenef:cCarteirinha   := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numeroCarteira" ))
+    oGuia:oBenef:cAtendRN       := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/atendimentoRN" ))
+    oGuia:oBenef:cNome          := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/nomeBeneficiario" ))
+    oGuia:oBenef:ccNS           := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/numeroCNS" ))
+    oGuia:oBenef:cIndBenef      := oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosBeneficiario/identificadorBeneficiario" ))
+    
+    //Dados Solicitante 
+	oGuia:oProfSolicitante:cNome  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosProfissionaisResponsaveis/nomeProfSolic" ))
+	oGuia:oProfSolicitante:cConselho		:= "CRO"//oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosSolicitante/profissionalSolicitante/conselhoProfissional" ))    
+	oGuia:oProfSolicitante:cNumCons  		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosProfissionaisResponsaveis/croSolic" ))
+	oGuia:oProfSolicitante:cUF  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosProfissionaisResponsaveis/ufSolic" ))	
+	oGuia:oProfSolicitante:cCBOS  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosProfissionaisResponsaveis/cbosSolic" ))	    
+   
+	
+	//Dados Executante  
+	oGuia:oRDAExecutante:cNome  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosProfissionaisResponsaveis/contratadoExecutante/nomeContratado" ))
+	oGuia:oRDAExecutante:cCnes  			:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/dadosProfissionaisResponsaveis/CNES" ))
+     
+	//for de novo, pois podemos ter vários procedimentos na guia.....
+	nProcs := oXML:XPathChildCount(cPathTag + addNs("/procedimentosExecutados") )
+	aTmp := {}
+
+	cNewPath := cPathTag + addNS("/procedimentosExecutados")
+	nJ := 0
+	While oXML:XPathHasNode(cNewPath)
+
+		nJ++
+        cNewPathW := cNewPath + "["+ allTrim( str( nJ ) ) +"]"
+
+	    aadd(atmp, {	cSeqItem	:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/sequencialItem" )),;
+				 		cCodTab		:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/procSolic/codigoTabela" )),;
+				 		cCodPro		:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/procSolic/codigoProcedimento" )),;
+				 		cDescPro	:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/procSolic/descricaoProcedimento" )),;
+				 		cDente		:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/denteRegiao/codDente" )),;
+				 		cRegiao		:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/denteRegiao/codRegiao" )),;
+				 	 	cFace		:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/denteFace" )),;
+				 		nQtdExe		:= Val(oXML:XPathGetNodeValue( cNewPathW  + addNS( "/qtdProc" ))),;
+				 		nVlrUS		:= val(oXML:XPathGetNodeValue( cNewPathW  + addNS( "/valorUS" ))),;
+				 		nVlrPro		:= val(oXML:XPathGetNodeValue( cNewPathW  + addNS( "/valorProc" ))),;
+						nVlrFran	:= val(oXML:XPathGetNodeValue( cNewPathW  + addNS( "/valorFranquia" ))),;
+						lAutorizado	:= val(oXML:XPathGetNodeValue( cNewPathW  + addNS( "/autorizado" ))),;
+						cDatExec	:= oXML:XPathGetNodeValue( cNewPathW  + addNS( "/dataRealizacao" )) })
+    
+ 		oGuia:oProced:cDatExec		:= cDatExec
+ 		oGuia:oProced:cCodTab		:= cCodTab
+ 		oGuia:oProced:cCodPro		:= cCodPro
+ 		oGuia:oProced:cDescPro		:= cDescPro
+ 		oGuia:oProced:nQtdExe		:= nQtdExe
+ 		oGuia:oProced:nVlrPro		:= nVlrPro
+ 		oGuia:oProced:nVlrTot		:= nVlrPro * nQtdExe //Não tem valor total do evento na guia odonto
+		oGuia:oProced:cSeqItem		:= cSeqItem
+		oGuia:oProced:cDente		:= cDente
+		oGuia:oProced:cRegiao		:= cRegiao
+		oGuia:oProced:cFace			:= cFace
+
+		PlVlOdonto(oLote,oGuia,@aCriticas,nX) 
+
+		oXML:XPathDelNode(cNewPath)
+	EndDo
+ 	
+ 	nTotEve += nJ
+
+   //Observação 	
+	oGuia:cObs                  		:= oXML:XPathGetNodeValue( cPathTag  + addNS( "/observacao" ))
+   
+	//Valores totais
+	oGuia:oXMLTotais:nVlrProcedimento	:= val(oXML:XPathGetNodeValue( cPathTag  + addNS( "/valorTotalProc" ))) 
+    
+    oGuia:aProcimp := aClone(atmp)
+    limpaArray(aTmp)
+    
+    aadd(aGuias,oGuia)    
+
+next
+
+oLote:nValTotal := nValTotal
+oLote:nQtdGuias := nGuias 	
+
+cResp := PLSTISSNWL(oLote, aGuias, aCriticas, cSoapXml, .T.)
+freeObj(oGuia)               
+oGuia := nil
+limpaArray(aGuias)
+limpaArray(aTmp)
+return cResp
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlVlOdonto
+Valida guias Odonto
+@version P12
+@since   19/11/2021
+/*/
+//-------------------------------------------------------------------
+static function PlVlOdonto(oLote, oGuia, aCritSoap, nX)
+	
+	local aVgDatBlo		:= {}
+	local lCritica		:= .f.
+	local dDataAtend	:= PlVerDataX(oGuia:oProced:cDatExec)
+	local cMatNova		:= ""
+	local cNumGuiPre	:= oGuia:cNUMGUIPRE
+	local lRegAns		:= .t.
+	local lPlChHiBlo 	:= .f.
+
+	//verifico o tipo de crítica - no futuro pode ser parametrizado:
+	nValorCrit := 1
+	
+	If !Empty(oGuia:cRegAnsCab)
+		if oObjCompOD["ANS" + oGuia:cRegAnsCab] == Nil
+			BA0->( DbSetOrder(5) ) //BA0_FILIAL+BA0_SUSEP
+			If !BA0->( MsSeek( cFilBA0 + alltrim(oGuia:cRegAnsCab ) ))
+				lRegAns := .f.
+			EndIf
+			oObjCompOD["ANS" + oGuia:cRegAnsCab] := lRegAns
+		endif
+
+		if !oObjCompOD["ANS" + oGuia:cRegAnsCab] .or. !lRegAns
+			aAdd(aCritSoap,{nValorCrit, nX, "", "5027", "REGISTRO ANS DA OPERADORA INVÁLIDO - N Guia: " + AllTrim(cNumGuiPre)})
+		endif
+	EndIf 
+	
+	if !empty(oGuia:oBenef:cCarteirinha)
+		if oObjCompOD["BNF" + oGuia:oBenef:cCarteirinha] == Nil
+			BA1->(dbsetorder(2)) //BA1_FILIAL+BA1_CODINT+BA1_CODEMP+BA1_MATRIC+BA1_TIPREG+BA1_DIGITO
+			if !BA1->(dbseek(cFilBA1 + alltrim(oGuia:oBenef:cCarteirinha)))
+				BA1->(dbsetorder(5))
+				if !BA1->(DbSeek(cFilBA1 + alltrim(oGuia:oBenef:cCarteirinha))) //BA1_FILIAL + BA1_MATANT + BA1_TIPANT
+					lCritica := .t.
+				endif
+			endif
+			oObjCompOD["BNF" + oGuia:oBenef:cCarteirinha] := lCritica
+		endif
+
+		if oObjCompOD["BNF" + oGuia:oBenef:cCarteirinha] .or. lCritica
+			aAdd(aCritSoap,{nValorCrit, nX, "", "1001", "NUMERO DA CARTEIRA INVALIDO - N Guia: " + AllTrim(cNumGuiPre)})
+		endif
+			
+		
+		if !lCritica  //Significa que achou o beneficiário.
+			oObjCompOD["BNF" + oGuia:oBenef:cCarteirinha] := lCritica
+			if oObjCompOD["BNFBCA" + oGuia:oBenef:cCarteirinha + oGuia:oProced:cDatExec] == Nil
+				//Verificar se o beneficiário estava bloqueado no dia do atendimento :
+				if (PlChHiBlo('BCA',dDataAtend,BA1->(BA1_CODINT+BA1_CODEMP+BA1_MATRIC),BA1->BA1_TIPREG,nil,nil,nil,nil,@aVgDatBlo,.F.))
+					// Verifica se a matricula informada e anterior a alguma transferencia
+					if !empty(BA1->(BA1_TRADES)) .and. PlXmlCkDes(BA1->(BA1_TRADES), dDataAtend, @cMatNova)
+						oGuia:oBenef:cCarteirinha := cMatNova
+						BA1->(dbsetorder(2)) //BA1_FILIAL+BA1_CODINT+BA1_CODEMP+BA1_MATRIC+BA1_TIPREG+BA1_DIGITO
+						BA1->(dbseek(cFilBA1 + alltrim(cMatNova)))
+					else
+						lPlChHiBlo := .t.
+					endif
+				endif
+				oObjCompOD["BNFBCA" + oGuia:oBenef:cCarteirinha + oGuia:oProced:cDatExec] := lPlChHiBlo
+			endif
+			if oObjCompOD["BNFBCA" + oGuia:oBenef:cCarteirinha + oGuia:oProced:cDatExec] .or. lPlChHiBlo 
+				aAdd(aCritSoap,{nValorCrit, nX, "", "1016", "BENEFICIÁRIO COM ATENDIMENTO SUSPENSO - N Guia: " + AllTrim(cNumGuiPre)})
+			endif
+			
+			//Verifica se a data do atendimento é menor que a data de inclusão no plano :
+			if (dDataAtend < BA1->BA1_DATINC)	
+				aAdd(aCritSoap,{nValorCrit, nX, "", "1005", "ATENDIMENTO ANTERIOR À INCLUSÃO DO BENEFICIÁRIO - N Guia: " + AllTrim(cNumGuiPre)})
+			endif
+			
+			//Verifica data da carteira	:
+			if (!empty(BA1->BA1_DTVLCR) .and. dDataAtend > BA1->BA1_DTVLCR)	
+				aAdd(aCritSoap,{nValorCrit, nX, "", "1017", "DATA VALIDADE DA CARTEIRA VENCIDA - N Guia: " + AllTrim(cNumGuiPre) })
+			endif
+			
+		endif		
+			
+	endif
+
+return (aCritSoap)
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLSLoteVal
+Realiza a gravação na tabela B1R - Protocolos, gravando a solicitação recebida e enviada.
+
+@version P12
+@since   02/2023
+/*/
+//-------------------------------------------------------------------
+function PLSLoteVal(cXMLString, cXmlRetProc, oDadosObj)
+local cFilB1R		:= xFilial("B1R")
+local lRequesB1R	:= B1R->(FieldPos("B1R_REQUES")) > 0
+local lResponB1R	:= B1R->(FieldPos("B1R_RESPON")) > 0
+
+Default cXMLString 	:= ''
+Default cXmlRetProc	:= {}
+
+if !empty(cXMLString)
+
+	//Quando ocorrer críticas, não gera o código B1R e PEG, vamos conferir e gerar aqui
+	if empty(oDadosObj:cNumB1R)
+		oDadosObj:cNumB1R := PlGerB1RCod()
+	endif
+	if empty(oDadosObj:cCodPegGr)
+		oDadosObj:cCodPegGr := oDadosObj:cNumLote
+	endif
+
+	//Grava o B1R
+	B1R->(RecLock("B1R", .T.))
+		B1R->B1R_FILIAL := cFilB1R
+		B1R->B1R_PROTOC := oDadosObj:cNumB1R // número do protocolo gerado pelo PLS para comunicação -> tamanho 12 caractere
+		B1R->B1R_ORIGEM := oDadosObj:cCodRda
+		B1R->B1R_PROTOG := oDadosObj:cNumLote
+		B1R->B1R_PROTOI := oDadosObj:cCodPegGr
+		B1R->B1R_STATUS := 'B' //Status A -> o loteGuias foi recebido, porém o processamento ainda não foi finalizado //Status B -> O loteguias teve o processamento finalizado e a resposta gerada
+
+		//Requisição SOAP
+		if lRequesB1R
+			B1R->B1R_REQUES := cXMLString
+		endif
+
+		//Resposta SOAP
+		if lResponB1R
+			B1R->B1R_RESPON := cXmlRetProc
+		endif
+	B1R->(MsUnLock())
+
+endif							
+
+return
+	
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} getDestPres
+Capturo a identificação do prestador que foi enviada como destino
+
+@author    Eduardo Bento
+@version   P12
+@since     08/2022
+/*/
+//------------------------------------------------------------------------------------------
+Function getDestPres(oXML,cPathTag)
+
+local aRet := {,,}
+default oXML := nil
+default cPathTag := ""
+
+aRet[1] := oXML:XPathGetNodeValue( cPathTag + addNS("/destino/identificacaoPrestador/CNPJ" ))
+aRet[2] := oXML:XPathGetNodeValue( cPathTag + addNS("/destino/identificacaoPrestador/CPF" ))
+aRet[3] := oXML:XPathGetNodeValue( cPathTag + addNS("/destino/identificacaoPrestador/codigoPrestadorNaOperadora" ))
+
+If !Empty(aRet[1])
+	Return aRet[1]
+Elseif !Empty(aRet[2])
+	Return aRet[2]
+Elseif !Empty(aRet[3])
+	Return aRet[3]
+Endif
+
+Return ""
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} vldDesPres
+Verifica se o prestador existe na base, caso seja enviado como destino em mensagens Prestador->Destino
+O sistema aceitará como destino, a identificação do prestador para estar conforme a documentação
+Ponto de atenção: É provável que a documentação, em uma mensagem prestador -> operadora, obrigue que o 
+destino seja uma operadora. Nesse caso retornar a validação presente no conjunto 674490 (25/04/2022) 
+
+@author    Eduardo Bento
+@version   P12
+@since     08/2022
+/*/
+//------------------------------------------------------------------------------------------
+
+Function vldDesPres(cIdPResDes, cCodRDA)
+
+	Local	lInvalido	:= .T.
+	Default	cIdPResDes	:= ""
+
+	If (Len(cIdPResDes) == 11 .or. Len(cIdPResDes) == 14) // CPF ou CNPJ
+		BAU->(dbSetOrder(4))
+		lInvalido := !BAU->(DbSeek(xfilial("BAU") + alltrim(cIdPResDes)))
+	Else
+		BAU->(DbSetOrder(1))
+		lInvalido := !BAU->(DbSeek(xFilial("BAU") + alltrim(cIdPResDes))) // codigoPrestadorNaOperadora
+	Endif
+
+	cCodRDA := BAU->BAU_CODIGO
+
+return lInvalido
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} PlGerB1RCod
+Função para gerar o código da B1R e verificar se o mesmo já não foi usado, devido alguma falha em semáforo ou SXE/SXF
+@version   P12
+@since     01/2023
+/*/
+//------------------------------------------------------------------------------------------
+function PlGerB1RCod()
+local cNumB1R 	:= ""
+local cFilB1R	:= xFilial("B1R")
+
+B1R->(dbsetOrder(1))
+cNumB1R := GetSXENum("B1R", "B1R_PROTOC")
+
+//Verifica se o número já não foi usado
+while B1R->(MsSeek(cFilB1R + cNumB1R))
+	cNumB1R := GetSXENum("B1R", "B1R_PROTOC")
+Enddo
+B1R->(confirmSX8())
+
+return cNumB1R
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlVarCarreg
+Função para carregar valores nas variáveis estáticas, otimizando processamento
+@version P12
+@since   01/2023
+/*/
+//-------------------------------------------------------------------
+static function PlVarCarreg()
+if !lVarCarreg
+	lVarCarreg	:= .t.
+	cFilBA0		:= xFilial("BA0")
+	cFilBA1		:= xFilial("BA1")
+endif
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLGrvLog
+Função que vai gravar em um arquivo (vldcriticas_webservice.log), na pasta logpls, as informações do erro da execução da expressão BVN, bem como 
+iniciar o tratamento de erro, ao acionar o comando break, já que está dentro do bloco begin sequence.
+Sem o BREAK, a execução continua, sem apresentar erro, mas vai ser retornado um false automático, que vai caracterizar um falso positivo nas validações.
+@version P12
+@since   06/2023
+/*/
+//-------------------------------------------------------------------
+static function PLGrvLog(oErro, cDado, oCab, lAutoma)
+local cCabErro	:= DTOS(Date()) + " - " + Time() + CRLF + "Lote: " + oCab:cNumLote + " -- RDA: " + oCab:cCodRDA + CRLF
+local cRodErro 	:= CRLF + Replicate("-",50) + CRLF
+local cNomeArq	:= "vldcriticas_webservice.log"
+default lAutoma	:= .f.
+
+if !lAutoma
+	PlsLogFil(cCabErro + "Erro encontrado: " + oErro:Description + CRLF + "Expressão da BVN: " + cvaltochar(cDado) + cRodErro, cNomeArq)
+	break //interrompo a execução, informando que ocorreu erro.
+endif
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLCarEspWS 
+Função para tratamento de caracteres a partir de um texto.
+Criado a function pois a classe TXMLManager não está conseguindo fazer o decode de alguns caracteres UTF-8 que está vindo no XML (DTAPPSRV-7551).
+
+obs: Não foi utilizado a função PlRetPonto pois existem chamadas da função fora do fonte WSPLSTISSL, e alterando-o poderá impactar em outros cenários.
+
+@author  Renan Marinho
+@version P12
+@since   11/2023
+/*/
+//--------------------------------------------------------------------
+static Function PLCarEspWS(cTexto)
+	Local cRet := ""
+	Local nChar := 0
+	Local aCarEsp := {}
+	Local x := 1
+	Local y := 2
+
+	If !Empty(cTexto)
+		cRet := cTexto
+			Aadd(aCarEsp,{"´"," " })
+			Aadd(aCarEsp,{","," " })
+			Aadd(aCarEsp,{"("," " })
+			Aadd(aCarEsp,{")"," " })
+			Aadd(aCarEsp,{"\"," " })
+			Aadd(aCarEsp,{":"," " })
+			Aadd(aCarEsp,{"^"," " })
+			Aadd(aCarEsp,{"*"," " })
+			Aadd(aCarEsp,{"#"," " })
+			Aadd(aCarEsp,{"!"," " })
+			Aadd(aCarEsp,{"["," " }) 
+			Aadd(aCarEsp,{"]"," " })
+			Aadd(aCarEsp,{"?"," " })
+			Aadd(aCarEsp,{";"," " })
+			Aadd(aCarEsp,{"`"," " })
+			Aadd(aCarEsp,{Chr( 166)," " })
+			Aadd(aCarEsp,{Chr( 167)," " })
+			Aadd(aCarEsp,{"@"," " })
+			Aadd(aCarEsp,{"~"," " })
+			Aadd(aCarEsp,{"¨"," " })
+			Aadd(aCarEsp,{"{"," " })
+			Aadd(aCarEsp,{"}"," " })
+			Aadd(aCarEsp,{"+"," " })
+			Aadd(aCarEsp,{"_"," " })
+			Aadd(aCarEsp,{"<"," " })
+			Aadd(aCarEsp,{">"," " })
+			Aadd(aCarEsp,{"&"," "})
+			Aadd(aCarEsp,{"|"," "})
+			Aadd(aCarEsp,{"°"," "})	
+			Aadd(aCarEsp,{"•"," "})
+			Aadd(aCarEsp,{"º"," "})
+			Aadd(aCarEsp,{"¬"," "})
+			Aadd(aCarEsp,{"¢"," "})		
+			Aadd(aCarEsp,{"¿"," "})
+			Aadd(aCarEsp,{"”"," "})
+			Aadd(aCarEsp,{"©"," "})
+			Aadd(aCarEsp,{"	"," "})
+			Aadd(aCarEsp,{"§"," "})
+			Aadd(aCarEsp,{"•"," "})
+			Aadd(aCarEsp,{"Ã£","ã"})
+			Aadd(aCarEsp,{"Ãª","ê"})
+			Aadd(aCarEsp,{"Â–",""})			
+
+			For nChar := 1 To Len(aCarEsp)
+				cRet := StrTran(cRet,aCarEsp[nChar,x],aCarEsp[nChar,y])
+			Next
+	EndIf
+
+Return(cRet)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getOrigem 
+Valida RDA Origem
+
+@version P12
+@since   11/2023
+/*/
+//--------------------------------------------------------------------
+
+Static Function getOrigem(oXML,cPathTag)
+
+	local aRet := {'','',''}
+	Local cRet := ''
+	default oXML := nil
+	default cPathTag := ""
+
+	aRet[1] := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/identificacaoPrestador/CNPJ" ))
+	aRet[2] := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/identificacaoPrestador/CPF" ))
+	aRet[3] := oXML:XPathGetNodeValue( cPathTag + addNS("/origem/identificacaoPrestador/codigoPrestadorNaOperadora" ))
+
+	If !Empty(aRet[1])
+		cRet := AllTrim(aRet[1])
+	Elseif !Empty(aRet[2])
+		cRet := AllTrim(aRet[2])
+	Elseif !Empty(aRet[3])
+		cRet := AllTrim(aRet[3])
+	Endif
+
+Return cRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} valCodTab 
+Valida codigo da tabela no DEPARA
+
+@version P12
+@since   05/2024
+/*/
+//--------------------------------------------------------------------
+Static Function valCodTab(cCodTab,cAlias,cCodTabXml,cProcXml)
+	Local aTabDup	:= {}
+	Local nFor		:= 0
+	Local nLen		:= 0
+	Local cValSis	:= ""
+	Local cNewCdTab	:= ""
+	Local cCdTabRet	:= cCodTab
+	Local cFilBR8	:= xFilial("BR8")
+
+	cCodTab 	:= AllTrim(cCodTab)
+	cCodTabXml 	:= AllTrim(cCodTabXml)
+	cProcXml 	:= AllTrim(cProcXml)
+
+	If cAlias == "BR8"
+		dbSelectArea("BTU")
+		BTU->(dbSetOrder(3)) //BTU_FILIAL+BTU_CODTAB+BTU_ALIAS+BTU_CDTERM
+		If BTU->(MsSeek(xFilial("BTU")+cCodTabXml+cAlias+cProcXml))
+			cValSis := AllTrim(BTU->BTU_VLRSIS)
+			If cValSis != cFilBR8+cCodTab+cProcXml
+				aTabDup	:= PlsBusTerDup(SuperGetMv("MV_TISSCAB", .F. ,"87"))
+				nLen := Len(aTabDup)
+				For nFor := 1 to nLen
+					If AllTrim(aTabDup[nFor][01]) == cCodTabXml .AND. AllTrim(aTabDup[nFor][02]) <> cCodTab
+						cNewCdTab := AllTrim(aTabDup[nFor][02])
+						If cValSis == cFilBR8+cNewCdTab+cProcXml
+							cCdTabRet := cNewCdTab
+							exit
+						EndIf
+					EndIf
+				Next nFor
+			EndIf
+		EndIf
+	Endif
+
+Return cCdTabRet

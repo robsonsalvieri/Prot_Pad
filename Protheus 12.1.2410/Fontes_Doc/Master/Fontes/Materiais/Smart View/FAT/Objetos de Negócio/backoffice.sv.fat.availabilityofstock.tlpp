@@ -1,0 +1,456 @@
+#include "protheus.ch"
+#include "fwlibversion.ch"
+#include "totvs.ch"
+#include "msobject.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+#include "tlpp-rest.th"
+#include "tlpp-core.th"
+#include "backoffice.sv.fat.availabilityofstock.ch"
+
+Static __LookUp := FwLibVersion() >= "20231121" as logical
+Static __aPrepPDV := {} as array
+
+
+namespace totvs.protheus.backoffice.sv.fat.availabilityofstock.treportsintegratedprovider
+using namespace totvs.framework.treports.integratedprovider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team="SIGAFAT", tables="SC6,SC9,SB1,SB2", name="Disponibilidade de Estoque para Vendas", country="ALL", customTables="SB1" )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} availabilityofstockSmartViewBusinessObject
+Classe para criação do Objeto de Negócio para listagem de processos de venda
+
+@author FAT/CRM
+@since 01/08/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------  
+Class availabilityofstockSmartViewBusinessObject from IntegratedProvider
+    
+    public method new() 		as object
+    public method getData() 	as object
+    public method getSchema() 	as object
+	public method FatSv017CreateSQL()
+
+	protected data aFields      as array
+	protected data aStruct      as array
+	protected data aFieldsValue as array
+	protected data cQryPdv 		as character
+	protected data cAliasProd 	as character
+    protected data cLocSelect 	as character
+    protected data cLocWhere 	as character
+	protected data ojItems 		as json
+
+Endclass
+ 
+//-------------------------------------------------------------------
+/*{Protheus.doc} new
+Método de instância da classe
+ 
+@return object: self
+ 
+@author FAT/CRM
+@since 01/08/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method new() class availabilityofstockSmartViewBusinessObject
+	
+	_Super:new()
+    self:appendArea(STR0001) 	 //"Faturamento"
+    self:setDisplayName(STR0002) //"Disponibilidades"
+    self:setDescription(STR0003) //"Relação de Disponibilidade de Estoque para Venda"
+    self:setIsLookUp(.T.)		 //Define que terá consulta de LookUp
+	
+	self:aFields        := {}
+	self:aFieldsValue   := {}
+	self:cLocSelect		:= ""
+	self:cQryPdv		:= ""
+	self:cAliasProd		:= ""
+	self:cLocWhere    	:= ""
+
+Return self
+ 
+/*{Protheus.doc} getData
+Retorna os dados do objeto de negócio
+ 
+@param nPage, numérico, indica a página atual do Relação
+@param oFilter, objeto, contém o filtro do TReports
+ 
+@return object: self:oData
+ 
+@author FAT/CRM
+@since 01/08/2023
+@version 1.0
+*/
+Method getData(nPage as numeric, oFilter as object) as object class availabilityofstockSmartViewBusinessObject
+
+	Local xValue        := "" as character
+	Local cMD5			:= "" as character
+	Local cFilAtu		:= "" as character
+	Local cProdAtu		:= "" as character
+	Local nX        	:= 0  as numeric
+	Local nQAtu			:= 0  as numeric
+	Local nQEmp			:= 0  as numeric
+	Local nPed			:= 0  as numeric
+	Local nBlo			:= 0  as numeric
+	Local nRes			:= 0  as numeric
+	Local nDisp 		:= 0  as numeric
+	Local nScan			:= 0  as numeric
+	Local nPosPrepared  := 0  as numeric
+	Local aInsPdv		:= {} as array
+	Local cAliasPdv 	:= GetNextAlias() as character
+	Local nTamProd 		:= TamSx3("B1_COD")[1] as numeric
+
+	//Verifica se precisa fazer o tratamento para LGPD 
+	Local aPDFields 	:= FatGetfieldsLGPD(self:aFields, self:getCustomFields() ) as array
+	Local lObfuscated 	:= len( aPDFields ) > 0 as logical
+
+	MV_FIL	 := ""
+	MV_ORDER := 1
+
+	//Metodo para retorno do json dos parametros 
+    FatSetValueMVPAR(oFilter:GetParameters(), "MTR690")
+
+	//Tratamento tamanho do campo mascara do produto
+	MV_PAR07 := PADR(MV_PAR07, nTamProd)
+
+	MV_ORDER := IIf(MV_ORDER == 0, 1, MV_ORDER)
+
+	self:aFieldsValue:= {{"B2_QATU",     {"B2_QATU",  	"", 'nQatu'}},;
+                    	 {"B2_QEMP",     {"B2_QEMP",   	"", 'nQEmp'}},;
+						 {"B2_RESERVA",  {"B2_RESERVA", "", 'nRes' }},;
+                    	 {"NPED",        {"NPED",      	"", 'nPed' }},;
+                    	 {"NBLO",      	 {"NBLO",      	"", 'nBlo' }},;
+                    	 {"NDISP",       {"NDISP",     	"", 'nDisp'}}}             
+
+	//Chamo o método para montar a query da SB1
+	self:FatSv017CreateSQL()
+	
+	DbSelectArea((self:cAliasProd))
+
+	//Posiciona no registro inicial
+	(self:cAliasProd)->(DbGoTop())
+
+	// Percorre a tabela de produtos
+	While (Self:cAliasProd)->(!Eof())
+		
+		cFilAtu  := FatSVFilial("SC6","C6_FILIAL",(self:cAliasProd)->TMP_FILORI)
+		cProdAtu := (self:cAliasProd)->B1_COD
+
+		If ValidMasc(cProdAtu, MV_PAR07)
+
+			__aPrepPDV := {}
+			aInsPdv := {}
+			nQatu := 0
+			nQEmp := 0
+			nRes  := 0
+			nDisp := 0
+			nPed := 0
+			nBlo := 0
+
+			nQatu += (self:cAliasProd)->B2_QATU + Iif(MV_PAR10 == 1,0,(self:cAliasProd)->B2_SALPEDI)
+			nQEmp += (self:cAliasProd)->B2_QEMP
+			nRes  += (self:cAliasProd)->B2_RESERVA
+
+			aAdd(aInsPdv, FwJoinFilial("SF4", "SC6"))
+			aAdd(aInsPdv, 'S')
+			aAdd(aInsPdv, ' ')
+			aAdd(aInsPdv, ' ')
+			aAdd(aInsPdv, cFilAtu)
+			aAdd(aInsPdv, cProdAtu)
+			aAdd(aInsPdv, ' ')
+			
+			cMD5 := MD5(self:cQryPdv)
+
+			If (nPosPrepared := Ascan(__aPrepPDV,{|x| x[2] == cMD5})) == 0
+				self:cQryPdv := ChangeQuery(self:cQryPdv)
+				Aadd(__aPrepPDV,{FwExecStatement():New(self:cQryPdv),cMD5})
+				nPosPrepared := Len(__aPrepPDV)
+			EndIf
+
+			For nX := 1 To Len(aInsPdv)
+				If nX == 1
+					__aPrepPDV[nPosPrepared][1]:SetUnsafe(nX, aInsPdv[nX])
+				Else	
+					__aPrepPDV[nPosPrepared][1]:SetString(nX, aInsPdv[nX])
+				Endif	
+			Next nX
+			
+			__aPrepPDV[nPosPrepared][1]:OpenAlias(cAliasPdv)
+
+			DbSelectArea(cAliasPdv)
+
+			(cAliasPdv)->(dbGoTop())
+
+			While (cAliasPdv)->(!Eof()) 
+
+				If !(mv_par08 == 2 .And. Alltrim((cAliasPdv)->C6_BLQ) == "S") .And. !(mv_par09 == 2 .And. Alltrim((cAliasPdv)->C6_BLQ) == "R")// Bloqueado ou Residuo
+
+					If (cAliasPdv)->C6_LOCAL >= mv_par03 .And. (cAliasPdv)->C6_LOCAL <= mv_par04
+
+						nPed := nPed + ((cAliasPdv)->C6_QTDVEN-(cAliasPdv)->C6_QTDENT-(cAliasPdv)->C6_QTDEMP-(cAliasPdv)->C6_QTDRESE)
+
+						If  ( !Empty((cAliasPdv)->C9_BLCRED) .Or. !Empty(((cAliasPdv)->C9_BLEST) ) .And.( (cAliasPdv)->C9_BLCRED != "10" .And. (cAliasPdv)->C9_BLEST != "10" ) )
+							
+							nBlo += (cAliasPdv)->C9_QTDLIB - (cAliasPdv)->C9_QTDRESE
+						EndIf
+
+					EndIf
+
+				EndIf
+
+				(cAliasPdv)->(dbSkip())
+
+			EndDo
+			
+			dbSelectArea(self:cAliasProd)
+
+			nDisp := nQatu-nRes-nPed-nBlo-nQEmp
+
+			If nPed != 0 .OR. nQatu != 0 .Or. nBlo <> 0
+
+				self:ojItems := JsonObject():new()
+				For nX := 1 To Len(self:aStruct)
+
+					If (nScan := aScan(self:aFieldsValue, {|x| x[1] == self:aStruct[nX][5]})) > 0
+						xValue := FatGetValueFields(self:aFieldsValue[nScan][1], "self:cAliasProd", self:aFieldsValue[nScan][2])
+					Else
+						xValue := "(self:cAliasProd)->"+self:aStruct[nX][5]
+					EndIf
+
+					self:ojItems[self:aStruct[nX][1]] := IIF(lObfuscated .And. (nScan := aScan(aPDFields, {|x| x[1] == self:aStruct[nX][5]})) > 0,;
+															aPDFields[nScan][2],;
+															IIF(UPPER(self:aStruct[nX][3]) == "DATE",;
+																IIF(ValType(&(xValue)) == "C",;
+																	totvs.framework.treports.date.stringToTimeStamp(&(xValue)), totvs.framework.treports.date.dateToTimeStamp(&(xValue))),;
+																	&(xValue)))
+				Next
+
+				self:processData(1)                 //Método para inclusão dos campos localizados no "self:ojItems"
+				self:oData:appendData(self:ojItems) //Efetuar append dos registros para o objeto do SmartView
+
+			EndIf
+
+		EndIf
+
+		(self:cAliasProd)->(dbSkip())
+
+	Enddo
+
+	If Select(self:cAliasProd) > 0
+		(self:cAliasProd)->(DbCloseArea())
+	Endif
+
+	If Select(cAliasPdv) > 0
+		(cAliasPdv)->(DbCloseArea())
+	Endif
+
+	FwFreeArray(self:aFieldsValue)
+	FwFreeArray(aPDFields)
+	aSize(aInsPdv ,0)
+
+Return self:oData
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} getSchema
+Retorna a estrutura dos campos
+ 
+@return object: self:oSchema
+ 
+@author FAT/CRM
+@since 01/08/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method getSchema() as object class availabilityofstockSmartViewBusinessObject
+
+	Local nX            := 0  as numeric
+    Local aStruCpoFake  := {} as array
+	Local aParameters 	:= {} as array
+
+    self:aFields := {"B1_FILIAL","B1_COD", "B1_DESC", "B1_TIPO" ,"B1_UM", "B2_QATU", "B2_QEMP", "NPED", "NBLO", "B2_RESERVA", "NDISP"}
+	
+    //Array com estrutura dos campos Fake para montar o addproperty
+	aStruCpoFake :={{"NPED"	, STR0010, "number", STR0010, "NPED"	},; 	//Pedidos Pendentes
+					{"NBLO"	, STR0011, "number", STR0011, "NBLO"	},; 	//Pedidos Bloqueados
+					{"NDISP", STR0013, "number", STR0013, "NDISP"	}} 		//Disponível para Venda
+
+	self:aStruct := FatTrGetStruct(self:aFields, aStruCpoFake)
+
+	// Cria a estrutura dos campos Padroes                                   
+	For nX := 1 To Len(self:aStruct)
+        self:oSchema:addProperty(self:aStruct[nX][01], self:aStruct[nX][02], self:aStruct[nX][03], self:aStruct[nX][04], self:aStruct[nX][05])
+    Next
+
+	aParameters := FtSVSetParam("MTR690")
+
+	// Cria a estrutura dos parametros Customizados      
+	self:oSchema:addParameter("MV_FIL"  , STR0016 +" ?"	, "string"	, .T.,,,,,, FTSVHelp(,,,.T.)) 	//Filial                             
+	self:oSchema:addParameter("MV_ORDER", STR0014 +" ?"	, "string"	, .F.,,,,,, FTSVHelp(,,.T.))	//Ordem
+
+	For nX := 1 To Len(aParameters)
+		self:oSchema:addParameter(aParameters[nX][1], aParameters[nX][2], aParameters[nX][3], aParameters[nX][4],,,,,, aParameters[nX][5])
+	Next nX
+
+	If __LookUp //Validação para versão da Lib
+
+		self:setCustomURL("MV_PAR05", "api/framework/v1/genericLookupService/smartview/02", 2)
+		self:setCustomURL("MV_PAR06", "api/framework/v1/genericLookupService/smartview/02", 2)
+		self:setCustomURL("MV_PAR08", "api/framework/treports/integratedprovider/v1/options/MTR690/MV_PAR08", 1)
+        self:setCustomURL("MV_PAR09", "api/framework/treports/integratedprovider/v1/options/MTR690/MV_PAR09", 1)
+        self:setCustomURL("MV_PAR10", "api/framework/treports/integratedprovider/v1/options/MTR690/MV_PAR10", 1)
+		self:setCustomURL("MV_ORDER", "api/faturamento/smartview/v1/options/fat/availabilityofstock/SVFTaf001/1", 1)
+		self:setCustomURL("MV_PAR01", "api/framework/v1/genericLookupService/smartview/SB1", 2)
+		self:setCustomURL("MV_PAR02", "api/framework/v1/genericLookupService/smartview/SB1", 2)
+		self:setCustomURL("MV_PAR03", "api/framework/v1/genericLookupService/smartview/NNR", 2)
+		self:setCustomURL("MV_PAR04", "api/framework/v1/genericLookupService/smartview/NNR", 2)
+		self:setCustomURL("MV_FIL",   "api/framework/v1/genericLookupService/smartview/SM0", 2)
+	EndIf
+
+	FwFreeArray(aStruCpoFake)
+
+Return self:oSchema
+
+/*{Protheus.doc} SVFTaf001
+Retorna as opçoes disponível para o parâmetro de ordem.
+
+@return array: Array com as opçoes.
+
+@author FAT/CRM
+@since 15/08/2023
+@version 1.0
+*/   
+Function SVFTaf001(cOpcao) 
+    Local aRet := {} as array
+	
+	//Codigo, Tipo, Descrição e Local Padrão
+    If cOpcao == "1" 
+        aRet := { STR0004, STR0006, STR0005, STR0015 } 
+    EndIf
+	
+Return aRet
+
+/*{Protheus.doc} FatSv017CreateSQL
+	Retorna todas as querys montadas
+	@author FAT/CRM
+	@since 06/02/2026
+	@version 1.0
+	@return Nil
+*/
+
+Method FatSv017CreateSQL() Class availabilityofstockSmartViewBusinessObject
+	Local nParam 			:= 1   as numeric
+	Local nX 				:= 0   as numeric
+	Local cNameTmp 			:= ""  as character
+	Local cFieldsQry 		:= ""  as character
+	Local cQryProd 			:= ""  as character
+	Local oTempTableBranch	:= Nil as object
+	Local oQryProd 	 		:= Nil as object
+	Local aFiliais	 		:= {}  as array
+	Local aCustomFields	 	:= {}  as array
+	Local aGroupBy	 		:= {}  as array
+	Local aOrder	 		:= {}  as array
+	Local cGroupBy    		:= "" as character
+
+	// Função que verifica se há filiais informadas no parâmetro
+	aFiliais := FatGetMVFiliais(MV_FIL)
+
+	// Função que irá criar a tabela temporaria para fazer o Join de filiais
+	oTempTableBranch := FatSVTableTempBranch(aFiliais, "SB1", "B1_FILIAL")
+
+	cNameTmp := oTempTableBranch:GetTableNameForQuery()
+	
+	// Verifica o Filtro                                             
+	cFieldsQry += "B1_FILIAL,B1_COD,B1_DESC,B1_UM,B1_LOCPAD,B1_TIPO,TMP_FILORI,"
+	cFieldsQry += "SUM(SB2.B2_QATU) B2_QATU,SUM(SB2.B2_QEMP) B2_QEMP,SUM(SB2.B2_RESERVA) B2_RESERVA,SUM(SB2.B2_SALPEDI) B2_SALPEDI "
+	cFieldsQry += Self:cLocSelect
+
+	//Adiciona campos customizados (no array da estrutura)
+	FatInjCposPerson(@self:aFieldsValue,@self:aStruct, @cFieldsQry, self:getCustomFields(), .T., .T., .T.)
+
+	cGroupBy := "B1_FILIAL,B1_COD,B1_DESC,B1_UM,B1_LOCPAD,B1_TIPO,TMP_FILORI"
+
+	//Verifica se temm campos customizados
+	aCustomFields := self:getCustomFields()
+
+	If Len(aCustomFields) > 0
+		cGroupBy += ","
+	Endif
+
+	//Adiciono o campo no array aGroupBy
+	For nX := 1 To Len(aCustomFields)
+		aAdd(aGroupBy,aCustomFields[nX,1])
+	Next
+	
+	//Transformo o array em string para a consulta SQL
+	cGroupBy += ArrTokStr(aGroupBy, ",")
+				
+	// Define a ordenação com base no parâmetro MV_ORDER
+	aOrder := 	{   " SB1.B1_FILIAL,SB1.B1_LOCPAD,SB1.B1_COD ",;   //STR0005 ORDEM 3
+					" SB1.B1_FILIAL,SB1.B1_TIPO,SB1.B1_COD ",;   //STR0006 ORDEM 2
+					" SB1.B1_FILIAL,SB1.B1_DESC,SB1.B1_COD ",;			     //STR0004 ORDEM 1
+                	" SB1.B1_FILIAL,SB1.B1_COD ",; //STR0015 ESSE INDICE NÃO EXISTE NA TABELA
+				}
+
+	cQryProd := " SELECT ? "
+	cQryProd += " FROM " + RetSqlName("SB1") + " SB1"
+	cQryProd += " INNER JOIN ? TMPFIL"
+	cQryProd += " ON TMPFIL.TMP_FILIAL = SB1.B1_FILIAL"	
+	cQryProd += " LEFT JOIN "+ RetSqlName("SB2") +" SB2 ON ? "
+	cQryProd += " AND SB2.B2_COD =  SB1.B1_COD  "
+	cQryProd += " AND SB2.B2_LOCAL  BETWEEN ? AND ?" 
+	cQryProd += " AND SB2.D_E_L_E_T_ = ?" 
+	cQryProd += " WHERE SB1.B1_FILIAL = TMPFIL.TMP_FILIAL "
+	cQryProd += " AND SB1.B1_TIPO BETWEEN ? AND ? "
+	cQryProd += " AND SB1.B1_COD BETWEEN ? AND ? "
+	cQryProd += " ? "
+	cQryProd += " AND SB1.D_E_L_E_T_ = ?"
+	cQryProd += " GROUP BY ?"
+	cQryProd += " ORDER BY ? "
+		
+	oQryProd := FwExecStatement():New(ChangeQuery(cQryProd))
+	oQryProd:SetUnsafe(nParam++ , cFieldsQry)
+	oQryProd:SetUnsafe(nParam++ , cNameTmp)
+	oQryProd:SetUnsafe(nParam++ , FwJoinFilial("SB2", "SB1"))
+	oQryProd:SetString(nParam++ , mv_par03)
+	oQryProd:SetString(nParam++ , mv_par04)
+	oQryProd:SetString(nParam++ , ' ')
+	oQryProd:SetString(nParam++ , mv_par05)
+	oQryProd:SetString(nParam++ , mv_par06)
+	oQryProd:SetString(nParam++ , mv_par01)
+	oQryProd:SetString(nParam++ , mv_par02)
+	oQryProd:SetUnsafe(nParam++ , self:cLocWhere)
+	oQryProd:SetString(nParam++ , ' ')		
+	oQryProd:SetUnsafe(nParam++ , cGroupBy)
+	oQryProd:SetUnsafe(nParam++, IIf(MV_ORDER > 0, aOrder[MV_ORDER], aOrder[1]))
+
+	self:cAliasProd := oQryProd:OpenAlias()
+
+	self:cQryPdv := " SELECT SC6.C6_FILIAL,SC6.C6_PRODUTO,SC6.C6_QTDVEN,SC6.C6_QTDEMP,SC6.C6_QTDENT,SC6.C6_QTDRESE,SC6.C6_BLQ,SC6.C6_NUM,SC6.C6_ITEM,SC6.C6_LOCAL, "
+	self:cQryPdv += " SC9.C9_BLCRED,SC9.C9_BLEST,SC9.C9_SEQUEN,SC9.C9_QTDLIB,SC9.C9_QTDRESE "
+	self:cQryPdv += " FROM " + RetSqlName("SC6") + " SC6 "
+	self:cQryPdv += " INNER JOIN " + RetSqlName("SF4") + " SF4 ON ? "
+	self:cQryPdv += " AND SF4.F4_CODIGO = SC6.C6_TES " 
+	self:cQryPdv += " AND SF4.F4_ESTOQUE  = ? "
+	self:cQryPdv += " AND SF4.D_E_L_E_T_ = ? "
+	self:cQryPdv += " LEFT JOIN " + RetSqlName("SC9") + " SC9 ON SC9.C9_FILIAL = SC6.C6_FILIAL "
+	self:cQryPdv += " AND SC9.C9_PEDIDO = SC6.C6_NUM "
+	self:cQryPdv += " AND SC9.C9_PRODUTO = SC6.C6_PRODUTO "
+	self:cQryPdv += " AND SC9.C9_ITEM = SC6.C6_ITEM "
+	self:cQryPdv += " AND  SC9.D_E_L_E_T_ = ? " 
+	self:cQryPdv += " WHERE SC6.C6_FILIAL = ? "
+	self:cQryPdv += " AND SC6.C6_PRODUTO = ? "
+	self:cQryPdv += " AND SC6.C6_QTDVEN > SC6.C6_QTDENT "
+	self:cQryPdv += " AND SC6.D_E_L_E_T_  = ? "
+	self:cQryPdv += "ORDER BY SC6.C6_FILIAL,SC6.C6_PRODUTO,SC6.C6_NUM,SC6.C6_ITEM "
+
+	oTempTableBranch:Delete()
+	FreeObj(oQryProd)
+	FreeObj(oTempTableBranch)
+	FwFreeArray(aFiliais)
+	FwFreeArray(aCustomFields)
+	FwFreeArray(aGroupBy)
+	FwFreeArray(aOrder)
+
+Return 

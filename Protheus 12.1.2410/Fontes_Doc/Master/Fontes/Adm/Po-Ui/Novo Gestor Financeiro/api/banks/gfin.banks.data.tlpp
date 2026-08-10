@@ -1,0 +1,183 @@
+#include 'tlpp-core.th'
+#include 'gfin.banks.data.ch'
+#Include 'FwSchedule.ch'
+#include 'totvs.ch'
+
+NameSpace gfin.api.banks
+using namespace gfin.util
+
+/*/
+{Protheus.doc} apiDefaultFields
+  campos default para retorno
+
+  @return  array, lista de campos
+
+  @author Renato Ito
+  @since 01/03/2021
+/*/
+Function apiDefaultFields(aApiFields as Array) As Array
+  Local cFields := '' as character
+  Local nField  := 0  as numeric
+  Default aApiFields := {}
+
+  cFields := 'A6_FILIAL,A6_COD,A6_AGENCIA,A6_NUMCON,A6_NOME,A6_NREDUZ'
+
+  for nField := 1 to len(aApiFields)
+    if !(aApiFields[nField] $ cfields)
+      cfields += ',' + aApiFields[nField]
+    endif
+  next
+  // retira o campo de filial se for compartilhado
+  if FWModeAccess('SA6', 1) == 'C'
+    strTran(cfields, 'A6_FILIAL,', '')
+  endif
+Return STRtoArray(cFields, ',')
+
+/*/
+{Protheus.doc} apiBanksQuery
+  query padrão para listagem de bancos
+
+  @return  query As Character, query
+
+  @author Renato Ito
+  @since 01/03/2021
+/*/
+Function apiBanksQuery() As Character
+  Local query As Character
+
+  query := " SELECT #QueryFields#"
+  query += " FROM " + RetSqlName('SA6') + " SA6"
+  query += " WHERE #QueryWhere#"
+Return query
+
+/*/
+{Protheus.doc} apiBanksQueryWhere
+  condição padrão para query
+
+  @return  queryWhere As Character, condição
+
+  @author Renato Ito
+  @since 01/03/2021
+/*/
+Function apiBanksQueryWhere(branches As Array) As Character
+  Local queryWhere As Character
+
+  queryWhere := "SA6.D_E_L_E_T_ = ' ' "
+  If !Empty(branches)
+    queryWhere += "AND SA6.A6_FILIAL IN (" + gfin.util.branchesFormatToIn(branches, 'SA6') + ")"
+  EndIf
+Return queryWhere
+
+/*/
+  {Protheus.doc} apiBanksQueryOrder
+  ordenação padrão para query
+
+  @return  queryOrder As Character, order para query
+
+  @author renato.ito
+  @since 01/03/2021
+/*/
+Function apiBanksQueryOrder() As Character
+  Local queryOrder As Character
+  queryOrder := 'A6_FILIAL,A6_COD,A6_AGENCIA,A6_NUMCON'
+Return queryOrder
+
+/*/
+{Protheus.doc} banksUpdate
+  Atualização dos bancos
+
+  @param bankId as Array, chave do banco
+  @param fields as Array, {campo, valor}
+
+  @return  queryOrder As Character, order para query
+
+  @author Renato Ito
+  @since 01/03/2021
+/*/
+Function banksUpdate(bankId As Array, fields As Array)
+  Local bankAuto      As Array
+  Local field         As Numeric
+  Local index         As Numeric
+  Local error         As Array
+  Local errorContent  As Character
+  Local response      As Json
+  Local validBolecode As Json
+  Private lMsErroAuto As Logical
+  Private lAutoErrNoFile := .T. As Logical
+
+  bankAuto := {}
+  response := JsonObject():New()
+  validBolecode := JsonObject():New()
+  validBolecode['result'] := .T.
+  AAdd(bankAuto, {'A6_FILIAL' , PadR(bankId[1], TamSX3('A6_FILIAL')[1])  , Nil})
+  AAdd(bankAuto, {'A6_COD'    , PadR(bankId[2], TamSX3('A6_COD')[1])     , Nil})
+  AAdd(bankAuto, {'A6_AGENCIA', PadR(bankId[3], TamSX3('A6_AGENCIA')[1]) , Nil})
+  AAdd(bankAuto, {'A6_NUMCON' , PadR(bankId[4], TamSX3('A6_NUMCON')[1])  , Nil})
+  For field := 1 To Len(fields)
+    AAdd(bankAuto, {fields[field][1] , fields[field][2], Nil})
+  Next
+
+  dbSelectArea("SA6")
+  dBSetOrder(1) //A6_FILIAL+A6_COD+A6_AGENCIA+A6_NUMCON
+
+  If SA6->(DBSeek(bankAuto[1][2] + bankAuto[2][2] + bankAuto[3][2] + bankAuto[4][2] ))
+    Do Case
+      Case SA6->A6_BCOOFI == '341' .AND. FindFunction('totvs.protheus.backoffice.ngf.itau.validBolecode')
+        validBolecode := totvs.protheus.backoffice.ngf.itau.validBolecode(bankAuto)
+      Case SA6->A6_BCOOFI == '237' .AND. FindFunction('totvs.protheus.backoffice.ngf.bills.validBolPix')
+        validBolecode := totvs.protheus.backoffice.ngf.bills.validBolPix(bankAuto)
+    End Case
+    If validBolecode['result']    
+      MSExecAuto({|a,b| MATA070(a, b)}, bankAuto, 4) // 4 - alteração
+
+      If(lMsErroAuto)
+        error := GetAutoGRLog()
+        For index := 1 To Len(error)
+          errorContent += error[index] + CRLF
+        Next index
+        response := answerErrorFormat(500, 'Internal Error', errorContent)
+      Else
+        response["result"]   := .T.
+        response["response"] := JsonObject():New()
+        response["response"]["status"] := 'Ok'
+      EndIf
+    Else
+      response := answerErrorFormat(403, 'Falha na configuração do layout', validBolecode['response']['errorMessage'])
+    EndIf      
+  Else
+    response := answerErrorFormat(403, 'BankId', STR0001)
+  EndIf
+Return response
+
+/*/
+{Protheus.doc} updateSysAppParam
+  Atualização das credenciais na SYS_APP_PARAM
+
+  @param cPDTenant, caracter, Tenant
+  @param cPDUser, caracter, Usuário
+  @param cPDPss, caracter, Password
+  @param cExtBusId, caracter, External Business Id
+  @param cPosId, caracter, Ponto de Venda
+
+  @author Daniel Moda
+  @since 01/02/2024
+/*/
+Function updateSysAppParam(cPDTenant As Character, cPDUser As Character, cPDPss As Character, cExtBusId As Character, cPosId As Character, cBranch As Character)
+
+  Local oConfigS   As Object
+  Local cChaveConf As Character
+
+  cChaveConf := cEmpAnt + AllTrim(cBranch)
+
+  oConfigS := JSONObject():New()
+  oConfigS["fin_user_techfin_" 	+ cChaveConf]	:= AllTrim(cPDUser)
+  oConfigS["fin_password_techfin_" + cChaveConf]	:= AllTrim(cPDPss)
+  oConfigS["fin_tenant_techfin_" 	+ cChaveConf]	:= AllTrim(cPDTenant)
+  oConfigS["fin_idpos_techfin_" 	+ cChaveConf]	:= AllTrim(cPosId)
+  oConfigS["fin_extBusId_techfin_" + cChaveConf]	:= AllTrim(cExtBusId)
+  FwTFSetConfig(oConfigS)
+
+  FreeObj(oConfigS)
+Return
+
+

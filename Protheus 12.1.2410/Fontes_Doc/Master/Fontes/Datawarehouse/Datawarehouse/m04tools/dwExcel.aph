@@ -1,0 +1,135 @@
+<%
+// ######################################################################################
+// Projeto: DATA WAREHOUSE
+// Modulo : M04 - Tools
+// Fonte  : dwExcel - Rotina de integração com o Excel
+// ---------+-------------------+--------------------------------------------------------
+// Data     | Autor             | Descricao
+// ---------+-------------------+--------------------------------------------------------
+// 25.05.05 | 0548-Alan Candido |
+// --------------------------------------------------------------------------------------
+
+#include "dwincs.ch"
+#include "dwexcel.ch"
+local cRet := STR0001, cLixo, lOk //"NEGADO"
+local aDWList := {}, nInd, aFields := {}   
+local aConsList := {}
+local cPrepExec := "", cCRC, aParams 
+local oUser := TDWUser():New()   
+local oConsulta
+local nIdCons	:= 0
+	                 
+if dwVal(HttpGet->oper) == OP_EXCEL_LOGIN
+	HttpSession->LoginData 	:= nil        
+	If oSigaDW:Excel() == EXCEL_NONE
+		cRet := STR0003
+	else
+		if oUser:Login(Httpget->u, URLDecode( Httpget->p ) )
+			for nInd := 1 to len(oSigaDW:DWList():faItems)      
+				lOk := oUser:GetDwAcessPerm(oSigaDW:DWList():faItems[nInd, 1])
+				if lOk
+					aAdd(aDWList, { oSigaDW:DWList():faItems[nInd, 1], oSigaDW:DWList():faItems[nInd, 2]})
+					cRet := "OK" + dwInt2Hex(oUser:UserID(),8)
+					HttpSession->LoginData := { Httpget->u, URLDecode( Httpget->p ) }
+				endif
+			next  
+		endif
+	endif
+elseif dwVal(HttpGet->oper) == OP_EXCEL_CONS	
+	cRet := "OK"
+	oConsulta := InitTable(TAB_CONSULTAS)
+	if oUser:Login(Httpget->u, URLDecode( Httpget->p ))
+		while !oConsulta:eof()  
+			nIdCons := oConsulta:value("id")
+			// Se for Integracao Excel, verifica se tem acesso a consulta
+			If oConsulta:value("id_dw") == dwVal(HttpGet->dw) .and. ;
+			   ((oSigaDW:Excel() == EXCEL_SOME .and. oConsulta:value("excel")) .or.;
+			     oSigaDW:Excel() == EXCEL_ALL) .AND. oUser:GetQryAcessPerm(DwVal(HttpGet->dw), nIdCons)
+				aAdd(aConsList, { nIdCons, oConsulta:value("nome") })
+			endif
+			oConsulta:_next()
+		enddo
+	endif
+	oConsulta:Free()
+elseif dwVal(HttpGet->oper) == OP_EXCEL_QUERY
+	if valType(HttpSession->LoginData) == "A"
+	   oSigaDW:SelectDW(HttpGet->dw)
+		if oUser:Login(HttpSession->LoginData[1], HttpSession->LoginData[2])
+			oSigaDW:SelectDW(,dwVal(Httpget->dw))
+			oConsulta := initTable(TAB_CONSULTAS)
+			if oConsulta:Seek(5, { "P", Httpget->q }) .or. ;
+				oConsulta:Seek(8, { "U", oUser:UserID(), Httpget->q })		
+				lOK := oUser:GetQryAcessPerm(DwVal(HttpGet->dw),oConsulta:value("ID"))
+				If lOk
+					cRet := "OK"
+					oCons := TConsulta():New(oConsulta:value("ID"), TYPE_TABLE)
+					oCons:FieldList(.t.)
+					aEval(oCons:DimFields(), { |x| aAdd(aFields, { x:Alias(), x:Tipo(), x:Tam(), x:NDec(),x:Desc() }) })
+					aEval(oCons:Indicadores(), { |x| aAdd(aFields, { x:Alias(), x:Tipo(), x:Tam(), x:NDec(),x:Desc() }) })
+					HttpSession->LoginData := { HttpSession->LoginData[1], HttpSession->LoginData[2], oConsulta:value("ID"), HttpGet->dw, {} }
+				endif
+				
+			endif
+		endif                               
+	endif
+elseif dwVal(HttpGet->oper) == OP_EXCEL_SELEC
+	if valType(HttpSession->LoginData) == "A"
+		HttpSession->LoginData[5] := { httpGet->fn, httpGet->s }
+	endif
+elseif dwVal(HttpGet->oper) == OP_EXCEL_PREPEXEC
+	cRet := "OK"                                                                                                                                                  
+	// Esquema de chave: Login do usuário | Cod. Consulta | PW | DW | CRC
+	cPrepExec := dwEncodeParm(nil, HttpSession->LoginData[1] + "|" + allTrim(dwStr(HttpSession->LoginData[3]) + "|" + HttpSession->LoginData[2] + "|" + HttpSession->LoginData[4] + "|" + dwStr(HttpSession->LoginData[5],.t.) + "|")) 
+	cPrepExec += "_" +MSCRC32STR(cPrepExec)
+elseif dwVal(HttpGet->oper) == OP_EXCEL_EXEC
+	cPrepExec := dwToken(httpGet->L, "_", .f.)[1] 
+	cCRC := dwToken(httpGet->L, "_", .f.)[2] 
+	if cCRC <> MSCRC32STR(cPrepExec)
+		cRet := STR0002 + " [FF01]." //"Ocorreu um erro durante o processo de integração, favor entrar em contato com o administrador do SigaDW e informar a ocorrência"
+	else
+		aParams := dwToken(dwDecodeParm(cPrepExec), "|")
+		// 1Login do usuário | 2Cod. Consulta | 3PW | 4DW | 5Filtro |CRC		
+		if !oUser:Login(aParams[1], aParams[3])
+			cRet := STR0002 + " [FF02]." //"Ocorreu um erro durante o processo de integração, favor entrar em contato com o administrador do SigaDW e informar a ocorrência"
+		endif
+		oUserDW := oUser
+		oSigaDW:SelectDW(dwStr(aParams[4]))
+		httpSession->ExcelFilter := aClone(&(aParams[5])) 
+		oCons := TConsulta():New(aParams[2], TYPE_TABLE, .f.)
+		lOk := .t.
+		if !oCons:IsValid() 
+			lOk := oCons:BuildTable()
+		endif
+		if lOk 
+			cRet := m05export(aParams[2], .t., dwInt2Hex(oCons:IDUser(),8), FT_DIRECT_EXCEL) //"#SEND_DIRECT#")
+		else
+			cRet := STR0002 //"Ocorreu um erro durante o processo de integração, favor entrar em contato com o administrador do SigaDW e informar a ocorrência."
+		endif
+	endif
+endif
+%>
+<html>
+<body>
+<table>
+<tr><td><%=cRet%><td></tr>
+<%for nInd := 1 to len(aDWList)%>
+<tr><td><%=aDWList[nInd,1]%> - <%=aDWList[nInd,2]%> </td></tr>
+<%next%>
+<%for nInd := 1 to len(aConsList)%>
+<tr><td><%=aConsList[nInd,1]%> - <%=aConsList[nInd,2]%> </td></tr>
+<%next%>
+<%for nInd := 1 to len(aFields)%>
+<tr>
+<td><%=aFields[nInd, 5]%></td>
+<td><%=aFields[nInd, 1]%></td>
+<td><%=aFields[nInd, 2]%></td>
+<td><%=aFields[nInd, 3]%></td>
+<td><%=aFields[nInd, 4]%></td>
+</tr>           
+<%next%>
+<%if !empty(cPrepExec) .and. !(dwVal(HttpGet->oper) == OP_EXCEL_EXEC) %>
+<tr><td><%=cPrepExec%></td></tr>
+<%endif%>
+</table>
+</body>
+</html>

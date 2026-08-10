@@ -1,0 +1,495 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "APWEBSRV.CH"
+
+/* ===============================================================================
+WSDL Location    http://172.16.36.88:81/webservice/RHVDFJOURNEY.apw?WSDL
+Gerado em        02/17/14 17:16:08
+Observações      Código-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Alterações neste arquivo podem causar funcionamento incorreto
+                 e serão perdidas caso o código-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _OYYDNPQ ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSRHVDFJOURNEY
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSRHVDFJOURNEY
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD ADDVDFJOURNEYREQUEST
+	WSMETHOD GETJOURNEY
+	WSMETHOD GETWORKFLOWSTAGE
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   oWSREQUEST                AS RHVDFJOURNEY_TREQUEST
+	WSDATA   oWSVDFJOURNEYREQUEST      AS RHVDFJOURNEY_TVDFJOURNEY
+	WSDATA   cADDVDFJOURNEYREQUESTRESULT AS string
+	WSDATA   cEMPLOYEEFIL              AS string
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   cGETJOURNEYRESULT         AS string
+	WSDATA   cWORKFLOW                 AS string
+	WSDATA   cSTAGE                    AS string
+	WSDATA   lCOMPENSATE               AS boolean
+	WSDATA   cSTARTERBRANCH            AS string
+	WSDATA   cSTARTERREGISTRATION      AS string
+	WSDATA   oWSGETWORKFLOWSTAGERESULT AS RHVDFJOURNEY_TSTAGEDATA
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	WSDATA   oWSTREQUEST               AS RHVDFJOURNEY_TREQUEST
+	WSDATA   oWSTVDFJOURNEY            AS RHVDFJOURNEY_TVDFJOURNEY
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSRHVDFJOURNEY
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O Código-Fonte Client atual requer os executáveis do Protheus Build [7.00.121227P-20131106] ou superior. Atualize o Protheus ou gere o Código-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSRHVDFJOURNEY
+	::oWSREQUEST         := RHVDFJOURNEY_TREQUEST():New()
+	::oWSVDFJOURNEYREQUEST := RHVDFJOURNEY_TVDFJOURNEY():New()
+	::oWSGETWORKFLOWSTAGERESULT := RHVDFJOURNEY_TSTAGEDATA():New()
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSTREQUEST        := ::oWSREQUEST
+	::oWSTVDFJOURNEY     := ::oWSVDFJOURNEYREQUEST
+Return
+
+WSMETHOD RESET WSCLIENT WSRHVDFJOURNEY
+	::oWSREQUEST         := NIL 
+	::oWSVDFJOURNEYREQUEST := NIL 
+	::cADDVDFJOURNEYREQUESTRESULT := NIL 
+	::cEMPLOYEEFIL       := NIL 
+	::cREGISTRATION      := NIL 
+	::cGETJOURNEYRESULT  := NIL 
+	::cWORKFLOW          := NIL 
+	::cSTAGE             := NIL 
+	::lCOMPENSATE        := NIL 
+	::cSTARTERBRANCH     := NIL 
+	::cSTARTERREGISTRATION := NIL 
+	::oWSGETWORKFLOWSTAGERESULT := NIL 
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSTREQUEST        := NIL
+	::oWSTVDFJOURNEY     := NIL
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSRHVDFJOURNEY
+Local oClone := WSRHVDFJOURNEY():New()
+	oClone:_URL          := ::_URL 
+	oClone:oWSREQUEST    :=  IIF(::oWSREQUEST = NIL , NIL ,::oWSREQUEST:Clone() )
+	oClone:oWSVDFJOURNEYREQUEST :=  IIF(::oWSVDFJOURNEYREQUEST = NIL , NIL ,::oWSVDFJOURNEYREQUEST:Clone() )
+	oClone:cADDVDFJOURNEYREQUESTRESULT := ::cADDVDFJOURNEYREQUESTRESULT
+	oClone:cEMPLOYEEFIL  := ::cEMPLOYEEFIL
+	oClone:cREGISTRATION := ::cREGISTRATION
+	oClone:cGETJOURNEYRESULT := ::cGETJOURNEYRESULT
+	oClone:cWORKFLOW     := ::cWORKFLOW
+	oClone:cSTAGE        := ::cSTAGE
+	oClone:lCOMPENSATE   := ::lCOMPENSATE
+	oClone:cSTARTERBRANCH := ::cSTARTERBRANCH
+	oClone:cSTARTERREGISTRATION := ::cSTARTERREGISTRATION
+	oClone:oWSGETWORKFLOWSTAGERESULT :=  IIF(::oWSGETWORKFLOWSTAGERESULT = NIL , NIL ,::oWSGETWORKFLOWSTAGERESULT:Clone() )
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	oClone:oWSTREQUEST   := oClone:oWSREQUEST
+	oClone:oWSTVDFJOURNEY := oClone:oWSVDFJOURNEYREQUEST
+Return oClone
+
+// WSDL Method ADDVDFJOURNEYREQUEST of Service WSRHVDFJOURNEY
+
+WSMETHOD ADDVDFJOURNEYREQUEST WSSEND oWSREQUEST,oWSVDFJOURNEYREQUEST WSRECEIVE cADDVDFJOURNEYREQUESTRESULT WSCLIENT WSRHVDFJOURNEY
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<ADDVDFJOURNEYREQUEST xmlns="http://172.16.36.88:81/">'
+cSoap += WSSoapValue("REQUEST", ::oWSREQUEST, oWSREQUEST , "TREQUEST", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VDFJOURNEYREQUEST", ::oWSVDFJOURNEYREQUEST, oWSVDFJOURNEYREQUEST , "TVDFJOURNEY", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</ADDVDFJOURNEYREQUEST>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://172.16.36.88:81/ADDVDFJOURNEYREQUEST",; 
+	"DOCUMENT","http://172.16.36.88:81/",,"1.031217",; 
+	"http://172.16.36.88:81/webservice/RHVDFJOURNEY.apw")
+
+::Init()
+::cADDVDFJOURNEYREQUESTRESULT :=  WSAdvValue( oXmlRet,"_ADDVDFJOURNEYREQUESTRESPONSE:_ADDVDFJOURNEYREQUESTRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETJOURNEY of Service WSRHVDFJOURNEY
+
+WSMETHOD GETJOURNEY WSSEND cEMPLOYEEFIL,cREGISTRATION WSRECEIVE cGETJOURNEYRESULT WSCLIENT WSRHVDFJOURNEY
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETJOURNEY xmlns="http://172.16.36.88:81/">'
+cSoap += WSSoapValue("EMPLOYEEFIL", ::cEMPLOYEEFIL, cEMPLOYEEFIL , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</GETJOURNEY>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://172.16.36.88:81/GETJOURNEY",; 
+	"DOCUMENT","http://172.16.36.88:81/",,"1.031217",; 
+	"http://172.16.36.88:81/webservice/RHVDFJOURNEY.apw")
+
+::Init()
+::cGETJOURNEYRESULT  :=  WSAdvValue( oXmlRet,"_GETJOURNEYRESPONSE:_GETJOURNEYRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETWORKFLOWSTAGE of Service WSRHVDFJOURNEY
+
+WSMETHOD GETWORKFLOWSTAGE WSSEND cEMPLOYEEFIL,cREGISTRATION,cWORKFLOW,cSTAGE,lCOMPENSATE,cSTARTERBRANCH,cSTARTERREGISTRATION WSRECEIVE oWSGETWORKFLOWSTAGERESULT WSCLIENT WSRHVDFJOURNEY
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETWORKFLOWSTAGE xmlns="http://172.16.36.88:81/">'
+cSoap += WSSoapValue("EMPLOYEEFIL", ::cEMPLOYEEFIL, cEMPLOYEEFIL , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, cREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("WORKFLOW", ::cWORKFLOW, cWORKFLOW , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("STAGE", ::cSTAGE, cSTAGE , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("COMPENSATE", ::lCOMPENSATE, lCOMPENSATE , "boolean", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("STARTERBRANCH", ::cSTARTERBRANCH, cSTARTERBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("STARTERREGISTRATION", ::cSTARTERREGISTRATION, cSTARTERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</GETWORKFLOWSTAGE>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://172.16.36.88:81/GETWORKFLOWSTAGE",; 
+	"DOCUMENT","http://172.16.36.88:81/",,"1.031217",; 
+	"http://172.16.36.88:81/webservice/RHVDFJOURNEY.apw")
+
+::Init()
+::oWSGETWORKFLOWSTAGERESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETWORKFLOWSTAGERESPONSE:_GETWORKFLOWSTAGERESULT","TSTAGEDATA",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure TREQUEST
+
+WSSTRUCT RHVDFJOURNEY_TREQUEST
+	WSDATA   cAPPROVERBRANCH           AS string OPTIONAL
+	WSDATA   nAPPROVERLEVEL            AS integer OPTIONAL
+	WSDATA   cAPPROVERREGISTRATION     AS string OPTIONAL
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   oWSITEMS                  AS RHVDFJOURNEY_ARRAYOFTREQUESTITEM OPTIONAL
+	WSDATA   cOBSERVATION              AS string
+	WSDATA   cPARTICIPANTRH            AS string OPTIONAL
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   dREQUESTDATE              AS date OPTIONAL
+	WSDATA   oWSREQUESTTYPE            AS RHVDFJOURNEY_TREQUESTTYPE OPTIONAL
+	WSDATA   dRESPONSEDATE             AS date OPTIONAL
+	WSDATA   cSOURCE                   AS string OPTIONAL
+	WSDATA   cSTARTERBRANCH            AS string OPTIONAL
+	WSDATA   cSTARTERKEY               AS string OPTIONAL
+	WSDATA   nSTARTERLEVEL             AS integer OPTIONAL
+	WSDATA   cSTARTERREGISTRATION      AS string OPTIONAL
+	WSDATA   oWSSTATUS                 AS RHVDFJOURNEY_TREQUESTSTATUS OPTIONAL
+	WSDATA   cVISION                   AS string OPTIONAL
+	WSDATA   cWFAPROV                  AS string OPTIONAL
+	WSDATA   cWFID                     AS string OPTIONAL
+	WSDATA   cWFSTAGE                  AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_TREQUEST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_TREQUEST
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_TREQUEST
+	Local oClone := RHVDFJOURNEY_TREQUEST():NEW()
+	oClone:cAPPROVERBRANCH      := ::cAPPROVERBRANCH
+	oClone:nAPPROVERLEVEL       := ::nAPPROVERLEVEL
+	oClone:cAPPROVERREGISTRATION := ::cAPPROVERREGISTRATION
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cCODE                := ::cCODE
+	oClone:oWSITEMS             := IIF(::oWSITEMS = NIL , NIL , ::oWSITEMS:Clone() )
+	oClone:cOBSERVATION         := ::cOBSERVATION
+	oClone:cPARTICIPANTRH       := ::cPARTICIPANTRH
+	oClone:cREGISTRATION        := ::cREGISTRATION
+	oClone:dREQUESTDATE         := ::dREQUESTDATE
+	oClone:oWSREQUESTTYPE       := IIF(::oWSREQUESTTYPE = NIL , NIL , ::oWSREQUESTTYPE:Clone() )
+	oClone:dRESPONSEDATE        := ::dRESPONSEDATE
+	oClone:cSOURCE              := ::cSOURCE
+	oClone:cSTARTERBRANCH       := ::cSTARTERBRANCH
+	oClone:cSTARTERKEY          := ::cSTARTERKEY
+	oClone:nSTARTERLEVEL        := ::nSTARTERLEVEL
+	oClone:cSTARTERREGISTRATION := ::cSTARTERREGISTRATION
+	oClone:oWSSTATUS            := IIF(::oWSSTATUS = NIL , NIL , ::oWSSTATUS:Clone() )
+	oClone:cVISION              := ::cVISION
+	oClone:cWFAPROV             := ::cWFAPROV
+	oClone:cWFID                := ::cWFID
+	oClone:cWFSTAGE             := ::cWFSTAGE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFJOURNEY_TREQUEST
+	Local cSoap := ""
+	cSoap += WSSoapValue("APPROVERBRANCH", ::cAPPROVERBRANCH, ::cAPPROVERBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("APPROVERLEVEL", ::nAPPROVERLEVEL, ::nAPPROVERLEVEL , "integer", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("APPROVERREGISTRATION", ::cAPPROVERREGISTRATION, ::cAPPROVERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("ITEMS", ::oWSITEMS, ::oWSITEMS , "ARRAYOFTREQUESTITEM", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("OBSERVATION", ::cOBSERVATION, ::cOBSERVATION , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("PARTICIPANTRH", ::cPARTICIPANTRH, ::cPARTICIPANTRH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, ::cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REQUESTDATE", ::dREQUESTDATE, ::dREQUESTDATE , "date", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REQUESTTYPE", ::oWSREQUESTTYPE, ::oWSREQUESTTYPE , "TREQUESTTYPE", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("RESPONSEDATE", ::dRESPONSEDATE, ::dRESPONSEDATE , "date", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SOURCE", ::cSOURCE, ::cSOURCE , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERBRANCH", ::cSTARTERBRANCH, ::cSTARTERBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERKEY", ::cSTARTERKEY, ::cSTARTERKEY , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERLEVEL", ::nSTARTERLEVEL, ::nSTARTERLEVEL , "integer", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERREGISTRATION", ::cSTARTERREGISTRATION, ::cSTARTERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STATUS", ::oWSSTATUS, ::oWSSTATUS , "TREQUESTSTATUS", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("VISION", ::cVISION, ::cVISION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("WFAPROV", ::cWFAPROV, ::cWFAPROV , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("WFID", ::cWFID, ::cWFID , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("WFSTAGE", ::cWFSTAGE, ::cWFSTAGE , "string", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TVDFJOURNEY
+
+WSSTRUCT RHVDFJOURNEY_TVDFJOURNEY
+	WSDATA   cJOURNEY                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_TVDFJOURNEY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_TVDFJOURNEY
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_TVDFJOURNEY
+	Local oClone := RHVDFJOURNEY_TVDFJOURNEY():NEW()
+	oClone:cJOURNEY             := ::cJOURNEY
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFJOURNEY_TVDFJOURNEY
+	Local cSoap := ""
+	cSoap += WSSoapValue("JOURNEY", ::cJOURNEY, ::cJOURNEY , "string", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TSTAGEDATA
+
+WSSTRUCT RHVDFJOURNEY_TSTAGEDATA
+	WSDATA   cAPPROVERLEVEL            AS string OPTIONAL
+	WSDATA   cDEPARTMENT               AS string OPTIONAL
+	WSDATA   cDESTINATION              AS string
+	WSDATA   cRESPONSIBLE              AS string OPTIONAL
+	WSDATA   cRESPONSIBLEFIL           AS string OPTIONAL
+	WSDATA   cRESPONSIBLEREG           AS string OPTIONAL
+	WSDATA   cSTAGE                    AS string
+	WSDATA   cWORKFLOW                 AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_TSTAGEDATA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_TSTAGEDATA
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_TSTAGEDATA
+	Local oClone := RHVDFJOURNEY_TSTAGEDATA():NEW()
+	oClone:cAPPROVERLEVEL       := ::cAPPROVERLEVEL
+	oClone:cDEPARTMENT          := ::cDEPARTMENT
+	oClone:cDESTINATION         := ::cDESTINATION
+	oClone:cRESPONSIBLE         := ::cRESPONSIBLE
+	oClone:cRESPONSIBLEFIL      := ::cRESPONSIBLEFIL
+	oClone:cRESPONSIBLEREG      := ::cRESPONSIBLEREG
+	oClone:cSTAGE               := ::cSTAGE
+	oClone:cWORKFLOW            := ::cWORKFLOW
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHVDFJOURNEY_TSTAGEDATA
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAPPROVERLEVEL     :=  WSAdvValue( oResponse,"_APPROVERLEVEL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDEPARTMENT        :=  WSAdvValue( oResponse,"_DEPARTMENT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESTINATION       :=  WSAdvValue( oResponse,"_DESTINATION","string",NIL,"Property cDESTINATION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cRESPONSIBLE       :=  WSAdvValue( oResponse,"_RESPONSIBLE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cRESPONSIBLEFIL    :=  WSAdvValue( oResponse,"_RESPONSIBLEFIL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cRESPONSIBLEREG    :=  WSAdvValue( oResponse,"_RESPONSIBLEREG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTAGE             :=  WSAdvValue( oResponse,"_STAGE","string",NIL,"Property cSTAGE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cWORKFLOW          :=  WSAdvValue( oResponse,"_WORKFLOW","string",NIL,"Property cWORKFLOW as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFTREQUESTITEM
+
+WSSTRUCT RHVDFJOURNEY_ARRAYOFTREQUESTITEM
+	WSDATA   oWSTREQUESTITEM           AS RHVDFJOURNEY_TREQUESTITEM OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_ARRAYOFTREQUESTITEM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_ARRAYOFTREQUESTITEM
+	::oWSTREQUESTITEM      := {} // Array Of  RHVDFJOURNEY_TREQUESTITEM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_ARRAYOFTREQUESTITEM
+	Local oClone := RHVDFJOURNEY_ARRAYOFTREQUESTITEM():NEW()
+	oClone:oWSTREQUESTITEM := NIL
+	If ::oWSTREQUESTITEM <> NIL 
+		oClone:oWSTREQUESTITEM := {}
+		aEval( ::oWSTREQUESTITEM , { |x| aadd( oClone:oWSTREQUESTITEM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFJOURNEY_ARRAYOFTREQUESTITEM
+	Local cSoap := ""
+	aEval( ::oWSTREQUESTITEM , {|x| cSoap := cSoap  +  WSSoapValue("TREQUESTITEM", x , x , "TREQUESTITEM", .F. , .F., 0 , NIL, .F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTTYPE
+
+WSSTRUCT RHVDFJOURNEY_TREQUESTTYPE
+	WSDATA   cCODE                     AS string
+	WSDATA   cDESCRIPTION              AS string
+	WSDATA   cLINK                     AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_TREQUESTTYPE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_TREQUESTTYPE
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_TREQUESTTYPE
+	Local oClone := RHVDFJOURNEY_TREQUESTTYPE():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cLINK                := ::cLINK
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFJOURNEY_TREQUESTTYPE
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("DESCRIPTION", ::cDESCRIPTION, ::cDESCRIPTION , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("LINK", ::cLINK, ::cLINK , "string", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTSTATUS
+
+WSSTRUCT RHVDFJOURNEY_TREQUESTSTATUS
+	WSDATA   cCODE                     AS string
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_TREQUESTSTATUS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_TREQUESTSTATUS
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_TREQUESTSTATUS
+	Local oClone := RHVDFJOURNEY_TREQUESTSTATUS():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFJOURNEY_TREQUESTSTATUS
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("DESCRIPTION", ::cDESCRIPTION, ::cDESCRIPTION , "string", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTITEM
+
+WSSTRUCT RHVDFJOURNEY_TREQUESTITEM
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cFIELDDESCRIPTION         AS string OPTIONAL
+	WSDATA   cFIELDNAME                AS string
+	WSDATA   cNEWVALUE                 AS string
+	WSDATA   cPREVIOUSVALUE            AS string OPTIONAL
+	WSDATA   cREQUESTCODE              AS string
+	WSDATA   nSEQUENCE                 AS integer
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFJOURNEY_TREQUESTITEM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFJOURNEY_TREQUESTITEM
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFJOURNEY_TREQUESTITEM
+	Local oClone := RHVDFJOURNEY_TREQUESTITEM():NEW()
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cFIELDDESCRIPTION    := ::cFIELDDESCRIPTION
+	oClone:cFIELDNAME           := ::cFIELDNAME
+	oClone:cNEWVALUE            := ::cNEWVALUE
+	oClone:cPREVIOUSVALUE       := ::cPREVIOUSVALUE
+	oClone:cREQUESTCODE         := ::cREQUESTCODE
+	oClone:nSEQUENCE            := ::nSEQUENCE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFJOURNEY_TREQUESTITEM
+	Local cSoap := ""
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("FIELDDESCRIPTION", ::cFIELDDESCRIPTION, ::cFIELDDESCRIPTION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("FIELDNAME", ::cFIELDNAME, ::cFIELDNAME , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("NEWVALUE", ::cNEWVALUE, ::cNEWVALUE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("PREVIOUSVALUE", ::cPREVIOUSVALUE, ::cPREVIOUSVALUE , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REQUESTCODE", ::cREQUESTCODE, ::cREQUESTCODE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SEQUENCE", ::nSEQUENCE, ::nSEQUENCE , "integer", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+

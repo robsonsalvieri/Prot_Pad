@@ -1,0 +1,426 @@
+<%
+// ######################################################################################
+// Projeto: DATA WAREHOUSE
+// Modulo : Actions
+// Fonte  : dwAcessPrivileges - Manutenção de acesso/privilegios para usuários/grupos
+// ---------+-------------------+--------------------------------------------------------
+// Data     | Autor             | Descricao
+// ---------+-------------------+--------------------------------------------------------
+// 20.02.06 |2481-Paulo R Vieira| Versão 3
+// --------------------------------------------------------------------------------------
+
+#include "dwincs.ch"
+#include "dwAcessPrivileges.ch"
+
+#define PREFIXE_QUERY_MANUT		"QM"
+#define PREFIXE_QUERY_ACESS		"QA"
+#define PREFIXE_QUERY_EXPORT	"QE"
+
+#define PREFIXE_CUBE_MANUT		"CM"
+#define PREFIXE_CUBE_ACESS		"CA"
+
+#define FIELD_CREATE_QUERY		"edNewQuerys"
+#define FIELD_ACESS_DW			"edAcessDW"
+
+#define ABA_DW_NAME				"abaDw"
+
+Local aFields	:= {}
+Local nIDUser	:= DwVal( iif (!empty(HttpGet->id_user), HttpGet->id_user, HttpPost->id_user) )
+Local aButtons 	:= {}
+Local oUsers	:= InitTable(TAB_USER), cMainTitle := STR0001 //"Definição de Privilégios"
+Local lUserIsAdm := .F., lEdit := .t.
+
+if !empty(nIDUser) .AND. !(nIDUser == 0)
+	oUsers:Seek(1, { nIDUser })
+	if !oUsers:EoF() .and. oUsers:value("id") == nIDUser         
+	  if oUsers:value("tipo") == "U" // usuário
+			cMainTitle += STR0002 + "[ " + oUsers:value("nome") + " ]"//" para o usuário "
+		else
+			cMainTitle += STR0016 + "[ " + oUsers:value("nome") + " ]" //" para o grupo "
+		endif
+		lUserIsAdm := oUsers:value("admin")
+	endif
+endif
+
+// RESET PRIVILÉGIOS DO USUÁRIO
+if HttpGet->Action == AC_RESET_PRIVILEGE
+	resetPrivileges(nIDUser)
+endif
+
+// SALVA AS CONFIGURAÇÕES
+if HttpGet->Action == AC_SAVE_PRIVILEGE
+	saveDWs(nIDUser)
+	HttpSend( buildAutoClose( , , , 5500) + CRLF )
+	DWLog(STR0021) // "Operação concluída com sucesso."
+endif
+
+// CONSTROI O MENU COM OS GRUPOS E USUÁRIOS
+HttpSession->subOper := OP_NONE
+
+if !isNull(HttpGet->iframe)
+  if HttpGet->iframe == "ifUsers"
+%> 
+  <%= buildUsers() %>
+  <%= tagJS() %>
+	function doSlctUser(acIdUser) 
+	{                             
+    var iFrame = getElement('ifPriv', parent.document)
+	  iFrame.src = prepURL(<%= makeAction(AC_USER_PRIVILEGE) %> + "&id_user=" + acIdUser + "&iframe=ifPriv&jscript=1");
+	}
+	</script>
+<%else
+  if !empty(nIDUser)
+	// constroi a parte principal (consultas e cubos)
+    makeTitle(aFields, cMainTitle)
+		buildMain(aFields, nIDUser)
+  		makeLegend(aFields, "legcheck01.gif", STR0017) //###"Não habilitado"
+  		makeLegend(aFields, "legcheck02.gif", STR0018) //###"Habilitado"
+  		makeLegend(aFields, "legcheck03.gif", STR0019) //###"por Herança"
+		// verifca se o usuário não é admin
+		if lUserIsAdm
+			HttpSession->DWErrMsg := STR0006 //"Atenção: usuário é Administrador do Datawarehouse, portanto possui todos os privilégios no sistema."
+		endif
+	
+		// campo de controle do id do usuário
+		makeHidden(aFields, "id_user", nIDUser)
+		// campo de controle do id do usuário
+		makeHidden(aFields, "Oper", OP_SUBMIT)
+  else
+		makeAttention(aFields, STR0007) //"Selecione um grupo ou usuário ao lado para realizar as configurações."
+		lEdit := .f.
+  endif%>      
+    <%= buildMiniForm("frmPrivUsr#", AC_SAVE_PRIVILEGE, OP_SUBMIT, aFields, lEdit .and. !lUserIsAdm, "ifPriv") %>
+    <%= tagJS() %>
+	function u_bodyonload() {
+		initAba("<%= ABA_DW_NAME + DwStr(HttpSession->CurrentDW) %>");
+	}
+	</script>
+<%endif
+else
+  oIFrames := THIFrameMan():New()
+  oIFrames:action(AC_USER_PRIVILEGE)
+  oIFrames:AddFrame("ifUsers", STR0019, 0.25) //###"Grupos/Usuários"
+  oIFrames:AddFrame("ifPriv", STR0020, 0.70) //###"Privilégios"
+  oIFrames:Width(1)
+  oIFrames:Height(1)
+  if isIE6()
+    oIFrames:scrollBar(.t.)
+  endif
+%>
+
+<%= buildForm("frmPrivUsr", cMainTitle, AC_SHOW_PRIVILEGE, OP_NONE, aButtons, oIFrames, .T., , , , , 1) %>
+<%= tagJS() %>
+	function u_bodyonload() {
+		window['documentSource'] = document;
+	}
+
+	function doApply(aoForm) {
+		aoForm.action = <%= makeAction(AC_SAVE_PRIVILEGE, { { "id_user", nIDUser }, { "Oper", OP_SUBMIT } }) %>;
+		aoForm.submit();
+	}
+
+	function doReset(aoForm) {
+		if (window.confirm("<%= STR0008 %>")){ //"Deseja realmente redefinir os privilégios para este usuário com os privilégios do grupo do usuário ?"
+			aoForm.action = <%= makeAction(AC_RESET_PRIVILEGE, { { "id_user", nIDUser }, { "Oper", OP_SUBMIT } }) %>;
+			aoForm.submit();
+		}
+	}
+
+</script>
+<%
+endif
+
+return __Response
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por construir os grupo de usuários e os seus respectivos usuários
+Arg:
+Ret: Objeto do tipo THTreeList, contendo a árvore de grupos/usuários
+--------------------------------------------------------------------------------------
+*/
+static function buildUsers()
+	Local oUsers	:= InitTable(TAB_USER)
+	Local aGrupos 	:= {}, aTemp
+	Local oTree
+	Local nInd, aBuffer, cGroupNode := nil
+
+	// cria a arvore de usuários
+	oTree := THTree():New()
+	oTree:Name("treeUser")
+	oTree:SubTheme("treeGroup")
+	oTree:UrlFrame("_self") 
+	oTree:RootURL(nil)
+	oTree:RootCaption("")
+	oTree:width(1)
+	
+	// recupera os grupos de usuários e adiciona ao array aGrupos
+	oUsers:Seek(2, { "G" })
+	while !oUsers:EoF() .and. oUsers:value("tipo") == "G"
+		if oUsers:value("ativo")
+			aAdd(aGrupos, { oUsers:value("id"), oUsers:value("nome") }) 
+		endif
+		oUsers:_Next()
+	enddo
+	
+	// itera pelo array de grupos e cria uma tabela html com um header com o grupo e os seus usuários
+	for nInd := 1 to len(aGrupos)
+    lFirst := .t.
+		// procura pelo id_grupo
+		aTemp := {}
+		oUsers:Seek(4, { aGrupos[nInd][1] })
+		while !oUsers:EoF() .and. oUsers:value("id_grupo") == aGrupos[nInd][1]
+			if oUsers:value("ativo") .and. !oUsers:value("admin")
+				if lFirst
+			  	lFirst := .f.
+			  	cGroupNode := "tci" + DwStr(aGrupos[nInd, 1])
+		 			oTree:AddNode(nil, cGroupNode, aGrupos[nInd, 2], .t., "javascript:doSlctUser(" + DwStr(aGrupos[nInd, 1]) + ");")
+				endif
+
+		 		oTree:AddNode(cGroupNode, "tci" + DwStr(oUsers:value("id")), oUsers:value("nome")+"("+oUsers:value("login")+")" ;
+		 			, .t., "javascript:doSlctUser(" + DwStr(oUsers:value("id")) + ");")
+			endif
+			oUsers:_Next()
+		enddo
+	
+	next
+                             
+	aBuffer := {}
+	oTree:Buffer(aBuffer)
+
+return dwConcatWSep(CRLF, aBuffer)
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por construir a página principal com os DWs e os seus respectivos cubos e consultas
+Arg: 	aaFields, array, contém os campos a serem apresentados na página
+		anIDUser, numérico, contém o id do usuário
+Ret:
+--------------------------------------------------------------------------------------
+*/
+static function buildMain(aaFields, anIDUser)
+	
+	Local aDWs, aTabGroup, aTabComp, nInd
+	Local oPrivileges, oPrivOper
+	
+	// itera pelo DW contruindo os cubos e consultas em um aba própria para cada DW
+	aTabGroup := {}
+	aDWs := oSigaDW:DWList():Items()
+	for nInd := 1 to len(aDWs)
+		
+		aTabComp := {}
+		
+		// instancia o objeto de controle de privilégios para o usuário específico
+		oPrivileges := TDWPrivileges():New(aDWs[nInd][1], anIDUser)
+		
+		// cria a opção de acesso ao DW
+		oPrivOper := oPrivileges:checkDwPrivileges(aDWs[nInd][1])
+		makeCheckMultipleStatus(aTabComp, FIELD_ACESS_DW + DwStr(aDWs[nInd][1]), STR0009 + aDWs[nInd][2] + ")", .F., , aDWs[nInd][1], oPrivOper:Acess(), oPrivOper:AcessInherited()) //"Acessar DW ("
+		
+		// cria as consultas para este DW
+		buildQuerys(aTabComp, oPrivileges)
+		
+		// cria os cubos para este DW
+		buildCubes(aTabComp, oPrivileges)
+		
+		// cria a aba para este DW
+		makeChildTabbed(aTabGroup, ABA_DW_NAME + DwStr(aDWs[nInd][1]), aDWs[nInd][2], aTabComp)
+	next
+	
+	// cria a aba principal contendo as abas acima criadas
+	makeTabbedPane(aaFields, "abaDWGroup", aTabGroup)
+
+return
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por construir as consultas de um datawarehouse
+Arg: 	aaFields, array, contém os campos a serem apresentados na página
+		aoPrivileges, objeto, contém o objeto com os privilégios para o usuário
+Ret: .T. se tiver autorização, .F. em outra situação
+--------------------------------------------------------------------------------------
+*/
+static function buildQuerys(aaFields, aoPrivileges)
+	local oConsulta := InitTable(TAB_CONSULTAS)
+	local oPrivOper
+	local aDispData	:= {}, aDispTitle := {}
+	local cID, cDwID, aAux, nInd
+	
+	cDwID := DwStr(aoPrivileges:DwID())
+		
+	// verifica privilégio de criação de consultas
+	oPrivOper := aoPrivileges:checkCreateQuery()
+	makeCheckMultipleStatus(aaFields, FIELD_CREATE_QUERY + DwStr(aoPrivileges:DwID()), STR0010, .F., , 0, oPrivOper:Create(), oPrivOper:CreateInherited()) //"Nova Consulta"
+	
+	// itera pelas consultas, verificando para cada consulta o privilégio do usuário
+	aAux := DWDetail(TAB_CONSULTAS, QUERY_PREDEF, { || { alltrim(descricao) +"( " + alltrim(nome)+ " )", id, nome }}, "tipo", 5, aoPrivileges:DwID())
+	aAux := aSort(aAux,,, { |x,y| x[1] < y[1]})
+	for nInd := 1 to len(aAux)
+		oPrivOper 		:= aoPrivileges:checkQueryPrivileges(aAux[nInd][2])
+		cID				:= DwStr(aAux[nInd][2])
+		aAdd(aDispData, aAux[nInd][1])
+		aAdd(aDispData, makeCheckMultipleStatus(NIL, PREFIXE_QUERY_MANUT + cDwID + cID, "", .F., , cID, oPrivOper:Maintenance(), oPrivOper:MaintInherited()))
+		aAdd(aDispData, makeCheckMultipleStatus(NIL, PREFIXE_QUERY_ACESS + cDwID + cID, "", .F., , cID, oPrivOper:Acess(), oPrivOper:AcessInherited()))
+		aAdd(aDispData, makeCheckMultipleStatus(NIL, PREFIXE_QUERY_EXPORT + cDwID + cID, "", .F., , cID, oPrivOper:Export(), oPrivOper:ExportInherited()))
+	next
+	
+	// exibe os dados sobre consultas
+	if len(aDispData) > 0
+		aAdd(aDispTitle, STR0011) //"Consultas"
+		aAdd(aDispTitle, makeHCheckField(NIL, PREFIXE_QUERY_MANUT + cDwID, STR0012, .F., .F.)) //"Manutenção"
+		aAdd(aDispTitle, makeHCheckField(NIL, PREFIXE_QUERY_ACESS + cDwID, STR0013, .F., .F.)) //"Acesso"
+		aAdd(aDispTitle, makeHCheckField(NIL, PREFIXE_QUERY_EXPORT + cDwID, STR0014, .F., .F.)) //"Exportar"
+		
+		makeText(aaFields, displayData(aDispData, 4, aDispTitle, , { 0.45, 0.2, 0.15, 0.2 }))
+		makeBlankRow(aaFields)
+	endif
+	
+return
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por construir os cubos de um datawarehouse
+Arg: 	aaFields, array, contém os campos a serem apresentados na página
+		aoPrivileges, objeto, contém o objeto com os privilégios para o usuário
+Ret: .T. se tiver autorização, .F. em outra situação
+--------------------------------------------------------------------------------------
+*/
+static function buildCubes(aaFields, aoPrivileges)
+	local oCubes := InitTable(TAB_CUBESLIST)
+	local oPrivOper
+	local aDispData	:= {}, aDispTitle := {}
+	local cID, aAux, nInd
+	
+	cDwID := DwStr(aoPrivileges:DwID())
+	
+	aAux := DWDetail(TAB_CUBESLIST, -1, { || { alltrim(descricao) +"( " + alltrim(nome)+ " )", id, nome }}, , 2, aoPrivileges:DwID())
+	aAux := aSort(aAux,,, { |x,y| x[1] < y[1]})
+	for nInd := 1 to len(aAux)
+		oPrivOper 		:= aoPrivileges:checkCubePrivileges(aAux[nInd][2])
+		cID				:= DwStr(aAux[nInd][2])
+		aAdd(aDispData, aAux[nInd][1])
+		aAdd(aDispData, makeCheckMultipleStatus(NIL, PREFIXE_CUBE_MANUT + cDwID + cID, "", .F., , cID, oPrivOper:Maintenance(), oPrivOper:MaintInherited()))
+		aAdd(aDispData, makeCheckMultipleStatus(NIL, PREFIXE_CUBE_ACESS + cDwID + cID, "", .F., , cID, oPrivOper:Acess(), oPrivOper:AcessInherited()))
+	next
+	
+	// exibe os dados sobre consultas
+	if len(aDispData) > 0
+		aAdd(aDispTitle, STR0015) //"Cubos"
+		aAdd(aDispTitle, makeHCheckField(NIL, PREFIXE_CUBE_MANUT + cDwID, STR0012, .F., .F.)) //"Manutenção"
+		aAdd(aDispTitle, makeHCheckField(NIL, PREFIXE_CUBE_ACESS + cDwID, STR0013, .F., .F.)) //"Acesso"
+		
+		makeText(aaFields, displayData(aDispData, 3, aDispTitle, , { 0.5, 0.25, 0.25 }))
+		makeBlankRow(aaFields)
+	endif
+	
+return
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por salvar diversos privilégios para um usuário
+Arg: anIDUser, numérico, contém o id do usuário
+Ret:
+--------------------------------------------------------------------------------------
+*/
+static function saveDWs(anIDUser)
+	
+	// recupera os DWs
+	Local aDWs := oSigaDW:DWList():Items()
+	Local nInd
+	
+	// itera pelo DW contruindo salvando os privilégios do usuário para cada DW
+	for nInd := 1 to len(aDWs)
+		// salva os privilégios apartir da instância do objeto de controle de privilégios para o usuário específico
+		savePrivileges( TDWPrivileges():New(aDWs[nInd][1], anIDUser) )
+	next
+	
+return
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por salvar diversos privilégios para um usuário
+Arg: aoPrivileges, objeto, contém o objeto com os privilégios para o usuário.
+Ret:
+--------------------------------------------------------------------------------------
+*/
+static function savePrivileges(aoPrivileges)
+	
+	Local oPrivOper
+	Local oQuerys		:= InitTable(TAB_CONSULTAS)
+	Local oCubes		:= InitTable(TAB_CUBESLIST)
+	Local cID, cDwID, cField, lField
+	
+	cDwID := DwStr(aoPrivileges:DwID())
+	
+	// salva o privilégio (caso tenha) de acessar o DW
+	oPrivOper 	:= TDWPrivOper():New()
+	cField		:= &("HttpPost->" + FIELD_ACESS_DW + cDwID)
+	lField		:= iif (!empty(cField), .T., .F.)
+	oPrivOper:Acess(lField)
+	aoPrivileges:SaveDwPrivileges(aoPrivileges:DwID(), oPrivOper)
+	
+	// salva o privilégio (caso tenha) de criar consultas
+	oPrivOper := TDWPrivOper():New()
+	cField		:= &("HttpPost->" + FIELD_CREATE_QUERY + cDwID)
+	lField		:= iif (!empty(cField), .T., .F.)
+	oPrivOper:Create(lField)
+	aoPrivileges:SaveCreatePrivileges(oPrivOper)
+	
+	// salva os privilégios (caso tenha algum) sobre as consultas (manutenção, acesso e exportação)
+	__DWIDTemp := aoPrivileges:DwID()
+	oQuerys:Seek(2, { "" })
+	while !oQuerys:EoF()
+		cID := DwStr(oQuerys:value("id"))
+		
+		oPrivOper := TDWPrivOper():New()
+		oPrivOper:Maintenance( iif(!empty( &("HttpPost->" + PREFIXE_QUERY_MANUT + cDwID + cID) ), .T., .F.) )
+		oPrivOper:Acess( iif (!empty( &("HttpPost->" + PREFIXE_QUERY_ACESS + cDwID + cID) ), .T., .F.) )
+		oPrivOper:Export( iif (!empty( &("HttpPost->" + PREFIXE_QUERY_EXPORT + cDwID + cID) ), .T., .F.) )
+		
+		aoPrivileges:SaveQueryPrivileges(oQuerys:value("id"), oPrivOper)
+		
+		oQuerys:_Next()
+	enddo
+	__DWIDTemp := -1
+	
+	// salva os privilégios (caso tenha algum) sobre os cubos (manutenção e acesso)
+	__DWIDTemp := aoPrivileges:DwID()
+	oCubes:Seek(2, { "" })
+	while !oCubes:EoF()
+		cID := DwStr(oCubes:value("id"))
+		
+		oPrivOper := TDWPrivOper():New()
+		oPrivOper:Maintenance( iif(!empty( &("HttpPost->" + PREFIXE_CUBE_MANUT + cDwID + cID) ), .T., .F.) )
+		oPrivOper:Acess( iif (!empty( &("HttpPost->" + PREFIXE_CUBE_ACESS + cDwID + cID) ), .T., .F.) )
+		
+		aoPrivileges:SaveCubePrivileges(oCubes:value("id"), oPrivOper)
+		
+		oCubes:_Next()
+	enddo
+	__DWIDTemp := -1
+return
+
+/*
+--------------------------------------------------------------------------------------
+Função responsável por redefinir todos os privilégios deste usuário com os privilégios do grupo do usuário
+Arg: anIDUser, numérico, contém o id do usuário
+Ret:
+--------------------------------------------------------------------------------------
+*/
+static function resetPrivileges(anIDUser)
+	
+	Local nInd
+	Local oPrivileges
+	
+	// itera pelo DW contruindo redefinindo os DWs
+	Local aDWs := oSigaDW:DWList():Items()
+	
+	for nInd := 1 to len(aDWs)
+		// instancia o objeto de controle de privilégios para o usuário específico
+		oPrivileges := TDWPrivileges():New(aDWs[nInd][1], anIDUser)
+		oPrivileges:ResetAllPrivileges()
+	next
+	
+return
+
+%>

@@ -1,0 +1,1904 @@
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#INCLUDE 'PROTHEUS.CH'
+#include 'FWMVCDEF.CH'
+#include 'BACKOFFICE.PGC.ANALYZE.QUOTATION.REPOSITORY.CH'
+
+namespace pgc.analyzeQuotationRepository
+using namespace pgc.utils
+using namespace pgc.quotationsGeneric
+using namespace pgc.updateQuotationRepository
+
+/*/{Protheus.doc} pgcAnalyzeQuotationRepository
+	Classe Adapter para o serviço de atualização da cotação.
+@author juan.felipe
+@since 06/01/2023
+/*/
+Class pgcAnalyzeQuotationRepository FROM FWAdapterBaseV2
+    public Data lOk As Logical
+    public Data lIsQuotationMap As Logical
+    public Data oJsonRequest    As Object
+    public Data oObjMapRef      As Object
+    public Data cFilCTO         As Character
+    public Data nCTOSize        As Numeric
+    public Data oObjRecMoeda    As Object
+    public Data oObjSM2Coin     As Object
+
+    public Method New()
+    public Method Get()
+    public Method deleteQuotationItem()
+    public Method TreatJSONResponse()
+    public Method setBalanceValue()
+    public Method setAverageValue()
+    public Method suppliersByQuotationProduct()
+    public Method analyzeQuoteByProposal()
+    public Method analyzeQuoteByItem()
+    public Method RequestAdj()
+    public Method DescentralItems()
+    public Method AdjItemSC8()
+    public Method AdjMessage()
+    public Method CurrencyByName()
+    public Method MapCurrency()
+    public Method MapActualCurrency()
+    public Method UpdateRateValue()
+    public Method CoinExistsSM2()
+    public Method NFCRetMoed()
+EndClass
+
+
+/*/{Protheus.doc} New
+	Método construtor
+@author juan.felipe
+@since 06/01/2023
+/*/
+Method New(cVerb) Class pgcAnalyzeQuotationRepository
+    Default cVerb           := "GET"
+    Self:lOk                := .F.
+    Self:lIsQuotationMap    := .F.
+    Self:oJsonRequest       := Nil
+    Self:oObjMapRef         := JsonObject():New()
+    Self:cFilCTO            := FwxFilial("CTO")
+    Self:nCTOSize           := TamSX3("CTO_MOEDA")[1]
+    Self:oObjRecMoeda       := JsonObject():New()
+    Self:oObjSM2Coin        := JsonObject():New()
+    
+    _Super:New(cVerb, .T.)
+Return Self
+
+/*/{Protheus.doc} Get
+	Consulta fornecedores/itens da cotação
+@author juan.felipe
+@since 06/01/2023
+@param nPage, numeric, número da pagina.
+@param nPageSize, numeric, tamanho da página.
+@param nQuery, numeric, 1- Listagem de itens não respondidos; 2- Listagem de itens; 3- Listagem de fornecedores ordenados por critério; 4- Listagem de SCs relacionadas.
+@return oJsonQryParam, object, objeto json com query params.
+@return oJsonResponse, object, objeto json com path params.
+@return Nil, nulo.
+/*/
+Method Get(nPage, nPageSize, nQuery, oJsonQryParam, oJsonPathParam) class pgcAnalyzeQuotationRepository
+    Local aArea  As Array
+    Local aQueryRequest As Array
+    Local cWhere As Character
+    Local oUtils As Object
+    Local cWhereParam1 As Character
+    Local cOrderParam1 As Character
+    Default nQuery         := 1
+    Default oJsonQryParam  := Nil
+    Default oJsonPathParam := Nil
+    Default nPage          := 1
+	Default nPageSize      := 10
+
+    If nQuery == 3
+        If ValType(oJsonPathParam) == "J" .And. oJsonPathParam:hasProperty("criterion")
+            cOrderParam1 := oJsonPathParam["criterion"]
+            If !Lower(cOrderParam1) $ 'value|valuewithtax|deadline|rate' //-- Valida se é algum dos critérios de ordenação
+                Self:lOk := .F.
+                Self:cMessage := STR0006 + cOrderParam1 + STR0007 + 'value/valuewithtax/deadline/rate' //-- O paraâmetro de ordeção XXX não existe. Insira um dos seguintes parâmetros:
+                Self:nCode := 400
+            EndIf
+        EndIf
+    EndIf
+
+    If Self:lOk
+        aArea := FwGetArea()
+        aQueryRequest := {}
+        cWhere := GetWhere(nQuery, cWhereParam1, Self:lIsQuotationMap)
+        oUtils := pgcUtils():New()
+
+        AddMapFields(self, nQuery)
+
+        Self:setPage(nPage)
+        Self:setPageSize(nPageSize)
+        Self:SetQuery(GetQuery(nQuery))
+        Self:SetWhere(cWhere)
+        Self:SetOrder(GetOrder(nQuery, cOrderParam1))
+        Self:SetUseSpaces(.T.)
+
+        aQueryRequest := oUtils:queryRequestToArray(oRest:getQueryRequest())
+
+        If Len(aQueryRequest) > 0
+            Self:SetUrlFilter(aQueryRequest)
+        EndIf
+
+        Self:SetOrderQuery(oUtils:getQueryParam('ORDER'))
+        Self:SetFields(oUtils:getQueryParam('FIELDS'))
+        
+        If Self:Execute()
+            Self:FillGetResponse()
+            Self:TreatJSONResponse(nQuery, Self:oJsonObj:oJsonObj)
+        EndIf
+
+        FwRestArea(aArea)
+        FwFreeArray(aArea)
+        FwFreeObj(oUtils)
+        FwFreeObj(Self:oObjMapRef)
+        FwFreeObj(Self:oObjRecMoeda)
+        FwFreeObj(Self:oObjSM2Coin)
+    EndIf
+Return Nil
+
+/*/{Protheus.doc} AddMapFields
+	Cria o Mapa de campos Protheus x API para os itens da cotação.
+@author juan.felipe
+@since 06/01/2023
+@param oSelf, object, Objeto - Objeto com herança da classe FWAdapterBaseV2.
+@param nQuery, numeric, 1- Listagem de itens não respondidos; 2- Listagem de itens; 3- Listagem de fornecedores ordenados por critério; 4- Listagem de SCs relacionadas.
+@return Nil, nulo.
+/*/
+Static Function AddMapFields(oSelf, nQuery)
+local oMetSX3   := pgcUpdateQuotationRepository():New()
+local aImpMI    := {'C8_TOTAL','C8_VALFRE','C8_DESPESA','C8_SEGURO','C8_VALEMB','C8_VALIMP1','C8_VALIMP2','C8_VALIMP3','C8_VALIMP4','C8_VALIMP5','C8_VALIMP6','C8_VALIMP7','C8_VALIMP8','C8_VALIMP9',;
+    'C8_VALIMPA','C8_VALIMPB','C8_VALIMPC','C8_VALIMPD','C8_VALIMPE','C8_VALIMPF','C8_VALIMPG','C8_VALIMPH','C8_VALIMPI','C8_VALIMPJ','C8_VALIMPK','C8_VALIMPL','C8_VALIMPM','C8_VALIMPN','C8_VALIMPO',;
+    'C8_VALIMPP','C8_VALIMPQ','C8_VALIMPR','C8_VALIMPS','C8_VALIMPT','C8_VALIMPU','C8_VALIMPV','C8_VALIMPX','C8_VALIMPZ'} // -- Campos para soma de impostos MI - Total da cotação
+
+    If nQuery == 1
+        oSelf:AddMapFields('branch'            , 'C8_FILIAL' , .T., .T., {'C8_FILIAL' , 'C', TamSX3('C8_FILIAL' )[1], 0})
+        oSelf:AddMapFields('quotationCode'     , 'C8_NUM'    , .T., .T., {'C8_NUM'    , 'C', TamSX3('C8_NUM'    )[1], 0})
+        oSelf:AddMapFields('productCode'       , 'C8_PRODUTO', .T., .T., {'C8_PRODUTO', 'C', TamSX3('C8_PRODUTO')[1], 0})
+        oSelf:AddMapFields('item'              , 'C8_ITEM'   , .T., .T., {'C8_ITEM'   , 'C', TamSX3('C8_ITEM'   )[1], 0})
+        oSelf:AddMapFields('gridItem'          , 'C8_ITEMGRD', .T., .T., {'C8_ITEMGRD', 'C', TamSX3('C8_ITEMGRD')[1], 0})
+        oSelf:AddMapFields('productDescription', 'B1_DESC'   , .T., .F., {'B1_DESC'   , 'C', TamSX3('B1_DESC'   )[1], 0})
+        oSelf:AddMapFields('unity'             , 'C8_UM'     , .T., .F., {'C8_UM'     , 'C', TamSX3('C8_UM'     )[1], 0})
+        oSelf:AddMapFields('quantity'          , 'C8_QUANT'  , .T., .F., {'C8_QUANT'  , 'N', TamSX3('C8_QUANT'  )[1], 0})  
+        oSelf:AddMapFields('numsc'             , 'C8_NUMSC'  , .T., .F., {'C8_NUMSC'  , 'C', TamSX3('C8_NUMSC'  )[1], 0})        
+        oSelf:AddMapFields('itemsc'            , 'C8_ITEMSC' , .T., .F., {'C8_ITEMSC' , 'C', TamSX3('C8_ITEMSC' )[1], 0})        
+    ElseIf nQuery == 2
+        oSelf:AddMapFields('branch'            , 'C8_FILIAL' , .T., .T., {'C8_FILIAL' , 'C', TamSX3('C8_FILIAL' )[1], 0})
+        oSelf:AddMapFields('quotationCode'     , 'C8_NUM'    , .T., .T., {'C8_NUM'    , 'C', TamSX3('C8_NUM'    )[1], 0})
+        oSelf:AddMapFields('productCode'       , 'C8_PRODUTO', .T., .T., {'C8_PRODUTO', 'C', TamSX3('C8_PRODUTO')[1], 0})
+        oSelf:AddMapFields('item'              , 'C8_ITEM'   , .T., .T., {'C8_ITEM'   , 'C', TamSX3('C8_ITEM'   )[1], 0})
+        oSelf:AddMapFields('itemGrid'          , 'C8_ITEMGRD', .T., .T., {'C8_ITEMGRD', 'C', TamSX3('C8_ITEMGRD')[1], 0})
+        oSelf:AddMapFields('unity'             , 'C8_UM'     , .T., .F., {'C8_UM'     , 'C', TamSX3('C8_UM'     )[1], 0})
+        oSelf:AddMapFields('quantity'          , 'C8_QUANT'  , .T., .F., {'C8_QUANT'  , 'N', TamSX3('C8_QUANT'  )[1], 0}, 'MAX(C8_QUANT)' )
+        oSelf:AddMapFields('numsc'             , 'C8_NUMSC'  , .T., .F., {'C8_NUMSC'  , 'C', TamSX3('C8_NUMSC'  )[1], 0})        
+        oSelf:AddMapFields('itemsc'            , 'C8_ITEMSC' , .T., .F., {'C8_ITEMSC' , 'C', TamSX3('C8_ITEMSC' )[1], 0})        
+        oSelf:AddMapFields('productgroup'      , 'B1_GRUPO'  , .T., .F., {'B1_GRUPO'  , 'C', TamSX3('B1_GRUPO'  )[1], 0})        
+    ElseIf nQuery == 3
+        oSelf:AddMapFields('branch'            , 'C8_FILIAL' , .T., .T., {'C8_FILIAL'   , 'C', TamSX3('C8_FILIAL' )[1], 0})
+        oSelf:AddMapFields('quotationCode'     , 'C8_NUM'    , .T., .T., {'C8_NUM'      , 'C', TamSX3('C8_NUM'    )[1], 0})
+        oSelf:AddMapFields('supplier'          , 'C8_FORNECE', .T., .T., {'C8_FORNECE'  , 'C', TamSX3('C8_FORNECE')[1], 0})
+        oSelf:AddMapFields('store'             , 'C8_LOJA'   , .T., .T., {'C8_LOJA'     , 'C', TamSX3('C8_LOJA'   )[1], 0})
+        oSelf:AddMapFields('proposal'          , 'C8_NUMPRO' , .T., .T., {'C8_NUMPRO'   , 'C', TamSX3('C8_NUMPRO' )[1], 0})
+        oSelf:AddMapFields('corporateName'     , 'C8_FORNOME', .T., .F., {'C8_FORNOME'  , 'C', TamSX3('C8_FORNOME')[1], 0})
+        oSelf:AddMapFields('cnpj'              , 'A2_CGC'    , .T., .F., {'A2_CGC'      , 'C', TamSX3('A2_CGC'    )[1], 0})
+        oSelf:AddMapFields('type'              , 'A2_TIPO'   , .T., .F., {'A2_TIPO'     , 'C', TamSX3('A2_TIPO'   )[1], 0})
+        oSelf:AddMapFields('address'           , 'A2_END'    , .T., .F., {'A2_END'      , 'C', TamSX3('A2_END'    )[1], 0})
+        oSelf:AddMapFields('district'          , 'A2_BAIRRO' , .T., .F., {'A2_BAIRRO'   , 'C', TamSX3('A2_BAIRRO' )[1], 0})
+        oSelf:AddMapFields('state'             , 'A2_EST'    , .T., .F., {'A2_EST'      , 'C', TamSX3('A2_EST'    )[1], 0})
+        oSelf:AddMapFields('county'            , 'A2_MUN'    , .T., .F., {'A2_MUN'      , 'C', TamSX3('A2_MUN'    )[1], 0})
+        oSelf:AddMapFields('zipCode'           , 'A2_CEP'    , .T., .F., {'A2_CEP'      , 'C', TamSX3('A2_CEP'    )[1], 0})
+        oSelf:AddMapFields('countryCode'       , 'A2_DDI'    , .T., .F., {'A2_DDI'      , 'C', TamSX3('A2_DDI'    )[1], 0})
+        oSelf:AddMapFields('areaCode'          , 'A2_DDD'    , .T., .F., {'A2_DDD'      , 'C', TamSX3('A2_DDD'    )[1], 0})
+        oSelf:AddMapFields('telephone'         , 'A2_TEL'    , .T., .F., {'A2_TEL'      , 'C', TamSX3('A2_TEL'    )[1], 0})
+        oSelf:AddMapFields('email'             , 'A2_EMAIL'  , .T., .F., {'A2_EMAIL'    , 'C', TamSX3('A2_EMAIL'  )[1], 0})
+        oSelf:AddMapFields('paymentCondition'  , 'C8_COND'   , .T., .F., {'C8_COND'     , 'C', TamSX3('C8_COND'   )[1], 0})
+        oSelf:AddMapFields('paymentDescription', 'E4_DESCRI' , .T., .F., {'E4_DESCRI'   , 'C', TamSX3('E4_DESCRI' )[1], 0})
+        oSelf:AddMapFields('typeShip'          , 'C8_TPFRETE', .T., .F., {'C8_TPFRETE'  , 'C', TamSX3('C8_TPFRETE')[1], 0})
+        oSelf:AddMapFields('rate'              , 'RATE'      , .T., .F., {'RATE'        , 'N', TamSX3('A5_NOTA'   )[1], 0}, 'AVG(A5_NOTA)'   )
+        oSelf:AddMapFields('deadline'          , 'DEADLINE'  , .T., .F., {'DEADLINE'    , 'N', TamSX3('C8_PRAZO'  )[1], 0}, 'AVG(C8_PRAZO)'  )
+        oSelf:AddMapFields('total'             , 'TOTAL'     , .T., .F., {'TOTAL'       , 'N', TamSX3('C8_TOTAL'  )[1], 0}, oMetSX3:QueryOperationAnalysis("SUM(", if(cPaisLoc == 'BRA',{'C8_TOTAL', 'C8_VALFRE', 'C8_DESPESA', 'C8_SEGURO', 'C8_VALEMB', 'C8_VALIPI', 'C8_VALSOL', 'C8_VALICM'}, aImpMI)) + "-C8_VLDESC)")
+        oSelf:AddMapFields('totalItems'        , 'TOTALITEMS', .T., .F., {'TOTALITEMS'  , 'N', TamSX3('C8_TOTAL'  )[1], 0}, 'SUM(C8_TOTAL+C8_VALFRE+C8_DESPESA+C8_SEGURO+C8_VALEMB-C8_VLDESC)'  )
+        oSelf:AddMapFields('totalShip'         , 'TOTALSHIP' , .T., .F., {'TOTALSHIP'   , 'N', TamSX3('C8_VALFRE' )[1], 0}, 'SUM(C8_VALFRE)' )
+        oSelf:AddMapFields('totalExpense'      , 'TOTALEXPEN', .T., .F., {'TOTALEXPEN'  , 'N', TamSX3('C8_DESPESA')[1], 0}, 'SUM(C8_DESPESA)')
+        oSelf:AddMapFields('totalInsurance'    , 'TOTALINSUR', .T., .F., {'TOTALINSUR'  , 'N', TamSX3('C8_SEGURO' )[1], 0}, 'SUM(C8_SEGURO)' )
+        oSelf:AddMapFields('totalPackingValue' , 'TOTALPACK' , .T., .F., {'TOTALPACK'   , 'N', TamSX3('C8_VALEMB' )[1], 0}, 'SUM(C8_VALEMB)' )
+        oSelf:AddMapFields('totalDiscount'     , 'TOTALDISC' , .T., .F., {'TOTALDISC'   , 'N', TamSX3('C8_VLDESC' )[1], 0}, 'SUM(C8_VLDESC)' )
+        if oMetSX3:vldFieldsSX3('SC8', 'C8_VALIPI')
+            oSelf:AddMapFields('totalIpi'          , 'TOTALIPI'  , .T., .F., {'TOTALIPI'    , 'N', TamSX3('C8_VALIPI' )[1], 0}, 'SUM(C8_VALIPI)' )
+        endif
+        if oMetSX3:vldFieldsSX3('SC8', 'C8_VALICM')
+            oSelf:AddMapFields('totalIcms'         , 'TOTALICMS' , .T., .F., {'TOTALICMS'   , 'N', TamSX3('C8_VALICM' )[1], 0}, 'SUM(C8_VALICM)' )
+        endif
+        if oMetSX3:vldFieldsSX3('SC8', 'C8_VALSOL')
+            oSelf:AddMapFields('totalIcmsst'       , 'TOTALICMSST',.T., .F., {'TOTALICMSST' , 'N', TamSX3('C8_VALSOL' )[1], 0}, 'SUM(C8_VALSOL)' )
+		endif
+        oSelf:AddMapFields('quantityItems'      , 'QUANTITEMS'  , .T., .F., {'QUANTITEMS'   , 'N', 10                       , 0}, 'COUNT(C8_ITEM)' )
+        oSelf:AddMapFields('deadlineD'          , 'DEADLINED'   , .T., .F., {'DEADLINED'    , 'N', 20                       , 2}, 'AVG( CAST(C8_DATPRF AS FLOAT))' )
+        oSelf:AddMapFields('currency'           , 'C8_MOEDA'    , .T., .F., {'C8_MOEDA'     , 'C', TamSX3('C8_MOEDA')[1]    , 0})
+        oSelf:AddMapFields('currencyrate'       , 'C8_TXMOEDA'  , .T., .F., {'C8_TXMOEDA'   , 'N', TamSX3('C8_TXMOEDA')[1]  , 0})
+		if cPaisLoc != "BRA"
+            oSelf:AddMapFields('totaltaxesim'   , 'TOTALTAXIM'  , .T., .F., {'TOTALTAXIM'   , 'N', TamSX3('C8_TOTAL')[1]    , 0}, oMetSX3:QueryOperationAnalysis("SUM(",  aImpMI) + "-C8_TOTAL-C8_VALFRE-C8_DESPESA-C8_SEGURO-C8_VALEMB)" )    
+        endif
+
+    ElseIf nQuery == 4
+        oSelf:AddMapFields('branch'            , 'C1_FILIAL' , .T., .T., {'C1_FILIAL' , 'C', TamSX3('C1_FILIAL' )[1], 0})
+        oSelf:AddMapFields('quotationCode'     , 'C1_COTACAO'    , .T., .T., {'C1_COTACAO', 'C', TamSX3('C1_COTACAO'    )[1], 0})
+        oSelf:AddMapFields('productCode'       , 'C1_PRODUTO', .T., .T., {'C1_PRODUTO', 'C', TamSX3('C1_PRODUTO')[1], 0})
+        oSelf:AddMapFields('item'              , 'C1_ITEM'   , .T., .T., {'C1_ITEM'   , 'C', TamSX3('C1_ITEM'   )[1], 0})
+        oSelf:AddMapFields('quantity'          , 'C1_QUANT'  , .T., .F., {'C1_QUANT'  , 'N', TamSX3('C1_QUANT'  )[1], 0}) 
+        oSelf:AddMapFields('requester'         , 'C1_SOLICIT', .T., .F., {'C1_SOLICIT', 'C', TamSX3('C1_SOLICIT')[1], 0})
+        oSelf:AddMapFields('requestCode'       , 'C1_NUM'    , .T., .F., {'C1_NUM'    , 'C', TamSX3('C1_NUM'    )[1], 0})
+        oSelf:AddMapFields('seqitem'           , 'C1_ITEM'   , .T., .F., {'C1_ITEM'   , 'C', TamSX3('C1_ITEM'   )[1], 0})
+        oSelf:AddMapFields('productName'       , 'C1_DESCRI' , .T., .F., {'C1_DESCRI' , 'C', TamSX3('C1_DESCRI' )[1], 0})
+    EndIf
+
+    FwFreeArray(aImpMI)
+Return Nil
+ 
+/*/{Protheus.doc} GetQuery
+	Monta a expressão SQL para consulta dos itens da cotação.
+@author juan.felipe
+@since 06/01/2023
+@param nQuery, numeric, 1- Listagem de itens não respondidos; 2- Listagem de itens; 3- Listagem de fornecedores ordenados por critério; 4- Listagem de SCs relacionadas.
+@return cQuery, string, query dos fornecedores/itens da cotação.
+/*/
+Static Function GetQuery(nQuery)
+    Local cQuery As Character
+    Default nQuery := 1
+    
+    If nQuery == 1
+        cQuery := " SELECT DISTINCT #QueryFields#"
+        cQuery += " FROM " + RetSqlName( 'SC8' ) + " SC8"
+        cQuery += " INNER JOIN " + RetSqlName( 'SB1' ) + " SB1 ON"
+        cQuery += "     SB1.B1_FILIAL = '" + FWxFilial('SB1') + "'" 
+        cQuery += "     AND SB1.B1_COD = SC8.C8_PRODUTO"
+        cQuery += "     AND SB1.D_E_L_E_T_ = ' '"
+        cQuery += " WHERE #QueryWhere#"
+        cQuery += " GROUP BY #QueryFields#"
+        cQuery += " HAVING" //-- Verifica se nenhum fornecedor respondeu o item
+        cQuery += "     (SELECT COUNT(SC82.C8_ITEM)"
+        cQuery += "     FROM "+ RetSQLName("SC8") +" SC82"
+        cQuery += "     WHERE SC82.C8_FILIAL = SC8.C8_FILIAL"
+        cQuery += "         AND SC82.C8_NUM = SC8.C8_NUM"
+        cQuery += "         AND SC82.C8_PRODUTO = SC8.C8_PRODUTO"
+        cQuery += "         AND SC82.C8_ITEM = SC8.C8_ITEM"
+        cQuery += "         AND SC82.C8_ITEMGRD = SC8.C8_ITEMGRD"
+        cQuery += "         AND SC82.C8_TOTAL > 0"
+        cQuery += "         AND SC82.D_E_L_E_T_ = ' '"
+        cQuery += "         AND SC82.C8_NUMPRO = (
+		cQuery += "             SELECT MAX(SC83.C8_NUMPRO)"
+		cQuery += "             FROM "+ RetSQLName("SC8") +" SC83"
+		cQuery += "             WHERE SC83.C8_FILIAL = SC82.C8_FILIAL AND"
+		cQuery += "             	SC83.C8_NUM = SC82.C8_NUM AND"
+		cQuery += "             	SC83.C8_FORNECE = SC82.C8_FORNECE AND"
+		cQuery += "             	SC83.C8_LOJA = SC82.C8_LOJA AND"
+		cQuery += "             	SC83.C8_FORNOME = SC82.C8_FORNOME AND"
+		cQuery += "             	SC83.D_E_L_E_T_ = ' '"
+        cQuery += "         )"
+        cQuery += "     ) = 0"
+    Elseif nQuery == 2
+        cQuery := " SELECT #QueryFields#"
+        cQuery += " FROM " + RetSqlName( 'SC8' ) + " SC8"
+        cQuery += " INNER JOIN " + RetSqlName( 'SB1' ) + " SB1 ON"
+        cQuery += "     SB1.B1_FILIAL = '" + FWxFilial('SB1') + "'" 
+        cQuery += "     AND SB1.B1_COD = SC8.C8_PRODUTO"
+        cQuery += "     AND SB1.D_E_L_E_T_ = ' '"
+        cQuery += " WHERE #QueryWhere#"
+        cQuery += " GROUP BY C8_FILIAL, C8_NUM, C8_PRODUTO, C8_ITEM, C8_ITEMGRD, C8_UM, B1_GRUPO, C8_NUMSC, C8_ITEMSC "
+    ElseIf nQuery == 3
+        cQuery := " SELECT #QueryFields#"
+        cQuery += " FROM " + RetSqlName( 'SC8' ) + " SC8"
+        cQuery += " INNER JOIN "+ RetSqlName( 'DHU' ) + " DHU"
+        cQuery += "     ON DHU.DHU_FILIAL = '" + FWxFilial('DHU') + "'"
+        cQuery += "     AND DHU.DHU_NUM = SC8.C8_NUM"
+		cQuery += "     AND DHU.D_E_L_E_T_ = ' '"
+        cQuery += " LEFT JOIN "+ RetSqlName( 'SA2' ) + " SA2"
+        cQuery += "     ON SA2.A2_FILIAL = '" + FWxFilial('SA2') + "'"
+        cQuery += "     AND SA2.A2_COD = SC8.C8_FORNECE"
+        cQuery += "     AND SA2.A2_LOJA = SC8.C8_LOJA"
+        cQuery += "     AND SA2.D_E_L_E_T_ = ' '"
+        cQuery += " LEFT JOIN " + RetSqlName( 'SE4' ) + " SE4 ON"
+        cQuery += "     SE4.E4_FILIAL = '" + FWxFilial('SE4') + "'"
+        cQuery += "     AND SE4.E4_CODIGO = SC8.C8_COND"
+        cQuery += "     AND SE4.D_E_L_E_T_ = ' '"
+        cQuery += " LEFT JOIN ( "
+        cQuery += "    SELECT SA5.A5_FILIAL, SA5.A5_FORNECE, SA5.A5_LOJA, SA5.A5_PRODUTO, MAX(SA5.A5_NOTA) AS A5_NOTA"
+        cQuery += "    FROM " + RetSqlName( 'SA5' ) + " SA5"    
+        cQuery += "    WHERE  SA5.D_E_L_E_T_ = ' ' "
+        cQuery += "    GROUP BY  SA5.A5_FILIAL, SA5.A5_FORNECE, SA5.A5_LOJA, SA5.A5_PRODUTO"
+        cQuery += " ) SA5 ON "
+        cQuery += "     SA5.A5_FILIAL = '" + FWxFilial('SA5') + "'"
+        cQuery += "     AND SA5.A5_FORNECE = SC8.C8_FORNECE"
+        cQuery += "     AND SA5.A5_LOJA = SC8.C8_LOJA"
+        cQuery += "     AND SA5.A5_PRODUTO = SC8.C8_PRODUTO"
+        cQuery += " WHERE #QueryWhere#"
+        cQuery += " GROUP BY"
+        cQuery += "     SC8.C8_FILIAL, SC8.C8_NUM, SC8.C8_NUMPRO, SC8.C8_FORNECE,"
+        cQuery += "     SC8.C8_LOJA, SC8.C8_FORNOME, SA2.A2_CGC, SA2.A2_TIPO, SA2.A2_END,"
+        cQuery += "     SA2.A2_BAIRRO, SA2.A2_EST, SA2.A2_MUN, SA2.A2_CEP, SA2.A2_DDI,"
+        cQuery += "     SA2.A2_DDD, SA2.A2_TEL, SA2.A2_EMAIL, SC8.C8_COND, SC8.C8_TPFRETE,"
+        cQuery += "     SE4.E4_DESCRI, SC8.C8_MOEDA, SC8.C8_TXMOEDA"
+        cQuery += " HAVING"
+        cQuery += "     (SELECT COUNT(SC82.C8_ITEM)" //-- Conta quantidade de itens 100% atendidos
+        cQuery += "     FROM "+ RetSQLName("SC8") +" SC82"
+        cQuery += "     WHERE SC82.C8_FILIAL = SC8.C8_FILIAL"
+        cQuery += "         AND SC82.C8_NUM = SC8.C8_NUM"
+        cQuery += "         AND SC82.C8_FORNECE = SC8.C8_FORNECE"
+        cQuery += "         AND SC82.C8_LOJA = SC8.C8_LOJA"
+        cQuery += "         AND SC82.C8_NUMPRO = SC8.C8_NUMPRO"
+        cQuery += "         AND SC82.C8_FORNOME = SC8.C8_FORNOME"
+        cQuery += "         AND SC82.C8_QUANT = SC82.C8_QTDISP" 
+        cQuery += "         AND SC82.C8_TOTAL > 0"
+		cQuery += "         AND SC82.D_E_L_E_T_ = ' ')"
+        cQuery += "     = " //-- Verifica se a quantidade de itens 100% atendidos é igual a quantidade total de itens da cotação
+        cQuery += "     (SELECT COUNT(SC83.C8_ITEM)" //-- Conta a quantidade de itens da cotação
+        cQuery += "     FROM "+ RetSQLName("SC8") +" SC83"
+        cQuery += "     WHERE SC83.C8_FILIAL = SC8.C8_FILIAL"
+        cQuery += "         AND SC83.C8_NUM = SC8.C8_NUM"
+        cQuery += "         AND SC83.C8_FORNECE = SC8.C8_FORNECE"
+        cQuery += "         AND SC83.C8_LOJA = SC8.C8_LOJA"
+        cQuery += "         AND SC83.C8_NUMPRO = SC8.C8_NUMPRO"
+        cQuery += "         AND SC83.C8_FORNOME = SC8.C8_FORNOME"
+        cQuery += "         AND SC83.D_E_L_E_T_ = ' ')"
+        cQuery += "     AND" 
+        cQuery += "     (SELECT COUNT(SC84.C8_ITEM)" //-- Verifica se o fornecedor recusou a cotação (C8_SITUAC = 4) ou o se fornecedor foi desqualificado (C8_SITUAC = 5)
+        cQuery += "     FROM "+ RetSQLName("SC8") +" SC84"
+        cQuery += "     WHERE SC84.C8_FILIAL = SC8.C8_FILIAL"
+        cQuery += "         AND SC84.C8_NUM = SC8.C8_NUM"
+        cQuery += "         AND SC84.C8_FORNECE = SC8.C8_FORNECE"
+        cQuery += "         AND SC84.C8_LOJA = SC8.C8_LOJA"
+        cQuery += "         AND SC84.C8_NUMPRO = SC8.C8_NUMPRO"
+        cQuery += "         AND SC84.C8_FORNOME = SC8.C8_FORNOME"
+        cQuery += "         AND SC84.C8_SITUAC IN('4', '5')"
+        cQuery += "         AND SC84.D_E_L_E_T_ = ' ') = 0"
+        cQuery += "     AND" 
+        cQuery += "   ( SELECT COUNT(SC85.C8_ITEM)" 
+        cQuery += "        FROM "+ RetSQLName("SC8") +" SC85"
+        cQuery += "        WHERE SC85.C8_FILIAL = SC8.C8_FILIAL"
+        cQuery += "            AND SC85.C8_NUM = SC8.C8_NUM"
+        cQuery += "            AND SC85.C8_FORNECE = SC8.C8_FORNECE"
+        cQuery += "            AND SC85.C8_LOJA = SC8.C8_LOJA"
+        cQuery += "            AND SC85.C8_NUMPRO = SC8.C8_NUMPRO"
+        cQuery += "            AND SC85.C8_FORNOME = SC8.C8_FORNOME"
+        cQuery += "            AND SC85.D_E_L_E_T_ = ' ' ) = " //-- Apenas quando a quantidade de itens da proposta for igual a quantidade total de itens da cotação (DHV)
+        cQuery += "   ( SELECT COUNT(DHV.DHV_ITEM)" 
+        cQuery += "        FROM "+ RetSQLName("DHV") +" DHV"
+        cQuery += "        WHERE DHV.DHV_FILIAL = '" + FWxFilial('DHV') + "'"
+        cQuery += "            AND DHV.DHV_NUM = SC8.C8_NUM"
+        cQuery += "            AND DHV.D_E_L_E_T_ = ' ' )"
+    Elseif nQuery == 4
+        cQuery := " SELECT #QueryFields#"
+        cQuery += "     FROM " + RetSqlName( 'SC1' ) + " SC1"
+        cQuery += " WHERE #QueryWhere#"
+        cQuery += " GROUP BY #QueryFields#"
+    endif
+Return cQuery
+
+/*/{Protheus.doc} GetWhere
+	Monta a expressão SQL WHERE.
+@author juan.felipe
+@since 06/01/2023
+@param nQuery, numeric, 1- Listagem de itens não respondidos; 2- Listagem de itens; 3- Listagem de fornecedores ordenados por critério; 4- Listagem de SCs relacionadas.
+@return cQuery, string, expressão where.
+/*/
+Static Function GetWhere(nQuery, cWhereParam1, lIsQuotationMap)
+    Local cWhere As Character
+    Default nQuery       := 1
+    Default cWhereParam1 := ""
+    Default lIsQuotationMap := .F.
+
+    If nQuery <> 4
+        cWhere := " SC8.C8_FILIAL = '"+ FWxFilial('SC8') +"'"
+    Else
+        cWhere := " SC1.C1_FILIAL = '"+ FWxFilial('SC1') +"'"
+    EndIf
+
+    If nQuery == 2 //--Análise por item
+        cWhere += " AND SC8.C8_SITUAC IN (' ', '1', '8')"
+		cWhere += " AND SC8.C8_PRECO > 0"
+    EndIf
+    
+    If nQuery == 3 //-- Fornecedores ordenados por critério
+        cWhere += " AND DHU.DHU_STATUS NOT IN('3', '4')" //-- A cotação não deve estar em análise ou finalizada
+    EndIf
+
+	If nQuery == 1 .Or. nQuery == 2 .Or. nQuery == 3
+		cWhere += " AND SC8.C8_NUMPRO = ("
+        cWhere += "     SELECT MAX(SC8_2.C8_NUMPRO)"
+        cWhere += "     FROM "+ RetSQLName("SC8") +" SC8_2"
+        cWhere += "     WHERE SC8_2.C8_FILIAL = SC8.C8_FILIAL AND"
+        cWhere += "         SC8_2.C8_NUM = SC8.C8_NUM AND"
+        cWhere += "         SC8_2.C8_FORNECE = SC8.C8_FORNECE AND"
+        cWhere += "         SC8_2.C8_LOJA = SC8.C8_LOJA AND"
+        cWhere += "         SC8_2.C8_FORNOME = SC8.C8_FORNOME AND"
+        cWhere += "         SC8_2.D_E_L_E_T_ = ' '"
+        cWhere += " )"
+	EndIf
+
+    If nQuery <> 4
+        cWhere += " AND SC8.D_E_L_E_T_ = ' '"
+    Else 
+        cWhere += " AND SC1.D_E_L_E_T_ = ' '"
+    EndIf
+
+Return cWhere
+
+/*/{Protheus.doc} GetOrder
+	Monta a expressão SQL ORDER.
+@author juan.felipe
+@since 24/01/2023
+@param nQuery, numeric, 1- Listagem de itens não respondidos; 2- Listagem de itens; 3- Listagem de fornecedores ordenados por critério; 4- Listagem de SCs relacionadas.
+@param cOrderParam1, character, parâmetro 1.
+@return cOrder, string, expressão Order.
+/*/
+Static Function GetOrder(nQuery, cOrderParam1)
+    Local cOrder    As Character
+    local oMetSX3   := pgcUpdateQuotationRepository():New()
+    local aImpMI    := {'C8_TOTAL','C8_VALFRE','C8_DESPESA','C8_SEGURO','C8_VALEMB','C8_VALIMP1','C8_VALIMP2','C8_VALIMP3','C8_VALIMP4','C8_VALIMP5','C8_VALIMP6','C8_VALIMP7','C8_VALIMP8','C8_VALIMP9',;
+                        'C8_VALIMPA','C8_VALIMPB','C8_VALIMPC','C8_VALIMPD','C8_VALIMPE','C8_VALIMPF','C8_VALIMPG','C8_VALIMPH','C8_VALIMPI','C8_VALIMPJ','C8_VALIMPK','C8_VALIMPL','C8_VALIMPM','C8_VALIMPN','C8_VALIMPO',;
+                        'C8_VALIMPP','C8_VALIMPQ','C8_VALIMPR','C8_VALIMPS','C8_VALIMPT','C8_VALIMPU','C8_VALIMPV','C8_VALIMPX','C8_VALIMPZ'}// -- Campos para soma de impostos MI - Total da cotação
+
+    cOrder := ''
+
+    If nQuery == 1 .Or. nQuery == 2
+        cOrder := 'C8_FILIAL, C8_NUM, C8_PRODUTO, C8_ITEM'
+    ElseIf nQuery == 3
+        cOrderParam1 := Lower(cOrderParam1)
+        
+        Do Case
+            Case cOrderParam1 == 'value' //-- Melhor preço
+                cOrder := 'SUM(C8_TOTAL+C8_VALFRE+C8_DESPESA+C8_SEGURO+C8_VALEMB-C8_VLDESC) * (CASE WHEN C8_TXMOEDA > 0 THEN C8_TXMOEDA ELSE 1 END) ASC'
+            Case cOrderParam1 == 'valuewithtax' //-- Melhor preço com imposto
+                cOrder := oMetSX3:QueryOperationAnalysis( "SUM(", if(cPaisLoc == "BRA",{'C8_TOTAL', 'C8_VALFRE', 'C8_DESPESA', 'C8_SEGURO', 'C8_VALEMB', 'C8_VALIPI', 'C8_VALSOL'},aImpMI)) + "-C8_VLDESC) * (CASE WHEN C8_TXMOEDA > 0 THEN C8_TXMOEDA ELSE 1 END) ASC"
+            Case cOrderParam1 == 'deadline' //-- Melhor prazo
+                cOrder := ' AVG(CAST(C8_DATPRF AS FLOAT)) ASC '
+            Case cOrderParam1 == 'rate' //-- Melhor nota
+                cOrder := 'AVG(A5_NOTA) DESC'
+        EndCase
+    elseif nQuery == 4
+        cOrder := 'C1_FILIAL, C1_NUM, C1_ITEM, C1_PRODUTO'    
+    EndIf
+
+    FwFreeArray(aImpMI)
+Return cOrder
+
+/*/{Protheus.doc} TreatJSONResponse
+	Trata retorno do JSON gerado pelo FWAdapter.
+@author juan.felipe
+@since 27/10/2022
+@param nQuery, numeric, 1- Listagem de Fornecedores; 2- Listagem de itens; 3- Listagem de fornecedores ordenados por critério; 4- Listagem de SCs relacionadas.
+@param oJsonResponse, object, JSON gerado pelo FWAdapter
+@return Nil, nulo.
+/*/
+Method TreatJSONResponse(nQuery, oJsonResponse) Class pgcAnalyzeQuotationRepository
+    Default nQuery := 1
+    Default oJsonResponse := Nil
+
+    If nQuery == 1 
+        Self:setBalanceValue(oJsonResponse)
+    elseif nQuery == 2 //-- Itens da cotação
+        Self:setAverageValue(oJsonResponse)
+    elseif nQuery == 3
+        Self:CurrencyByName(oJsonResponse)
+    elseif nQuery == 4
+       Self:RequestAdj(oJsonResponse) 
+    EndIf
+Return Nil
+
+/*/{Protheus.doc} setBalanceValue
+	Insere o valor do saldo dos produtos no json de retorno
+@author Ali Ahmad
+@since 03/12/2024
+/*/
+Method setBalanceValue(oJsonResponse) Class pgcAnalyzeQuotationRepository
+
+    local aItems                    As Array
+    local nLenItems                 As Numeric
+    local nX                        As Numeric
+    local nBalanceValue             As Numeric
+    default oJsonResponse :=        Nil
+
+    DbSelectArea("DHV")
+    DHV->(DbSetOrder(1))//DHV_FILIAL+DHV_NUM+DHV_ITEM
+
+    aItems := oJsonResponse['items']
+    nLenItems := Len(aItems)
+    nX := 1
+
+    For nX := 1 To Len(aItems)
+    
+        nBalanceValue := 0
+        aItems[nX]["itembalance"] := GetAdvFVal("DHV","DHV_SALDO", FWxFilial("DHV") + PADR(aItems[nX]["quotationcode"], TAMSX3("DHV_NUM")[1]) + PADR(aItems[nX]["item"], TAMSX3("DHV_ITEM")[1]),1)
+        aItems[nX]["productdescription"] := Alltrim(NFCProdDesc(aItems[nX]["productcode"], aItems[nX]["numsc"], aItems[nX]["itemsc"]))
+    Next nX
+Return nil
+
+/*/{Protheus.doc} setAverageValue
+	Insere o valor médio dos produtos no json de retorno
+@author Leandro Fini
+@since 23/01/2023
+/*/
+Method setAverageValue(oJsonResponse) Class pgcAnalyzeQuotationRepository
+    local aItems                    As Array
+    local aRetItem                  as array
+    local nX                        As Numeric
+    local aSuppliers                As Array 
+    local nQtySolic                 As Numeric 
+    local nAverageValue             As Numeric
+    local nAverageUnitValue         As Numeric
+    local nAverageDaysToDelivery    As Numeric
+    local nAverageShippingValue     As Numeric
+    local nAverageExpensesValue     As Numeric 
+    local nAverageInsurancesValue   As Numeric 
+    local nAverageDiscountValue     As Numeric
+    local nLenItems                 As Numeric
+    local lCentralized              as logical
+    local cBranchDelivery           as character
+    default oJsonResponse :=        Nil
+
+    DbSelectArea("SC8")
+    SC8->(DbSetOrder(3))//C8_FILIAL, C8_NUM, C8_PRODUTO, C8_FORNECE, C8_LOJA, C8_NUMPED, C8_ITEMPED
+
+    aItems := oJsonResponse['items']
+    nLenItems := Len(aItems)
+    nX := 1
+
+    While nX <= nLenItems
+        aSuppliers              := {}
+        nAverageValue           := 0
+        nAverageUnitValue       := 0
+        nAverageDaysToDelivery  := 0
+        nAverageShippingValue   := 0
+        nAverageExpensesValue   := 0
+        nAverageInsurancesValue := 0
+        nAverageDiscountValue   := 0
+        nQtySolic               := 0
+        lCentralized            := .f.
+        nQtySolic               := aItems[nX]["quantity"]
+        cBranchDelivery         := ""
+        aRetItem                := {}
+        if SC8->(MsSeek(PADR(aItems[nX]["branch"], TAMSX3("C8_FILIAL")[1]) + aItems[nX]["quotationcode"] + PADR(aItems[nX]["productcode"], TAMSX3("C8_PRODUTO")[1])))
+            while Alltrim( SC8->(C8_FILIAL+C8_NUM+C8_PRODUTO) ) == Alltrim(PADR(aItems[nX]["branch"], TAMSX3("C8_FILIAL")[1]) + aItems[nX]["quotationcode"] + aItems[nX]["productcode"])
+                if SC8->C8_ITEM <> aItems[nX]["item"] .or. SC8->C8_PRECO == 0 .or. SC8->C8_NUMPRO <> PGCLastProp(SC8->C8_NUM, SC8->C8_FORNECE, SC8->C8_LOJA, SC8->C8_FORNOME)
+                    SC8->(DbSkip())
+                    Loop
+                endif
+
+                if MethIsMemberOf(self , "DescentralItems")
+                    aRetItem := self:DescentralItems(SC8->C8_NUM, SC8->C8_PRODUTO, SC8->C8_IDENT, '', '', '', '')
+                    lCentralized := iif( len(aRetItem) > 1 , .t., iif( len(aRetItem) == 1 .and. aRetItem[1,5] != aRetItem[1,7], .t., .f.))
+                endif
+
+                cBranchDelivery := SC8->C8_FILENT
+
+                if aScan( aSuppliers, {|x| x == Alltrim(SC8->(C8_FORNECE+C8_LOJA)) } ) == 0
+                    aAdd(aSuppliers, Alltrim(SC8->(C8_FORNECE+C8_LOJA)))
+                    nAverageValue += SC8->C8_PRECO
+                    nAverageShippingValue += SC8->C8_VALFRE
+                    nAverageExpensesValue += SC8->C8_DESPESA
+                    nAverageInsurancesValue += SC8->C8_SEGURO
+                    nAverageDiscountValue += SC8->C8_VLDESC
+                    nAverageDaysToDelivery += SC8->C8_PRAZO
+                endif
+                SC8->(DbSkip())
+            enddo
+        endif
+        nAverageUnitValue :=  round(nAverageValue / len(aSuppliers),2)
+        nAverageValue := round(( ( nAverageValue / len(aSuppliers) ) * nQtySolic ),2) + round(( nAverageShippingValue / len(aSuppliers) ),2) + round(( nAverageExpensesValue / len(aSuppliers) ),2) + round(( nAverageInsurancesValue / len(aSuppliers) ),2) - round(( nAverageDiscountValue / len(aSuppliers) ),2)
+        nAverageDaysToDelivery := round(nAverageDaysToDelivery / len(aSuppliers),0)
+        
+        aItems[nX]["productdescription"]    := Alltrim(NFCProdDesc(aItems[nX]["productcode"], aItems[nX]["numsc"], aItems[nX]["itemsc"]))
+        aItems[nX]["itembalance"]           := GetAdvFVal("DHV","DHV_SALDO", FWxFilial("DHV") + PADR(aItems[nX]["quotationcode"], TAMSX3("DHV_NUM")[1]) + PADR(aItems[nX]["item"], TAMSX3("DHV_ITEM")[1]),1)
+        aItems[nX]["averagevalue"]          := nAverageValue
+        aItems[nX]["averageunitvalue"]      := nAverageUnitValue
+        aItems[nX]["averagedaystodelivery"] := nAverageDaysToDelivery
+        aItems[nX]["suppliers"]             := Self:suppliersByQuotationProduct(aItems[nX]["quotationcode"], aItems[nX]["productcode"], aItems[nX]["item"], aItems[nX]["productdescription"], aItems[nX]["itembalance"])
+        aItems[nX]["lcentralized"]          := lCentralized
+        aItems[nX]["deliverybranch"]        := cBranchDelivery
+
+        If Self:lIsQuotationMap .And. Len(aItems[nX]["suppliers"]["items"]) == 0
+            aDel(aItems, nX) //-- Remove item que não tem fornecedores
+            aSize(aItems, Len(aItems)-1)
+            nLenItems := Len(aItems)
+        Else
+            nX ++
+        EndIf
+    EndDo
+
+Return nil
+
+/*/{Protheus.doc} deleteQuotationItem
+	Deleta item da cotação.
+@author juan.felipe
+@since 06/01/2023
+@return oJsonRet, object, resposta no formato json.
+/*/
+Method deleteQuotationItem() Class pgcAnalyzeQuotationRepository
+    Local aAreas As Array
+    Local aItems As Array
+    Local cQuotationCode As Character
+    Local cProductCode As Character
+    Local cItem As Character
+    Local cMessage As Character
+    Local nCode As Numeric
+    Local nX As Numeric
+    Local nY As Numeric
+    Local nQuantityProduct As Numeric
+    Local oJsonRet As Object
+    Local oModel As Object
+    Local oModelDHU As Object    
+    Local oModelDHV As Object
+    Local oModelSC8 As Object
+    Local oUtils As Object
+    Local lReqMap as logical
+
+    aAreas      := {DHU->(GetArea()), GetArea()}
+    oJsonRet    := JsonObject():New()
+    oUtils      := pgcUtils():New()
+    Self:lOk    := .T.
+    lReqMap     := .f. 
+    
+    DHU->(dbSetOrder(1)) //-- DHU_FILIAL+DHU_NUM
+    
+    cQuotationCode := Self:oJsonRequest:quotationcode
+    aItems := Self:oJsonRequest:items
+    cMessage := ''
+
+    /*Se a exclusão vier do mapa de solicitação de compras, constará o código do item da SC1, que pode ser diferente da SC8.
+    Assim, necessito ajustar o código do item para o real, que consta na SC8. O array sempre vai constar apenas um item. */
+    lReqMap := AttIsMemberOf(Self:oJsonRequest, "requestmap")
+    if (lReqMap .and. Self:oJsonRequest:requestmap )
+        Self:AdjItemSC8(cQuotationCode, aItems[1]:productcode, aItems[1]:requestCode, aItems[1]:item, @aItems)
+    endif
+
+    If Self:lOk := DHU->(MsSeek(FWxFilial('DHU') + cQuotationCode))
+        PG020SetOp(iif(!lReqMap, 8, 11)) //-- Deleção de um item da cotação
+
+        oModel := FWLoadModel("PGCA020")
+        oModel:SetOperation(MODEL_OPERATION_UPDATE)
+        oModel:Activate()
+        oModelDHU := oModel:GetModel('DHUMASTER')
+        oModelDHV := oModel:GetModel('DHVDETAIL')
+        oModelSC8 := oModel:GetModel('SC8DETAIL')
+
+        nQuantityProduct = oModelDHU:GetValue("DHU_QTDPRO") - Len(aItems) //-- Atualiza quantidade de produtos da cotação
+        oModelDHU:SetValue("DHU_QTDPRO", nQuantityProduct)
+
+        For nX := 1 To Len(aItems)
+            cProductCode := aItems[nX]:productcode
+            cItem := aItems[nX]:item
+
+            If Self:lOk := oModelDHV:SeekLine({{"DHV_ITEM",cItem}})
+                If Self:lOk := oModelDHV:DeleteLine(.F.,.F.) //-- Deleta item da cotação
+                    For nY := 1 To oModelSC8:Length() //-- Deleta fornecedores referente ao item da cotação
+                        oModelSC8:GoLine(nY)
+                        
+                        If !oModelSC8:DeleteLine(.F.,.F.)
+                            Self:lOk := .F.
+                            Exit
+                        EndIf
+                    Next nY
+                EndIf
+            Else
+                cMessage := STR0018 + cProductCode + '-' + cItem + STR0002 //-- O item XXX não foi localizado na base de dados.
+            EndIf
+
+            If Self:lOk
+                If Self:lOk := oModel:VldData() .And. oModel:CommitData()
+                    cMessage := STR0001 //-- Os itens foram removidos da cotação.
+                EndIf
+            EndIf
+        Next nX
+
+        nCode := Iif(Self:lOk, 200, 400)
+        if lReqMap .and. nCode == 400
+            cMessage := self:AdjMessage(oModel)
+        endif
+        oJsonRet := oUtils:setClassResponse(nCode, cMessage, oModel) //-- Retorna mensagem da classe no formato json.
+        
+        oModel:DeActivate()
+    Else
+        oJsonRet := oUtils:setClassResponse(400, STR0004 + cQuotationCode + STR0005) //-- A cotação XXX não foi localizada na base de dados.
+    EndIf
+
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FreeObj(oModel)
+    FreeObj(oUtils)
+Return oJsonRet
+
+/*/{Protheus.doc} suppliersByQuotationProduct
+	Consulta os dados dos fornecedores da cotação que ofertaram um produto.
+@author Leandro Fini
+@since 23/01/2023
+@return .T., logical, consulta realizada corretamente.
+/*/
+Method suppliersByQuotationProduct(cQuotationCode,cProductCode,cItem, cProductDescription, nProductBalance) Class pgcAnalyzeQuotationRepository
+
+    Local oUtils            As Object
+    Local oJsonResponse     As Object
+    Local aItems            As Array
+    Local aSupplierData     As Array
+    Local nLoop             As Numeric
+    Local nBalance          As Numeric
+    Local nQuantityOrder    As Numeric
+    Local nPosCNPJ          As Numeric
+    Local nPosType          As Numeric
+    Local lHasSupObs        As Logical
+    Local cAliasSC8         := GetNextAlias()
+    Local cQuery            := ''
+    Local cDescription      := ''
+    Local aArea             := GetArea()
+    Local nLenSupplier      := TamSX3("A2_COD")[1]
+    Local nLenStore         := TamSX3("A2_LOJA")[1]
+    Local cNFCMoed          := SuperGetMV("MV_NFCMOED", .F., "1")
+    Local oMetSX3           := pgcUpdateQuotationRepository():New()
+    Local oQuery            := nil
+    Local nMoedPad          As Numeric
+    Local nTotaltoPay       As Numeric
+    Local nTaxObserv        As Numeric
+    Local nCurrency         As Numeric
+    Default cQuotationCode  := ''
+    Default cProductCode    := ''
+    Default cItem           := ''
+    Default cProductDescription := ''
+    Default nProductBalance := 0
+
+    nPosCNPJ                := 1
+    nPosType                := 2
+    lHasSupObs              := SC8->(FieldPos('C8_OBSFOR')) > 0
+    oJsonResponse           := JsonObject():New()
+    oJsonResponse["items"]  := {}
+    oUtils                  := pgcUtils():New()
+    nMoedPad                := 1 //Moeda 1 é REAL (R$)
+    nTotaltoPay             := 0
+    nTaxObserv              := 1
+
+    cQuery := "SELECT SC8.C8_FILIAL,"
+    cQuery += "   SC8.C8_ITEM,"
+    cQuery += "   SC8.C8_ITEMGRD,"
+    cQuery += "   SC8.C8_NUMPRO,"
+    cQuery += "   SC8.C8_PRODUTO,"
+    cQuery += "   SC8.C8_UM,"
+    cQuery += "   SC8.C8_QUANT,"
+    cQuery += "   SC8.C8_QTDISP,"
+    cQuery += "   SC8.C8_PRECO,"
+    cQuery += "   SC8.C8_TOTAL,"
+    cQuery += "   SC8.C8_FORNECE,"
+    cQuery += "   SC8.C8_LOJA,"
+    cQuery += "   SC8.C8_FORNOME,"
+    cQuery += "   SC8.C8_PRAZO,"
+    cQuery += "   SC8.C8_DATPRF,"
+    cQuery += "   SC8.C8_VLDESC,"
+    cQuery += "   SC8.C8_DESPESA,"
+    cQuery += "   SC8.C8_SEGURO,"
+    cQuery += "   SC8.C8_VALFRE,"
+    cQuery += "   SC8.C8_MOEDA,"
+	cQuery += "   SC8.C8_SITUAC,"
+    cQuery += "   SC8.C8_TXMOEDA,"
+
+    If Self:lIsQuotationMap //-- Adiciona total da cotação
+        cQuery += " (SELECT "
+        
+        cQuery += oMetSX3:QueryOperationAnalysis( " SUM(", {'C8_TOTAL', 'C8_VALFRE', 'C8_DESPESA', 'C8_SEGURO', 'C8_VALIPI', 'C8_VALSOL'}) + "-SC8_2.C8_VLDESC)"
+        cQuery += "    FROM "+RetSqlName("SC8")+" SC8_2 "
+        cQuery += "    WHERE SC8_2.C8_FILIAL = SC8.C8_FILIAL"
+        cQuery += "    AND SC8_2.C8_NUM = SC8.C8_NUM"
+        cQuery += "    AND SC8_2.C8_FORNECE = SC8.C8_FORNECE"
+        cQuery += "    AND SC8_2.C8_LOJA = SC8.C8_LOJA"
+        cQuery += "    AND SC8_2.C8_NUMPRO = SC8.C8_NUMPRO"
+        cQuery += "    AND SC8_2.C8_FORNOME = SC8.C8_FORNOME"
+        cQuery += "    AND SC8_2.D_E_L_E_T_ = ' ') TOTAL,"
+    EndIf
+
+    cQuery += "   R_E_C_N_O_ "
+    cQuery += "FROM " + RetSqlName("SC8")+" SC8 "
+    cQuery += "WHERE C8_FILIAL = ? "
+    cQuery += "  AND C8_NUM = ? "
+    cQuery += "  AND C8_PRODUTO = ? "
+    cQuery += "  AND C8_ITEM = ?"
+    cQuery += "  AND C8_SITUAC IN (' ','1','8') "
+    cQuery += "  AND C8_PRECO > 0 "
+    cQuery += "  AND D_E_L_E_T_ = ' ' "
+    cQuery += "  AND SC8.C8_NUMPRO = (
+    cQuery += "     SELECT MAX(SC82.C8_NUMPRO)"
+    cQuery += "     FROM "+ RetSQLName("SC8") +" SC82"
+    cQuery += "     WHERE SC82.C8_FILIAL = SC8.C8_FILIAL AND"
+    cQuery += "     	SC82.C8_NUM = SC8.C8_NUM AND"
+    cQuery += "     	SC82.C8_FORNECE = SC8.C8_FORNECE AND"
+    cQuery += "     	SC82.C8_LOJA = SC8.C8_LOJA AND"
+    cQuery += "     	SC82.C8_FORNOME = SC8.C8_FORNOME AND"
+    cQuery += "     	SC82.D_E_L_E_T_ = ' '"
+    cQuery += "     )"
+
+    If !Self:lIsQuotationMap
+        cQuery += " ORDER BY C8_TOTAL * (CASE WHEN C8_TXMOEDA > 0 THEN C8_TXMOEDA ELSE 1 END)"
+    Else
+        cQuery += " ORDER BY TOTAL"
+    EndIf
+
+    oQuery := FWPreparedStatement():New(cQuery)
+
+    oQuery:SetString(1, FWxFilial('SC8'))
+    oQuery:SetString(2, cQuotationCode)
+    oQuery:SetString(3, cProductCode)
+    oQuery:SetString(4, cItem)
+
+    cAliasSC8 := MpSysOpenQuery(oQuery:getFixQuery())
+
+    nLoop := 1
+    aItems := {}
+    While !(cAliasSC8)->(Eof())
+        
+        If !Self:lIsQuotationMap .Or. PGCAnsweredAll(cQuotationCode, (cAliasSC8)->C8_FORNECE, (cAliasSC8)->C8_LOJA, (cAliasSC8)->C8_FORNOME) //-- Se for mapa de cotação adiciona fornecedor ao array se nenhum fornecedor respondeu ou se atendeu todos os itens
+
+            SC8->(DbGoTo((cAliasSC8)->R_E_C_N_O_))
+
+            nQuantityOrder := PGCQtInOrder(cQuotationCode, cProductCode, cItem, (cAliasSC8)->C8_ITEMGRD,; 
+                                                (cAliasSC8)->C8_FORNECE,(cAliasSC8)-> C8_LOJA, (cAliasSC8)->C8_NUMPRO, (cAliasSC8)->C8_FORNOME)
+
+            If nQuantityOrder > 0 //-- Calcula saldo disponível para o item do fornecedor
+                nBalance := (cAliasSC8)->C8_QTDISP - nQuantityOrder
+                nBalance := IIf(nBalance > 0, nBalance, 0)
+            Else
+                nBalance := (cAliasSC8)->C8_QTDISP
+            EndIf
+
+            aSupplierData := GetAdvFVal("SA2", {"A2_CGC", "A2_TIPO"}, FWxFilial("SA2") + PADR((cAliasSC8)->C8_FORNECE, nLenSupplier) + PADR((cAliasSC8)->C8_LOJA, nLenStore),1)
+
+            aAdd(aItems, JsonObject():New())
+            aItems[nLoop]['quotationcode']          := cQuotationCode
+            aItems[nLoop]['productcode']            := (cAliasSC8)->C8_PRODUTO
+            aItems[nLoop]['item']                   := (cAliasSC8)->C8_ITEM
+            aItems[nLoop]['itemgrd']                := (cAliasSC8)->C8_ITEMGRD
+            aItems[nLoop]['proposal']               := (cAliasSC8)->C8_NUMPRO
+            aItems[nLoop]['productdescription']     := cProductDescription
+            aItems[nLoop]['suppliercode']           := (cAliasSC8)->C8_FORNECE
+            aItems[nLoop]['supplierstore']          := (cAliasSC8)->C8_LOJA
+            aItems[nLoop]['suppliername']           := (cAliasSC8)->C8_FORNOME
+            aItems[nLoop]['cnpj']                   := aSupplierData[nPosCNPJ]
+            aItems[nLoop]['suppliertype']           := aSupplierData[nPosType]
+            aItems[nLoop]['quantity']               := (cAliasSC8)->C8_QUANT
+            aItems[nLoop]['quantityavaible']        := (cAliasSC8)->C8_QTDISP
+            aItems[nLoop]['productbalance']         := nProductBalance //-- Saldo do produto
+            aItems[nLoop]['balance']                := nBalance //-- Saldo do fornecedor
+            aItems[nLoop]['unityvalue']             := (cAliasSC8)->C8_PRECO
+            nTotaltoPay                             := ( (cAliasSC8)->C8_TOTAL - (cAliasSC8)->C8_VLDESC ) + (cAliasSC8)->C8_VALFRE + (cAliasSC8)->C8_DESPESA + (cAliasSC8)->C8_SEGURO
+            aItems[nLoop]['totalvalue']             := (cAliasSC8)->C8_TOTAL
+            aItems[nLoop]['totaltopay']             := nTotaltoPay
+                       
+            If Self:lIsQuotationMap //-- Adiciona  total da cotação.
+                aItems[nLoop]['totalquote']         := (cAliasSC8)->TOTAL
+            EndIf
+            aItems[nLoop]['shipvalue']              := (cAliasSC8)->C8_VALFRE
+            aItems[nLoop]['discountvalue']          := (cAliasSC8)->C8_VLDESC
+            aItems[nLoop]['expensesvalue']          := (cAliasSC8)->C8_DESPESA
+            aItems[nLoop]['insurancesvalue']        := (cAliasSC8)->C8_SEGURO
+            aItems[nLoop]['daystodelivery']         := DateDiffDay(StoD((cAliasSC8)->C8_DATPRF), dDataBase)
+            aItems[nLoop]['estimateddeliverydate']  := (cAliasSC8)->C8_DATPRF
+            aItems[nLoop]['observation']            := FwHttpEncode(SC8->C8_OBS)
+            
+            //Parametro (MV_NFCMOED); 1=CTO(Default);2=MV_MOEDA 
+            If cNFCMoed == "1"
+                aItems[nLoop]['currencydescription'] := self:MapCurrency( (cAliasSC8)->C8_MOEDA )
+            Else
+                nCurrency := (cAliasSC8)->C8_MOEDA
+
+                cDescription := Self:NFCRetMoed(nCurrency)
+                aItems[nLoop]['currencydescription'] := cDescription
+            EndIf
+			
+            aItems[nLoop]['situac']                 := (cAliasSC8)->C8_SITUAC
+            aItems[nLoop]['supplierobservation']    := ''
+            nTaxObserv                              := (cAliasSC8)->C8_TXMOEDA
+            if ( (cAliasSC8)->C8_MOEDA != nMoedPad .and. (cAliasSC8)->C8_TXMOEDA <= 0 )
+                nTaxObserv := Self:MapActualCurrency((cAliasSC8)->C8_MOEDA)
+            endif
+            aItems[nLoop]['currencyrate']           := nTaxObserv
+            aItems[nLoop]['totalvalueconverted']    := Self:UpdateRateValue( (cAliasSC8)->C8_TOTAL, (cAliasSC8)->C8_MOEDA, nMoedPad, nTaxObserv )
+            nTotaltoPay                             := ( (cAliasSC8)->C8_TOTAL - (cAliasSC8)->C8_VLDESC ) + (cAliasSC8)->C8_VALFRE + (cAliasSC8)->C8_DESPESA + (cAliasSC8)->C8_SEGURO
+            aItems[nLoop]['totaltopayconverted']    := Self:UpdateRateValue( nTotaltoPay, (cAliasSC8)->C8_MOEDA, nMoedPad, nTaxObserv)
+
+            If lHasSupObs
+                aItems[nLoop]['supplierobservation'] := FwHttpEncode(SC8->C8_OBSFOR)
+            EndIf
+            nLoop++
+        EndIf
+        
+        (cAliasSC8)->(DbSkip())
+    Enddo
+
+    oJsonResponse["items"] := aItems
+
+    RestArea(aArea)
+
+    (cAliasSC8)->(DbCloseArea())
+
+Return oJsonResponse
+
+/*/{Protheus.doc} analyzeQuoteByProposal
+	Consulta os dados dos fornecedores da cotação que ofertaram um produto.
+@author Leandro Fini
+@since 23/01/2023
+@return .T., logical, consulta realizada corretamente.
+/*/
+Method analyzeQuoteByProposal(oJsonParams, oJsonRequest, cJustification, aPurchaseOrderObs) Class pgcAnalyzeQuotationRepository
+    Local aAreas As Array
+    Local cMessage As Character
+    Local nCode As Numeric
+    Local oJsonRet As Object
+    Local oModel As Object
+    Local oModelDHU As Object
+    Local oModelDHV As Object
+    Local oModelSC8 As Object
+    Local oModelSCE As Object
+    Local oUtils As Object
+    Local aSeek As Array
+    Local nX As Numeric
+    Local nCount As Numeric
+    Local nY As Numeric
+    Local nZ As Numeric
+    Local cPurchases as Character
+    Local cContracts as Character
+    Local cStatus as Character 
+    Local cLastProposal As Character
+    Local cQuotationCode := ''
+    Local cSupplier := ''
+    Local cStore := ''
+    Local cBody As Character
+    Local cUser As Character
+    Local cDocumentType := ''
+    local aRequestObservations as array
+    Local oJsonEmails As Object
+    Local aNames As Array
+    Local aRetPE As Array
+
+    Private aPurchaseReq As Array
+    Private __aGenContra As Array
+    Private lPgc := .T.
+
+    Default oJsonParams := JsonObject():New()
+    Default oJsonRequest := JsonObject():New()
+    Default cJustification := ''
+    Default aPurchaseOrderObs := {}
+
+    aAreas := {DHU->(GetArea()),SC8->(GetArea()), GetArea()}
+    oJsonRet := JsonObject():New()
+    oUtils := pgcUtils():New()
+    Self:lOk := .T.
+    aPurchaseReq := {}
+    __aGenContra := {}
+    aRetPE      := {}
+    cPurchases := ""
+    cContracts := ""
+    cStatus     := ""
+    aRequestObservations := {}
+
+    cQuotationCode := oJsonParams['quotationcode']'
+    cSupplier := oJsonParams['supplier']
+    cStore := oJsonParams['store']
+    cDocumentType := oJsonParams['documenttype']
+    
+    DbSelectArea("SCE")
+    DHU->(dbSetOrder(1)) //-- DHU_FILIAL+DHU_NUM
+
+    if (oJsonRequest:hasProperty("requestsorderobservations"))
+        aRequestObservations := oJsonRequest["requestsorderobservations"]
+    elseif (oJsonParams:hasProperty("requestsorderobservations"))
+        aRequestObservations := oJsonParams["requestsorderobservations"]
+    endif
+
+	If FieldPos("CE_NUMCTR") == 0 .And. cDocumentType == '2'
+        cMessage := STR0026 //--'Não é possível gerar contratos, pois o campo Num Contrato (CE_NUMCTR) não existe na tabela Encerramento de Cotações (SCE).'
+        Self:lOk := .F.
+    EndIf
+
+    DbSelectArea("SY1")
+    SY1->(DbSetOrder(3))//Y1_FILIAL+Y1_USER
+    if SY1->(MsSeek(fwxFilial("SY1")+RetCodUsr()))
+        if !RegistroOk("SY1")
+            cMessage := STR0039//"Não foi possível gerar o documento. Seu perfil de comprador está bloqueado. Verifique o cadastro de comprador."
+            Self:lOk := .F.
+        endif
+    endif
+
+    if Self:lOk .and. Existblock("NFCGERDOC")
+        cLastProposal := PGCLastProp(cQuotationCode, cSupplier, cStore)
+        aRetPE := ExecBlock("NFCGERDOC",.F.,.F.,{"1",{cQuotationCode,cSupplier,cStore,cLastProposal,cDocumentType}})
+        If ValType(aRetPE) == "A"
+            If Len(aRetPE) > 1
+                If ValType(aRetPE[1]) == "L" .and. !aRetPE[1]
+                    if ValType(aRetPE[2]) == "C"
+                        cMessage := aRetPE[2]
+                        Self:lOk := .F.
+                    endif
+                EndIf
+            EndIf
+        EndIf
+    endif
+
+    If Self:lOk := Self:lOk .And. !Empty(cQuotationCode) .And. DHU->(MsSeek(FWxFilial('DHU') + cQuotationCode))
+
+        if DHU->DHU_STATUS $ ("1|3|4") //-- Cotação pendente, analisada por item ou finalizada.
+            if DHU->DHU_STATUS == "1"
+                cStatus := STR0008//"pendente de atualização."
+            elseif DHU->DHU_STATUS == "3"
+                cStatus := STR0009//"analisada por item."
+            else 
+                cStatus := STR0010//"finalizada."
+            endif
+            oJsonRet := oUtils:setClassResponse(400, STR0011 + cQuotationCode + STR0012 + cStatus) //-- "A cotação XXX não poderá ser analisada por proposta, pois se encontra: #STATUS "
+        else
+            PG020SetOp(9) //-- Análise da cotação por proposta.
+            PG020SetCtr(oJsonRequest) //-- Json com os contratos.
+
+            oModel := FWLoadModel("PGCA020")
+            oModel:SetOperation(MODEL_OPERATION_UPDATE)
+            oModel:Activate()
+
+            oModelDHU := oModel:GetModel("DHUMASTER")
+            oModelSC8 := oModel:GetModel("SC8DETAIL")
+            oModelSCE := oModel:GetModel("SCEDETAIL")
+            oModelDHV := oModel:GetModel("DHVDETAIL")
+
+            oModelDHU:SetValue("DHU_NUM", cQuotationCode)
+            oModelDHU:SetValue("DHU_TPDOC", cDocumentType)
+
+            cLastProposal := PGCLastProp(cQuotationCode, cSupplier, cStore)
+
+            for nY := 1 to oModelDHV:Length()
+                oModelDHV:GoLine(nY)
+                nCount := 1
+                for nX := 1 to oModelSC8:Length()
+                    oModelSC8:GoLine(nX)
+
+                    SC8->(MsGoTo(oModelSC8:GetDataId()))
+
+                    if !(alltrim(oModelSC8:GetValue("C8_FORNECE")) == alltrim(cSupplier) .and. oModelSC8:GetValue("C8_LOJA") == cStore .and. oModelSC8:GetValue("C8_NUMPRO") == cLastProposal)
+                        oModelSC8:LoadValue("C8_NUMPED", Replicate("X", Len(SC8->C8_NUMPED))) //-- preencho o campo da proposta perdedora para alterar a legenda do legado.
+                        oModelSC8:LoadValue("C8_ITEMPED", Replicate("X", Len(SC8->C8_ITEMPED)))
+                        oModelSC8:LoadValue("C8_NUMCON", Replicate("X", Len(SC8->C8_NUMCON)))
+                        nCount++
+                        Loop
+                    endif
+
+                    if !empty(oModelSC8:GetValue("C8_NUMPED"))
+                        Self:lOk := .F.
+                        cMessage := STR0013 + cSupplier+"/"+cStore+ STR0014 + cQuotationCode + STR0015//"A proposta do fornecedor XXX para a cotação XXX já foi analisada."
+                        Exit
+                    endif
+
+                    If Empty(oModelSC8:GetValue('C8_FORNECE')+oModelSC8:GetValue('C8_LOJA'))
+                        Self:lOk := .F.
+                        cMessage := STR0023 //-- Não é possível gerar documento para um fornecedor participante que não teve cadastro.
+                        Exit
+                    EndIf
+
+                    oModelDHV:SetValue("DHV_SALDO", oModelDHV:GetValue("DHV_SALDO") - oModelSC8:GetValue("C8_QTDISP"))
+                    oModelSC8:LoadValue('C8_TPDOC', cDocumentType)
+
+                    if oModelSC8:GetValue("C8_TOTAL") == 0
+                        oModelSC8:LoadValue("C8_TOTAL", oModelSC8:GetValue("C8_QTDISP")*oModelSC8:GetValue("C8_PRECO"))
+                    endif
+
+                    if(len(aPurchaseOrderObs) > 0)
+                        for nZ := 1 to len(aPurchaseOrderObs)
+                            if(aPurchaseOrderObs[nZ]['item']) == oModelSC8:GetValue("C8_ITEM");
+                                .and. Alltrim(aPurchaseOrderObs[nZ]['productcode']) == Alltrim(oModelSC8:GetValue("C8_PRODUTO"))
+                                oModelSC8:LoadValue("C8_OBS",aPurchaseOrderObs[nZ]['observation'])
+                                exit
+                            endif
+                        next nZ
+                    endif
+
+                    if ( len(aRequestObservations) > 0 )
+                        for nZ := 1 to len(aRequestObservations)
+                            if ( alltrim(aRequestObservations[nZ]['productcode']) == alltrim(oModelSC8:GetValue("C8_PRODUTO")) .and. ;
+                                 alltrim(aRequestObservations[nZ]['item']) == alltrim(oModelSC8:GetValue("C8_ITEM")) )
+                                
+                                oModelSC8:LoadValue("C8_OBS", oModelSC8:GetValue("C8_OBS") + CRLF + aRequestObservations[nZ]['observationPC'])
+                                exit
+                            endif
+                        next
+                    endif
+
+                    if(!empty(cJustification))
+                        oModelSC8:LoadValue("C8_MOTVENC", STR0032 + cJustification) //Proposta:
+                    endif
+
+                    cLastProposal := PGCLastProp(cQuotationCode, cSupplier, cStore)
+                    aSeek := {}
+
+                    AAdd(aSeek, {"CE_FORNECE", oModelSC8:GetValue("C8_FORNECE")})
+                    AAdd(aSeek, {"CE_LOJA"   , oModelSC8:GetValue("C8_LOJA")})
+                    AAdd(aSeek, {"CE_NUMPRO" , cLastProposal}) 
+                    AAdd(aSeek, {"CE_ITEMCOT", oModelSC8:GetValue("C8_ITEM")})
+                    AAdd(aSeek, {"CE_ITEMGRD", oModelSC8:GetValue("C8_ITEMGRD")})
+                    AAdd(aSeek, {"CE_PRODUTO", oModelSC8:GetValue("C8_PRODUTO")})
+
+                    if !oModelSCE:SeekLine(aSeek)
+                        if nCount > 1 .And. !oModelSCE:IsEmpty()
+                            oModelSCE:AddLine()
+                        endif
+                        oModelSCE:SetValue("CE_FILIAL", fwxFilial("SCE"))
+                        oModelSCE:SetValue("CE_NUMCOT" , oModelSC8:GetValue("C8_NUM"))
+                        oModelSCE:SetValue("CE_FORNECE", oModelSC8:GetValue("C8_FORNECE"))
+                        oModelSCE:SetValue("CE_LOJA"   , oModelSC8:GetValue("C8_LOJA"))
+                        oModelSCE:SetValue("CE_NUMPRO" , cLastProposal)
+                        oModelSCE:SetValue("CE_ITEMCOT", oModelSC8:GetValue("C8_ITEM"))
+                        oModelSCE:SetValue("CE_ITEMGRD", oModelSC8:GetValue("C8_ITEMGRD"))
+                        oModelSCE:SetValue("CE_PRODUTO", oModelSC8:GetValue("C8_PRODUTO"))
+                        oModelSCE:LoadValue("CE_QUANT" , oModelSC8:GetValue("C8_QTDISP"))
+                        if(!empty(cJustification))
+                            oModelSCE:LoadValue("CE_MOTVENC" , oModelSC8:GetValue("C8_MOTVENC"))
+                        endif
+                    endif
+                next nX
+
+                If !Self:lOk
+                    Exit
+                EndIf
+            next nY
+            
+            If Self:lOk := Self:lOk .And. oModel:VldData() .And. oModel:CommitData() //-- Valida e realiza commit
+                If cDocumentType == '1'
+                    if Type("aPurchaseReq") == "A"
+                        cPurchases := ArrTokStr(aPurchaseReq,", ")
+
+                        oJsonEmails := NFCEmailSCs(cQuotationCode, aPurchaseReq)
+                        aNames := oJsonEmails:GetNames()
+
+                        For nY := 1 To Len(aNames)
+                            cUser := aNames[nY]
+
+                            //-- Novo Fluxo de Compras (PGCA010) | As solicitações de compras | tiveram os pedidos de compra | gerados.
+                            cBody := NFCHtmlMsg(/*Título*/,cFilAnt, STR0034 , STR0035 + ' ' + AllTrim(oJsonEmails[cUser]['requests']) + ' ' + STR0036 + ' [' + cPurchases + '] ' +  STR0037)
+                            NFCSendMail(oJsonEmails[cUser]['email'], cBody, STR0038) //-- Solicitação em Pedido de Compra
+                        Next nY
+                    endif
+                    
+                    cMessage := STR0004 + cQuotationCode + STR0016 + cPurchases //"A cotação XXX foi analisada. Foram gerados os pedidos de compra: "
+                Else
+                    If Type("__aGenContra") == "A"
+                        cContracts := ArrTokStr(__aGenContra,", ")
+                    EndIf
+
+                    cMessage := STR0004 + cQuotationCode + STR0027 + cContracts //"A cotação XXX foi analisada. Foram gerados os seguintes contratos: "
+                EndIf
+            EndIf
+
+            nCode := Iif(Self:lOk, 200, 400)
+            oJsonRet := oUtils:setClassResponse(nCode, cMessage, oModel) //-- Retorna mensagem da classe no formato json.
+            
+            oModel:DeActivate()
+        endif
+    Else
+        cMessage := If(!empty(cMessage),cMessage,STR0011 + cQuotationCode + STR0005)//-- A cotação XXX não foi localizada na base de dados.
+        oJsonRet := oUtils:setClassResponse(400, cMessage) 
+    EndIf
+
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FwFreeArray(aNames)
+    FwFreeArray(aRetPE)
+    FwFreeArray(aSeek)
+    FwFreeArray(aRequestObservations)
+    FreeObj(oModel)
+    FreeObj(oUtils)
+    FwFreeObj(oJsonEmails)
+Return oJsonRet
+
+/*/{Protheus.doc} analyzeQuoteByItem
+	Consulta os dados dos fornecedores da cotação que ofertaram um produto.
+@author Leandro Fini
+@since 23/01/2023
+@return .T., logical, consulta realizada corretamente.
+/*/
+Method analyzeQuoteByItem(oJsonRequest) Class pgcAnalyzeQuotationRepository
+    Local aAreas As Array
+    Local aSeek As Array
+    Local aItems As Array
+    Local aContracts As Array
+    Local cMessage As Character
+    Local oJsonRet As Object
+    Local oModel As Object
+    Local oModelDHU As Object
+    Local oModelDHV As Object
+    Local oModelSC8 As Object
+    Local oModelSCE As Object
+    Local oUtils As Object
+    local oJsonEmails As Object
+    Local nK As Numeric
+    Local nX As Numeric
+    Local nY As Numeric
+	Local nQuantityOrder As Numeric
+    Local cPurchases as Character
+    Local cContracts as Character
+    Local cStatus as Character
+    Local cQuotationCode As Character
+    Local cJustification As Character
+    Local cPurchaseOrderObs As Character
+    Local cSupplier As Character
+    Local cStore As Character
+    Local cItem As Character
+    Local cItemGrid As Character
+    Local cProduct As Character
+    Local cLastProposal As Character
+    Local lHasDocument As Logical
+    Local lExsSCEContr  as logical
+    Local nBalanceCtr   as numeric
+    Local aNames As Array
+    Local cUser As Character
+    Local cBody As Character
+    Local aRetPE As Array
+
+    Private aPurchaseReq As Array
+    Private __aGenContra As Array
+    Private __aSupError As Array
+    Private lPgc := .T.
+
+    Default oJsonRequest := nil
+
+    aAreas := {DHU->(GetArea()),SC8->(GetArea()), GetArea()}
+    oJsonRet := JsonObject():New()
+    oUtils := pgcUtils():New()
+    Self:lOk := .T.
+    aPurchaseReq := {}
+    __aGenContra := {}
+    __aSupError := {}
+    cPurchases := ""
+    cContracts := ""
+    cStatus     := ""
+    aItems  := {}
+    aRetPE  := {}
+    aSeek := {}
+    cQuotationCode := ""
+
+    cQuotationCode := oJsonRequest['quotationcode']
+    aItems         := oJsonRequest['items']
+    aContracts     := oJsonRequest['contracts']
+    
+    DbSelectArea('SCE')
+    DHU->(dbSetOrder(1)) //-- DHU_FILIAL+DHU_NUM
+
+    lExsSCEContr := FieldPos("CE_NUMCTR") == 0 
+
+	If lExsSCEContr .And. Len(aContracts) > 0
+        cMessage := STR0026 //-- 'Não é possível gerar contratos, pois o campo Num Contrato (CE_NUMCTR) não existe na tabela Encerramento de Cotações (SCE).'
+        Self:lOk := .F.
+    EndIf
+
+    DbSelectArea("SY1")
+    SY1->(DbSetOrder(3))//Y1_FILIAL+Y1_USER
+    if SY1->(MsSeek(fwxFilial("SY1")+RetCodUsr()))
+        if !RegistroOk("SY1")
+            cMessage := STR0039//"Não foi possível gerar o documento. Seu perfil de comprador está bloqueado. Verifique o cadastro de comprador."
+            Self:lOk := .F.
+        endif
+    endif
+
+    if Self:lOk .and. Existblock("NFCGERDOC")
+        cLastProposal := PGCLastProp(cQuotationCode, cSupplier, cStore)
+        aRetPE := ExecBlock("NFCGERDOC",.F.,.F.,{"2",{cQuotationCode,aItems,aContracts}})
+        If ValType(aRetPE) == "A"
+            If Len(aRetPE) > 1
+                If ValType(aRetPE[1]) == "L" .and. !aRetPE[1]
+                    if ValType(aRetPE[2]) == "C"
+                        cMessage := aRetPE[2]
+                        Self:lOk := .F.
+                    endif
+                EndIf
+            EndIf
+        EndIf
+    endif
+
+    If Self:lOk := Self:lOk .And. !Empty(cQuotationCode) .And. DHU->(MsSeek(FWxFilial('DHU') + cQuotationCode))
+
+        if DHU->DHU_STATUS $ ("1|4") //-- Cotação pendente, analisada por item ou finalizada.
+            if DHU->DHU_STATUS == "1"
+                cStatus := STR0008//"pendente de atualização."
+            else 
+                cStatus := STR0010//"finalizada."
+            endif
+            oJsonRet := oUtils:setClassResponse(400, STR0011 + cQuotationCode + STR0012 + cStatus) //-- "A cotação XXX não poderá ser analisada por proposta, pois se encontra: #STATUS "
+        else
+            PG020SetOp(9) //-- Análise da cotação.
+            PG020SetCtr(oJsonRequest) //-- Json com os contratos.
+
+            oModel := FWLoadModel("PGCA020")
+            oModel:SetOperation(MODEL_OPERATION_UPDATE)
+
+            oModel:Activate()
+            oModelDHU := oModel:GetModel("DHUMASTER")
+            oModelSC8 := oModel:GetModel("SC8DETAIL")
+            oModelSCE := oModel:GetModel("SCEDETAIL")
+            oModelDHV := oModel:GetModel("DHVDETAIL")
+
+            For nK := 1 To 2 //-- No primeiro loop são gerados os pedidos, no segundo os contratos
+                lHasDocument := .F.
+                cDocumentType := AllTrim(Str(nK)) //-- 1=Pedido, 2=Contrato
+
+                If !oModel:IsActive()
+                    PG020SetOp(9) //-- Análise da cotação.
+                    PG020SetCtr(oJsonRequest) //-- Json com os contratos.
+
+                    oModel:SetOperation(MODEL_OPERATION_UPDATE)
+                    oModel:Activate()
+                EndIf
+
+                oModelDHU:SetValue("DHU_NUM", cQuotationCode)
+                oModelDHU:SetValue("DHU_TPDOC", cDocumentType)
+
+                For nY := 1 To len(aItems)
+                    If aItems[nY]['documenttype'] == cDocumentType
+                        lHasDocument := .T.
+
+                        cJustification := Iif(aItems[nY]:hasProperty('justification'), aItems[nY]['justification'], '')
+                        cPurchaseOrderObs := Iif(aItems[nY]:hasProperty('purchaseorderobs'), aItems[nY]['purchaseorderobs'], '')
+
+                        aSeek := {}
+                        AAdd(aSeek, {"DHV_FILIAL" , fwxFilial("DHV")})
+                        AAdd(aSeek, {"DHV_NUM"    , cQuotationCode})
+                        AAdd(aSeek, {"DHV_ITEM"   , aItems[nY]['item']})
+                        AAdd(aSeek, {"DHV_CODPRO" , PADR(aItems[nY]['productcode'], tamsx3("B1_COD")[1])})
+
+                        for nX := 1 to oModelDHV:Length()
+                            oModelDHV:GoLine(nX)
+                            if !oModelDHV:SeekLine(aSeek, .F., .T.) //-- Posiciona na linha a ser analisada.
+                                if nX == oModelDHV:Length()
+                                    Self:lOk := .F.   
+                                endif
+                            else 
+                                Exit
+                            endif
+                        next nX
+
+                        if !Self:lOk
+                            cMessage := STR0018 + aItems[nY]['productcode'] + STR0019 //"O item XXX não foi encontrado na tabela de saldos (DHV)"
+                            Exit
+                        endif
+                        
+                        cSupplier    := PADR(aItems[nY]['supplier']   , tamsx3("C8_FORNECE")[1])
+                        cStore       := PADR(aItems[nY]['store']      , tamsx3("C8_LOJA"   )[1])
+                        cItem        := PADR(aItems[nY]['item']       , tamsx3("C8_ITEM"   )[1])
+                        cItemGrid    := PADR(aItems[nY]['itemgrid']   , tamsx3("C8_ITEMGRD")[1])
+                        cProduct     := PADR(aItems[nY]['productcode'], tamsx3("B1_COD"    )[1])
+                        cLastProposal := PGCLastProp(cQuotationCode,cSupplier,cStore)
+
+                        aSeek := {}
+                        AAdd(aSeek, {"C8_FORNECE", cSupplier})
+                        AAdd(aSeek, {"C8_LOJA"   , cStore})
+                        AAdd(aSeek, {"C8_NUMPRO" , cLastProposal}) 
+                        AAdd(aSeek, {"C8_ITEM"   , cItem})
+                        AAdd(aSeek, {"C8_ITEMGRD", cItemGrid})
+                        AAdd(aSeek, {"C8_PRODUTO", cProduct})
+
+                        if !oModelSC8:SeekLine(aSeek, .F., .T.) //-- Posiciona na linha a ser analisada.
+                            Self:lOk := .F.
+                            cMessage := STR0018 + aItems[nY]['productcode'] + STR0020//"O item XXX não foi encontrado"
+                            Exit
+                        endif
+
+                        If Empty(oModelSC8:GetValue('C8_FORNECE')+oModelSC8:GetValue('C8_LOJA'))
+                            Self:lOk := .F.
+                            cMessage := STR0024 + oModelSC8:GetValue('C8_FORNOME') + STR0025 //-- Não é possível gerar documento o fornecedor XXX pois é um fornecedor participante que não teve cadastro.
+                            Exit
+                        EndIf
+
+                        oModelSC8:LoadValue("C8_MOTVENC", iif( !empty(cJustification), STR0033, "") + cJustification) //Item:
+
+                        if(!empty(cPurchaseOrderObs))
+                            oModelSC8:LoadValue("C8_OBS",cPurchaseOrderObs)
+                        endif
+                    
+                        SC8->(MsGoTo(oModelSC8:GetDataId()))
+
+                        if oModelDHV:GetValue("DHV_SALDO") == 0
+                            cMessage := STR0018 + Alltrim(oModelDHV:GetValue("DHV_CODPRO")) + ; //--"O item XXX não possui saldo para análise. Solicitado: XXX / Saldo: XXX
+                                        STR0021 + cValtoChar(oModelSC8:GetValue("C8_QTDISP"))+;
+                                        STR0022 + cValtoChar(oModelDHV:GetValue("DHV_SALDO"))
+                            Self:lOk := .F.
+                            Exit
+                        endif
+
+                        aSeek := {}
+
+                        if ( aItems[nY]:hasProperty('quantityOrder') )
+                            nQuantityOrder  := aItems[nY]['quantityOrder']
+                            nBalanceCtr     := oModelDHV:GetValue("DHV_SALDO")
+
+                            if (nQuantityOrder > nBalanceCtr .or. nQuantityOrder <= 0 )
+                                nQuantityOrder := nBalanceCtr
+                            endif
+
+                            if (nBalanceCtr > nQuantityOrder)
+                                oModelDHV:SetValue("DHV_SALDO", nBalanceCtr - nQuantityOrder)
+                            else
+                                oModelDHV:SetValue("DHV_SALDO", 0)
+                            endif
+                        else
+                            nQuantityOrder := PGCQtInOrder(cQuotationCode, oModelSC8:GetValue('C8_PRODUTO'), oModelSC8:GetValue('C8_ITEM'),;
+                                                                        oModelSC8:GetValue('C8_ITEMGRD'), cSupplier, cStore, cLastProposal)
+                                                                        
+                            If nQuantityOrder > 0 //-- Calcula saldo disponível para o item do fornecedor
+                                nQuantityOrder := oModelSC8:GetValue("C8_QTDISP") - nQuantityOrder
+                                nQuantityOrder := IIf(nQuantityOrder > 0, nQuantityOrder, 0)
+                            ElseIf oModelDHV:GetValue("DHV_SALDO") < oModelSC8:GetValue("C8_QTDISP")
+                                nQuantityOrder := oModelDHV:GetValue("DHV_SALDO")
+                            Else
+                                nQuantityOrder := oModelSC8:GetValue("C8_QTDISP")
+                            EndIf
+
+                            If oModelDHV:GetValue("DHV_SALDO") > oModelSC8:GetValue("C8_QTDISP")
+                                oModelDHV:SetValue("DHV_SALDO", oModelDHV:GetValue("DHV_SALDO") - oModelSC8:GetValue("C8_QTDISP"))
+                            Else
+                                oModelDHV:SetValue("DHV_SALDO", 0)
+                            EndIf
+                        endif
+
+                        AAdd(aSeek, {"CE_FORNECE", oModelSC8:GetValue("C8_FORNECE")})
+                        AAdd(aSeek, {"CE_LOJA"   , oModelSC8:GetValue("C8_LOJA")})
+                        AAdd(aSeek, {"CE_NUMPRO" , cLastProposal}) 
+                        AAdd(aSeek, {"CE_ITEMCOT", oModelSC8:GetValue("C8_ITEM")})
+                        AAdd(aSeek, {"CE_ITEMGRD", oModelSC8:GetValue("C8_ITEMGRD")})
+                        AAdd(aSeek, {"CE_PRODUTO", oModelSC8:GetValue("C8_PRODUTO")})
+                        AAdd(aSeek, {"CE_NUMPED" , Space(tamsx3("CE_NUMPED")[1])})
+                        
+                        If !lExsSCEContr
+                            AAdd(aSeek, {"CE_NUMCTR" , Space(tamsx3("CE_NUMCTR")[1])})
+                        EndIf
+
+                        if !oModelSCE:SeekLine(aSeek) .And. !oModelSCE:IsEmpty()
+                            oModelSCE:AddLine()
+                        endif
+
+                        oModelSCE:LoadValue("CE_FILIAL" , fwxFilial("SCE"))
+                        oModelSCE:LoadValue("CE_NUMCOT" , oModelSC8:GetValue("C8_NUM"))
+                        oModelSCE:LoadValue("CE_FORNECE", oModelSC8:GetValue("C8_FORNECE"))
+                        oModelSCE:LoadValue("CE_LOJA"   , oModelSC8:GetValue("C8_LOJA"))
+                        oModelSCE:LoadValue("CE_NUMPRO" , cLastProposal)
+                        oModelSCE:LoadValue("CE_ITEMCOT", oModelSC8:GetValue("C8_ITEM"))
+                        oModelSCE:LoadValue("CE_ITEMGRD", oModelSC8:GetValue("C8_ITEMGRD"))
+                        oModelSCE:LoadValue("CE_PRODUTO", oModelSC8:GetValue("C8_PRODUTO"))
+                        oModelSCE:LoadValue("CE_QUANT"  , nQuantityOrder)
+                        oModelSCE:LoadValue("CE_MOTVENC", oModelSC8:GetValue("C8_MOTVENC"))
+
+                        If oModel:HasErrorMessage() .Or. !oModelSCE:VldLineData()
+                            Self:lOk := .F.
+                            Exit
+                        EndIf
+                    EndIf
+                Next nY
+                
+                If lHasDocument //-- Se tiver documentos, commita os dados.
+                    Self:lOk := Self:lOk .and. oModel:VldData() .And.  oModel:CommitData() //-- Valida e realiza commit
+                    
+                    If !Self:lOk
+                        oJsonRet := oUtils:setClassResponse(400, cMessage, oModel) //-- Retorna mensagem da classe no formato json.
+                        oJsonRet['contractsuppliererror'] := JsonObject():New()
+                        oJsonRet['contractsuppliererror']['c8_fornece'] := ''
+                        oJsonRet['contractsuppliererror']['c8_nome'] := ''
+
+                        If Type("__aSupError") == "A" .And. Len(__aSupError) > 0
+                            oJsonRet['contractsuppliererror']['c8_fornece'] := __aSupError[1]
+                            oJsonRet['contractsuppliererror']['c8_nome'] := __aSupError[2]
+                        EndIf
+                    EndIf
+                EndIf
+
+                oModel:DeActivate()
+
+                If !Self:lOk
+                    Exit
+                EndIf
+            Next nK
+
+            If Self:lOk
+                cMessage := STR0004 + cQuotationCode + STR0030 //-- A cotação XXXX foi analisada.
+
+                If Type("aPurchaseReq") == "A" .And. Len(aPurchaseReq) > 0
+                    cPurchases := ArrTokStr(aPurchaseReq,", ")
+                    cMessage += ' ' + STR0028 + ' [' + cPurchases + ']' //-- Pedidos gerados: [XXXX, XXXX]
+                    
+                    oJsonEmails := NFCEmailSCs(cQuotationCode, aPurchaseReq)
+                    aNames := oJsonEmails:GetNames()
+
+                    For nY := 1 To Len(aNames)
+                        cUser := aNames[nY]
+
+                        cBody := NFCHtmlMsg(/*Título*/,cFilAnt, STR0034 , STR0035 + ' ' + AllTrim(oJsonEmails[cUser]['requests']) + ' ' + STR0036 + ' [' + cPurchases + '] ' +  STR0037)
+                        NFCSendMail(oJsonEmails[cUser]['email'], cBody, STR0038) //-- Solicitação em Pedido de Compra
+                    Next nY
+                EndIf
+                
+                If Type("__aGenContra") == "A" .And. Len(__aGenContra) > 0
+                    cContracts := ArrTokStr(__aGenContra,", ")
+                    cMessage += ' ' + STR0029 + ' [' + cContracts + ']' //-- Contratos gerados: [XXXX, XXXX]
+                EndIf
+
+                If FWIsInCallStack("PGCA010")
+                    If Empty(cContracts) .And. Empty(cPurchases)
+                        cMessage := ' '
+                    EndIf
+                EndIf
+
+                oJsonRet := oUtils:setClassResponse(200, cMessage)
+            EndIf
+            
+            oModel:Destroy()
+        endif
+    Else
+        cMessage := If(!empty(cMessage),cMessage,STR0011 + cQuotationCode + STR0005)//-- A cotação XXX não foi localizada na base de dados.
+        oJsonRet := oUtils:setClassResponse(400, cMessage) 
+    EndIf
+
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FwFreeArray(aNames)
+    FwFreeArray(aRetPE)
+    FwFreeArray(aSeek)
+    FreeObj(oModel)
+    FreeObj(oUtils)
+    FwFreeObj(oJsonEmails)
+Return oJsonRet
+
+/*/{Protheus.doc} RequestAdj
+    Ajusta o retorno da APi, adicionando a propriedade foundRequests, detalhando os itens que fazem parte da solicitação
+@author renan.martins
+@since 28/11/2023
+@param oJsonResponse, objeto, Json de resposta inicial
+@return Nil, nulo.
+/*/
+Method RequestAdj(oJsonResponse) Class pgcAnalyzeQuotationRepository
+    Local aItems As Array
+    Local nX     As Numeric
+    Local aRequests As Array 
+    Local nLenItems As Numeric
+    local nCont     as numeric
+    Local cProductName As Character
+    Default oJsonResponse := Nil
+
+    DbSelectArea("SC1")
+    SC1->(DbSetOrder(5))//C1_FILIAL+C1_COTACAO
+
+    aItems := oJsonResponse['items']
+    nLenItems := Len(aItems)
+    nX := 1
+
+    While nX <= nLenItems
+        aRequests    := {}
+        nCont := 1
+
+        if SC1->(MsSeek(PADR(aItems[nX]["branch"], TAMSX3("C1_FILIAL")[1]) + aItems[nX]["quotationcode"] ))
+            while Alltrim( SC1->(C1_FILIAL+C1_COTACAO) ) == Alltrim(PADR(aItems[nX]["branch"], TAMSX3("C1_FILIAL")[1]) + aItems[nX]["quotationcode"])
+                cProductName := Alltrim(NFCProdDesc(SC1->C1_PRODUTO, SC1->C1_NUM, SC1->C1_ITEM))
+                aAdd(aRequests, JsonObject():New())
+                aRequests[nCont]['requestCode'] := SC1->C1_NUM
+                aRequests[nCont]['item'] := alltrim(SC1->C1_ITEM)
+                aRequests[nCont]['productCode'] := alltrim(SC1->C1_PRODUTO) 
+                aRequests[nCont]['description'] := cProductName
+                aRequests[nCont]['productName'] := cProductName
+                aRequests[nCont]['nameRequest'] := alltrim(SC1->C1_SOLICIT)
+                SC1->(DbSkip())
+                nCont:= nCont + 1
+            enddo
+        endif
+
+        cProductName := Alltrim(NFCProdDesc(aItems[nX]["productcode"], aItems[nX]["requestcode"], aItems[nX]["item"]))
+        
+        aItems[nX]["foundRequests"] := aRequests
+        aItems[nX]["productname"] := cProductName
+        nX ++
+    EndDo
+
+Return nil
+
+
+/*/{Protheus.doc} DescentralItems
+    Verifica se o item pertence a uma compra centralizada, procurando se existe mais de 1 SC1 relacionada ao registro.
+@author renan.martins
+@since 04/2024
+@param cNumCot - Número da cotação
+@param cProduto - Código do produto
+@param cIdent - Identificador
+@param cFornec - Fornecedor
+@param cLoja - Loja
+@param cCodProp - Código da proposta
+@param cJustifica - Justificativa
+@return aDados, array, Retorno com os registros realcionados.
+/*/
+Method DescentralItems(cNumCot, cProduto, cIdent, cFornec, cLoja, cCodProp, cJustifica) Class pgcAnalyzeQuotationRepository
+    Local cQuery        As character
+    local oQuery        as object
+    local cAliasTemp    as character
+    local aDados        as array
+    local cBranch       as character
+
+    aDados  := {}
+    cBranch := FWxFilial('SC1')
+
+    cQuery := " SELECT C1_ITEM, C1_ITEMGRD, C1_PRODUTO, C1_QUANT, C1_FILENT, SC1.R_E_C_N_O_ REC FROM " + RetSqlName("SC1") + " SC1 "
+    cQuery += "    WHERE SC1.C1_FILIAL = ? AND "
+    cQuery += "          SC1.C1_COTACAO = ? AND "
+    cQuery += "          SC1.C1_PRODUTO = ? AND "
+    cQuery += "          SC1.C1_IDENT = ? AND "
+    cQuery += "   SC1.D_E_L_E_T_ = ' ' "
+
+    oQuery := FWPreparedStatement():New(cQuery)
+
+    oQuery:SetString(1, cBranch)
+    oQuery:SetString(2, cNumCot)
+    oQuery:SetString(3, cProduto)
+    oQuery:SetString(4, cIdent)
+
+    cAliasTemp := GetNextAlias()
+    cAliasTemp := MpSysOpenQuery(oQuery:getFixQuery())
+
+    While !(cAliasTemp)->(Eof())
+    	aAdd(aDados, {(cAliasTemp)->C1_ITEM, (cAliasTemp)->C1_ITEMGRD, (cAliasTemp)->C1_PRODUTO, (cAliasTemp)->C1_QUANT, (cAliasTemp)->C1_FILENT, (cAliasTemp)->REC, cBranch})
+		(cAliasTemp)->(DbSkip())
+	EndDo
+
+    (cAliasTemp)->(dbCloseArea())
+    oQuery:Destroy()
+    FreeObj(oQuery)
+
+Return aDados
+
+
+/*/{Protheus.doc} AdjItemSC8
+    Retorna o código do item correto da SC8, baseado nos campos de produto e item da solicitação da SC1.
+@author renan.martins
+@since 05/2024
+@param cNumCot - Número da cotação
+@param cProduto - Código do produto
+@param cNumSC1 -Código da SC1
+@param cIdentSC1 - Identificador da SC1
+@param aItemsAlt - Array com o item, para alterar o sequencial (por referência)
+@return cCodeItem, charactert, código do item da SC8
+/*/
+Method AdjItemSC8(cNumCot, cProduto, cNumSC1, cIdentSC1, aItemsAlt) Class pgcAnalyzeQuotationRepository
+    Local cQuery        As character
+    local oQuery        as object
+    local cAliasTemp    as character
+    local cCodeItem     as character
+
+    cCodeItem := "0000"
+
+    cQuery += " SELECT C8_ITEM "
+    cQuery += "     FROM " + RetSqlName("SC8") + " SC8 "
+    cQuery += " INNER JOIN " + RetSqlName("SC1") + " SC1 "
+    cQuery += "     ON "
+    cQuery += " 	SC1.C1_FILIAL   = ? AND "
+    cQuery += " 	SC1.C1_COTACAO  = SC8.C8_NUM AND "
+    cQuery += " 	SC1.C1_PRODUTO  = SC8.C8_PRODUTO AND "
+    cQuery += " 	SC1.C1_IDENT    = SC8.C8_ITEM AND "
+    cQuery += " 	SC1.D_E_L_E_T_ = ' ' "
+    cQuery += " WHERE "
+    cQuery += "     SC8.C8_FILIAL   = ? AND "
+    cQuery += "     SC8.C8_NUM      = ? AND "
+    cQuery += "     SC8.C8_PRODUTO  = ? AND "
+    cQuery += "     SC1.C1_NUM      = ? AND "
+    cQuery += "     SC1.C1_ITEM     = ? AND "
+    cQuery += "     SC8.D_E_L_E_T_  = ' ' "
+
+    oQuery := FWPreparedStatement():New(cQuery)
+
+    oQuery:SetString(1, xFilial("SC1"))
+    oQuery:SetString(2, xFilial("SC8"))
+    oQuery:SetString(3, cNumCot)
+    oQuery:SetString(4, cProduto)
+    oQuery:SetString(5, cNumSC1)
+    oQuery:SetString(6, cIdentSC1)
+
+    cAliasTemp := GetNextAlias()
+    cAliasTemp := MpSysOpenQuery(oQuery:getFixQuery())
+
+    While !(cAliasTemp)->(Eof())
+        cCodeItem := (cAliasTemp)->C8_ITEM
+        exit
+	EndDo
+
+    //Insere o valor atualizado no objeto do aItem.
+    aItemsAlt[1]:item := cCodeItem
+
+    (cAliasTemp)->(dbCloseArea())
+    oQuery:Destroy()
+    FreeObj(oQuery)
+
+Return cCodeItem
+
+
+/*/{Protheus.doc} AdjMessage
+Verifica se a mensagem de erro do model é integridade. Se sim, trata para exibir melhor ao usuário 
+@author renan.martins
+@since 05/2024
+@param oModel, objeto, modelo de dados
+@return cRet, character, mensagem
+/*/
+Method AdjMessage(oModel) Class pgcAnalyzeQuotationRepository
+    Local cErrorType    as character
+    local cDescript     as character
+    local cRet          as character
+    default oModel      := nil
+
+    cRet := ""
+    if ( valtype(oModel) == "O" .And. oModel:IsActive() .And. oModel:HasErrorMessage() )
+        cErrorType  := upper(alltrim(oModel:GetErrorMessage()[5]))
+        cDescript   := upper(alltrim(oModel:GetErrorMessage()[6]))
+        if (cErrorType == "FWFORMBEFORE" .and. "SCE" $ cDescript .and. "SC8DETAIL" $ cDescript)
+            cRet := STR0031 //" O item já consta em Pedido de Compra/Contrato, não sendo possível excluí-lo! "
+        endif
+    endif
+Return cRet
+
+
+/*/{Protheus.doc} CurrencyByName
+    Ajusta o retorno da API, adicionando a propriedade currencydescription e a conversão de taxas, se moeda diferente de 1 (Real).
+@author renan.martins
+@since 10/2024
+@param oJsonResponse, objeto, Json de resposta inicial
+@return Nil, nulo.
+/*/
+Method CurrencyByName(oJsonResponse) Class pgcAnalyzeQuotationRepository
+    Local aItems            As Array
+    Local nX                As Numeric
+    Local nLenItems         As Numeric
+    Local nMoedPad          As Numeric
+    Local nTaxObserv        As Numeric
+    Local cDescription      As Character
+    Local cNFCMoed          := SuperGetMV("MV_NFCMOED", .F., "1")
+    Default oJsonResponse   := Nil
+
+    aItems      := oJsonResponse['items']
+    nLenItems   := Len(aItems)
+    nX          := 1
+    nMoedPad    := 1 //moeda 1 é sempre Real (R$)
+    nTaxObserv  := 1
+    nCurrency   := 1
+
+    While nX <= nLenItems
+        //Parametro (MV_NFCMOED); 1=CTO(Default);2=MV_MOEDA 
+        If cNFCMoed == "1"
+            aItems[nX]['currencydescription'] := Self:MapCurrency(aItems[nX]['currency'] )
+        Else
+            nCurrency := aItems[nX]['currency']
+            
+            cDescription := Self:NFCRetMoed(nCurrency)
+            aItems[nX]['currencydescription'] := cDescription
+        EndIf
+
+        if (aItems[nX]['currency'] != nMoedPad)
+            
+            nTaxObserv := aItems[nX]['currencyrate']
+            if ( aItems[nX]['currencyrate'] <= 0) //se na SC8 o valor for zero, vamos buscar o vaor na SM2 da taxa.
+                nTaxObserv := Self:MapActualCurrency(aItems[nX]['currency'])
+                aItems[nX]['currencyrate'] := nTaxObserv
+            endif
+            aItems[nX]['totalitems'] := Self:UpdateRateValue(aItems[nX]['totalitems'], aItems[nX]['currency'], nMoedPad, nTaxObserv) //total dos itens
+            aItems[nX]['total']      := Self:UpdateRateValue(aItems[nX]['total']     , aItems[nX]['currency'], nMoedPad, nTaxObserv) //total dos itens + impostos
+            
+        endif
+        nX++
+    EndDo
+
+Return nil
+
+/*/{Protheus.doc} NFCRetMoed
+	Método retorna a descricao da moeda posicionada
+@author ali.neto
+@since 26/03/2025
+/*/
+Method NFCRetMoed(nCurrency) Class pgcAnalyzeQuotationRepository
+
+    Local cDescription := ""
+    Default nCurrency  := 1
+
+    cDescription := SuperGetMV("MV_MOEDA"+AllTrim(Str(nCurrency,2)), .F., "")
+Return cDescription
+
+
+/*/{Protheus.doc} MapCurrency
+    Função para integrar as pesquisas por nome da moeda, já que temos tanto por Proposta e Item, que são em métodos diferentes.
+@author renan.martins
+@since 02/2025
+@param cSearch, character, código da moeda que está no item da SC8
+@return cRetname, character, retorna a descrição da moeda.
+/*/
+Method MapCurrency(nSearch ) Class pgcAnalyzeQuotationRepository
+    Local cRetName      as character
+    Local cRetTrat      as character
+    Default nSearch     := ""
+
+    cRetName := ""
+    cRetTrat := ""
+
+    if Self:oObjMapRef != nil
+        cRetTrat := StrZero(nSearch, Self:nCTOSize)
+
+        if Self:oObjMapRef[cRetTrat] != Nil	
+            cRetName := Self:oObjMapRef[cRetTrat]
+        else
+            cRetName := alltrim( GetAdvFVal("CTO", "CTO_DESC", Self:cFilCTO + cRetTrat, 1) )
+            Self:oObjMapRef[cRetTrat] := cRetName      
+        endif  
+    endif
+Return cRetName
+
+
+/*/{Protheus.doc} MapActualCurrency
+    Método para armazenar os valores em hash Json, para otimizar a pesquisa pelo valor da moeda vigente no dia, pelo RecMoeda.
+@author renan.martins
+@since 02/2025
+@param nSearch, character, código da moeda que está no item da SC8
+@return nValueCurrency, numeric, retorna o valor da taxa.
+/*/
+Method MapActualCurrency(nSearch) Class pgcAnalyzeQuotationRepository
+    Local nValueCurrency    as numeric
+    Local cNamePesq         as character
+    Default nSearch         := 1
+
+    nValueCurrency  := 1
+    cNamePesq       := cValtoChar(nSearch)
+
+    if Self:oObjRecMoeda != nil
+        if Self:oObjRecMoeda[cNamePesq] != Nil	
+            nValueCurrency := Self:oObjRecMoeda[cNamePesq]
+        else
+            if (Self:CoinExistsSM2(cNamePesq)) //Se existir o campo de Taxa da moeda na SM2. Se não, retorna 1
+                nValueCurrency := RecMoeda(dDataBase, cNamePesq)
+                if (nValueCurrency <= 0)
+                    nValueCurrency := 1
+                endif   
+            endif
+            Self:oObjRecMoeda[cNamePesq] := nValueCurrency      
+        endif  
+    endif
+Return nValueCurrency
+
+
+/*/{Protheus.doc} UpdateRateValue
+    Método para centralizar a conversão ou manter o valor passado, de acordo com a moeda passada na função.
+@author renan.martins
+@since 02/2025
+@param nValue           , numeric, valor a ser convertido
+@param nCurrency        , numeric, moeda utilizada na cotação
+@param nStaCurrency     , numeric, moeda padrão para a conversão (default 1-Real (R$))
+@param nRateSC8RM         , numeric, taxa da conversão da SC8 ou RecMoeda, se disponível
+@return nConvertValue   , numeric, Valor convertido.
+/*/
+Method UpdateRateValue(nValue, nCurrency, nStaCurrency, nRateSC8RM) Class pgcAnalyzeQuotationRepository
+    Local nConvertValue     as numeric
+    Default nValue          := 0
+    Default nCurrency       := 1 //1 padrão moeda REAL (R$)
+    Default nStaCurrency    := 1 //1 padrão moeda REAL (R$)
+    Default nRateSC8RM      := 1
+
+    if nCurrency == nStaCurrency
+        nConvertValue   := nValue
+    else
+        nConvertValue := Round( (nValue * nRateSC8RM), 2)
+    endif
+Return nConvertValue
+
+
+/*/{Protheus.doc} CoinExistsSM2
+    Método para centralizar se a moeda existe na SM2 e armazenar em json, para consulta. Se a moeda foi criada na CTO, mas não existe seu equivalente
+    na SM2, ao rodar a função RECMOEDA, ocasiona erro, já que não temos o campo de taxa dessa moeda.
+@author renan.martins
+@since 02/2025
+@param cCurrency        , character, moeda utilizada na cotação
+@return lExistsCoin     , logical  , se a moeda existe na SM2.
+/*/
+Method CoinExistsSM2(cCurrency) Class pgcAnalyzeQuotationRepository
+    Local lExistsCoin       as Logical
+    Default cCurrency       := "1" //1 padrão moeda REAL (R$)
+
+    lExistsCoin := .F.
+    if Self:oObjSM2Coin != nil
+        if Self:oObjSM2Coin[cCurrency] != Nil	
+            lExistsCoin := Self:oObjSM2Coin[cCurrency]
+        else
+            lExistsCoin := A120VrfSM2Moe(cCurrency)
+            Self:oObjSM2Coin[cCurrency] := lExistsCoin      
+        endif  
+    endif
+Return lExistsCoin

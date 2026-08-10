@@ -1,0 +1,477 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+
+Static oGetAjustApurIPI := Nil
+
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTAjustApurIPIFilter
+API de Ajustes da Apuração de IPI por parâmetros.
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 06/01/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/ipi/calculation-adjustments', description='API de Ajustes de apuração de IPI')
+Function MTAjustApurIPIFilter()
+Local oJsResponse         as json
+Local cbranches        := oRest:getQueryRequest()['branches'] as character
+Local cperiodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cperiodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+
+If valtype(cbranches) != 'U' .and. !empty(cbranches) .and. valtype(cperiodStart) != 'U' .and. !empty(cperiodStart) .and. valtype(cperiodEnd) != 'U' .and. !empty(cperiodEnd)
+    oJsResponse := AdjustmentApurIPIFilter(cbranches, cperiodStart, cperiodEnd)
+Endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET AdjustmentApurIPIFilter
+Função responsável por preencher o Json com com informações referentes aos ajustes da apuração de IPI
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 06/01/2025
+-------------------------------------------------------------------*/
+Static Function AdjustmentApurIPIFilter(cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local nPos         := 0                         as numeric
+Local nPageAux     := 0                         as numeric
+Local nPageSize    := 10                        as numeric
+Local nPos2        := 0                         as numeric
+Local nMes         := 0                         as numeric
+Local nAno         := 0                         as numeric
+Local lHasNext     := .f.                       as logical
+Local nPage        := 1                         as numeric
+Local oJsonResp    := JsonObject():New()        as object
+Local cAlias       := getNextAlias()            as character
+Local cAlias2      := getNextAlias()            as character
+Local oJParams     := oRest:getQueryRequest()   as json //Json com os parâmetros (query param)    
+Local cDbMs        := ""                        as character
+
+If valtype(oJParams) == 'J'
+    If valtype( oJParams['page'] ) != 'U' .and. Val(oJParams['page']) > 0
+        nPage := Val(oJParams['page'])
+    EndIf
+    If valtype( oJParams['pageSize'] ) != 'U' .and. Val(oJParams['pageSize']) > 0
+        nPageSize := Val(oJParams['pageSize'])
+    EndIf
+EndIf
+
+cDbMs := TcGetDb()
+
+If "MSSQL" $ cDbMs
+    GetAjusteApuraIPIMSSQL(@cAlias,nPage,nPageSize,cbranches, cperiodStart, cperiodEnd)
+ElseIf "ORACLE" $ cDbMs
+    GetAjusteApuraIPIORACLE(@cAlias,nPage,nPageSize,cbranches, cperiodStart, cperiodEnd)
+ElseIf "POSTGRES" $ cDbMs
+    GetAjusteApuraIPIPOSTGRES(@cAlias,nPage,nPageSize,cbranches, cperiodStart, cperiodEnd)
+EndIf
+
+// Iniciando o While
+If (cAlias)->(!Eof())
+    While (cAlias)->(!Eof())
+        nPageAux++
+        If nPageAux == 1
+            oJsonResp["items"] := {}
+        Endif
+        If nPageAux <= nPageSize
+            aAdd( oJsonResp["items"], JsonObject():New() )
+            nPos++
+            oJsonResp["items"][nPos]["period"]        :=   AllTrim((cAlias)->MESANO)
+            oJsonResp["items"][nPos]["credit"]        :=   (cAlias)->AJUSTCRED     
+            oJsonResp["items"][nPos]["debt"]          :=   (cAlias)->AJUSTDEBT
+            
+            nMes:= (cAlias)->MESNUMERO
+            nAno:= (cAlias)->ANONUMERO
+
+            If "MSSQL" $ cDbMs
+                GetAjusteApuraIPITotalMSSQL(@cAlias2,nPage,cbranches, cperiodStart, cperiodEnd, nMEs, nAno)
+            ElseIf "ORACLE" $ cDbMs
+                GetAjusteApuraIPITotalORACLE(@cAlias2,nPage,cbranches, cperiodStart, cperiodEnd, nMEs, nAno)
+            ElseIf "POSTGRES" $ cDbMs
+                GetAjusteApuraIPITotalPOSTGRES(@cAlias2,nPage,cbranches, cperiodStart, cperiodEnd, nMEs, nAno)
+            EndIf
+
+            oJsonResp["items"][nPos]["detail"] := {}
+            nPos2 := 0 
+            While (cAlias2)->(!Eof())
+
+                nPos2++
+                Aadd(oJsonResp["items"][nPos]["detail"], JsonObject():New() )
+                oJsonResp["items"][nPos]["detail"][nPos2]["branch"]        :=  AllTrim((cAlias2)->FILIAL)
+                oJsonResp["items"][nPos]["detail"][nPos2]["credit"]        :=   (cAlias2)->AJUSTECRED     
+                oJsonResp["items"][nPos]["detail"][nPos2]["debt"]          :=   (cAlias2)->AJUSTEDEBT
+
+                (cAlias2)->(DbSkip())
+            EndDo
+        Else
+            lHasNext := .t.
+            Exit
+        EndIf
+        (cAlias)->(DbSkip())
+    EndDo
+oJsonResp["hasNext"]    := lHasNext
+Else
+    oJsonResp['code'] := 400
+    oJsonResp['detailMessage'] := 'value not found'
+    oJsonResp['message'] := "Dados não encontrados para o período e/ou filial informados."
+EndIf       
+(cAlias)->(DBCloseArea())
+If Select(cAlias2) > 0
+    (cAlias2)->(DBCloseArea())
+EndIf
+Return oJsonResp:toJson()
+
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetAjusteApuraIPIMSSQL()
+(Responsável por executar a consulta aos campos da tabela CDP)
+@author william.palma
+@since 06/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetAjusteApuraIPIMSSQL(cAlias as character, nPage as numeric, nPageSize as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local cQuery    := ''  as character
+
+If oGetAjustApurIPI == Nil
+    cQuery := "SELECT DISTINCT (CDP.MESNOME) AS MESANO, SUM(CDP.VALORCRED) AS AJUSTCRED, SUM(CDP.VALORDEBT) AS AJUSTDEBT, CDP.MESNUM AS MESNUMERO, CDP.ANONUM AS ANONUMERO "
+    cQuery += "FROM ("
+    cQuery += " SELECT CDP_FILIAL AS FILIAL, MONTH(CDP_DTINI) AS MESNUM, YEAR(CDP_DTINI) AS ANONUM, "
+    cQuery += " CASE "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'jan/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'fev/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'mar/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'abr/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'mai/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'jun/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'jul/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'ago/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'set/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'out/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'nov/' + LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'dez/' + LEFT(CDP_DTINI,4) "
+    cQuery +="ELSE ? END as MESNOME,   "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORCRED,"
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORDEBT "
+    cQuery += " FROM "+RetSQLName("CDP")+" CDP "
+    cQuery += " WHERE CDP_FILIAL IN (?) AND CDP_DTINI BETWEEN ? AND ? AND CDP_LINHA IN (?) "
+    cQuery +="AND D_E_L_E_T_ = ? AND CDP_CODLAN = ? "
+    cQuery +="AND CDP_VALOR > ?"
+    cQuery += " GROUP BY CDP_FILIAL, RIGHT(CDP_DTINI,4), LEFT(CDP_DTINI,4), CDP_VALOR, CDP_LINHA, MONTH(CDP_DTINI), YEAR(CDP_DTINI)) AS CDP  "
+    cQuery += " GROUP BY CDP.MESNOME, CDP.MESNUM, CDP.ANONUM"
+    cQuery += " ORDER BY CDP.ANONUM, CDP.MESNUM"
+    cQuery += " OFFSET ( ? * ? ) ROWS "
+    cQuery += " FETCH NEXT ? ROWS ONLY "
+    oGetAjustApurIPI := FwExecStatement():New()
+    oGetAjustApurIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetAjustApurIPI != Nil
+    oGetAjustApurIPI:setString(1, "0101")
+    oGetAjustApurIPI:setString(2, "0201")
+    oGetAjustApurIPI:setString(3, "0301")
+    oGetAjustApurIPI:setString(4, "0401")
+    oGetAjustApurIPI:setString(5, "0501")
+    oGetAjustApurIPI:setString(6, "0601")
+    oGetAjustApurIPI:setString(7, "0701")
+    oGetAjustApurIPI:setString(8, "0801")
+    oGetAjustApurIPI:setString(9, "0901")
+    oGetAjustApurIPI:setString(10,"1001")
+    oGetAjustApurIPI:setString(11,"1101")
+    oGetAjustApurIPI:setString(12,"1201")
+    oGetAjustApurIPI:setString(13, "")
+    oGetAjustApurIPI:SetIn(14, {'004','005'})
+    oGetAjustApurIPI:SetIn(15, {'010','012'})
+    oGetAjustApurIPI:SetIn(16, StrTokArr(cbranches, "," ))
+    oGetAjustApurIPI:setString(17, StrTran(cperiodStart, "-", ""))
+    oGetAjustApurIPI:setString(18, StrTran(cperiodEnd, "-", ""))
+    oGetAjustApurIPI:SetIn(19, {'005','012','004','010'})
+    oGetAjustApurIPI:setString(20, ' ')
+    oGetAjustApurIPI:setString(21, "")
+    oGetAjustApurIPI:SetNumeric(22, 0)
+    oGetAjustApurIPI:SetUnsafe(23, cValToChar(nPage-1))
+    oGetAjustApurIPI:SetUnsafe(24, cValToChar(nPageSize))
+    oGetAjustApurIPI:SetUnsafe(25, cValToChar(nPageSize+1))
+    cAlias := oGetAjustApurIPI:OpenAlias()
+Endif
+FWFreeObj(oGetAjustApurIPI)
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetAjusteApuraIPIORACLE()
+(Responsável por executar a consulta aos campos da tabela CDP)
+@author william.palma
+@since 06/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetAjusteApuraIPIORACLE(cAlias as character, nPage as numeric, nPageSize as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local cQuery    := ''  as character
+
+If oGetAjustApurIPI == Nil
+    cQuery := "SELECT DISTINCT (CDP.MESNOME) AS MESANO, SUM(CDP.VALORCRED) AS AJUSTCRED, SUM(CDP.VALORDEBT) AS AJUSTDEBT, TO_NUMBER(CDP.MESNUM) AS MESNUMERO, TO_NUMBER(CDP.ANONUM) AS ANONUMERO "
+    cQuery += "FROM ("
+    cQuery += " SELECT CDP_FILIAL AS FILIAL, TO_CHAR(CAST(CDP_DTINI AS DATE), 'MM') AS MESNUM, TO_CHAR(CAST(CDP_DTINI AS DATE), 'YYYY') AS ANONUM, "
+    cQuery += " CASE "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'jan/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'fev/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'mar/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'abr/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'mai/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'jun/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'jul/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'ago/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'set/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'out/' || SUBSTR(CDP_DTINI,1,4) "
+    cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'nov/' || SUBSTR(CDP_DTINI,1,4) "
+	cQuery +="WHEN SUBSTR(CDP_DTINI,5,2) = ? THEN 'dez/' || SUBSTR(CDP_DTINI,1,4) "
+    cQuery +="ELSE ? END AS MESNOME,   "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN SUM(CDP_VALOR) ELSE 0 END  AS VALORCRED,"
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN SUM(CDP_VALOR) ELSE 0 END  AS VALORDEBT "
+    cQuery += " FROM "+RetSQLName("CDP")+" CDP "
+    cQuery += " WHERE CDP_FILIAL IN (?) AND TO_CHAR(CAST(CDP_DTINI AS DATE), 'YYYYMMDD')  BETWEEN ? AND ? AND CDP_LINHA IN (?) "
+    cQuery +="AND D_E_L_E_T_ = ? AND CDP_CODLAN = ? "
+    cQuery +="AND CDP_VALOR > ?"
+    cQuery += " GROUP BY CDP_FILIAL, SUBSTR(CDP_DTINI,5,2), SUBSTR(CDP_DTINI,1,4), CDP_VALOR, CDP_LINHA, TO_CHAR(CAST(CDP_DTINI AS DATE), 'MM'), TO_CHAR(CAST(CDP_DTINI AS DATE), 'YYYY')) CDP  "
+    cQuery += " GROUP BY CDP.MESNOME, CDP.MESNUM, CDP.ANONUM"
+    cQuery += " ORDER BY CDP.ANONUM, CDP.MESNUM"
+    cQuery += " OFFSET ( ? * ? ) ROWS "
+    cQuery += " FETCH NEXT ? ROWS ONLY "
+    oGetAjustApurIPI := FwExecStatement():New()
+    oGetAjustApurIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetAjustApurIPI != Nil
+    oGetAjustApurIPI:setString(1, "01")
+    oGetAjustApurIPI:setString(2, "02")
+    oGetAjustApurIPI:setString(3, "03")
+    oGetAjustApurIPI:setString(4, "04")
+    oGetAjustApurIPI:setString(5, "05")
+    oGetAjustApurIPI:setString(6, "06")
+    oGetAjustApurIPI:setString(7, "07")
+    oGetAjustApurIPI:setString(8, "08")
+    oGetAjustApurIPI:setString(9, "09")
+    oGetAjustApurIPI:setString(10,"10")
+    oGetAjustApurIPI:setString(11,"11")
+    oGetAjustApurIPI:setString(12,"12")
+    oGetAjustApurIPI:setString(13, "")
+    oGetAjustApurIPI:SetIn(14, {'004','005'})
+    oGetAjustApurIPI:SetIn(15, {'010','012'})
+    oGetAjustApurIPI:SetIn(16, StrTokArr(cbranches, "," ))
+    oGetAjustApurIPI:setString(17, StrTran(cperiodStart, "-", ""))
+    oGetAjustApurIPI:setString(18, StrTran(cperiodEnd, "-", ""))
+    oGetAjustApurIPI:SetIn(19, {'005','012','004','010'})
+    oGetAjustApurIPI:setString(20, ' ')
+    oGetAjustApurIPI:setString(21, "")
+    oGetAjustApurIPI:SetNumeric(22, 0)
+    oGetAjustApurIPI:SetUnsafe(23, cValToChar(nPage-1))
+    oGetAjustApurIPI:SetUnsafe(24, cValToChar(nPageSize))
+    oGetAjustApurIPI:SetUnsafe(25, cValToChar(nPageSize+1))
+    cAlias := oGetAjustApurIPI:OpenAlias()
+Endif
+FWFreeObj(oGetAjustApurIPI)
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetAjusteApuraIPIPOSTGRES()
+(Responsável por executar a consulta aos campos da tabela CDP)
+@author william.palma
+@since 06/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetAjusteApuraIPIPOSTGRES(cAlias as character, nPage as numeric, nPageSize as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character)
+Local cQuery    := ''  as character
+
+If oGetAjustApurIPI == Nil
+    cQuery := "SELECT DISTINCT (CDP.MESNOME) AS MESANO, SUM(CDP.VALORCRED) AS AJUSTCRED, SUM(CDP.VALORDEBT) AS AJUSTDEBT, TO_NUMBER(CDP.MESNUM,'99') AS MESNUMERO, TO_NUMBER(CDP.ANONUM,'9999') AS ANONUMERO "
+    cQuery += "FROM ("
+    cQuery += " SELECT CDP_FILIAL AS FILIAL, TO_CHAR(CDP_DTINI:: DATE, 'MM') AS MESNUM, TO_CHAR(CDP_DTINI:: DATE, 'YYYY') AS ANONUM, "
+    cQuery += " CASE "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'jan/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'fev/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'mar/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'abr/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'mai/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'jun/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'jul/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'ago/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'set/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'out/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'nov/' || LEFT(CDP_DTINI,4) "
+	cQuery +="WHEN RIGHT(CDP_DTINI,4) = ? THEN 'dez/' || LEFT(CDP_DTINI,4) "
+    cQuery +="ELSE ? END as MESNOME,  "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN SUM(CDP_VALOR) ELSE 0 END  AS VALORCRED,"
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN SUM(CDP_VALOR) ELSE 0 END  AS VALORDEBT "
+    cQuery += " FROM "+RetSQLName("CDP")+" CDP "
+    cQuery += " WHERE CDP_FILIAL IN (?) AND CDP_DTINI BETWEEN ? AND ? AND CDP_LINHA IN (?) "
+    cQuery +="AND D_E_L_E_T_ = ? AND CDP_CODLAN = ? "
+    cQuery +="AND CDP_VALOR > ?"
+    cQuery += " GROUP BY CDP_FILIAL, CDP_VALOR, CDP_LINHA, RIGHT(CDP_DTINI,4), LEFT(CDP_DTINI,4), CDP_LINHA, TO_CHAR(CDP_DTINI:: DATE, 'MM'), TO_CHAR(CDP_DTINI:: DATE, 'YYYY')) AS CDP  "
+    cQuery += " GROUP BY CDP.MESNOME, CDP.MESNUM, CDP.ANONUM"
+    cQuery += " ORDER BY TO_NUMBER(CDP.ANONUM,'9999'), TO_NUMBER(CDP.MESNUM,'99')"
+    cQuery += " OFFSET ( ? * ? ) ROWS "
+    cQuery += " FETCH NEXT ? ROWS ONLY "
+    oGetAjustApurIPI := FwExecStatement():New()
+    oGetAjustApurIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetAjustApurIPI != Nil
+    oGetAjustApurIPI:setString(1, "0101")
+    oGetAjustApurIPI:setString(2, "0201")
+    oGetAjustApurIPI:setString(3, "0301")
+    oGetAjustApurIPI:setString(4, "0401")
+    oGetAjustApurIPI:setString(5, "0501")
+    oGetAjustApurIPI:setString(6, "0601")
+    oGetAjustApurIPI:setString(7, "0701")
+    oGetAjustApurIPI:setString(8, "0801")
+    oGetAjustApurIPI:setString(9, "0901")
+    oGetAjustApurIPI:setString(10,"1001")
+    oGetAjustApurIPI:setString(11,"1101")
+    oGetAjustApurIPI:setString(12,"1201")
+    oGetAjustApurIPI:setString(13, "")
+    oGetAjustApurIPI:SetIn(14, {'004','005'})
+    oGetAjustApurIPI:SetIn(15, {'010','012'})
+    oGetAjustApurIPI:SetIn(16, StrTokArr(cbranches, "," ))
+    oGetAjustApurIPI:setString(17, StrTran(cperiodStart, "-", ""))
+    oGetAjustApurIPI:setString(18, StrTran(cperiodEnd, "-", ""))
+    oGetAjustApurIPI:SetIn(19, {'005','012','004','010'})
+    oGetAjustApurIPI:setString(20, ' ')
+    oGetAjustApurIPI:setString(21, "")
+    oGetAjustApurIPI:SetNumeric(22, 0)
+    oGetAjustApurIPI:SetUnsafe(23, cValToChar(nPage-1))
+    oGetAjustApurIPI:SetUnsafe(24, cValToChar(nPageSize))
+    oGetAjustApurIPI:SetUnsafe(25, cValToChar(nPageSize+1))
+    cAlias := oGetAjustApurIPI:OpenAlias()
+Endif
+FWFreeObj(oGetAjustApurIPI)
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetAjusteApuraIPITotalMSSQL()
+(Responsável por executar a consulta aos campos da tabela CDP)
+@author william.palma
+@since 06/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetAjusteApuraIPITotalMSSQL(cAlias2 as character, nPage as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character, nMes as numeric, nAno as numeric)
+Local cQuery    := ''  as character
+
+If oGetAjustApurIPI == Nil
+    cQuery := "SELECT DISTINCT (CDP.FILIAL) AS FILIAL, "
+    cQuery += "SUM(CDP.VALORCRED) AS AJUSTECRED , SUM(CDP.VALORDEBT) AS AJUSTEDEBT, CDP.MESNUM AS MESNUMERO, CDP.ANONUM AS ANONUMERO"
+    cQuery += " FROM (SELECT RIGHT(CDP_DTINI,4) AS MES, LEFT(CDP_DTINI,4) AS ANO, CDP_LINHA, MONTH(CDP_DTINI) AS MESNUM, YEAR(CDP_DTINI) AS ANONUM, CDP_FILIAL AS FILIAL, "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORCRED,"
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORDEBT "
+    cQuery += " FROM "+RetSQLName("CDP")+" CDP "
+    cQuery += " WHERE CDP_FILIAL IN (?) AND CDP_DTINI BETWEEN ? AND ? AND CDP_LINHA IN (?)"
+    cQuery +="AND D_E_L_E_T_ = ? AND CDP_CODLAN = ? "
+    cQuery +="AND CDP_VALOR > ?"
+    cQuery += " GROUP BY CDP_FILIAL, RIGHT(CDP_DTINI,4), LEFT(CDP_DTINI,4), CDP_VALOR, CDP_LINHA, MONTH(CDP_DTINI), YEAR(CDP_DTINI)) AS CDP WHERE CDP.MESNUM = ? AND CDP.ANONUM = ?  "
+    cQuery += " GROUP BY CDP.FILIAL, CDP.MESNUM, CDP.ANONUM"
+    cQuery += " ORDER BY CDP.ANONUM, CDP.MESNUM"
+    oGetAjustApurIPI := FwExecStatement():New()
+    oGetAjustApurIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetAjustApurIPI != Nil
+    oGetAjustApurIPI:SetIn(1, {'004','005'})
+    oGetAjustApurIPI:SetIn(2, {'010','012'})
+    oGetAjustApurIPI:SetIn(3, StrTokArr(cbranches, "," ))
+    oGetAjustApurIPI:setString(4, StrTran(cperiodStart, "-", ""))
+    oGetAjustApurIPI:setString(5, StrTran(cperiodEnd, "-", ""))
+    oGetAjustApurIPI:SetIn(6, {'005','012','004','010'})
+    oGetAjustApurIPI:setString(7, ' ')
+    oGetAjustApurIPI:setString(8, "")
+    oGetAjustApurIPI:SetNumeric(9, 0)
+    oGetAjustApurIPI:SetNumeric(10, nMes)
+    oGetAjustApurIPI:SetNumeric(11, nAno)
+    cAlias2 := oGetAjustApurIPI:OpenAlias()
+Endif
+FWFreeObj(oGetAjustApurIPI)
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetAjusteApuraIPITotalORACLE()
+(Responsável por executar a consulta aos campos da tabela CDP)
+@author william.palma
+@since 06/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetAjusteApuraIPITotalORACLE(cAlias2 as character, nPage as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character, nMes as numeric, nAno as numeric)
+Local cQuery    := ''  as character
+
+If oGetAjustApurIPI == Nil
+    cQuery := "SELECT DISTINCT (CDP.FILIAL) AS FILIAL, "
+    cQuery += "SUM(CDP.VALORCRED) AS AJUSTECRED , SUM(CDP.VALORDEBT) AS AJUSTEDEBT, TO_NUMBER(CDP.MESNUM) AS MESNUMERO, TO_NUMBER(CDP.ANONUM) AS ANONUMERO"
+    cQuery += " FROM (SELECT SUBSTR(CDP_DTINI,5,2) AS MES, SUBSTR(CDP_DTINI,1,4) AS ANO, TO_CHAR(CAST(CDP_DTINI AS DATE), 'MM') AS MESNUM, TO_CHAR(CAST(CDP_DTINI AS DATE), 'YYYY') AS ANONUM, CDP_FILIAL AS FILIAL, "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORCRED, "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORDEBT "
+    cQuery += " FROM "+RetSQLName("CDP")+" CDP "
+    cQuery += " WHERE CDP_FILIAL IN (?) AND TO_CHAR(CAST(CDP_DTINI AS DATE), 'YYYYMMDD')  BETWEEN ? AND ? AND CDP_LINHA IN (?)"
+    cQuery += " AND D_E_L_E_T_ = ? AND CDP_CODLAN = ? "
+    cQuery += " AND CDP_VALOR > ?"
+    cQuery += " GROUP BY CDP_FILIAL, SUBSTR(CDP_DTINI,5,2), SUBSTR(CDP_DTINI,1,4), CDP_VALOR, CDP_LINHA, TO_CHAR(CAST(CDP_DTINI AS DATE), 'MM'), TO_CHAR(CAST(CDP_DTINI AS DATE), 'YYYY')) CDP WHERE TO_NUMBER(CDP.MESNUM) = ? AND TO_NUMBER(CDP.ANONUM) = ?  "
+    cQuery += " GROUP BY CDP.FILIAL, CDP.MESNUM, CDP.ANONUM"
+    cQuery += " ORDER BY CDP.ANONUM, CDP.MESNUM"
+    oGetAjustApurIPI := FwExecStatement():New()
+    oGetAjustApurIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetAjustApurIPI != Nil
+    oGetAjustApurIPI:SetIn(1, {'004','005'})
+    oGetAjustApurIPI:SetIn(2, {'010','012'})
+    oGetAjustApurIPI:SetIn(3, StrTokArr(cbranches, "," ))
+    oGetAjustApurIPI:setString(4, StrTran(cperiodStart, "-", ""))
+    oGetAjustApurIPI:setString(5, StrTran(cperiodEnd, "-", ""))
+    oGetAjustApurIPI:SetIn(6, {'005','012','004','010'})
+    oGetAjustApurIPI:setString(7, ' ')
+    oGetAjustApurIPI:setString(8, "")
+    oGetAjustApurIPI:SetNumeric(9, 0)
+    oGetAjustApurIPI:SetNumeric(10, nMes)
+    oGetAjustApurIPI:SetNumeric(11, nAno)
+    cAlias2 := oGetAjustApurIPI:OpenAlias()
+Endif
+FWFreeObj(oGetAjustApurIPI)
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetAjusteApuraIPITotalPOSTGRES()
+(Responsável por executar a consulta aos campos da tabela CDP)
+@author william.palma
+@since 06/01/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetAjusteApuraIPITotalPOSTGRES(cAlias2 as character, nPage as numeric, cbranches as character, cperiodStart as character, cperiodEnd as character, nMes as numeric, nAno as numeric)
+Local cQuery    := ''  as character
+
+If oGetAjustApurIPI == Nil
+    cQuery := "SELECT DISTINCT (CDP.FILIAL) AS FILIAL, "
+    cQuery += "SUM(CDP.VALORCRED) AS AJUSTECRED , SUM(CDP.VALORDEBT) AS AJUSTEDEBT, TO_NUMBER(CDP.MESNUM,'99') AS MESNUMERO, TO_NUMBER(CDP.ANONUM,'9999') AS ANONUMERO"
+    cQuery += " FROM (SELECT RIGHT(CDP_DTINI,4) AS MES, LEFT(CDP_DTINI,4) AS ANO, TO_CHAR(CDP_DTINI:: DATE, 'MM') AS MESNUM, TO_CHAR(CDP_DTINI:: DATE, 'YYYY') AS ANONUM, CDP_FILIAL AS FILIAL, "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORCRED, "
+    cQuery += " CASE WHEN CDP_LINHA IN (?) THEN CDP_VALOR ELSE 0 END  AS VALORDEBT "
+    cQuery += " FROM "+RetSQLName("CDP")+" CDP "
+    cQuery += " WHERE CDP_FILIAL IN (?) AND CDP_DTINI BETWEEN ? AND ? AND CDP_LINHA IN (?) "
+    cQuery +="AND D_E_L_E_T_ = ? AND CDP_CODLAN = ? "
+    cQuery +="AND CDP_VALOR > ?"
+    cQuery += " GROUP BY CDP_FILIAL, CDP_VALOR, CDP_LINHA, RIGHT(CDP_DTINI,4), LEFT(CDP_DTINI,4), CDP_LINHA, TO_CHAR(CDP_DTINI:: DATE, 'MM'), TO_CHAR(CDP_DTINI:: DATE, 'YYYY')) AS CDP WHERE TO_NUMBER(CDP.MESNUM,'99') = ? AND TO_NUMBER(CDP.ANONUM,'9999') = ?  "
+    cQuery += " GROUP BY CDP.FILIAL, CDP.MESNUM, CDP.ANONUM"
+    cQuery += " ORDER BY TO_NUMBER(CDP.ANONUM,'9999'), TO_NUMBER(CDP.MESNUM,'99') "
+    oGetAjustApurIPI := FwExecStatement():New()
+    oGetAjustApurIPI:SetQuery(ChangeQuery(cQuery))
+Endif
+
+If oGetAjustApurIPI != Nil
+    oGetAjustApurIPI:SetIn(1, {'004','005'})
+    oGetAjustApurIPI:SetIn(2, {'010','012'})
+    oGetAjustApurIPI:SetIn(3, StrTokArr(cbranches, "," ))
+    oGetAjustApurIPI:setString(4, StrTran(cperiodStart, "-", ""))
+    oGetAjustApurIPI:setString(5, StrTran(cperiodEnd, "-", ""))
+    oGetAjustApurIPI:SetIn(6, {'005','012','004','010'})
+    oGetAjustApurIPI:setString(7, ' ')
+    oGetAjustApurIPI:setString(8, "")
+    oGetAjustApurIPI:SetNumeric(9, 0)
+    oGetAjustApurIPI:SetNumeric(10, nMes)
+    oGetAjustApurIPI:SetNumeric(11, nAno)
+    cAlias2 := oGetAjustApurIPI:OpenAlias()
+Endif
+FWFreeObj(oGetAjustApurIPI)
+Return

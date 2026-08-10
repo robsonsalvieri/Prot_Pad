@@ -1,0 +1,432 @@
+#Include "Totvs.ch"
+#include "tlpp-core.th"
+#include "distribution.convergencia.ch"
+#include "distribution.convergencia.estoque.inventario.classe.ch"
+
+Static nTamCod     := TamSx3('B7_COD')[1]
+Static nTamLocal   := TamSx3('B7_LOCAL')[1]
+Static nTamLocaliz := TamSx3('B7_LOCALIZ')[1]
+Static nTamNumSeri := TamSx3('B7_NUMSERI')[1]
+Static nTamLoteCtl := TamSx3('B7_LOTECTL')[1]
+Static nTamNumLote := TamSx3('B7_NUMLOTE')[1]
+Static oTabTmpDes  := Nil
+Static aArqTabDes  := {}
+
+/*/{Protheus.doc} WMSSaasInventario
+Classe de inventário Wms Saas
+@type class
+@author Alexsander Burigo Corrêa
+@since 16/09/2024
+/*/
+Class WMSSaasInventario From WMSSaasConvergencia implements WMSSaasConvergenciaInterface
+    Public Method new(cIdSaas as character, dDataFinalizacao as date)
+    Public Method loadOrNew(cIdSaas as character, dDataFinalizacao as date)
+    Public Method loadByChave(cIdSaas as character) as object
+    Public Method canBeUpdated() as logical
+    Public Method finaliza(finaliza as array) as logical
+    Public Method geraMovimentoInventario(aItens as array) as logical
+    Public Method getNomePessoa() as character
+EndClass
+
+/*/{Protheus.doc} loadOrNew
+    (long_description)
+    @author user
+    @since 16/09/2024
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method loadOrNew(cIdSaas as character, dDataFinalizacao as date) Class WMSSaasInventario
+local oLoad := self:loadByChave(cIdSaas)
+    If !Empty(oLoad:id)
+        Return oLoad
+    EndIf
+
+Return self:new(cIdSaas, dDataFinalizacao)
+
+/*/{Protheus.doc} WMSSaasInventario::New
+Carga das propriedades do cabeçalho da classe de convergência
+@type method
+@author Alexsander Burigo Corrêa
+@since 16/09/2024
+@param cIdSaas, character, Numero do documento de inventario no Saas
+@param dEmissao, date, Data de emissão
+/*/
+Method new(cIdSaas, dDataFinalizacao ) Class WMSSaasInventario
+    self:status              := self:getStatusCriado()
+    self:tipoTransacao       := self:getTipoTransacaoEstoqueInventario()
+    self:IdSaas              := cIdSaas
+    self:numeroDocumento     := ""
+    self:clienteOuFornecedor := ""
+    self:loja                := ""
+    self:dataCriacao         := FwTimeStamp(3,dDataBase, Time())
+    self:dataEmissao         := dDataFinalizacao
+    self:transportador       := ""
+    self:sequenciaIntegracao := ""
+    self:mensagemIntegracao  := ""
+    self:itensConvergencia   := {}
+Return self
+
+/*/{Protheus.doc} loadByChave
+    Faz o load da classe de estoque e convergencia pela chave
+    Esse metodo deve retornar apenas um registro da DBZ sempre, pois cada identificador de inventário só pode ter uma DBZ. Os registros de inventário não possuem DBY.
+    @author Alexsander Burigo Corrêa
+    @since 26/04/2024
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method loadByChave(cIdSaas) Class WMSSaasInventario
+Local cAliasDBZ := GetNextAlias()
+    BeginSql Alias cAliasDBZ
+		SELECT DBZ.DBZ_ID IDCONVERGENCIA
+		  FROM %Table:DBZ% DBZ
+		 WHERE DBZ.DBZ_FILIAL = %Exp:xFilial("DBZ")%
+		   AND DBZ.DBZ_TIPOTR = %Exp:self:getTipoTransacaoEstoqueInventario()%
+		   AND DBZ.DBZ_IDSAAS = %Exp:cIdSaas%
+		   AND DBZ.%NotDel%
+	EndSql
+
+    If (cAliasDBZ)->(!Eof())
+        self:loadById((cAliasDBZ)->IDCONVERGENCIA)        
+    EndIf
+    (cAliasDBZ)->(DbCloseArea())
+Return self
+
+/*/{Protheus.doc} canBeUpdated
+    Retorna status nos quais os registros de estoque podem ser alterados. Sempre falso, pois registros de estoque sempre são movimentados pelo SaaS e não podem ser excluídos no Protheus.
+    @author Alexsander Burigo Corrêa
+    @since 26/04/2024
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method canBeUpdated() as logical Class WMSSaasInventario
+Return .F.
+
+/*/{Protheus.doc} finaliza
+    Metodo de finalizacao da contagem do inventário
+    @author Alexsander Burigo Corrêa
+    @since 26/04/2024
+    @version version
+    @param aInventario, array, array de json com itens inventariados
+    
+    {;
+        "identificador"   : "963625140",;
+        "produto"         : "MAGICMOUSE",;
+        "tipoEstoque"     : "01",;
+        "quantidade"      : 83,;                        
+        "lote"            : "LOTE299",;
+        "dataValidade"    : "2025-07-16",;
+        "dataFinalizacao" : "2025-01-01";
+    }
+    @return return_var, return_type, return_description
+/*/
+Method finaliza(aInventario) Class WMSSaasInventario as logical
+Local nItem            := 0
+Local nItemFim         := 0
+Local cNumSeq          := ""
+Local dDataFinalizacao
+Local cLocal           := ""
+Local cProduto         := ""
+Local cLote            := ""
+Local cSubLote         := Space(nTamNumLote)
+Local dDataValidade
+Local cEndereco        := Space(nTamLocaliz)
+Local cNumeroSerie     := Space(nTamNumSeri)
+Local cTable           := Nil
+Local cAliasSB8        := Nil
+Local cAliasSB7        := Nil
+Local cAliasQry        := Nil
+Local cQuery           := ""
+Local nQuantidade      := 0
+Local lRastro          := .F.
+Local lRet             := .T.
+Local aItens           := {}
+Local aItem            := {}
+ 
+    // Cria tabela temporária
+    CriaTabDes()
+    
+    cTable := "%"+oTabTmpDes:GetRealName()+"%"
+    dbSelectArea(oTabTmpDes:GetAlias())
+
+    nItemFim := Len(aInventario)
+    For nItem := 1 To nItemFim
+        cProduto         := Padr(aInventario[nItem]['produto'],nTamCod)
+        cLocal           := Padr(aInventario[nItem]['tipoEstoque'],nTamLocal)
+        nQuantidade      := aInventario[nItem]['quantidade']
+        lRastro          := Rastro(cProduto,"L")
+        dDataFinalizacao := aInventario[nItem]['dataFinalizacao']
+        cLote            := If(lRastro .And. !(aInventario[nItem]['lote']==NIL),Padr(aInventario[nItem]['lote'],nTamLoteCtl),Space(nTamLoteCtl))
+        dDataValidade    := If(lRastro,aInventario[nItem]['dataValidade'],CtoD('  /  /  '))
+
+        cAliasQry := GetNextAlias()
+        BeginSql Alias cAliasQry
+            SELECT 1
+              FROM %Exp:cTable% TDES
+             WHERE TDES.TMP_LOCAL  = %Exp:cLocal%
+               AND TDES.TMP_COD    = %Exp:cProduto%
+               AND TDES.TMP_LOTECT = %Exp:cLote%
+               AND TDES.TMP_NUMLOT = %Exp:cSubLote%
+               AND TDES.TMP_NUMSER = %Exp:cNumeroSerie%
+               AND TDES.TMP_ENDER  = %Exp:cEndereco%           
+               AND TDES.%NotDel%
+        EndSql        
+        If (cAliasQry)->(!Eof())
+            cQuery := "UPDATE "+oTabTmpDes:GetRealName()
+            cQuery +=   " SET TMP_QUANT  += " + cValToChar(nQuantidade)
+            cQuery += " WHERE TMP_LOCAL  = '" + cLocal + "'"
+            cQuery +=   " AND TMP_COD    = '" + cProduto + "'"
+            cQuery +=   " AND TMP_LOTECT = '" + cLote + "'"
+            cQuery +=   " AND TMP_NUMLOT = '" + cSubLote + "'"
+            cQuery +=   " AND TMP_NUMSER = '" + cNumeroSerie + "'"
+            cQuery +=   " AND TMP_ENDER  = '" + cEndereco + "'"
+            cQuery +=   " AND D_E_L_E_T_ = ' '"
+            lRet := (TcSQLExec(cQuery) >= 0)
+        Else
+            If !lRastro .Or. (lRastro .And. !Empty(cLote))
+			    cQuery := "INSERT INTO "+oTabTmpDes:GetRealName()
+				cQuery +=      " (TMP_DATA,"
+				cQuery +=       " TMP_LOCAL,"
+				cQuery +=       " TMP_COD,"
+				cQuery +=       " TMP_LOTECT,"
+				cQuery +=       " TMP_NUMLOT,"
+				cQuery +=       " TMP_DTVALI,"
+				cQuery +=       " TMP_NUMSER,"
+				cQuery +=       " TMP_ENDER,"
+				cQuery +=       " TMP_QUANT)"
+				cQuery +=" VALUES "
+				cQuery +=       " ('"+DtoS(dDataFinalizacao)+"',"
+				cQuery +=       "'"+cLocal+"',"
+				cQuery +=       "'"+cProduto+"',"
+				cQuery +=       "'"+cLote+"',"
+				cQuery +=       "'"+cSubLote+"',"
+				cQuery +=       "'"+DtoS(dDataValidade)+"',"
+				cQuery +=       "'"+cNumeroSerie+"',"
+				cQuery +=       "'"+cEndereco+"',"
+				cQuery +=       cValtoChar(nQuantidade)+")"
+                lRet := (TcSQLExec(cQuery) >= 0)
+            EndIf
+            
+            If lRet
+                // Verifica se existe outros lotes no estoque ERP diferentes
+                If lRastro
+                    cAliasSB8 := GetNextAlias()
+                    BeginSql Alias cAliasSB8
+                        SELECT SB8.B8_LOTECTL,
+                               SB8.B8_DTVALID
+                          FROM %Table:SB8% SB8
+                         WHERE SB8.B8_FILIAL   = %Exp:xFilial("SB8")%
+                           AND SB8.B8_PRODUTO  = %Exp:cProduto%
+                           AND SB8.B8_LOCAL    = %Exp:cLocal%
+                           AND SB8.B8_LOTECTL <> %Exp:cLote%
+                           AND SB8.B8_SALDO    > 0
+                           AND NOT EXISTS (SELECT 1
+                                             FROM %Exp:cTable% TDES
+                                            WHERE TDES.TMP_LOCAL  = SB8.B8_LOCAL
+                                              AND TDES.TMP_COD    = SB8.B8_PRODUTO
+                                              AND TDES.TMP_LOTECT = SB8.B8_LOTECTL
+                                              AND TDES.TMP_NUMLOT = SB8.B8_NUMLOTE
+                                              AND TDES.%NotDel%)
+                           AND SB8.%NotDel%
+                    EndSql
+                    While (cAliasSB8)->(!Eof())
+                        cLote         := (cAliasSB8)->B8_LOTECTL
+                        dDataValidade := StoD((cAliasSB8)->B8_DTVALID)
+                        nQuantidade   := 0
+
+                        // Cria registro na temporaria
+                        cQuery := "INSERT INTO "+oTabTmpDes:GetRealName()
+                        cQuery +=       " (TMP_DATA,"
+                        cQuery +=       " TMP_LOCAL,"
+                        cQuery +=       " TMP_COD,"
+                        cQuery +=       " TMP_LOTECT,"
+                        cQuery +=       " TMP_NUMLOT,"
+                        cQuery +=       " TMP_DTVALI,"
+                        cQuery +=       " TMP_NUMSER,"
+                        cQuery +=       " TMP_ENDER,"
+                        cQuery +=       " TMP_QUANT)"
+                        cQuery +=" VALUES "
+                        cQuery +=       " ('"+DtoS(dDataFinalizacao)+"',"
+                        cQuery +=       "'"+cLocal+"',"
+                        cQuery +=       "'"+cProduto+"',"
+                        cQuery +=       "'"+cLote+"',"
+                        cQuery +=       "'"+cSubLote+"',"
+                        cQuery +=       "'"+DtoS(dDataValidade)+"',"
+                        cQuery +=       "'"+cNumeroSerie+"',"
+                        cQuery +=       "'"+cEndereco+"',"
+                        cQuery +=       cValtoChar(nQuantidade)+")"
+                        lRet := (TcSQLExec(cQuery) >= 0)
+
+                        (cAliasSB8)->(DbSkip())    
+                    EndDo
+                    (cAliasSB8)->(DbCloseArea())            
+                EndIf
+            EndIf
+        EndIf
+        (cAliasQry)->(DbCloseArea())
+        
+        // Ajusta para sair do array
+        IIf(!lRet,nItemFim := nItem,)
+    Next nItem
+
+    If lRet
+        // Verifica as contagens nao processadas da mesma data e dimensionais para exclui-las e gerar novamente com os dados saneados
+        cAliasSB7 := GetNextAlias()
+        BeginSql Alias cAliasSB7
+            SELECT SB7.R_E_C_N_O_ RECNOSB7
+              FROM %Table:SB7% SB7
+             INNER JOIN %Exp:cTable% TDES
+                ON TDES.TMP_DATA   = SB7.B7_DATA
+               AND TDES.TMP_COD    = SB7.B7_COD
+               AND TDES.TMP_LOCAL  = SB7.B7_LOCAL
+               AND TDES.TMP_ENDER  = SB7.B7_LOCALIZ
+               AND TDES.TMP_NUMSER = SB7.B7_NUMSERI
+               AND TDES.TMP_LOTECT = SB7.B7_LOTECTL
+               AND TDES.%NotDel%         
+             WHERE SB7.B7_FILIAL = %Exp:xFilial("SB7")%
+               AND SB7.B7_STATUS = '1'
+               AND SB7.%NotDel%
+        EndSql
+        While (cAliasSB7)->(!Eof())
+            SB7->(DbGoTo((cAliasSB7)->RECNOSB7))
+            
+            RecLock("SB7", .F.)
+            SB7->(DbDelete())
+            SB7->(MsUnlock())
+            
+            (cAliasSB7)->(DbSkip())
+        EndDo
+        (cAliasSB7)->(DbCloseArea())
+
+        // Gera contagens com base no inventario SaaS saneado
+        cAliasQry := GetNextAlias()
+        BeginSql Alias cAliasQry
+            SELECT TDES.TMP_COD,
+                   TDES.TMP_QUANT,
+                   TDES.TMP_LOCAL,
+                   TDES.TMP_DATA,
+                   TDES.TMP_LOTECT,
+                   TDES.TMP_DTVALI,
+                   TDES.TMP_NUMLOT,
+                   TDES.TMP_NUMSER,
+                   TDES.TMP_ENDER
+              FROM %Exp:cTable% TDES
+             WHERE TDES.%NotDel%
+        EndSql
+        If (cAliasQry)->(!Eof())
+            cNumSeq := SB7->(ProxNum())
+            While (cAliasQry)->(!Eof())
+                aItem := {}
+                
+                aAdd(aItem,{"B7_FILIAL" ,xFilial("SB7")               ,Nil})
+                aAdd(aItem,{"B7_COD"    ,(cAliasQry)->TMP_COD         ,Nil}) // Deve ter o tamanho exato do campo B7_COD, pois faz parte da chave do indice 1 da SB7
+                aAdd(aItem,{"B7_DOC"    ,cNumSeq                      ,Nil})
+                aAdd(aItem,{"B7_QUANT"  ,(cAliasQry)->TMP_QUANT       ,Nil})
+                aAdd(aItem,{"B7_LOCAL"  ,(cAliasQry)->TMP_LOCAL       ,Nil}) // Deve ter o tamanho exato do campo B7_LOCAL, pois faz parte da chave do indice 1 da SB7
+                aAdd(aItem,{"B7_DATA"   ,StoD((cAliasQry)->TMP_DATA)  ,Nil})
+                aAdd(aItem,{"B7_LOTECTL",(cAliasQry)->TMP_LOTECT      ,Nil})
+                aAdd(aItem,{"B7_DTVALID",StoD((cAliasQry)->TMP_DTVALI),Nil})        
+                aAdd(aItem,{"B7_NUMSERI",(cAliasQry)->TMP_NUMSER      ,Nil})        
+                aAdd(aItem,{"B7_NUMLOTE",(cAliasQry)->TMP_NUMLOT      ,Nil})
+                aAdd(aItem,{"B7_LOCALIZ",(cAliasQry)->TMP_ENDER       ,Nil})
+                aAdd(aItens, aItem)
+
+                (cAliasQry)->(DbSkip())
+            EndDo
+        EndIf
+        (cAliasQry)->(DbCloseArea())
+
+        DelTabTmp(oTabTmpDes:GetAlias())
+        oTabTmpDes := Nil   
+
+        If !self:geraMovimentoInventario(aItens)
+            lRet := .F.
+        EndIf
+    EndIf
+
+    // Atribui no convergência o número do documento gerado no SB7 para ligação o identificador SAAS
+    self:numeroDocumento := cNumSeq
+    self:save()
+    If lRet
+        self:setMensagemIntegracao(STR0001) // Fichas criadas com sucesso
+        self:setFinalizado()
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} getNomePessoa
+    (long_description)
+    @author user
+    @since 24/05/2024
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method getNomePessoa() Class WMSSaasInventario as character
+Return ""
+
+/*/{Protheus.doc} geraMovimentoInventario
+(aCab, aItens)
+    @author user
+    @since 23/09/2024
+    @version version
+    @param aItens, array, Itens para movimentação
+    @return lRet, logical, Indica se movimentação foi realizada com sucesso
+    /*/
+Method geraMovimentoInventario(aItens) Class WMSSaasInventario as logical
+Local nInvent          := 0
+Local nInventFim       := 0
+Local lRet             := .T.
+Local cLogErro         := ""
+
+Private lMsErroAuto   := .F.
+    nInventFim := Len(aItens)
+    For nInvent := 1 To nInventFim
+        MSExecAuto({|x,y,z| mata270(x,y,z)},aItens[nInvent],.T.,3)
+        If lMsErroAuto
+            cLogErro := MostraErro("\")
+            self:setErroIntegracao(cLogErro)
+            lRet := .F.
+            Exit
+        EndIf
+    Next nInvent
+Return lRet
+
+/*/{Protheus.doc} CriaTabDes
+    (long_description)
+    @author Alexsander Burigo Correa
+    @since 29/11/2024
+    @version 1.0
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Static Function CriaTabDes()
+Local aIndex     := {}
+Local aArqTmp    := {}
+Local aColsSX3   := {}
+Local nX         := 0
+Local cAliasTDes := Nil
+	// Cria tabela de quantidade disponível para armazenagem
+	aArqTabDes := {}
+
+	// Monta tabelas temporárias utilizadas no processo
+	Aadd(aIndex, "TMP_LOCAL+TMP_COD+TMP_LOTECT+TMP_NUMLOT+TMP_NUMSER+TMP_ENDER")
+
+	AAdd(aArqTmp,{"TMP_LOCAL"  ,BuscarSX3("B7_LOCAL"   , ,aColsSX3) ,"C",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Armazém
+	AAdd(aArqTmp,{"TMP_DATA"   ,BuscarSX3("B7_DATA"    , ,aColsSX3) ,"D",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Data inventário
+	AAdd(aArqTmp,{"TMP_COD"    ,BuscarSX3("B7_COD"     , ,aColsSX3) ,"C",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Produto
+	AAdd(aArqTmp,{"TMP_LOTECT" ,BuscarSX3("B7_LOTECTL" , ,aColsSX3) ,"C",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Lote
+	AAdd(aArqTmp,{"TMP_DTVALI" ,BuscarSX3("B7_DTVALID" , ,aColsSX3) ,"D",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Data validade
+	AAdd(aArqTmp,{"TMP_NUMLOT" ,BuscarSX3("B7_NUMLOTE" , ,aColsSX3) ,"C",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Sub-lote
+	AAdd(aArqTmp,{"TMP_NUMSER" ,BuscarSX3("B7_NUMSERI" , ,aColsSX3) ,"C",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Número de Série
+	AAdd(aArqTmp,{"TMP_ENDER"  ,BuscarSX3("B7_LOCALIZ" , ,aColsSX3) ,"C",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Endereço
+	AAdd(aArqTmp,{"TMP_QUANT"  ,BuscarSX3("B7_QUANT"   , ,aColsSX3) ,"N",aColsSX3[3],aColsSX3[4],aColsSX3[2]}) // Quantidade
+	
+    For nX := 1 To Len(aArqTmp)
+		AAdd(aArqTabDes,{aArqTmp[nX][1],aArqTmp[nX][3],aArqTmp[nX][4],aArqTmp[nX][5]})
+	Next nX
+	
+    cAliasTDes := GetNextAlias()
+	CriaTabTmp(aArqTabDes,aIndex,cAliasTDes,@oTabTmpDes)
+Return

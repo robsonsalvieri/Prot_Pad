@@ -1,0 +1,1771 @@
+#INCLUDE "Protheus.ch"
+#INCLUDE "TopConn.ch"
+
+namespace totvs.protheus.retail.rmi.servicos.SHPConciliador
+
+
+Static dDtFim       := cToD("")
+Static dDtInicial   := cToD("")
+Static cTicket      := ""
+Static oBuscaObj    := Nil
+Static aAnexos      := {}
+Static cStUuid      := ""
+
+// Testa conciliador
+//Exemplo para execução
+//totvs.protheus.retail.rmi.servicos.SHPConciliador.u_Concteste()
+User function Concteste(cEmpAmb as character,cFilAmb as character, cTicketJob as character, cDataIniJob as character, cDataFinalJob as character)
+    SHPConciliador(cEmpAmb, cFilAmb, cTicketJob, cDataIniJob, cDataFinalJob)
+Return
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} SHPConciliador
+Função responsal pelo conciliador de dados entre sistemas.
+
+@type       Class
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+Function SHPConciliador(cEmpAmb as character,cFilAmb as character, cTicketJob as character, cDataIniJob as character, cDataFinalJob as character )
+
+    Local nTimer    := seconds()
+    Local cSemaforo := "SHPConciliador" +"_"+ cEmpAmb
+
+    RpcSetType(3)
+    RpcSetEnv(cEmpAmb, cFilAmb, , ,"LOJA", "SHPConciliador")
+
+    If !LockByName(cSemaforo, .F., .F.)
+        LjxjMsgErr("Conciliador já esta sendo utilizado por outra instância.", /*cSolucao*/, "SHPConciliador")
+        Return Nil
+    EndIf
+
+    LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando conciliador..  aguarde!")
+    
+    Controle(cTicketJob, cDataIniJob, cDataFinalJob)
+
+    LjGrvLog("Conciliador ->"+ ProcName(), "Tempo total para execuçao do conciliador:["+ str(seconds()-nTimer,12,3) +"]") 
+    UnLockByName(cSemaforo, .F., .F.)
+Return
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} Controle
+Static responsavel pelo controle, organiza e executa o fluxo do conciliador
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+Static function Controle(cTicketJob as character, cDataIniJob as character, cDataFinalJob as character)
+
+    Local aDadosLive                := {}   as Array
+    Local aDadosProtheus            := {}   as Array
+    Local aDiferencasConsolidado    := {}   as Array
+    Local aDadosConector            := {}   as Array
+    Local aSaltos                   := {}   as Array
+    Local aEmails                   := {}   as Array
+    Local cDiretorio                := ""   as character
+    Local cAssunto                  := ""   as character
+    Local cCorpo                    := ""   as character
+    Local cConsolidado              := ""   as character
+    Local nEmail                    := 0    as numeric
+    Local lAnalisaSalto             := .T.  as logical
+    Local aAuxRet                   := {}   as Array
+    Local lHoraConf                 := .F.  as logical
+
+    oBuscaObj := RmiBusLiveObj():New()
+
+    // -- Confirmação é um processo de busca, porem é necessario na conferencia, para não ser necessario incluir um novo processo mudo o tipo para q ele seja setado corretamente
+    oBuscaObj:cTipo := "1" // -- Busca processo do tipo Envia
+    oBuscaObj:SetaProcesso("CONFERENCIA")
+    oBuscaObj:cTipo := "2" 
+
+    //Valida se o processo existe e esta ativo
+    If !oBuscaObj:getSucesso()
+    
+        oBuscaObj:getRetorno()
+    Else
+
+        lHoraConf := oBuscaObj:oConfProce:hasProperty("hora_conferencia")
+
+        If oBuscaObj:OCONFPROCE:hasProperty("data_conferencia") .And. STOD(oBuscaObj:OCONFPROCE["data_conferencia"]) < Date() .and.;
+            ( !lHoraConf .or. ( lHoraConf .and. time() > oBuscaObj:oConfProce["hora_conferencia"] ) )
+
+            If oBuscaObj:oConfProce:hasProperty("analisaSalto")
+                lAnalisaSalto := oBuscaObj:oConfProce["analisaSalto"]
+                LjxjMsgErr( "Tag [analisaSalto] configurada, vai definir se o salto de numeração será analisado: " + cValToChar(lAnalisaSalto), /*cSolucao*/, "SHPConciliador")
+            EndIf
+
+            oBuscaObj:cToken := ""
+            oBuscaObj:PreExecucao()
+
+            If oBuscaObj:OCONFPROCE:hasProperty("diretorio_resultado") .And. !Empty(oBuscaObj:OCONFPROCE["diretorio_resultado"])
+                cDiretorio := oBuscaObj:OCONFPROCE["diretorio_resultado"]
+            EndIf 
+
+            LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando busca dos dados do TVFR no connector... Aguarde!")
+            
+            aAuxRet := ObterDadosLive({cTicketJob,cDataIniJob,cDataFinalJob})
+
+            //Valida retorno para carregar dados do connector
+            If aAuxRet[1]
+                aDadosConector := aClone(aAuxRet[3])
+            EndIf
+
+            LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando busca dos dados do TVFR no connector...")
+            LjGrvLog("Conciliador ->"+ ProcName(),"Quantidade de itens retornados:[" + cValtoChar(Len(aDadosConector)) + "]")
+
+            If Len(aDadosConector) > 0
+            
+                //Obtem e organiza os dados recebidos pelo LIVE
+                LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando Processamento dos registros TVFR... Aguarde!")
+                aDadosLive := DadosLive(aDadosConector)
+                aAuxRet[1] := aDadosLive[4]
+                aAuxRet[2] := aDadosLive[5]
+                LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando processamento dos Registros TVFR...")
+
+                If aAuxRet[1]
+                    
+                    //Obtem e organiza os dados recebidos pelo Protheus
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando busca dos registros no Protheus... Aguarde!")
+                    aDadosProtheus := dadosProtheus(aDadosLive[3])
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando busca dos registros no Protheus...")
+
+                    If lAnalisaSalto
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Analisando Salto de numeração... Aguarde!")
+                        aSaltos := AnalisaSaltoNumeracao(aDadosProtheus[3])
+                        LjGrvLog("Conciliador ->"+ ProcName()," Finalizando analise de salto de numeração")
+                    EndIf
+
+                    //Obtem e organiza os dados recebidos pelo Protheus
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando comparação... Aguarde!")
+                    aDiferencasConsolidado := ComparaDados(aDadosProtheus, aDadosLive)
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando Comparação")
+
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando busca de informações consolidadas... Aguarde!")
+                    If oBuscaObj:OCONFPROCE:hasProperty("diretorio_query") .And. !Empty(oBuscaObj:OCONFPROCE["diretorio_query"])
+                        cConsolidado := Consolidado(aDiferencasConsolidado,oBuscaObj:OCONFPROCE["diretorio_query"])
+                    Else
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Tag: [diretorio_query] não existe ou vazia, não será gerado consolidado no corpo do e-mail! ")    
+                    EndIf 
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando busca de informações consolidadas",cConsolidado)
+
+                    If lAnalisaSalto
+                        //Remove erros conhecidos   
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando removendo erros conhecidos do salto... Aguarde!")
+                        aSaltos := RemoveErrosdoSalto(aSaltos,aDiferencasConsolidado)
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando removendo erros conhecidos do salto")
+
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando Gerando/Gravando CSV de Salto de numeração... Aguarde!")
+                        SalvarCsv(GerarCsv(aSaltos),"SaltoNumeracao",cDiretorio)
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando Gerando/Gravando CSV de Salto de numeração")
+                    EndIf
+
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Iniciando busca dos registros no Protheus... Aguarde!")
+                    SalvarCsv(GerarCsv(aDiferencasConsolidado),,cDiretorio)
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Finalizando gerando/Gravando CSV de resultado...")
+
+                    If oBuscaObj:OCONFPROCE:hasProperty("emails") .And. Valtype(oBuscaObj:OCONFPROCE["emails"]) == "A" .And. Len(oBuscaObj:OCONFPROCE["emails"]) >= 1
+
+                        aEmails  := oBuscaObj:OCONFPROCE["emails"]
+                        cAssunto := "Resultado do conciliador. execução do dia:" + DTOC(Date())
+                        cCorpo   := "Resultado do conciliador. execução do dia:" + DTOC(Date()) + " com os seguintes parametros: Data Inicial[" + DTOC(dDtInicial) + "]" + " Data Final["+ DTOC(dDtFim) +"] Ticket:["+ cTicket +"]" + CHR(13) + CHR(10)
+                        cCorpo   += "<br>" + cConsolidado
+
+                        For nEmail := 1 To Len(aEmails)
+                            If !EnviaEmail(aEmails[nEmail], cAssunto, cCorpo, aAnexos)
+                                LjGrvLog("Conciliador ->"+ ProcName(),"Não foi possivel enviar email para:[" + aEmails[nEmail] + "] os arquivos estão salvos em:",aAnexos)
+                            EndIf 
+                        Next 
+                    
+                    EndIf 
+
+                EndIf 
+            Endif 
+
+            //Grava log de erro MHL
+            If !aAuxRet[1]
+                gravaErro(aAuxRet[2])
+            EndIf
+
+            If !Empty(cTicket)
+                oBuscaObj:cConfirma := cTicket
+                oBuscaObj:Confirma()
+
+                //Atualiza data de conferencia quando conseguir executar corretamente
+                If aAuxRet[1]
+                    oBuscaObj:OCONFPROCE["data_conferencia"] := DTOS(Date())
+                EndIf
+            EndIf 
+        
+            // -- Atualiza configuração do assinante. (oConfAssin)
+            oBuscaObj:SalvaConfig()
+
+            FWFreeArray(aDadosLive)
+            FwFreeArray(aDadosProtheus)
+            FWFreeArray(aDiferencasConsolidado)
+            FWFreeArray(aSaltos)
+            FWFreeArray(aAnexos)
+
+        Else    
+            LjGrvLog("Conciliador ->"+ ProcName(),"Parametro de assinante data_conferencia:[" + IIF(Valtype(oBuscaObj:OCONFPROCE["data_conferencia"]) == "U","Em branco",oBuscaObj:OCONFPROCE["data_conferencia"] +  "]")) 
+        
+            If Valtype(oBuscaObj:OCONFPROCE["data_conferencia"]) == "U"
+                LjGrvLog("Conciliador ->"+ ProcName(),"Parametro [data_conferencia] nulo, preencheremos com a seguinte data:[" + DTOS(Date() - 1) + "]")
+                oBuscaObj:OCONFPROCE["data_conferencia"] := DToS(Date() - 1)
+
+                // -- Atualiza configuração do assinante. (oConfAssin)
+                oBuscaObj:SalvaConfig()
+            EndIf 
+        EndIf
+    EndIf
+
+    FreeObj(oBuscaObj)
+
+Return Nil
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} dadosLive
+Static responsavel por preparar os dados recebidos pelo assisnate live
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+
+Static function dadosLive(aDadosConector as Array)  as Object
+    
+    Local nTimer                                 as numeric
+    Local aDadosLive      := {}                  as array
+    Local oHashLive       := tHashMap():New()    as Object
+    Local nPosicaoChave                          as numeric
+    Local nPosicao        := 0                   as numeric
+    Local nX              := 0                   as numeric
+    Local nPosicaoFilial  := 0                   as numeric
+    Local aFiliais        := {}                  as Array
+    Local aChaves         := {}                  as Array
+    Local cFilialProtheus := ""                  as Character
+    Local cWhereFilial    := ""                  as Character
+    Local lRetorno        := .T.                 as logical
+    Local nTotal          := len(aDadosConector) as numeric
+    Local Item            := 1                   as numeric
+    Local cErro           := ""                  as Character
+    
+    nTimer := seconds()
+   
+    cWhereFilial := "("
+    
+    LjGrvLog("Conciliador ->"+ ProcName(),"Processando Dados LIVE... " + cValToChar(1) + " de " + cValToChar(nTotal) + "...")
+
+    For Item := 1 To nTotal
+        
+        nPosicao := 0
+        aChaves := {}
+        cFilialProtheus := ""
+        
+        //*Campos que temos no protheus q não temos no live */
+        //* Criado para manter a compatibilidade */
+        /*20*/aAdd(aDadosConector[Item],"SEM INFORMAÇÃO")//Codigo do cliente (informado somente no protheus)     
+        /*21*/aAdd(aDadosConector[Item],"INFORMAÇÃO NÃO LOCALIZADA")//Observação     
+        /*22*/aAdd(aDadosConector[Item],"INFORMAÇÃO NÃO LOCALIZADA")//Origem     
+        /*23*/aAdd(aDadosConector[Item],"INFORMAÇÃO NÃO LOCALIZADA")//Mensagem de erro     
+        /*24*/aAdd(aDadosConector[Item],"INFORMAÇÃO NÃO LOCALIZADA")//UUID
+        /*25*/aAdd(aDadosConector[Item],"")//Data Integração
+        /*26*/aAdd(aDadosConector[Item],"")//Observação Fiscal
+
+        If (nPosicaoFilial := AScan(aFiliais,{|x| Alltrim(x[1]) == Alltrim(aDadosConector[Item][4])})) == 0   // Se já tiver a filial para esse codigo ignora
+        
+            If !Empty(cFilialProtheus := RmiDePaRet("LIVE", "SM0", aDadosConector[Item][4], .F.))
+                aAdd(aFiliais, {aDadosConector[Item][4],cFilialProtheus}) 
+                cWhereFilial += "'" +  cFilialProtheus + "',"
+            Else
+            
+                lRetorno := .F.
+                If !(aDadosConector[Item][4] $ cErro)
+                    cErro += "DE/PARA de filiais[SM0] não encontrado, conteúdo procurado: [" + aDadosConector[Item][4] + "]"
+                EndIf
+                Loop
+            EndIf 
+        EndIf
+
+        If Empty(cFilialProtheus)
+            cFilialProtheus := aFiliais[nPosicaoFilial][2]
+        EndIF 
+        
+        If aDadosConector[Item][12] == "3"    //CodigoDocFiscal
+            nPosicaoChave := 10 //controle
+            If aDadosConector[Item][nPosicaoChave] == "0" .Or. Empty(aDadosConector[Item][nPosicaoChave])
+                nPosicaoChave := 11 //Chavedocc
+                
+                //aAdd(aChaves,Alltrim(aDadosConector[Item][nPosicaoChave]) + "|" + aDadosConector[Item][13] + "|" + aDadosConector[Item][19] + "|" + "SEM CONTROLE")    //ChaveDocc     DocFiscal   ValorTotalBruto
+                aAdd(aChaves,cFilialProtheus + "|" + Alltrim(aDadosConector[Item][nPosicaoChave]) + "|" + aDadosConector[Item][13] + "|" + aDadosConector[Item][19] + "|" + "SEM CONTROLE")    //ChaveDocc     DocFiscal   ValorTotalBruto
+
+            Else
+                //aAdd(aChaves,Alltrim(aDadosConector[Item][nPosicaoChave]))
+                aAdd(aChaves,AllTrim(cFilialProtheus) + "|" + Alltrim(aDadosConector[Item][nPosicaoChave]))  //CodigoLoja    Controle     
+            EndIf 
+            
+        Else
+            nPosicaoChave := 11
+
+            // -- Se for em branco busca apenas por doc e serie 
+            If Empty(aDadosConector[Item][nPosicaoChave])
+                If (Empty(aDadosConector[Item][6]) .Or. aDadosConector[Item][6] == "0") .And. (Empty(aDadosConector[Item][7]) .Or. aDadosConector[Item][7] == "0") 
+                    Loop  
+                Else
+                    aAdd(aChaves,Alltrim(cFilialProtheus) + Alltrim(STR(Val(aDadosConector[Item][7]))) + Alltrim(STR(Val(aDadosConector[Item][8])))) 
+                EndIf   
+            Else
+                aAdd(aChaves,Alltrim(aDadosConector[Item][nPosicaoChave]))  
+                aAdd(aChaves,Alltrim(cFilialProtheus) + Alltrim(STR(Val(aDadosConector[Item][7]))) + Alltrim(STR(Val(aDadosConector[Item][8])))) // -- Filial + serie + doc 
+            EndIf 
+            
+        EndIf
+
+        For nX := 1 To Len(aChaves)
+            oHashLive:Get(aChaves[nX],@nPosicao)
+            If nPosicao > 0
+                Exit
+            EndIf 
+        Next nX 
+
+        If nPosicao > 0 
+            aAdd(aDadosLive[nPosicao][2],aDadosConector[Item])
+        Else
+            aAdd(aDadosLive,{aChaves,{aDadosConector[Item]}})
+            For nX := 1 To Len(aChaves)
+                oHashLive:Set(Alltrim(aChaves[nX]),Len(aDadosLive)) 
+            Next nX 
+        EndIf 
+            
+    Next 
+
+    cWhereFilial := SubString(cWhereFilial,1,Len(cWhereFilial)-1)
+    cWhereFilial += ")"
+
+    LjGrvLog("Conciliador ->"+ ProcName(), "Tempo para processar dados fornecido pelo TOTVS Conector" + str(seconds()-nTimer,12,3)) 
+    LjGrvLog("Conciliador ->"+ ProcName(), "Registros: " + STR(Len(aDadosLive))) 
+
+Return {aDadosLive, oHashLive, cWhereFilial, lRetorno, cErro}
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} dadosProtheus
+Static responsavel por buscaar e preparar os dados do assisnate Protheus
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+Static function dadosProtheus(cWhereFilial as character )
+    
+    Local cAlias          := GetNextAlias()   as character
+    Local cQuery          := ""               as character
+    Local nTotal          := 0                as numeric
+    Local nAtual          := 0                as numeric
+    Local aLinha          := {}               as Array
+    Local aDadosProtheus  := {}               as Array
+    Local aChaves         := {}               as Array
+    Local oHashProtheus   := tHashMap():New() as Object
+    Local nPosicao                            as numeric
+    Local nPosicaoChave   := 11               as numeric
+    Local aDevolucaoPDV   := {}               as Array 
+    Local nPosDevolucao   := 0                as numeric
+    Local nX              := 0                as numeric
+    Local lDevolucaoPDV   := .F.              as logical
+    Local oHashDocumentos := tHashMap():New() as Object
+    Local aDocumentos     := {}               as array
+    Local lSat            := .F.              as Logical
+    Local cFiltroProduto  := ""               as Character
+
+    cQuery += " SELECT"
+    cQuery += " FT_FILIAL,FT_SERSAT,FT_SERIE,FT_NFISCAL,FT_ESPECIE,FT_CHVNFE,FT_EMISSAO,FT_DTCANC,FT_ITEM,FT_PRODUTO,FT_QUANT,FT_VALCONT,FT_TIPO,FT_ENTRADA,"
+    cQuery += " FT_TIPOMOV, FT_CLIEFOR + '|' + FT_LOJA AS CLIENTE, UPPER(FT_OBSERV) AS FT_OBSERV"
+    cQuery += " FROM "+ RetSqlName( 'SFT' )+ " SFT"
+    cQuery += " WHERE SFT.FT_FILIAL IN " + cWhereFilial
+    cQuery += " AND SFT.FT_EMISSAO BETWEEN '"+dTos(dDtInicial)+"' AND '"+dTos(dDtFim)+"'"
+    cQuery += " AND ("
+    cQuery +=       " SFT.FT_CHVNFE <> ' '"
+    cQuery +=       " OR FT_TIPO = 'D'"
+    cQuery +=       " OR (  SFT.FT_CHVNFE  = ' ' AND SFT.FT_ESPECIE = 'NFCE' )"
+    cQuery +=       " OR ( SFT.FT_TIPOMOV = 'S' AND SFT.FT_ESPECIE = 'SPED'  )"
+    cQuery += " )"
+    cQuery += " AND SFT.FT_ESPECIE NOT IN ('CTE','CTEOS')"
+    cQuery += " AND SFT.D_E_L_E_T_ = ' '"
+
+    //Filtra produtos como no processo de integração PRODUTO
+    cQuery += " AND EXISTS ( SELECT '' FROM " + RetSqlName( 'SB1' ) + " SB1 WHERE B1_COD = FT_PRODUTO AND SB1.D_E_L_E_T_= ' '"
+
+    cFiltroProduto := allTrim( posicione("MHN", 1, xFilial("MHN") + padR("PRODUTO", tamSx3("MHN_COD")[1]), "MHN_FILTRO") )      //MHN_FILIAL, MHN_COD, R_E_C_N_O_, D_E_L_E_T_
+    if !empty(cFiltroProduto)
+        cQuery += " AND " + iif( subStr(cFiltroProduto, 1, 1) == "&", &( subStr(cFiltroProduto, 2) ), cFiltroProduto )
+    endIf
+    cQuery += ")"
+
+    cQuery += " AND NOT EXISTS ( SELECT '' FROM " + RetSqlName( 'SF3' ) + " SF3 WHERE F3_FILIAL = FT_FILIAL AND F3_NFISCAL = FT_NFISCAL AND F3_SERIE = FT_SERIE AND F3_ESPECIE = 'SPED' AND F3_CODRSEF = '102' AND SF3.D_E_L_E_T_ = ' ' )"  //Não trazer inutilização especie SPED
+    cQuery += " ORDER BY FT_EMISSAO"
+
+    TCQUERY cQuery NEW ALIAS (cAlias)
+
+    Count To nTotal
+
+    LjGrvLog("Conciliador ->"+ ProcName(), "Query que retorna dados do Protheus", {nTotal, cQuery})
+
+    (cAlias)->(DbGoTop())
+    While !(cAlias)->(EoF())
+        
+        lDevolucaoPDV := .F.
+        nPosicao := 0
+        aChaves := {}
+        nAtual++
+
+        aLinha := {}
+        /*1*/aAdd(aLinha,IIF(ALLTRIM(UPPER((cAlias)->(FT_ESPECIE))) == "SPED" .Or. (cAlias)->FT_TIPOMOV == "E", "NOTA", "CUPOM"))   //Tipo
+        /*2*/aAdd(aLinha,"SEM INFORMAÇÃO")//Ticket Saida
+        /*3*/aAdd(aLinha,"SEM INFORMAÇÃO")//Situacao Ticket
+        /*4*/aAdd(aLinha,(cAlias)->(FT_FILIAL) /*IIF(Empty(Auxiliar := RmiDePaRet("LIVE", "SM0", (cAlias)->(FT_FILIAL), .T.)),"SEM DE/PARA DE EMPRESA [SM0]",Auxiliar)*/)//Codigo Loja -- Pegar no DE/Para
+        /*5*/aAdd(aLinha,"")//CNPJ   -- Alinhar com o thiago a remoção
+        /*6*/aAdd(aLinha,(cAlias)->(FT_SERSAT))//NumeroImpressora
+        /*7*/aAdd(aLinha,(cAlias)->(FT_SERIE))//Serie
+        /*8*/aAdd(aLinha,(cAlias)->(FT_NFISCAL))//Nº Doc
+        /*9*/aAdd(aLinha,(cAlias)->(FT_ESPECIE))//Modelo Fiscal
+        /*10*/aAdd(aLinha,"")//Controle -- PEGAR DA MHQ
+        /*11*/aAdd(aLinha,(cAlias)->(FT_CHVNFE))//Chave Doc
+        /*12*/aAdd(aLinha,"")//Codigo Doc Fiscal
+        /*13*/aAdd(aLinha,IIF(Alltrim((cAlias)->(FT_TIPOMOV)) == "E","ENTRADA","SAIDA"))//Doc Fiscal
+        /*14*/aAdd(aLinha,DTOC(STOD((cAlias)->(FT_EMISSAO))))//DataEmissao
+        /*15*/aAdd(aLinha, IIF( Empty( (cAlias)->(FT_DTCANC) ), "0", IIF( AllTrim((cAlias)->FT_OBSERV) == "NF INUTILIZADA", "3",  "1") ) )  //SituacaoNFCe  Situacao Doc -- Regra TVFR - 0=normal, 1=cancelado e 3=inutilizado
+        /*16*/aAdd(aLinha,(cAlias)->(FT_ITEM))//Item
+        /*17*/aAdd(aLinha,(cAlias)->(FT_PRODUTO))//Cod Produto
+        /*18*/aAdd(aLinha,(cAlias)->(FT_QUANT))//Quantidade
+        /*19*/aAdd(aLinha,(cAlias)->(FT_VALCONT))//ValorTotalBruto     
+        /*20*/aAdd(aLinha,(cAlias)->(CLIENTE))//Cliente|Loja     
+        /*21*/aAdd(aLinha,"")//Observação     
+        /*22*/aAdd(aLinha,"")//Origem     
+        /*23*/aAdd(aLinha,"")//Mensagem de erro     
+        /*24*/aAdd(aLinha,"")//UUID
+        /*25*/aAdd(aLinha,"")//Data Integração
+        /*26*/aAdd(aLinha, AllTrim( (cAlias)->FT_OBSERV) )//Observação Fiscal
+
+        // -- Regra que verifica se é uma devolução originaria do PDV
+        If (cAlias)->(FT_TIPO) == "D"
+            nPosDevolucao := aScan(aDevolucaoPDV,{|x| x[1] == (cAlias)->(FT_FILIAL) + (cAlias)->(FT_NFISCAL) + (cAlias)->(FT_SERIE) })
+
+            If nPosDevolucao > 0 
+                lDevolucaoPDV := aDevolucaoPDV[nPosDevolucao][2]
+            Else 
+                aadd(aDevolucaoPDV,{(cAlias)->(FT_FILIAL) + (cAlias)->(FT_NFISCAL) + (cAlias)->(FT_SERIE),GetAdvFVal( 'SF1', 'F1_ORIGEM', xfilial( 'SF1',(cAlias)->(FT_FILIAL)) + (cAlias)->(FT_NFISCAL) + (cAlias)->(FT_SERIE) , 1, '') == "SMARTCON"})
+                lDevolucaoPDV := aDevolucaoPDV[Len(aDevolucaoPDV)][2]
+            EndIf 
+        EndIf 
+
+        // -- Controle de Salto de numeração
+        If (Alltrim((cAlias)->(FT_TIPOMOV)) == "E" .AND.  lDevolucaoPDV) .OR. Alltrim((cAlias)->(FT_TIPOMOV)) == "S"
+            cChave := (cAlias)->(FT_FILIAL) + Alltrim(STR(Val((cAlias)->(FT_NFISCAL)))) + Alltrim(STR(Val((cAlias)->(FT_SERIE)))) + (cAlias)->(FT_TIPOMOV)
+        
+            If !oHashDocumentos:Get(cChave) 
+
+                oHashDocumentos:Set(cChave) 
+
+                lSat :=  (cAlias)->(FT_ESPECIE) == "SATCE"
+
+                CancelamentoSAT := !(Empty((cAlias)->(FT_DTCANC))) .AND. lSat
+
+                cNumeroSerie := Iif(lSat,(cAlias)->(FT_SERSAT),(cAlias)->(FT_SERIE))
+                
+                nPosicaoFilial := AScan(aDocumentos,{|x| x[1] == (cAlias)->(FT_FILIAL)})
+                
+                If nPosicaoFilial == 0
+                    aadd(aDocumentos,{(cAlias)->(FT_FILIAL),{}})
+                    nAuxLen := len(aDocumentos)
+
+                    aadd(aDocumentos[nAuxLen][2],{Val(cNumeroSerie),{}})
+                    aadd(aDocumentos[nAuxLen][2][Len(aDocumentos[nAuxLen][2])][2],{Val((cAlias)->(FT_NFISCAL)),CancelamentoSAT,(cAlias)->(FT_SERSAT),(cAlias)->(FT_SERIE)})
+                Else
+                    PosicaoSerie :=  AScan(aDocumentos[nPosicaoFilial][2],{|x| x[1] == Val(cNumeroSerie)})
+                    
+                    If PosicaoSerie == 0
+                        aadd(aDocumentos[nPosicaoFilial][2],{Val(cNumeroSerie),{}})
+                        aadd(aDocumentos[nPosicaoFilial][2][Len(aDocumentos[nPosicaoFilial][2])][2],{Val((cAlias)->(FT_NFISCAL)),CancelamentoSAT,(cAlias)->(FT_SERSAT),(cAlias)->(FT_SERIE)})
+                    Else
+                        aadd(aDocumentos[nPosicaoFilial][2][PosicaoSerie][2],{Val((cAlias)->(FT_NFISCAL)),CancelamentoSAT,(cAlias)->(FT_SERSAT),(cAlias)->(FT_SERIE)})
+                    EndIf 
+                    
+                EndIf 
+
+                nPosicao := 0
+            EndIf 
+
+        EndIf 
+        
+
+        // -- Se for devolução realiza busca
+        If  lDevolucaoPDV
+            
+            //-- Atualizo o Codigo Doc Fiscal
+            aDepara := StrTokArr(RmiDePaRet("LIVE", "SF1", (cAlias)->(FT_FILIAL) + "|" + (cAlias)->(FT_NFISCAL) + "|" + (cAlias)->(FT_SERIE), .T.),"|")
+
+            If Len(aDepara) >= 3 
+                aLinha[10] := aDepara[Len(aDepara)] // -- numero de controle encontrado no De/para
+            EndIf 
+            
+            aLinha[12] := "3"
+            aLinha[13] := "DEVOLUCAO - TROCA"
+
+            // -- se é devolução a chave é o numero de controle 
+            If !Empty(Alltrim(aLinha[10]))
+                aAdd(aChaves,Alltrim(aLinha[4]) + "|" + Alltrim(aLinha[10]))   
+            Else
+                // -- se não achar o numero de controle a chave passa a ser filial + doc + serie, não deve achar para que seja apresentado a diferença
+                aAdd(aChaves,Alltrim(aLinha[4]) + Alltrim(STR(Val(aLinha[7]))) + Alltrim(STR(Val(aLinha[8])))) 
+            EndIf
+
+        Else
+           
+            If !Empty(Alltrim(aLinha[nPosicaoChave]))   
+                aAdd(aChaves,Alltrim(aLinha[nPosicaoChave]))  
+            EndIf
+
+            If !Empty(Alltrim(aLinha[4]) + Alltrim(STR(Val(aLinha[7]))) + Alltrim(STR(Val(aLinha[8]))))
+                aAdd(aChaves,Alltrim(aLinha[4]) + Alltrim(STR(Val(aLinha[7]))) + Alltrim(STR(Val(aLinha[8])))) 
+            EndIf   
+ 
+        EndIf 
+
+        For nX := 1 To Len(aChaves)
+            oHashProtheus:Get(aChaves[nX],@nPosicao)
+            
+            If nPosicao > 0
+                Exit
+            EndIf 
+
+        Next nX 
+        
+        If nPosicao > 0
+            aAdd(aDadosProtheus[nPosicao][2],aLinha)
+        Else
+            aAdd(aDadosProtheus,{aChaves,{aLinha}})
+
+            For nX := 1 To Len(aChaves)
+                oHashProtheus:Set(Alltrim(aChaves[nX]),Len(aDadosProtheus)) 
+            Next nX 
+        EndIf 
+
+        (cAlias)->(DbSkip())
+    EndDo
+
+    (cAlias)->(DBCloseArea())
+    
+Return {aDadosProtheus,oHashProtheus,aDocumentos}
+
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} ComparaDados
+Static responsavel por comparar os dados do protheus e outros assinantes
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function ComparaDados(dadosProtheus as Array, dadosLive as Array) as Array
+
+    Local Item                                        as numeric
+    Local nPosicao            := 0                     as numeric
+    Local nX                 := 0                     as numeric
+    Local nTamanhoItens      := Len(dadosProtheus[1]) as numeric
+    Local aNotasFaltando     := {}                    as Array
+    Local aMensagemErro      := array(7)              as Array
+    Local cSerie             := ""                    as character
+    Local cSerialEquipamento := ""                    as character
+    Local cModelo            := ""                    as character
+    Local cDoc               := ""                    as character
+    Local cChave             := ""                    as character
+    Local cTipo              := ""                    as character
+
+    LjGrvLog("Conciliador ->"+ ProcName(),"Inicindo comparação Protheus > TVFR! Aguarde!")
+    
+    //-- Cabeçalho
+    aAdd(aNotasFaltando,{})
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Tipo") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Ticket") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"SituacaoTicket") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"CodigoLoja") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"CNPJ") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"NumeroImpressora") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Serie") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Ndoc") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"ModeloFisc") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Controle") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"ChaveDocc") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"CodigoDocFiscal") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"DocFiscal") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"DataEmissao") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"SituacaoNFCe") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Item") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"CodProduto") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Quantiade") 
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"ValorTotalBruto") 
+    
+    // Adiciona itens a mais para o cabeçalho
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Cliente")
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Observacao")
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"Origem")
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"msg_erro")
+    aAdd(aNotasFaltando[Len(aNotasFaltando)],"UUID")
+
+    /*25*/aAdd(aNotasFaltando[Len(aNotasFaltando)],"DtIntegracao")
+    /*26*/aAdd(aNotasFaltando[Len(aNotasFaltando)],"Obs_Fiscal")
+
+    // Compara do Protheus para TVFR
+    For Item := 1 To nTamanhoItens
+        
+        nPosicao := 0
+
+        If  !Empty(dadosProtheus[1][Item][1])
+            QtdChave := Len(dadosProtheus[1][Item][1])
+            For nX := 1 To QtdChave
+                
+                If !(dadosProtheus[1][Item][1][nX] == "0")
+                    dadosLive[2]:Get(Alltrim(dadosProtheus[1][Item][1][nX]),@nPosicao)
+                EndIf
+
+                aMensagemErro[1] := ""
+                aMensagemErro[2] := ""
+                aMensagemErro[3] := ""
+                aMensagemErro[4] := ""
+                aMensagemErro[5] := ""
+                aMensagemErro[6] := ""
+                aMensagemErro[7] := ""
+
+                If nPosicao == 0 
+                    // -- So logo se for o ultimo
+                    If nX == QtdChave
+
+                        If UPPER(ALLTRIM(dadosProtheus[1][Item][2][1][1])) == "NOTA" .And. dadosProtheus[1][Item][2][1][15] == "1"  //Tipo e SituacaoNFCe
+                            //Nota cancelada no PROTHEUS e não existe no TVFR, então não gera erro
+                        Else
+
+                            aAdd(aNotasFaltando,dadosProtheus[1][Item][2][1])
+                            aNotasFaltando[Len(aNotasFaltando)][21] := "Nota/Cupom não encontrado no TVFR"//--Observação
+                            aNotasFaltando[Len(aNotasFaltando)][22] := "PROTHEUS"//--Origem
+
+                            If UPPER(ALLTRIM(aNotasFaltando[Len(aNotasFaltando)][1])) == "NOTA" 
+                                aMensagemErro := BuscaErroNotaDeEntradaSaidaProtheus(aNotasFaltando[Len(aNotasFaltando)][04],aNotasFaltando[Len(aNotasFaltando)][08],aNotasFaltando[Len(aNotasFaltando)][07],aNotasFaltando[Len(aNotasFaltando)][20],aNotasFaltando[Len(aNotasFaltando)][13],CTOD(aNotasFaltando[Len(aNotasFaltando)][14]))
+                            EndIf 
+
+                            aNotasFaltando[Len(aNotasFaltando)][23] := aMensagemErro[1]
+                            aNotasFaltando[Len(aNotasFaltando)][24] := aMensagemErro[5]
+
+                            aNotasFaltando[Len(aNotasFaltando)][25] := aMensagemErro[6]
+                            
+                            If Empty(aMensagemErro[1])
+                                If UPPER(ALLTRIM(aNotasFaltando[Len(aNotasFaltando)][1])) == "NOTA" 
+                                    aNotasFaltando[Len(aNotasFaltando)][23] := IIF( aMensagemErro[6] == DToC(Date()), "Integração gerada hoje | Arquivo do TVFR ainda não contempla esta informação.", "Mensagem de erro não encontrada | Verifique se os filtros do processo foram atendidos." )
+                                Else
+                                    aNotasFaltando[Len(aNotasFaltando)][21] := "Cupom emitido pelo PROTHEUS"    //--Observação
+                                    aNotasFaltando[Len(aNotasFaltando)][23] := "Não existe integração de cupom do PROTHEUS para o TVFR."    //--Mensagem de erro
+                                EndIf
+                            EndIf
+
+                        EndIf
+                    EndIf 
+                        
+                Else
+
+                    //-- se ja achei com uma chave não busco a proxima.
+                    Exit
+                EndIf 
+  
+            Next nX
+        EndIf 
+        If Mod(Item, 1000) == 0
+            LjGrvLog("Conciliador ->"+ ProcName(),"Comparando do Protheus > TVFR" + cValToChar(Item) + " de " + cValToChar(nTamanhoItens) + "...")
+        EndIf
+    Next Item
+
+    nTamanhoItens := Len(dadosLive[1])
+
+    
+    LjGrvLog("Conciliador ->"+ ProcName(),"Concluida comparação Protheus > TVFR! Aguarde!")
+    LjGrvLog("Conciliador ->"+ ProcName(),"Inicindo comparação TVFR > Protheus! Aguarde!")
+
+    // Compara do Live para o Protheus
+    For Item := 1 To nTamanhoItens
+
+        nPosicao := 0
+
+        If  !Empty(dadosLive[1][Item][1])
+            QtdChave := Len(dadosLive[1][Item][1])
+            For nX := 1 To QtdChave
+                
+                If !(dadosLive[1][Item][1][nX] == "0")
+                    dadosProtheus[2]:Get(Alltrim(dadosLive[1][Item][1][nX]),@nPosicao)
+                EndIf 
+
+                aMensagemErro[1] := ""
+                aMensagemErro[2] := ""
+                aMensagemErro[3] := ""
+                aMensagemErro[4] := ""
+                aMensagemErro[5] := ""
+                aMensagemErro[6] := ""
+                aMensagemErro[7] := ""
+
+                If nPosicao == 0 
+                    
+                    If nX == QtdChave 
+
+                        aAdd(aNotasFaltando,dadosLive[1][Item][2][1])
+                        aNotasFaltando[Len(aNotasFaltando)][21] := "Nota/Cupom não encontrado no PROTHEUS"
+                        aNotasFaltando[Len(aNotasFaltando)][22] := "LIVE"
+
+                        lSemControle := dadosLive[1][Item][1][nX] == "0" .AND. aNotasFaltando[Len(aNotasFaltando)][12] == "3"
+
+                        If UPPER(ALLTRIM(aNotasFaltando[Len(aNotasFaltando)][1])) == "CUPOM" .AND. !lSemControle
+                            aMensagemErro := BuscaErroVenda(aNotasFaltando[Len(aNotasFaltando)][8],aNotasFaltando[Len(aNotasFaltando)][7],aNotasFaltando[Len(aNotasFaltando)][6],aNotasFaltando[Len(aNotasFaltando)][9])
+                        ElseIf ALLTRIM(aNotasFaltando[Len(aNotasFaltando)][12]) == "3" .AND. !lSemControle
+                            aMensagemErro := BuscaErroNotaDeEntradaLive(aNotasFaltando[Len(aNotasFaltando)][10],aNotasFaltando[Len(aNotasFaltando)][7],CTOD(SUBSTR(aNotasFaltando[Len(aNotasFaltando)][14],1,10)))
+                        EndIf 
+
+                        aNotasFaltando[Len(aNotasFaltando)][23] := aMensagemErro[1]
+                        aNotasFaltando[Len(aNotasFaltando)][24] := aMensagemErro[5]
+
+                        aNotasFaltando[Len(aNotasFaltando)][25] := aMensagemErro[6]
+          
+                        If Empty(aMensagemErro[1])
+
+                            If aNotasFaltando[Len(aNotasFaltando)][10] == "0" .AND. aNotasFaltando[Len(aNotasFaltando)][12] == "3"
+                                aNotasFaltando[Len(aNotasFaltando)][23] := "Devolução sem numero de controle"
+
+                            ElseIf aNotasFaltando[Len(aNotasFaltando)][08] == "0" .AND. aNotasFaltando[Len(aNotasFaltando)][12] == "1"  //NDoc      //CodigoDocFiscal
+                                aNotasFaltando[Len(aNotasFaltando)][23] := "Nota de Entrada que não é troca | sem numero e sem informações de integração"
+
+                            Else
+                                aNotasFaltando[Len(aNotasFaltando)][23] := "Mensagem de erro não encontrada | esse movimento ainda não chegou no PROTHEUS ou não foi encontrado nas tabelas de integração"
+                            EndIf
+                        EndIf
+
+                    EndIf 
+
+                Else
+
+                    //Valida se a SituacaoNFCe do TVFR é igual ao PROTHEUS (0=normal, 1=cancelado e 3=inutilizado)
+                    If dadosLive[1][Item][2][1][15] <> dadosProtheus[1][nPosicao][2][1][15]
+
+                        aAdd(aNotasFaltando,dadosLive[1][Item][2][1])
+                        aNotasFaltando[Len(aNotasFaltando)][21] := "Nota/Cupom encontrado com SituacaoNFCe diferente"
+                        //aNotasFaltando[Len(aNotasFaltando)][22] := "LIVE"
+
+                        lSemControle := dadosLive[1][Item][1][nX] == "0" .AND. aNotasFaltando[Len(aNotasFaltando)][12] == "3"
+
+                        If UPPER(ALLTRIM(aNotasFaltando[Len(aNotasFaltando)][1])) == "CUPOM" .AND. !lSemControle
+
+                            cSerie               := aNotasFaltando[Len(aNotasFaltando)][7]
+                            cSerie               := Iif(cSerie == "0", "", cSerie)
+                            cSerialEquipamento   := aNotasFaltando[Len(aNotasFaltando)][6] 
+                            cModelo              := aNotasFaltando[Len(aNotasFaltando)][9] 
+                            cDoc                 := aNotasFaltando[Len(aNotasFaltando)][8]
+
+                            cChave := cSerie + "|" + cSerialEquipamento + "|" + cModelo+ "|" + cDoc
+
+                            aMensagemErro := BuscaMHQ(cChave, "VENDA", "LIVE")
+
+                        ElseIf ALLTRIM(aNotasFaltando[Len(aNotasFaltando)][12]) == "3" .AND. !lSemControle
+                            aMensagemErro := BuscaErroNotaDeEntradaLive(aNotasFaltando[Len(aNotasFaltando)][10],aNotasFaltando[Len(aNotasFaltando)][7],CTOD(SUBSTR(aNotasFaltando[Len(aNotasFaltando)][14],1,10)))
+
+                            cSerie       := aNotasFaltando[Len(aNotasFaltando)][7]
+                            Controle    := aNotasFaltando[Len(aNotasFaltando)][10]
+                            DataEmissao := CTOD(SUBSTR(aNotasFaltando[Len(aNotasFaltando)][14],1,10))
+
+                            cChave :=  "%|" + cSerie + "|" + Controle 
+
+                            aMensagemErro := BuscaMHQ(cChave, "NOTA DE ENTRADA", "LIVE", .T., DataEmissao)
+
+                        Else
+
+                            cTipo        := IIF( ALLTRIM(UPPER(aNotasFaltando[Len(aNotasFaltando)][13])) == "ENTRADA", "NOTA DE ENTRADA", "NOTA DE SAIDA" )
+                            DataEmissao := CTOD(SUBSTR(aNotasFaltando[Len(aNotasFaltando)][14],1,10))
+
+                            cChave       := RmiDePaRet("LIVE", "SM0", aNotasFaltando[Len(aNotasFaltando)][04]) + "|" + aNotasFaltando[Len(aNotasFaltando)][08] + "|" + aNotasFaltando[Len(aNotasFaltando)][07] + "|" + aNotasFaltando[Len(aNotasFaltando)][20]
+
+                            aMensagemErro := BuscaMHQ(cChave, cTipo, "PROTHEUS", .F., DataEmissao)
+                        EndIf 
+
+                        //Origem
+                        If !Empty(aMensagemErro[7])
+                            aNotasFaltando[Len(aNotasFaltando)][22] := aMensagemErro[7]
+                        EndIf
+
+                        aNotasFaltando[Len(aNotasFaltando)][23] := "SituacaoNFCe no TVFR " + dadosLive[1][Item][2][1][15] + " e no PROTHEUS " + dadosProtheus[1][nPosicao][2][1][15]
+                        aNotasFaltando[Len(aNotasFaltando)][24] := aMensagemErro[5]
+                        aNotasFaltando[Len(aNotasFaltando)][25] := aMensagemErro[6]
+                        aNotasFaltando[Len(aNotasFaltando)][26] := dadosProtheus[1][nPosicao][2][1][26]  //Observação Fiscal
+                    EndIf
+
+                    //-- se ja achei com uma chave não busco a proxima.
+                    Exit
+                EndIf 
+
+            Next nX    
+
+        EndIf 
+        If Mod(Item, 1000) == 0
+            LjGrvLog("Conciliador ->"+ ProcName(),"Comparando do TVFR > Protheus" + cValToChar(Item) + " de " + cValToChar(nTamanhoItens) + "...")
+        EndIf
+    Next Item
+
+
+Return aNotasFaltando
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} BuscaErroVenda
+Static responsavel por buscar erros na integração
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function BuscaErroVenda(cDoc as character, cSerie as character, cSerialEquipamento as character, cModelo as character)
+
+    Local cChave               as character
+
+    Default cSerie := ""
+    Default cSerialEquipamento := ""
+
+    cSerie := Iif(cSerie == "0","",cSerie)
+
+    cChave := cSerie + "|" + cSerialEquipamento + "|" + cModelo + "|" + cDoc    
+
+Return BuscaMHQ(cChave, "VENDA","LIVE")
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} BuscaErroNotaDeEntradaLive
+Static responsavel por buscar erros na integração
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function BuscaErroNotaDeEntradaLive(Controle as character, cSerie as character, DataEmissao as Date)
+
+    Local cChave               as character
+    cChave :=  "%|" + cSerie + "|" + Controle 
+
+Return BuscaMHQ(cChave, "NOTA DE ENTRADA","LIVE",.T.,DataEmissao)
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} BuscaErroNotaDeEntradaSaidaProtheus
+Static responsavel por buscar erros na integração
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function BuscaErroNotaDeEntradaSaidaProtheus(Filial as character, cDoc as character, cSerie as character, Cliente as character ,cTipo as character,DataEmissao as Date)
+
+    Local cChave        as character
+    Local aMensagemErro as Array
+
+    cChave := Filial + "|" + cDoc + "|" + cSerie + "|" + Cliente
+    cTipo := IIF(ALLTRIM(UPPER(cTipo)) == "ENTRADA","NOTA DE ENTRADA", "NOTA DE SAIDA")
+
+    If Empty((aMensagemErro := NaoAtendeFiltro(cTipo,Filial,cDoc,cSerie))[1])
+        aMensagemErro := BuscaMHQ(cChave, cTipo,"PROTHEUS",.F.,DataEmissao)
+    EndIf 
+
+Return aMensagemErro
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} NaoAtendeFiltro
+Static responsavel por buscar erros na integração
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function NaoAtendeFiltro(cTipo as character,Filial as character,cDoc as character,cSerie as character) as Array
+
+    Local aMensagemErro := Array(7)             as Array
+    Local prefixo       := IIF(cTipo == "NOTA DE ENTRADA", "F1_","F2_")
+    Local NomeTabela    := GetNextAlias()       as character
+    Local cQuery        := ""                   as character
+    Local cAssinante    := "LIVE"               as character
+    
+    cTipo := padR( cTipo, tamSx3("MHN_COD")[1] )
+
+    DBSelectArea("MHN")
+    MHN->(DBSetOrder(1)) //MHN_FILIAL+MHN_COD
+
+    //Filtro do processo e se o mesmo esta ativo para integração
+    If MHN->( DBSeek(xfilial("MHN") + cTipo) ) .and. posicione("MHP", 1, xFilial("MHP") + padR(cAssinante, tamSx3("MHP_CASSIN")[1]) + cTipo, "MHP_ATIVO") == "1"
+    
+        cQuery := ""
+        cQuery += " SELECT R_E_C_N_O_"
+        cQuery += " FROM " + RetSqlName( MHN->MHN_TABELA )
+        cQuery += " WHERE "+ Prefixo + "FILIAL = '" + xFilial(MHN->MHN_TABELA,Filial) + "' "
+        cQuery += " AND "  + Prefixo + "DOC = '" + cDoc + "' "
+        cQuery += " AND "  + Prefixo + "SERIE = '" + cSerie + "' "
+        cQuery += " AND "  + Alltrim(MHN->MHN_FILTRO)
+
+        TCQUERY cQuery NEW ALIAS (NomeTabela)
+
+        If (NomeTabela)->(EOF())
+            //aMensagemErro  := Array(6)
+            aMensagemErro[1] := "Filtro do Processo :[" + cTipo + "] não foi atendido, Filtro:[" + Alltrim(MHN->MHN_FILTRO) + "] "
+            aMensagemErro[2] := ""
+            aMensagemErro[3] := ""
+            aMensagemErro[4] := ""
+            aMensagemErro[5] := ""
+            aMensagemErro[6] := ""
+            aMensagemErro[7] := ""
+
+            aMensagemErro[1] := StrTran(StrTran(aMensagemErro[1],","," |virgula| "),";"," |virgula| ")
+        EndIf
+
+        (NomeTabela)->(dbcloseArea())
+    else
+
+        aMensagemErro[1] := "O Processo: [" + cTipo + "] não esta ativo para integração ou não foi encontrado na tabela de processos."
+        aMensagemErro[2] := ""
+        aMensagemErro[3] := ""
+        aMensagemErro[4] := ""
+        aMensagemErro[5] := ""
+        aMensagemErro[6] := ""
+        aMensagemErro[7] := ""
+
+        aMensagemErro[1] := StrTran(StrTran(aMensagemErro[1],","," |virgula| "),";"," |virgula| ")
+    endIf 
+
+Return aMensagemErro
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} BuscaMHQ
+Static responsavel por buscar erros na integração
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function BuscaMHQ(cChave as  character, Processo as character, Origem as character, lBuscaAproximada as logical, ApartirDe as date)
+    
+    Local NomeTabela    := GetNextAlias() as Character
+    Local cQuery                          as character
+    Local aMensagemErro := Array(7)       as Array
+
+    Default lBuscaAproximada := .F.
+    Default ApartirDe := CTOD("")
+
+    cQuery := " SELECT MHL_ALIAS, MHL_CODMEN, ISNULL(CONVERT(VARCHAR(8000), CONVERT(VARBINARY(8000), MHL_ERROR)),'') AS MHL_ERROR, MHL_CPROCE, MHQ_UUID, MHQ_DATGER, MHQ_ORIGEM "
+    cQuery += " FROM "+ RetSqlName( "MHQ" )+ " MHQ " 
+    cQuery +=   " LEFT JOIN  " + RetSqlName( "MHL" ) + " MHL"
+    cQuery +=       " ON MHQ.MHQ_UUID = MHL.MHL_UIDORI "
+    cQuery +=           " AND MHL.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE MHQ.MHQ_CHVUNI " + IIF(lBuscaAproximada, "LIKE", "=") + " '" + cChave + "'"
+    cQuery +=   " AND MHQ.MHQ_CPROCE = '" + Processo + "'"
+    cQuery +=   " AND MHQ.MHQ_ORIGEM = '" + Origem + "'"
+    If !Empty(ApartirDe)
+        cQuery += " AND MHQ.MHQ_DATGER >= '" + DTOS(ApartirDe) + "'"
+    EndIf
+    cQuery +=   " AND MHQ.D_E_L_E_T_ = ' '"
+    cQuery += " ORDER BY MHL.MHL_DATA DESC, MHL.MHL_HORA DESC"
+
+    TCQUERY cQuery NEW ALIAS (NomeTabela)
+
+    aMensagemErro[1] := ""
+    aMensagemErro[2] := ""
+    aMensagemErro[3] := ""
+    aMensagemErro[4] := ""
+    aMensagemErro[5] := ""
+    aMensagemErro[6] := ""
+    aMensagemErro[7] := ""
+
+    If !(NomeTabela)->(EoF())
+        aMensagemErro[1] := AllTrim((NomeTabela)->MHL_ERROR)
+        aMensagemErro[2] := AllTrim((NomeTabela)->MHL_ALIAS)
+        aMensagemErro[3] := AllTrim((NomeTabela)->MHL_CODMEN)
+        aMensagemErro[4] := AllTrim((NomeTabela)->MHL_CPROCE)
+        aMensagemErro[5] := AllTrim((NomeTabela)->MHQ_UUID)
+        aMensagemErro[6] := DtoC( StoD( (NomeTabela)->MHQ_DATGER ) )  
+        aMensagemErro[7] := AllTrim((NomeTabela)->MHQ_ORIGEM)  
+    Else
+        
+        aMensagemErro[1] += "A " + Processo + " não esta integrada com o Protheus. Motivo: Verifique se a coluna Ticket está preenchida, ela sinaliza se a " + Processo + " foi disponibilizada para integração pelo sistema do TVFR / LIVE Connector. Solicite ao time de suporte do TVFR / LIVE Connector a disponibilização da "+Processo+". chave buscada: ["+ cChave +"]"
+        
+        LjxjMsgErr("Query erro de busca do Processo: "+ Processo + " Query executada: "+cQuery, /*cSolucao*/, "SHPConciliador")   
+    EndIf 
+
+    aMensagemErro[1] := FwCutOff(StrTran(StrTran(aMensagemErro[1],","," |virgula| "),";"," |virgula| "))
+
+    (NomeTabela)->(DBCloseArea())
+
+return aMensagemErro
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} GerarCsv
+Static responsavel por preparar os dados de resultado para salvar
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static Function GerarCsv(dados as array) as character
+    Local linha := 1 as numeric
+    Local coluna := 1 as numeric
+    Local csv := "" as character
+
+    For linha := 1 To Len(dados)
+        For coluna := 1 To len(dados[linha])
+            
+            csv += IIF( Valtype(dados[linha][coluna]) == "N", Alltrim(STR(dados[linha][coluna])), dados[linha][coluna] ) + ";"
+            
+        Next coluna
+        csv := SubString(csv,1,Len(csv)-1)
+        csv += chr(13) + chr(10)
+    Next linha
+
+Return csv
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} SalvarCsv
+Static responsavel por salvar arquivo CSV
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function SalvarCsv(csv as character, NomeArquivo, caminhoDoArquivo as character)
+    
+    Local Arquivo  := Nil as Object
+    Local lRetorno := .T. as logical
+    Local nRet     := 0   as numeric
+    Local lRet     := .T. as logical
+
+    Default NomeArquivo    := "ResultadoComparacao"
+    
+    If Empty(caminhoDoArquivo)
+        caminhoDoArquivo     := "\AUTOCOM\"
+    EndIf 
+   
+    If !Empty(caminhoDoArquivo)
+
+        //Verifica se ja existe o diretório principal (Diretorio Pai)
+        If !ExistDir(caminhoDoArquivo)
+            nRet := MakeDir(caminhoDoArquivo)
+            
+            If nRet != 0
+                LjGrvLog("Conciliador ->"+ ProcName(), "Não foi possível criar o diretório " + caminhoDoArquivo + ". Erro: " + cValToChar( FError() ) )
+                lRet := .F.
+            EndIf
+        EndIf
+
+        If lRet
+            
+            aadd(aAnexos,caminhoDoArquivo + NomeArquivo + ".csv")
+            
+            Arquivo := FWFileWriter():new(caminhoDoArquivo + NomeArquivo + ".csv")
+
+            If Arquivo:Exists()
+                If  !Arquivo:Erase()
+                    LjGrvLog("Conciliador ->"+ ProcName(), "Não foi possivel excluir arquivo, motivo: [" + Iif(Valtype(Arquivo:error():Message) == "U",str(FError(),4),Arquivo:error():Message) + "]")
+                EndIf 
+            EndIf
+            
+            If lRetorno
+            
+                If (Arquivo:Create())
+                    
+                    Arquivo:Write(csv)
+
+                Else 
+                    LjGrvLog("Conciliador ->"+ ProcName(), "Não foi possivel criar o arquivo["+ caminhoDoArquivo + "ResultadoComparacao.csv" +"]" + " motivo: [" + Iif(Valtype(Arquivo:error():Message) == "U",str(FError(),4),Arquivo:error():Message) + "]") 
+                Endif
+            EndIf 
+
+            Arquivo:Close()
+
+        EndIf 
+    EndIf 
+ 
+Return
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} AnalisaSaltoNumeracao
+Static responsavel por buscar e informar saltos encontrados no protheus
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function AnalisaSaltoNumeracao(aDados as Array)
+    Local NumeroFiliais   := 1
+    Local NumeroSerie     := 1
+    Local NumeroDocumento := 1
+    Local ProximoNumero   := 0
+    Local aSaltos         := {}
+    Local cTextoMaxSalto  := "Foram encontrados muitos saltos de numeração, comparação abortada para não travar rotina, verifique !"
+    Local Steep           := 1
+    Local nQtdCancel      := 0
+
+    aSaltos := {{"Filial","Serie","Documento"}} 
+    
+    // -- Organiza as Filiais
+
+    ASort(aDados, , , {|x,y|x[1] < y[1]})  
+
+    For NumeroFiliais := 1 To Len(aDados)  
+            
+        // -- Organiza as Series
+        ASort(aDados[NumeroFiliais][2], , , {|x,y|x[1] < y[1]}) 
+
+        For NumeroSerie := 1 To Len(aDados[NumeroFiliais][2])  
+            
+            // -- Organiza Documento
+            ASort(aDados[NumeroFiliais][2][NumeroSerie][2], , , {|x,y|x[1] < y[1]}) 
+            ProximoNumero  := 0
+            PrimeiroNumero := aDados[NumeroFiliais][2][NumeroSerie][2][1][1]
+            UltimoNumero   := aDados[NumeroFiliais][2][NumeroSerie][2][Len(aDados[NumeroFiliais][2][NumeroSerie][2])][1]
+            nQtdCancel     := 0
+            For NumeroDocumento := 1 To Len(aDados[NumeroFiliais][2][NumeroSerie][2]) 
+                
+                //Composição do NumeroDocumento
+                //NumeroDocumento = { Val((cAlias)->(FT_NFISCAL)), CancelamentoSAT, (cAlias)->(FT_SERSAT), (cAlias)->(FT_SERIE)})
+
+                //Guarda a quantidade de cancelamentos para despresar os saltos (SAT\MFE)
+                If aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][2]
+                    nQtdCancel++
+                EndIf 
+
+                If aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] == PrimeiroNumero
+                    ProximoNumero := aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] + Steep
+                    Loop
+                EndIf 
+
+                If aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] == ProximoNumero 
+                    ProximoNumero := aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] + Steep
+                    Loop
+                ENdIf
+
+                //Tratamento para cancelamento SAT
+                //If aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] == (ProximoNumero - 1)
+                //    Loop
+                //EndIf
+                
+                While aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] <> ProximoNumero .And. ProximoNumero <= UltimoNumero
+
+                    //Limita a comparação até a ultima nota daquela filial\serie
+                    //If ProximoNumero > UltimoNumero
+                    //    Exit
+                    //EndIf
+
+                    //Verifica se encontra o proximo numero dentro da serie
+                    //If aScan(aDados[NumeroFiliais][2][NumeroSerie][2], {|x| x[1] == ProximoNumero} ) > 0
+                    //    Exit
+                    //EndIf
+
+                    //Se existir algum cancelamento (SAT\MFE) anterior ao ProximoNumero, permite o salto, porque o cancelamento utilizar o proximo numero livre do equipamento
+                    If nQtdCancel > 0
+                        nQtdCancel--
+                        ProximoNumero++
+                        Loop
+                    EndIf
+
+                    //Conout("Filial: " + cValtoChar(aDados[NumeroFiliais][1]) + " Serie: " + cValtoChar(aDados[NumeroFiliais][2][NumeroSerie][1])  + " Documento: " + cValtoChar(ProximoNumero))
+                    aAdd(aSaltos,{cValtoChar(aDados[NumeroFiliais][1]),cValtoChar(aDados[NumeroFiliais][2][NumeroSerie][1]),cValtoChar(ProximoNumero)})
+                    ProximoNumero++
+
+                    //Tratamento para limitar saltos de numeração para não travar rotina
+                    If Len(aSaltos) >= 1000
+                        LjxjMsgErr( cTextoMaxSalto + CRLF + varInfo("aSaltos", aSaltos, Nil, .F., .F.) , /*cSolucao*/, "SHPConciliador")
+                        aAdd(aSaltos,{cTextoMaxSalto, "0", "0"})
+                        Return aSaltos
+                    EndIf
+                EndDo
+
+                //Limita a comparação até a ultima nota daquela filial\serie
+                //If ProximoNumero > UltimoNumero
+                //    Exit
+                //EndIf
+
+                ProximoNumero := aDados[NumeroFiliais][2][NumeroSerie][2][NumeroDocumento][1] + Steep
+                
+            Next NumeroDocumento
+
+        Next NumeroSerie
+
+    Next Filiais
+
+Return aSaltos
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} BuscaErroVenda
+Static responsavel por remover erros conhecidos dos saltos
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function RemoveErrosdoSalto(aSaltos,diferencasConsolidado)
+
+    Local nItem             := 0 
+    Local cFilialProtheus   := "" 
+    Local cSerie            := ""
+    Local cSql              := "SELECT F3_FILIAL, F3_SERIE, F3_NFISCAL FROM " + RetSqlName("SF3")
+    Local cWhere            := ""
+    Local aSql              := {}
+    Local aAuxSaltos        := {{"Filial","Serie","Documento"}}
+   
+    For nItem := 2 To Len(diferencasConsolidado)
+        
+        If Len(diferencasConsolidado[nItem][4]) > 2 
+            cFilialProtheus := RmiDePaRet("LIVE", "SM0", diferencasConsolidado[nItem][4], .F.)
+        Else
+            cFilialProtheus := diferencasConsolidado[nItem][4]
+        EndIf 
+
+        If Empty(diferencasConsolidado[nItem][7])
+            cSerie := diferencasConsolidado[nItem][6]
+        Else
+            cSerie := diferencasConsolidado[nItem][7]
+        EndIf 
+
+        //Removo um erro conhecido
+        //If (nPos := aScan(aSaltos,{|x|  cFilialProtheus +  cSerie + diferencasConsolidado[nItem][8] == x[1] + x[2] + x[3] })) > 0 
+        If (nPos := aScan(aSaltos, {|x|  x[1] == cFilialProtheus .And. x[2] == cSerie .And. Val(x[3]) == Val(diferencasConsolidado[nItem][8])} ) ) > 0 
+
+            ADel( aSaltos, nPos)
+            ASize( aSaltos, Len(aSaltos) - 1 )
+        EndIf
+
+
+    Next nItem
+
+    //Remove notas encontras no PROTHEUS
+    For nItem:=2 To Len(aSaltos)
+
+        cWhere :=   " WHERE D_E_L_E_T_ = ' '"
+        cWhere +=   " AND F3_FILIAL = '" + aSaltos[nItem][1] + "'"
+        cWhere +=   " AND F3_SERIE = '" + aSaltos[nItem][2] + "'"
+        cWhere +=   " AND CAST(F3_NFISCAL AS INT) = " + cValToChar( Val(aSaltos[nItem][3]) )
+
+        aSql := RmiXSql(cSql + cWhere, "*", /*lCommit*/, /*aReplace*/)
+
+        If Len(aSql) == 0
+            AADD( aAuxSaltos, aSaltos[nItem] )
+        EndIf
+    Next nItem
+    FwFreeArray(aSql)
+
+
+return aAuxSaltos
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} ObterDadosLive
+Static responsavel por startar os fluxo de conciliador, solicitando ao assiante externo a geração dos arquivos de conciliador
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static Function ObterDadosLive(aTicket)
+       
+    Local cDtFim                                                                    as character
+    Local cDtInicial                                                                as character
+    Local nRetroagir                                                                as numeric
+    Local dDataBaseConc                                                             as date
+    Local aConsulta                                                                 as array
+    Local aDadosConector := {.F., "Função ObterDadosLive e RecuperarConferencia não retornou dados.", {}}  as array
+
+    // -- Se receber o ticket realiza as busca com base no ticket recebido, se não receber cria um nova MHQ/MHR
+    If Valtype(aTicket) == "A" .AND. Len(aTicket) >= 3 .AND. !Empty(aTicket[1]) .AND. !Empty(aTicket[2]) .AND. !Empty(aTicket[3])
+        cTicket    := aTicket[1]
+        cDtFim     := aTicket[3]
+        cDtInicial := aTicket[2]
+    Else
+        
+        cTicket := RMITImeStamp() 
+
+        If oBuscaObj:OCONFPROCE:hasProperty("dataInicial") .And. oBuscaObj:OCONFPROCE:hasProperty("dataFinal")
+            
+            cDtFim := oBuscaObj:OCONFPROCE["dataFinal"]
+            
+            If Empty(cDtFim)
+                cDtFim :=  subStr(DTOS(date() -1),1,4) + "-" + subStr(DTOS(date() -1),5,2) + "-" + subStr(DTOS(date() -1),7,2)
+            EndIf 
+            
+            cDtInicial := oBuscaObj:OCONFPROCE["dataInicial"]
+        Else
+            
+            If oBuscaObj:OCONFPROCE:hasProperty("diasParaRetroagir")
+                nRetroagir := oBuscaObj:OCONFPROCE["diasParaRetroagir"]
+            Else
+                nRetroagir := 30 // --Se não tiver a configuração retroage 30 dias
+            EndIf 
+            
+            dDataBaseConc := date() -1
+
+            cDtFim := subStr(DTOS(dDataBaseConc),1,4) + "-" + subStr(DTOS(dDataBaseConc),5,2) + "-" + subStr(DTOS(dDataBaseConc),7,2)
+            cDtInicial := subStr(DTOS(dDataBaseConc -  nRetroagir),1,4) + "-" + subStr(DTOS(dDataBaseConc -  nRetroagir),5,2) + "-" + subStr(DTOS(dDataBaseConc -  nRetroagir),7,2)
+        
+        EndIf 
+
+
+        RmiExeGat("CONFERENCIA", "2", {cTicket,cDtFim,cDtInicial})
+
+
+    EndIf  
+
+    dDtFim          := STOD(StrTran(cDtFim , "-", ""))
+    dDtInicial      := STOD(StrTran(cDtInicial , "-", ""))
+
+    If (aConsulta := Consulta())[1]
+        aDadosConector := RecuperarConferencia()
+    Else
+	    oBuscaObj:cConfirma := aConsulta[2] 
+	    oBuscaObj:Confirma()
+	    cTicket := ""
+	EndIf
+
+Return aDadosConector
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} Consulta
+Static responsavel por consultar a preparação dos movimentos
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function Consulta()  as Array
+    
+    Local nTimer            := seconds()      as numeric
+    Local cQuery            := ""             as character
+    Local NomeTabela        := GetNextAlias() as Character
+    Local nTentativa        := 1              as numeric
+    Local lRetorno          := .F.            as logical
+    Local nAguarda          := 60000          as numeric    //1 minuto
+    Local nMaximaTentativas := 1200           as numeric
+    Local oXml                                as Object
+    Local cTicketAberto     := ""             as Character
+    Local cError                              as Character
+    Local cWarning                            as Character
+
+    cStUuid := ""
+
+    // -- Aguarda pelomenos (nAguarda)5 minutos antes de inicar a primeira consulta
+    LjGrvLog("Conciliador ->"+ ProcName(),"Iremos aguardar:[" + cValtoChar((nAguarda / 1000) / 60) + "] minutos ate a primeira consulta de dados") 
+    Sleep(nAguarda)
+   
+    cQuery :=   " SELECT MHQ_STATUS, MHQ_UUID, MHR_STATUS "
+    cQuery +=   "    , CAST( MHQ_MENSAG AS VARCHAR(8000) ) AS MHQ_MENSAG  "
+    cQuery +=   "	 , CAST( MHR_ENVIO AS VARCHAR(8000) ) AS MHR_ENVIO "
+    cQuery +=   "	 , CAST( MHR_RETORN AS VARCHAR(8000) ) AS MHR_RETORN "
+    cQuery +=   " FROM " + RetSqlName( "MHQ" ) + " MHQ "
+    cQuery +=   " LEFT JOIN " + RetSqlName( "MHR" ) + " MHR ON MHR.MHR_FILIAL = MHQ.MHQ_FILIAL "
+    cQuery +=   "	 AND MHR.MHR_UIDMHQ = MHQ.MHQ_UUID "
+    cQuery +=   "	 AND MHR.D_E_L_E_T_ = MHQ.D_E_L_E_T_ "
+    cQuery +=   " WHERE MHQ.MHQ_ORIGEM = 'PROTHEUS' "
+    cQuery +=   "	 AND MHQ.MHQ_CPROCE = 'CONFERENCIA' "
+    cQuery +=   "	 AND MHQ.MHQ_CHVUNI = '" + cTicket + "' "
+    cQuery +=   "	 AND MHQ.D_E_L_E_T_ = '' "
+
+    While nTentativa <= nMaximaTentativas
+
+        LjGrvLog("Conciliador ->"+ ProcName(),"Tentativa:[" + cValtoChar(nTentativa) + "] de:[" + cValtoChar(nMaximaTentativas) + "]") 
+    
+        If nTentativa > 1
+            (NomeTabela)->(DBCloseArea())
+        EndIf 
+
+        TCQUERY cQuery NEW ALIAS (NomeTabela)
+
+        If (NomeTabela)->( Eof() )
+            LjxjMsgErr( I18n("Ticket #1 não foi encontrado na base, será fechado no Connector. #2 Query executada [#3]", {cTicket, CRLF, cQuery}), /*cSolucao*/, "SHPConciliador")
+            cTicketAberto := cTicket
+            Exit
+        Else
+
+            cStUuid := (NomeTabela)->MHQ_UUID
+
+            If (NomeTabela)->MHR_STATUS $ " |1|6" // -- Não enviado ou aguardando processamento
+                // -- Aguardando  processamento da integração
+            
+                LjGrvLog("Conciliador ->"+ ProcName(),"Iremos aguardar:[" + cValtoChar((nAguarda / 1000) / 60) + "] minutos ate a proxima tentativa. Motivo: MHR_STATUS ["+ (NomeTabela)->MHR_STATUS + "] - Aguardando processamento ou MHR ainda não criada") 
+                    
+                Sleep(nAguarda) 
+                nTentativa ++ 
+                Loop
+            Else
+                If (NomeTabela) ->(MHR_STATUS) == "3"
+
+                                
+                    oXml := XmlParser((NomeTabela) ->(MHR_RETORN), "_", @cError, @cWarning)
+
+                    If oXml == nil
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Não foi possivel realizar a busca dos dados para o conciliador, motivo:[" + cError + "]") 
+                    Else
+                        // Ticket que será fechado 
+                        cTicketAberto := oXml:_LC_RETORNOCONCILIADOR:_NUMEROTICKET:TEXT
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Existe um ticket em abarto, para seguir com o processamento deveremos fechar ele para que seja possivel processar na proxima execução do conciliador. ticket:[" +cTicketAberto + "]")
+                    EndIf 
+
+                	Exit
+                Elseif (NomeTabela) ->(MHR_STATUS) == "2"
+                    lRetorno := .T.
+                    Exit
+                Else 
+                    
+                    LjGrvLog("Conciliador ->"+ ProcName(),"Iremos aguardar:[" + cValtoChar((nAguarda / 1000) / 60) + "] minutos ate a proxima tentativa. Motivo: MHR_STATUS Desconhecido:["+  (NomeTabela) ->(MHR_STATUS) +"]")           
+
+                    Sleep(nAguarda) 
+                    nTentativa ++ 
+                    Loop
+                EndIf 
+            Endif
+
+        EndIf
+    EndDo
+
+    (NomeTabela)->(DBCloseArea())
+
+    LjGrvLog("Conciliador ->"+ ProcName(),"Tempo para preparar os dados no TOTVS Conector (resposta do ManterConciliadorLC com movimentos disponiveis) " + str(seconds()-nTimer,12,3)) 
+
+Return {lRetorno,cTicketAberto}
+
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} recuperarConferencia
+Static responsavel por buscar movimentação de conciliador
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+Function recuperarConferencia() as Array
+
+    Local cBody    := ""  as character
+    Local cData    := ""  as character
+    Local nPagina  := 0   as numeric
+    Local Item     := 0   as numeric
+    Local cToken   := ""  as character
+    Local lHasNext := .F. as logical
+    Local aDados   := {}  as array
+    Local oWs             as Object
+    Local cError   := ""  as character
+    Local cWarning        as Character
+    Local oXml            as Object
+    Local lRetorno := .T. as Logical
+    
+    oBuscaObj:PreExecucao()
+    cToken  := oBuscaObj:cToken
+    cURl    := oBuscaObj:oConfAssin["url_token"]
+
+    oWs     := RMIConWsdl(cURl, @cError) 
+
+        //Seta a operação que será executada
+    If !Empty(cError) .Or. !oWs:SetOperation("RecuperarConciliadorVendaLC_Integracao_Xml")
+
+        lRetorno := .F.
+        cError   := i18n("[#1] Problema ao efetuar o #2 ticket [#3]: #4", {ProcName(), "SetOperation", cTicket, cError +" "+ IIF(valType(oWs) == "O", oWs:cError, "")} )
+    Else
+
+        While lHasNext .Or. nPagina == 0
+            
+            nPagina++
+
+            cBody := '<?xml version="1.0" encoding="UTF-8"?>'
+            cBody += '<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:liv="http://LiveConnector/">
+            cBody += '    <soapenv:Header/>
+            cBody += '    <soapenv:Body>
+            cBody += '        <liv:RecuperarConciliadorVendaLC_Integracao_Xml>
+            cBody += '            <liv:codigoSistemaSatelite>' + oBuscaObj:oConfAssin["sistemasatelite"] + '</liv:codigoSistemaSatelite>'
+            cBody += '            <liv:xmlIdentificacao><![CDATA[<LC_Identificacao>
+            cBody += '                            <Chave>' + cToken + '</Chave>
+            cBody += '                            <CodigoSistemaSatelite>' + oBuscaObj:oConfAssin["sistemasatelite"] + '</CodigoSistemaSatelite>
+            cBody += '                            </LC_Identificacao>]]></liv:xmlIdentificacao>
+            cBody += '            <liv:numeroTicket>' + cTicket + '</liv:numeroTicket>
+            cBody += '            <liv:pagina>' + cValtochar(nPagina) + '</liv:pagina>
+            cBody += '        </liv:RecuperarConciliadorVendaLC_Integracao_Xml>
+            cBody += '    </soapenv:Body>
+            cBody += '</soapenv:Envelope> 
+
+            cBody := EnCodeUtf8(cBody)
+
+            If oWs:SendSoapMsg(cBody)
+                cRetorno := oWs:GetSoapResponse()
+                
+                LjGrvLog("Conciliador ->"+ ProcName(),"Inicio de tratamento de retorno do conector")
+
+                cRetorno := StrTran(cRetorno , "&lt;", "<")
+                cRetorno := StrTran(cRetorno , "&gt;", ">")
+                cRetorno := StrTran(cRetorno , "&#xD;", "")
+
+                LjGrvLog("Conciliador ->"+ ProcName(),"Fim de tratamento de retorno do conector")
+
+                oXml := XmlParser(cRetorno, "_", @cError, @cWarning)
+
+                If oXml <>  nil
+
+                    oDados := oXml:_S_ENVELOPE:_S_BODY:_RECUPERARCONCILIADORVENDALC_INTEGRACAO_XMLRESPONSE:_RECUPERARCONCILIADORVENDALC_INTEGRACAO_XMLRESULT:_LC_TICKETCONCILIADORVENDA
+                    
+                    If XmlChildEx( oDados:_DOCUMENTOS, "_LC_CONCILIADORMOVIMENTO" ) <> Nil
+
+                        lHasNext := IIf(Upper(oDados:_HASNEXT:TEXT) == "TRUE",.T.,.F.)
+                        nItens := Len(oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO)
+
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Processando Dados conector... " + cValToChar(1) + " de " + cValToChar(nItens) + "...")
+
+                        For Item := 1 To nItens 
+                            
+                            aAdd(aDados,{})
+
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Tipo:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Ticket:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_SituacaoTicket:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_CodigoLoja:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_CNPJ:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_NumeroImpressora:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Serie:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Ndoc:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_ModeloFiscal:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Controle:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_ChaveDoc:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_CodigoDocFiscal:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_DocFiscal:TEXT)
+                            
+                            cData := oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_DataEmissao:TEXT
+                            cData := DTOC(STOD(strTran( SubStr( cData, 1,AT("T",cData) - 1 ), "-","" )))
+
+                            aAdd(aDados[Len(aDados)],cData)
+                            
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_SituacaoNFCe:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Item:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_CodProduto:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_Quantidade:TEXT)
+                            aAdd(aDados[Len(aDados)],oDados:_DOCUMENTOS:_LC_CONCILIADORMOVIMENTO[Item]:_ValorTotalBruto:TEXT)
+
+                        Next
+
+                    Else
+                        LjGrvLog("Conciliador ->"+ ProcName(),"Nenhum dados(Cupom/Nota) encontrado no período informado")    
+                    EndIf 
+
+                EndIf 
+            Else
+
+                lRetorno := .F.
+                cError   := I18n("[#1] Problema ao efetuar o #2 ticket [#3] pagina #4: #5", {ProcName(), "SendSoapMsg", cTicket, cValtoChar(nPagina), oWs:cError} )
+            EndIf 
+
+        Enddo
+
+    EndIF 
+
+    LjGrvLog("Conciliador ->"+ ProcName(),"Quantidade de dados recebidos pelo Conector:[" + cValToChar(Len(aDados)) + "]")
+    
+Return {lRetorno, cError, aDados}
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} EnviaEmail
+Static responsavel por enviar email
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static Function EnviaEmail(cPara, cAssunto, cCorpo, aAnexos)
+
+Return GPEMail(cAssunto, cCorpo, cPara, aAnexos)
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} Consolidado
+Static responsavel por gerar informações consolidadas para enviar no corpo do e-mail
+
+@type       Static
+@author     Lucas Novais (lnovais@)
+@since      08/03/2023
+@version    12.1.2310
+/*/
+//-------------------------------------------------------------------------------------
+
+Static function Consolidado(aDiferencasConsolidado,cCaminhoQuery)
+    Local aCampos    := {}                       as Array
+    Local nCampo     := 0                        as numeric
+    Local oTempTable := FWTemporaryTable():New() as object
+    Local cAlias     := ""
+    Local nItem      := 1
+    Local cQuery     := ""
+    Local oFile      := Nil
+    Local NomeTabela        := GetNextAlias() as Character
+    Local cRetorno := ""
+
+    oFile := FWFileReader():New(cCaminhoQuery + "QueryConsolidadoConciliador.sql")
+
+    If (oFile:Open())
+
+        For nCampo := 1 To Len(aDiferencasConsolidado[1])
+            aDiferencasConsolidado[1][nCampo] := SubStr(aDiferencasConsolidado[1][nCampo],1,10)
+            If aDiferencasConsolidado[1][nCampo] == "DataEmissa"
+                aAdd(aCampos,{aDiferencasConsolidado[1][nCampo],"D",8,0})
+            Else
+                aAdd(aCampos,{aDiferencasConsolidado[1][nCampo],"C",254,0})
+            EndIf
+        Next 
+
+        oTempTable:SetFields( aCampos )
+        oTempTable:Create()
+        
+        cAlias := oTempTable:GetAlias()
+        
+        For nItem := 2 To Len(aDiferencasConsolidado)
+            RecLock(cAlias, .T.)
+                For nCampo := 1 To Len(aCampos)
+                    (cAlias)->&(aCampos[nCampo][1]) := Iif(aCampos[nCampo][2] == "D",CTOD(aDiferencasConsolidado[nItem][nCampo]),;
+                    Iif(Valtype(aDiferencasConsolidado[nItem][nCampo]) == "N",CVALTOCHAR(aDiferencasConsolidado[nItem][nCampo]),aDiferencasConsolidado[nItem][nCampo]))
+                Next nCampo
+            (cAlias)->(MsUnLock())
+        Next nItem  
+                
+        While (oFile:hasLine())
+            cQuery += oFile:GetLine() + CHR(13) + CHR(10)
+        End
+
+        oFile:Close()
+    
+        cQuery := StrTran(cQuery,"TabelaResultado",oTempTable:GetRealName())
+
+        TCQUERY cQuery NEW ALIAS (NomeTabela)
+        
+        aStruct := (NomeTabela)->( dbStruct() )
+        
+        If !(NomeTabela)->(EoF())
+            cRetorno += '<table border="1">'
+            cRetorno += '<tr>'
+            
+            For nCampo := 1 To Len(aStruct)
+                cRetorno +=  "<td>" + Alltrim(aStruct[nCampo][1]) + "</td>"
+            Next nCampo
+            
+            cRetorno += '</tr>'
+
+            While !(NomeTabela)->(EoF())
+                
+                cRetorno += '<tr>'
+                
+                For nCampo := 1 To Len(aStruct)
+                    cRetorno += "<td>" + Alltrim(Iif(Valtype((NomeTabela)->&(aStruct[nCampo][1])) == "C",(NomeTabela)->&(aStruct[nCampo][1]),cValtoChar((NomeTabela)->&(aStruct[nCampo][1])))) + "</td>"
+                Next nCampo
+
+                cRetorno += '</tr>'
+
+                (NomeTabela)->(DbSkip())
+            End
+
+            cRetorno += '</table>'
+        EndIf
+
+        (NomeTabela)->(DBCloseArea()) 
+        oTempTable:Delete()
+    
+    Endif
+    
+Return cRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} gravaErro
+Atualiza MHR_STATUS da CONFERENCIA, grava log de erro na MHL e gerar conout
+
+@author  Rafael Tenorio da Costa
+@since   25/10/2023
+@version 12.1.2310
+/*/
+//-------------------------------------------------------------------
+Static Function gravaErro(cErro)
+
+    Local aArea     := getArea()
+    Local aAreaMHQ  := MHQ->( getArea() )
+    Local aAreaMHR  := MHR->( getArea() )
+
+    cErro := AllTrim(cErro)
+
+    If !Empty(cStUuid)
+
+        MHQ->( dbSetOrder(7) )  //MHQ_FILIAL, MHQ_UUID, R_E_C_N_O_, D_E_L_E_T_
+
+        MHR->( dbSetOrder(3) )  //MHR_FILIAL, MHR_UIDMHQ, MHR_CASSIN, MHR_CPROCE, R_E_C_N_O_, D_E_L_E_T_
+
+        If MHQ->( dbSeek(xFilial("MHQ") + cStUuid) ) .and. MHR->( dbSeek(xFilial("MHR") + cStUuid) )
+
+            rmiGrvLog(  "3"             , "MHR"         , MHR->( recno() )  , "CONCILI"         ,;
+                        cErro           , /*lRegNew*/   , /*lTxt*/          , "MHR_STATUS"      ,;
+                        .T.             , 3             , MHQ->MHQ_CHVUNI   , MHQ->MHQ_CPROCE   ,;
+                        MHR->MHR_CASSIN , MHR->MHR_UIDMHQ )
+        EndIf
+    EndIf
+
+    LjxjMsgErr( i18n("Conciliador não foi gerado para o UUID #1, motivo: #2", {cStUuid, cErro}), /*cSolucao*/, "SHPConciliador")
+
+    restArea(aAreaMHR)
+    restArea(aAreaMHQ)
+    restArea(aArea)
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setBuscaObj
+Atualiza o objeto oBuscaObj utilizado teste cobertura de linhas
+
+@author  Rafael Tenorio da Costa
+@since   25/10/2023
+@version 12.1.2310
+/*/
+//-------------------------------------------------------------------
+Function setBuscaObj(oBusca)
+    oBuscaObj := oBusca
+Return Nil

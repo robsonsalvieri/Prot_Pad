@@ -1,0 +1,1 @@
+/home/valadao/eadvpl/bin/eadvpl /home/valadao/dllso/autocom.prg -target=SHAREDLIB -dLINUX

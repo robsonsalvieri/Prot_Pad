@@ -1,0 +1,463 @@
+#INCLUDE "tlpp-core.th"
+#include "backoffice.ngf.applicationsLoans.data.CH"
+#include 'totvs.ch'
+
+NAMESPACE totvs.protheus.backoffice.ngf.applicationsLoans
+USING NAMESPACE gfin.api.orders
+using namespace gfin.util
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+
+Static __MovQuery   := Nil
+Static __ParcQuery  := Nil
+
+/*/{Protheus.doc} apiItemsFields
+  campos defaults referente aos resgates de aplicações para API
+
+  @param cOperation, Character, Indica se é uma aplicação ou emprestimo
+  @return array, lista dos campos
+
+  @author vinicius.prado
+  @since 19/11/2021
+/*/
+Function apiItemsFields(cOperation As Character) as array
+	Local cfields as Character
+
+	If cOperation == "APL"
+		cFilTable := 'EI_FILIAL'
+		cfields := 'EI_SEQ,EI_DATA,EI_VALOR'
+	Else
+		cFilTable := 'E2_FILIAL'
+		cFields   := 'E2_PARCELA,E2_VENCTO,E2_VENCREA,E2_BAIXA,E2_VALOR'
+	Endif
+
+	If FWModeAccess('SEH', 1) == 'C'
+		strTran(cfields, cFilTable, '')
+	Endif
+
+Return STRtoArray(cfields, ',')
+
+/*/{Protheus.doc} apiApplicationLoanQuery
+  query para consulta de aplicações para API
+
+  @return query As Character, query padrão para uso na api
+
+  @author vinicius.prado
+  @since 19/11/2021
+/*/
+Function apiApplicationLoanQuery()
+	Local query as Character
+
+	query := " SELECT #QueryFields# "
+	query += " FROM " + RetSqlName('SEH') + " SEH "
+	query += " WHERE  SEH.D_E_L_E_T_ = ' ' "
+	query += " #QueryWhere# "
+Return query
+
+/*/{Protheus.doc} apiApplicationLoanOrder
+  ordenação utilizada na query de aplicações para API
+
+  @return order As Character, string de order para query
+
+  @author vinicius.prado
+  @since 19/11/2021
+/*/
+Function apiApplicationLoanOrder() as Character
+	Local cQueryOrder := '' as Character
+	Local cModeAccess := '' as Character
+	Local cFields     := '' as Character
+
+	cModeAccess := FWModeAccess('SEH', 01) // COMPARTILHAMENTO EMPRESA
+
+	cFields     := IIF(cModeAccess == 'C', '', 'EH_FILIAL,')
+	cQueryOrder := cFields + 'EH_NUMERO,EH_REVISAO'
+
+Return cQueryOrder
+
+/*/{Protheus.doc} getItemsMoviments
+  obtem os resgates das aplicações
+
+  @param  aplications As Character, string com o Json de aplicações
+  @return applicationsJson As Json, Json com as aplicações e resgates
+
+  @author vinicius.prado
+  @since 19/11/2021
+/*/
+Function getItemsMoviments(applications as Character, operation as Character) as Json
+	Local applicationsJson as Json
+	Local details as Json
+	Local cont as Numeric
+
+	applicationsJson := JsonObject():new()
+	applicationsJson:FromJson(applications)
+
+	For cont := 1 to Len(applicationsJson['items'])
+		details := JsonObject():new()
+		applicationsJson['items'][cont]['detail'] := details;
+
+		applicationsJson['items'][cont]['detail']['movements'] := getMovimentsQuery(applicationsJson['items'][cont])
+
+		If operation == "EMP"
+			applicationsJson['items'][cont]['detail']['parcels']  := getParcelsLoanQuery(applicationsJson['items'][cont])
+		Endif
+
+		details := Nil
+	Next cont
+
+	If __MovQuery <> Nil
+		__MovQuery := Nil
+	EndIf
+
+	If __ParcQuery <> Nil
+		__ParcQuery := Nil
+	EndIf
+Return applicationsJson
+
+/*/{Protheus.doc} getAplMovimentsQuery
+  obtem os resgates de uma determinada aplicação
+
+  @param  applicationItem As Json, aplicação
+  @return applicationItem As Json, aplicação com os resgates
+
+  @author vinicius.prado
+  @since 19/11/2021
+/*/
+Function getMovimentsQuery(applicationItem as Json) as Array
+	Local cQry		      As Character
+	Local aMoviments    As Array
+	Local aMoviment     As Array
+	Local cTableRecue	  As Character
+	Local cPicture      As Character
+
+	aMoviments  := {}
+	aMoviment   := {}
+	cQry	      := ""
+	cTableRecue	:= ""
+	cPicture    := X3Picture('EI_VALOR')
+
+	If __MovQuery == Nil
+		cQry := "SELECT SEI.EI_FILIAL, SEI.EI_APLEMP, SEI.EI_NUMERO, SEI.EI_REVISAO, SEI.EI_SEQ, SEI.EI_DATA, SEI.EI_VALOR, SEH.EH_MOEDA FROM ? SEH "
+		cQry += "INNER JOIN ? SEI "
+		cQry += "ON SEH.EH_FILIAL = SEI.EI_FILIAL AND "
+		cQry +=    "SEH.EH_NUMERO = SEI.EI_NUMERO AND "
+		cQry +=    "SEH.EH_REVISAO = SEI.EI_REVISAO AND "
+		cQry +=    "SEI.EI_TIPODOC = 'VL' AND "
+		cQry +=    "SEI.EI_STATUS = ' ' AND "
+		cQry +=    "SEI.EI_PARCELA = ' ' "
+		cQry += "WHERE SEH.EH_FILIAL = ? AND  "
+		cQry +=    "SEH.EH_NUMERO = ? AND "
+		cQry +=    "SEH.EH_REVISAO = ? AND "
+		cQry +=    "SEH.D_E_L_E_T_ = ' ' AND "
+		cQry +=    "SEI.D_E_L_E_T_ = ' ' "
+		cQry := ChangeQuery(cQry)
+		__MovQuery := FWPreparedStatement():New(cQry)
+	EndIf
+
+	__MovQuery:SetNumeric(1, RetSqlName("SEH"))
+	__MovQuery:SetNumeric(2, RetSqlName("SEI"))
+	__MovQuery:SetString(3, xFilial("SEH", applicationItem['eh_filial']))
+	__MovQuery:SetString(4, applicationItem['eh_numero'])
+	__MovQuery:SetString(5, applicationItem['eh_revisao'])
+
+	cQry := __MovQuery:GetFixQuery()
+	cTableRecue := MpSysOpenQuery(cQry)
+
+	While (cTableRecue)->(!Eof())
+		aMoviment := {;
+			'ei_filial':  (cTableRecue)->EI_FILIAL,;
+			'ei_aplemp':  (cTableRecue)->EI_APLEMP,;
+			'ei_numero':  (cTableRecue)->EI_NUMERO,;
+			'ei_revisao': (cTableRecue)->EI_REVISAO,;
+			'ei_seq':     (cTableRecue)->EI_SEQ,;
+			'ei_data':    gfin.util.stringDatetoIso((cTableRecue)->EI_DATA),;
+			'ei_valor':   SUPERGETMV('MV_SIMB' + CValToChar((cTableRecue)->EH_MOEDA),.F.,'') + " " + AllTrim(Transform((cTableRecue)->EI_VALOR, cPicture)),;
+			'ei_valor_value': (cTableRecue)->EI_VALOR,;
+			'ei_moeda':   (cTableRecue)->EH_MOEDA;
+			}
+		Aadd(aMoviments, aMoviment)
+		(cTableRecue)->(DBSkip())
+	EndDo
+
+	(cTableRecue)->(DbCloseArea())
+
+Return aClone(aMoviments)
+
+/*/{Protheus.doc} getParcelsLoanQuery
+  obtem as parcelas de um determinado emprestimo
+
+  @param  applicationItem As Json, emprestimo
+  @return applicationItem As Json, emprestimo com as parcelas
+
+  @author Vitor Duca
+  @since 18/11/2021
+/*/
+Function getParcelsLoanQuery(applicationItem as Json) as Array
+	Local cQry		      As Character
+	Local aParcels      As Array
+	Local parcels       As Array
+	Local cTableRecue	  As Character
+	Local documentSize  As Numeric
+	Local loanSize      As Numeric
+	Local cPicture      As Character
+
+	documentSize  := Len(AllTrim(FWxFilial('SE2')))
+	loanSize      := Len(AllTrim(FWxFilial('SEH')))
+	cPicture    := X3Picture('E2_VALOR')
+
+	aParcels    := {}
+	Parcels     := {}
+	cQry	      := ""
+	cTableRecue	:= ""
+
+	If __ParcQuery == Nil
+		cQry := "SELECT SE2.E2_FILIAL, "
+		cQry +=     "SE2.E2_PREFIXO, "
+		cQry +=     "SE2.E2_NUM, "
+		cQry +=     "SE2.E2_PARCELA, "
+		cQry +=     "SE2.E2_TIPO, "
+		cQry +=     "SE2.E2_FORNECE, "
+		cQry +=     "SE2.E2_LOJA, "
+		cQry +=     "SE2.E2_VENCREA, "
+		cQry +=     "SE2.E2_VENCTO, "
+		cQry +=     "SE2.E2_BAIXA, "
+		cQry +=     "SE2.E2_VALOR, "
+		cQry +=     "SE2.E2_JUROS, "
+		cQry +=     "SE2.E2_MOEDA, "
+		// Coluna criada para controle das parcelas amortizadas e o parcelas do processo antigo
+		cQry +=     "(SELECT COUNT(SEI.EI_NUMERO) "
+		cQry +=     "FROM " + RetSqlName("SEI") + " SEI "
+		cQry +=     "WHERE SEI.EI_FILIAL = SEH.EH_FILIAL "
+		cQry +=     "AND SEI.EI_NUMERO = SEH.EH_NUMERO "
+		cQry +=     "AND SEI.EI_REVISAO = SEH.EH_REVISAO "
+		cQry +=     "AND SEI.EI_PARCELA = SE2.E2_PARCELA "
+		cQry +=     "AND SEI.EI_STATUS = '' "
+		cQry +=     "AND SEI.D_E_L_E_T_ = '') AS MOVIMENTOS "
+		cQry += "FROM " + RetSqlName("SEH") + " SEH "
+		cQry += "INNER JOIN " + RetSqlName("SE2") + " SE2 ON "
+		cQry += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SEH","EH_FILIAL","SEH"}, {"SE2","E2_FILIAL","SE2"} )  + " "
+		cQry += "AND SE2.E2_PREFIXO IN ('EMP', 'TEM') "
+		cQry += "AND SE2.E2_NUM = SEH.EH_NUMERO "
+		cQry += "AND NOT EXISTS "
+		cQry +=   "(SELECT FII_NUMORI "
+		cQry +=   "FROM " + RetSqlName("FII") + " FII "
+		cQry +=   "WHERE FII.FII_FILIAL = SE2.E2_FILIAL "
+		cQry +=     "AND FII.FII_ENTORI = 'SE2' "
+		cQry +=     "AND FII.FII_PREFOR = SE2.E2_PREFIXO "
+		cQry +=     "AND FII.FII_NUMORI = SE2.E2_NUM "
+		cQry +=     "AND FII.FII_PARCOR = SE2.E2_PARCELA "
+		cQry +=     "AND FII.FII_TIPOOR = SE2.E2_TIPO "
+		cQry +=     "AND FII.FII_CFORI = SE2.E2_FORNECE "
+		cQry +=     "AND FII.FII_LOJAOR = SE2.E2_LOJA "
+		cQry +=     "AND FII.D_E_L_E_T_ = '') "
+		cQry += "AND SE2.D_E_L_E_T_ = ' ' "
+		cQry += "WHERE SEH.EH_FILIAL = ? "
+		cQry +=   "AND SEH.EH_NUMERO = ? "
+		cQry +=   "AND SEH.EH_REVISAO = ? "
+		cQry +=   "AND SEH.EH_APLEMP = 'EMP' "
+		cQry +=   "AND SEH.EH_GERPARC = '1' "
+		cQry +=   "AND SEH.D_E_L_E_T_ = ' '
+		cQry += "ORDER BY SE2.E2_FILIAL, SE2.E2_VENCREA, SE2.E2_NOMFOR, SE2.E2_PREFIXO, SE2.E2_NUM, SE2.E2_PARCELA"
+		cQry := ChangeQuery(cQry)
+		__ParcQuery := FWPreparedStatement():New(cQry)
+	EndIf
+
+	__ParcQuery:SetString(1, xFilial("SEH", applicationItem['eh_filial']))
+	__ParcQuery:SetString(2, applicationItem['eh_numero'])
+	__ParcQuery:SetString(3, applicationItem['eh_revisao'])
+
+	cQry := __ParcQuery:GetFixQuery()
+	cTableRecue := MpSysOpenQuery(cQry)
+
+	While (cTableRecue)->(!Eof())
+		parcels := {;
+			'e2_filial': (cTableRecue)->E2_FILIAL,;
+			'e2_prefixo': (cTableRecue)->E2_PREFIXO,;
+			'e2_num': (cTableRecue)->E2_NUM,;
+			'e2_parcela': (cTableRecue)->E2_PARCELA,;
+			'e2_tipo': (cTableRecue)->E2_TIPO,;
+			'e2_fornece': (cTableRecue)->E2_FORNECE,;
+			'e2_loja': (cTableRecue)->E2_LOJA,;
+			'e2_vencrea': gfin.util.stringDatetoIso((cTableRecue)->E2_VENCREA),;
+			'e2_vencto': gfin.util.stringDatetoIso((cTableRecue)->E2_VENCTO),;
+			'e2_baixa': Iif(!Empty((cTableRecue)->E2_BAIXA), gfin.util.stringDatetoIso((cTableRecue)->E2_BAIXA), ""),;
+			'e2_valor': SUPERGETMV('MV_SIMB' + CValToChar((cTableRecue)->E2_MOEDA),.F.,'') + " " + AllTrim(Transform((cTableRecue)->E2_VALOR, cPicture)),;
+			'e2_valor_value': (cTableRecue)->E2_VALOR,;
+			'e2_juros': SUPERGETMV('MV_SIMB' + CValToChar((cTableRecue)->E2_MOEDA),.F.,'') + " " + AllTrim(Transform((cTableRecue)->E2_JUROS, cPicture)),;
+			'e2_juros_value': (cTableRecue)->E2_JUROS,;
+			'movimentos': (cTableRecue)->MOVIMENTOS;
+			}
+		Aadd(aParcels, parcels)
+		(cTableRecue)->(DBSkip())
+	EndDo
+
+	(cTableRecue)->(DbCloseArea())
+
+Return aClone(aParcels)
+
+/*/{Protheus.doc} ApplicationsLoansDelete
+  Realiza a deleção dos registros de acordo com o ID passado por parâmetro
+  @type  Function
+  @author Vitor Duca
+  @since 24/11/2021
+  @version 1.0
+  @param applicationsLoansID, Character, Id para pesquisa do registro
+  @return response, Json, Json de resposta referente a execução da operação
+/*/
+Function ApplicationsLoansDelete(aApplicationsLoansID As Array, aParams As Array) As Json
+	Local aExecAuto := {} As Array
+	Local jResponse As Json
+	Local lRevisao := Len(aApplicationsLoansID) > 2 As Logical
+	Local cIdContabil := FWUUIDV4() As Character
+
+	Private lMsErroAuto := .F. As Logical
+	Private lAutoErrNoFile := .T. As Logical
+
+	jResponse := JsonObject():new()
+	aExecAuto := FwVetByDic(aExecAuto, "SEH")
+
+	Aadd(aExecAuto,{ "EH_FILIAL" , Padr(aApplicationsLoansID[1],  TamSx3("EH_FILIAL")[1])   , NIL })
+	Aadd(aExecAuto,{ "EH_NUMERO" , Padr(aApplicationsLoansID[2],  TamSx3("EH_NUMERO")[1])   , NIL })
+
+	If lRevisao
+		Aadd(aExecAuto,{ "EH_REVISAO" , Padr(aApplicationsLoansID[3],  TamSx3("EH_REVISAO")[1])  , NIL })
+	Else
+		Aadd(aExecAuto,{ "EH_REVISAO" , Padr(" ",  TamSx3("EH_REVISAO")[1]) , NIL })
+	Endif
+
+	SEH->(DbSetOrder(1))
+	If SEH->(DBSeek(aExecAuto[1][2] + aExecAuto[2][2] + aExecAuto[3][2]))
+
+		Aadd(aExecAuto,{ "EH_APLEMP" , SEH->EH_APLEMP, NIL })
+
+		SetFunName("FINA171")
+		MsExecAuto({|a,b,c,d,e| FINA171(a,b,c,d,e)},,{{"SEHMASTER", aExecAuto}}, 5, aParams, cIdContabil)
+
+		If lMsErroAuto
+			jResponse := answerFormat(.F., 500, STR0006 , totvs.protheus.backoffice.ngf.util.GetError()) //'Não foi possivel excluir o contrato'
+		else
+			jResponse := answerFormat(.T., 201, STR0007, '') //'Contrato excluído com sucesso'
+			jResponse["response"]["contract"] := JsonObject():new()
+			jResponse["response"]["contract"]["idcontabil"] := cIdContabil
+			If !Empty(aExecAuto[1][2])
+				jResponse["response"]["contract"]["branch"] := aExecAuto[1][2]
+			Else
+				jResponse["response"]["contract"]["branch"] := cFilAnt
+			EndIf
+		Endif
+	Else
+		jResponse := answerFormat(.F., 400, STR0001, '')
+	Endif
+
+Return jResponse
+
+/*/{Protheus.doc} ApplicationsLoansInclude
+  Inclui o registro na tabela atraves da MsExecAuto
+  @type  Function
+  @author Vitor Duca
+  @since 01/12/2021
+  @version 1.0
+  @param aExecAuto, Array, Array que sera enviado para ExecAuto
+  @return jResponse, Json, Objeto de resposta que sera retornado na requisição
+/*/
+Function ApplicationsLoansInclude(aExecAuto As Array, aParams As Array, aSE2Detail As Array, aFieldsCalculate As Array) As Json
+	Local jResponse   := JsonObject():new() As Json
+	Local cIdContabil := FWUUIDV4()         As Character
+	Local cEH_NUMERO  := ""                 As Character
+	Local aAutoCab	  := {}					As Array
+	Private lMsErroAuto    := .F.           As Logical
+	Private lAutoErrNoFile := .T.           As Logical
+
+	aExecAuto  := FwVetByDic(aExecAuto, "SEH")
+	cEH_NUMERO := aExecAuto[ascan(aExecAuto,{|x| x[1]='EH_NUMERO'})][2]
+
+	aAdd(aAutoCab, {"SEHMASTER", aExecAuto})
+
+	If Len(aFieldsCalculate) > 0
+		aAdd(aAutoCab, {"CALCPARC", aFieldsCalculate})
+	Endif
+
+	If Len(aSE2Detail) > 0
+		aAdd(aAutoCab, {"SE2DETAIL", aSE2Detail})
+	Endif
+
+	SEH->(DbSetOrder(1))
+	If !SEH->(DBSeek(xFilial("SEH") + cEH_NUMERO + "01"))
+
+		SetFunName("FINA171")
+		MsExecAuto({|a,b,c,d,e| FINA171(a,b,c,d,e)},,aAutoCab, 3, aParams, cIdContabil)
+
+		If lMsErroAuto
+			FreeForUse('SEH', cEH_NUMERO  + "01")
+			jResponse := answerFormat(.F., 500, STR0008, totvs.protheus.backoffice.ngf.util.GetError()) // 'Não foi possivel incluir o contrato'
+		Else
+
+			If SEH->(FieldPos("EH_TEMPLT")) > 0 .and. !Empty(SEH->EH_TEMPLT)
+				FWLsPutAsyncInfo("LS006", RetCodUsr(), '06', "FIN_" + SEH->EH_APLEMP + "_TEMPLATE")
+			Endif
+
+			jResponse := answerFormat(.T., 201, STR0009, '') // 'Contrato cadastrado com sucesso'
+			jResponse["response"]["contract"] := JsonObject():new()
+			jResponse["response"]["contract"]["branch"] := xFilial("SEH")
+			jResponse["response"]["contract"]["number"] := cEH_NUMERO
+			jResponse["response"]["contract"]["revision"] := "01"
+			jResponse["response"]["contract"]["idcontabil"] := cIdContabil
+		Endif
+
+	Else
+		jResponse := answerFormat(.F., 400, STR0002, '')
+	Endif
+
+Return jResponse
+
+/*/{Protheus.doc} ApplicationsLoansEdit
+  Edita o registro na tabela atraves da MsExecAuto
+
+  @type  Function
+  @author vinicius.prado
+  @since 20/12/2021
+  @version 1.0
+  @param aExecAuto, Array, Array que sera enviado para ExecAuto
+  @return jResponse, Json, Objeto de resposta que sera retornado na requisição
+/*/
+Function ApplicationsLoansEdit(aExecAuto As Array, aApplicationsLoansID as Array) As Json
+	Local jResponse As Json
+	Local akey      := {} As Array
+	Local lRevisao := Len(aApplicationsLoansID) > 2 As Logical
+
+	Private lMsErroAuto := .F. As Logical
+	Private lAutoErrNoFile := .T. As Logical
+
+	jResponse := JsonObject():new()
+	aExecAuto := FwVetByDic(aExecAuto, "SEH")
+
+	Aadd(akey,{ "EH_FILIAL"     , Padr(aApplicationsLoansID[1],  TamSx3("EH_FILIAL")[1])   , NIL })
+	Aadd(akey,{ "EH_NUMERO"     , Padr(aApplicationsLoansID[2],  TamSx3("EH_NUMERO")[1])   , NIL })
+
+	Aadd(aExecAuto,{ "EH_FILIAL" , Padr(aApplicationsLoansID[1],  TamSx3("EH_FILIAL")[1])   , NIL })
+	Aadd(aExecAuto,{ "EH_NUMERO" , Padr(aApplicationsLoansID[2],  TamSx3("EH_NUMERO")[1])   , NIL })
+
+	If lRevisao
+		Aadd(akey,{ "EH_REVISAO"      , Padr(aApplicationsLoansID[3],  TamSx3("EH_REVISAO")[1])  , NIL })
+		Aadd(aExecAuto,{ "EH_REVISAO" , Padr(aApplicationsLoansID[3],  TamSx3("EH_REVISAO")[1])  , NIL })
+	Else
+		Aadd(akey,{ "EH_REVISAO"      , Padr(" ",  TamSx3("EH_REVISAO")[1]) , NIL })
+		Aadd(aExecAuto,{ "EH_REVISAO" , Padr(" ",  TamSx3("EH_REVISAO")[1]) , NIL })
+	Endif
+
+	SEH->(DbSetOrder(1))
+	If SEH->(DBSeek(akey[1][2] + akey[2][2] + akey[3][2]))
+
+		Aadd(aExecAuto,{ "EH_APLEMP" , SEH->EH_APLEMP, NIL })
+
+		SetFunName("FINA171")
+		MsExecAuto({|a,b,c| FINA171(a,b,c)},,{{"SEHMASTER", aExecAuto}}, 4)
+
+		If lMsErroAuto
+			jResponse := answerFormat(.F., 500, STR0010, totvs.protheus.backoffice.ngf.util.GetError()) //'Não foi possivel alterar o contrato'
+		else
+			jResponse := answerFormat(.T., 200, STR0011, '') //'Contrado alterado com sucesso'
+		Endif
+	Else
+		jResponse := answerFormat(.F., 400, STR0004, '')
+	Endif
+
+Return jResponse

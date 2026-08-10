@@ -1,0 +1,580 @@
+#Include "Protheus.ch"
+#Include "RwMake.ch"
+#Include "FwBrowse.ch"
+#Include "FwMvcDef.ch"
+#Include "TOPCONN.ch"
+#INCLUDE "TBICONN.CH"
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#include 'classificadorfiscal.ch'
+
+static jAliquotasCache := JsonObject():New()
+
+Namespace totvs.protheus.backoffice.fiscal.Classifier
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FISGravAliquota
+Classe que contém as operações para gravar a aliquota vinda da regra da Systax
+@author  Yuri Gimenes da Costa
+@since   11.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+CLASS FISGravAliquota
+
+    data setcod as character
+    data username as character
+    data senha as character
+
+    data rest_client as object
+    data rToken as character
+    data error as numeric
+    data error_description as character
+    data JSONResult as json
+    data cIdCenario as character
+    data cCodProd as character
+    data nOriProd as numeric
+    data cPontAtu as character
+    data jSValid as json
+    data jRet as json
+    data oJsonRetor as object
+    data oStatementAliquota as object
+
+    public data aAliquotas as array
+ 
+    Public METHOD FISGetDados(oJsonAliq,lIntegraNCM,lIPI,cMockServer,cPathAliqZero)
+    Public METHOD FISGravaAliquota(cCodAliq,cDesc,cVlOrig,cPcAlq,cTpAlq)
+    Public Method gravaDadosjson(cAliquot)
+    Public METHOD New() CONSTRUCTOR
+    Method AtuCJE(cCJECod)
+    METHOD setcod(setcod)
+    Method AliquotaZero(cIdTrib, cCST)
+    Public METHOD ExcluiRegraDeAliquota() as logical
+
+END CLASS
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New()
+Método construtor da classe
+@author  Yuri Gimenes da Costa
+@since   11.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+METHOD New() CLASS FISGravAliquota
+
+Local aParam := {"CODREGALIQ"}
+Local cParametro := GetConfigClassif(aParam)
+Local oParametro := JsonObject():New()
+
+self:jRet := JsonObject():New()
+
+If oParametro:FromJson(cParametro) == Nil
+
+    ::setcod(oParametro:CODREGALIQ)
+
+    FreeObj(oParametro)
+
+    FWFreeArray(aParam)
+
+EndIf
+
+self:aAliquotas := {}
+
+Return
+
+//-----------------------------------------------------------------
+ /*/{Protheus.doc} FISGetDados()
+Método para obter os dados dos impostos no Json
+@author 	Yuri Gimenes
+@since 		11.05.2022
+@version 	1.0
+/*/
+//-----------------------------------------------------------------
+METHOD FISGetDados(oJsonAliq,lIntegraNCM,lIPI,cMockServer,cPathAliqZero) CLASS FISGravAliquota
+
+    Local oJsonGrav     := JsonObject():New()
+    Local oJsGravDt     := Nil
+    Local nY            as integer
+    Local nYB           as integer
+    Local nYC           as integer
+    Local nGrv          as integer
+    Local cDesc         as Character
+    Local cVlOrig       as Character
+    Local cTpAlq        as Character
+    Local cPcAlq        as Character
+    Local cImposto      as Character
+    Local aJson         := {}
+    Local alRet         := {}
+    Local cStrJson      as Character
+    Local cCodAliq      as Character
+    Local aJsonRet      := {}
+    Local cAliquota     as Character
+    Local nBaseComp     as numeric
+
+    Default lIntegraNCM     := .T.
+    Default lIpi            := .F.
+    Default cMockServer     := ""
+    Default cPathAliqZero   := ""
+        
+    oJsonGrav["aliquotas"] := {}
+
+    BEGIN TRANSACTION
+
+    For nYB := 1 to Len(oJsonAliq["cenario"])
+
+        For nYC := 1 to Len(oJsonAliq["cenario"][nYB]["retorno"])
+
+            aJson := oJsonAliq["cenario"][nYB]["retorno"][nYC]:GetNames()
+
+            For nY := 1 to Len(aJson)                
+
+                cStrJson := aJson[nY]
+
+                If lIPI
+                    If ( cStrJson != "ipi" )
+                        loop
+                    EndIf
+                EndIf
+
+                If ValType(oJsonAliq["cenario"][nYB]["retorno"][nYC][cStrJson]) == "J"
+
+                    cAliquota := ""
+
+                    If ( oJsonAliq["cenario"][nYB]["retorno"][nYC][cStrJson]:hasProperty("aliquota") )
+                        cAliquota := oJsonAliq["cenario"][nYB]["retorno"][nYC][cStrJson]["aliquota"]
+                    Else
+                        If ( oJsonAliq["cenario"][nYB]["retorno"][nYC][cStrJson]:hasProperty("bc_composicao") )
+                            nBaseComp := oJsonAliq["cenario"][nYB]["retorno"][nYC][cStrJson]["bc_composicao"]
+
+                            If ( ::AliquotaZero(nBaseComp, cStrJson, cMockServer, cPathAliqZero) )
+                                cAliquota := "0.00"
+                            EndIf
+                        EndIf
+                    EndIf
+
+                    If ( !Empty(cAliquota) )
+                        //tributos comuns                           
+                        oJsGravDt := JsonObject():New()
+
+                        oJsGravDt["descricao"]      := upper(cStrJson) + " - " + str(Val(AllTrim( cAliquota )),5,2)+"%"
+                        oJsGravDt["val_origem"]     := '04'
+                        oJsGravDt["tp_aliquota"]    := '1'
+                        oJsGravDt["imposto"]        := upper(cStrJson)
+                        oJsGravDt["pc_aliquota"]    := cAliquota
+
+                        aadd(oJsonGrav["aliquotas"],oJsGravDt)
+
+                        FREEOBJ( oJsGravDt )
+                    EndIf
+
+                EndIf
+                
+            Next nY
+
+            FWFreeArray(aJson)
+
+        Next nYC
+
+    Next nYB
+
+    //Grava os dados de alíquota
+    If Len(oJsonGrav["aliquotas"]) > 0
+
+        For nGrv := 1 to Len(oJsonGrav["aliquotas"])
+
+            cDesc       := 'Aliquota ' + CValToChar(Val(oJsonGrav["aliquotas"][nGrv]["pc_aliquota"])) + '%' //oJsonGrav["aliquotas"][nGrv]["descricao"]
+            cVlOrig     := oJsonGrav["aliquotas"][nGrv]["val_origem"] 
+            cTpAlq      := oJsonGrav["aliquotas"][nGrv]["tp_aliquota"]
+            cPcAlq      := oJsonGrav["aliquotas"][nGrv]["pc_aliquota"]
+            cImposto    := oJsonGrav["aliquotas"][nGrv]["imposto"]
+
+            cCodAliq := "ALI"+AllTrim(self:setcod)
+            alRet := ::FISGravaAliquota(@cCodAliq,cDesc,cVlOrig,cPcAlq,cTpAlq)
+
+            If alRet[1]
+
+                aadd(aJsonRet,{cImposto, upper(cCodAliq)})
+
+                If alRet[2]
+                    ::setcod := ::AtuCJE(AllTrim(::setcod))
+                EndIf
+            EndIf
+
+            FWFreeArray(alRet)
+
+        Next nGrv
+
+    EndIf
+
+    FreeObj(oJsonGrav)
+
+    END TRANSACTION
+
+Return aJsonRet
+
+//-----------------------------------------------------------------
+ /*/{Protheus.doc} GravaAliquota()
+Método para gravar a alíquota no configurador de tributos
+@author 	Yuri Gimenes
+@since 		11.05.2022
+@version 	1.0
+/*/
+//-----------------------------------------------------------------
+METHOD FISGravaAliquota(cCodAliq,cDesc,cVlOrig,cPcAlq,cTpAlq, cFormula) CLASS FISGravAliquota
+
+Local oModel	            as object
+Local lExist                as Logical
+Local alRet                 := {lExist,.F.}
+Local cChaveMD5             as character
+Local oMd5Classification    as object
+Local jMd5Find              as json
+Local jChave                as json
+Local aErro                 := {} as array
+Local jAliquota             as json
+
+Default cCodAliq    := "ALI"+AllTrim(self:setcod)
+Default cDesc       := '' 
+Default cVlOrig     := '01'
+Default cPcAlq      := "0"
+Default cTpAlq      := ""
+Default cFormula    := ""
+
+oModel := FWLoadModel('FISA162')
+oModel:SetOperation(MODEL_OPERATION_INSERT)
+oModel:Activate()
+
+oModel:SetValue('FISA162','F28_CODIGO', cCodAliq)
+oModel:SetValue('FISA162','F28_DESC'  , cDesc)
+oModel:SetValue('FISA162','F28_VALORI', cVlOrig)
+
+If !Empty(cTpAlq) 
+    oModel:SetValue('FISA162','F28_TPALIQ', cTpAlq)
+Endif
+
+If  cVlOrig == "06" .and. !Empty(cFormula)        
+    Fsa162Form(cFormula)
+else
+    oModel:SetValue('FISA162','F28_ALIQ  ', Val(cPcAlq)) 
+Endif
+
+jChave := JsonObject():New()
+jChave['F28_TPALIQ'] := oModel:GetValue('FISA162', 'F28_TPALIQ')
+jChave['CIN_FNPI'] := xFisSYard(oModel:GetValue('FORMULALQ', 'CIN_FORMUL'))
+
+jMd5Find := JsonObject():New()
+jMd5Find['cache'] := jAliquotasCache
+jMd5Find['table'] := 'F28'
+jMd5Find['index'] := 7
+jMd5Find['codeField'] := 'F28_CODIGO'
+jMd5Find['key'] := jChave
+jMd5Find['ruleTypes'] := '2'
+
+oMd5Classification := Md5Classification():New()
+oMd5Classification:Find(jMd5Find)
+lExist := oMd5Classification:GetFound()
+cChaveMD5 := oMd5Classification:GetMd5Key()
+
+if ( lExist )
+    cCodAliq := oMd5Classification:GetCode()
+endif
+
+alRet := { lExist, .F. }
+
+if ( !lExist )
+    If oModel:VldData()
+        oModel:CommitData()
+        oModel:DeActivate()
+
+        alRet[1] := .T.
+        alRet[2] := .T.
+    Else
+        aErro := oModel:GetErrorMessage()
+
+        self:jRet["sucesso"] := .F.
+        self:jRet["erro"]    := {}
+        aadd(self:jRet["erro"],oModel:aErrorMessage[1]+"-"+oModel:aErrorMessage[2]+"-"+oModel:aErrorMessage[3]+"-"+oModel:aErrorMessage[4]+"-"+oModel:aErrorMessage[5]+"-"+oModel:aErrorMessage[6])
+        DisarmTransaction()
+    EndIf
+endif
+
+oModel:DeActivate()
+oModel:Destroy()
+oModel := Nil
+FreeObj( oModel )
+
+oMd5Classification:Destroy()
+FwFreevar(oMd5Classification)
+FwFreevar(jMd5Find)
+FwFreevar(jChave)
+
+if ( alRet[1] )
+    jAliquotasCache[cChaveMD5] := cCodAliq  
+endif
+
+jAliquota := JsonObject():New()
+jAliquota['codigo'] := cCodAliq
+jAliquota['incluido'] := alRet[2]
+jAliquota['md5'] := cChaveMD5
+
+if ( Len(aErro) > 0 )
+    jAliquota['erro'] := JsonObject():New()
+    jAliquota['erro']['formularioDeOrigem'] := AllToChar(aErro[1]) 
+    jAliquota['erro']['campoDeOrigem'] := AllToChar(aErro[2])
+    jAliquota['erro']['formularioDeErro'] := AllToChar(aErro[3])
+    jAliquota['erro']['campoDeErro'] := AllToChar(aErro[4])
+    jAliquota['erro']['erro'] := AllToChar(aErro[5])
+    jAliquota['erro']['mensagemDoErro'] := AllToChar(aErro[6])
+    jAliquota['erro']['mensagemDaSolucao'] := AllToChar(aErro[7])
+    jAliquota['erro']['valorAtribuido'] := AllToChar(aErro[8])
+    jAliquota['erro']['valorAnterior'] := AllToChar(aErro[9])
+endif
+
+Aadd(self:aAliquotas, jAliquota)
+
+ASize(aErro, 0)
+
+Return alRet
+
+/*/{Protheus.doc} gravaDadosjson
+
+    Metodo para gravar os dados de alíquota no configurador de tributos recebendo um json com os dados de alíquota
+
+    @type method
+    @author Rafael Oliveira
+    @since 19/12/2023
+    @version 12.1.2310
+    @param cAliquot, character, json com os dados de alíquota
+    @return lRet, logical, retorna .T. se gravou com sucesso e .F. se não gravou
+    /*/
+Method gravaDadosjson(cAliquot as character) Class FISGravAliquota
+
+    Local aAliquot          as array
+    Local aAliquotas        as array
+    Local aRegisterAliq     as array
+    Local aRet              as array
+    Local aTaxes            as array
+    Local cCodAliq          as character
+    Local cDesc             as character
+    Local cFormula          as character
+    Local cPcAlq            as character
+    Local cTax              as character
+    Local cTpAlq            as character
+    Local cVlOrig           as character
+    Local jAliquot          as json
+    Local jCadastraAliquota as json
+    Local jTaxes            as json
+    Local nX, nY, nR        as numeric
+
+    aAliquot      := {}
+    aAliquotas    := {}
+    aRegisterAliq := {}
+    aRet          := {}
+    aTaxes        := {}
+
+    jTaxes := JsonObject():New()
+
+    If jTaxes:FromJson(cAliquot) == Nil
+
+        aAliquot := jTaxes['ncm']:getnames()
+
+        For nX := 1 to len(aAliquot) 
+
+            aTaxes := jTaxes['ncm'][aAliquot[nx]]:getnames()
+            
+            For nY := 1 to len(aTaxes)
+
+                jAliquot := jTaxes['ncm'][aAliquot[nx]][aTaxes[nY]]
+
+                If valType(jAliquot) == 'J' .and. jAliquot:hasProperty('aliquot')
+
+                    aAliquotas := jAliquot['aliquot']:getnames()
+
+                    For nR := 1 to len(aAliquotas)
+
+                        jCadastraAliquota := jAliquot['aliquot'][aAliquotas[nR]]
+
+                        cDesc       := jCadastraAliquota['descricao']
+                        cVlOrig     := jCadastraAliquota['val_origem']                        
+                        cTpAlq      := jCadastraAliquota['tp_aliquota']
+
+                        If jCadastraAliquota:hasproperty('aliquota')
+                            cPcAlq      := jCadastraAliquota['aliquota']
+                        Endif
+
+                        If jCadastraAliquota:hasproperty('formula')
+                            cFormula   := jCadastraAliquota['formula']
+                        Endif
+
+                        cTax := aTaxes[nY]
+
+                        cCodAliq      := "ALI"+AllTrim(::setcod)
+
+                        aRet := Self:FISGravaAliquota(@cCodAliq,cDesc,cVlOrig,cPcAlq,cTpAlq, cFormula)
+
+                        If aRet[1]
+                            aadd(aRegisterAliq,{cTax,upper(cCodAliq), aAliquot[nX]})
+                            If aRet[2]
+                                ::setcod := ::AtuCJE(AllTrim(::setcod))
+                            Endif
+                        EndIf
+                    
+                    Next nR
+                Endif                
+            Next nY
+        Next nX
+
+        aSize( aTaxes, 0 )
+        aSize( aAliquot, 0 )
+        aSize( aAliquotas, 0 )
+        aSize( aRet, 0 )
+        FWFreeVar( jCadastraAliquota )
+        FWFreeVar( jAliquot )        
+        FWFreeVar( jTaxes )
+        
+    Endif
+
+Return aRegisterAliq
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setcod
+Método para passar o código da regra de alíquota no Configurador.
+@author  Yuri Gimenes
+@since   11.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method setcod(setcod) Class FISGravAliquota
+
+    Self:setcod := setcod
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setcod
+Método para passar o código da regra de alíquota no Configurador.
+@author  Yuri Gimenes
+@since   11.05.2022
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method AtuCJE(cCJECod) Class FISGravAliquota
+
+DbSelectArea("CJE")
+CJE->(DbSetOrder(1))
+
+If CJE->(MsSeek(xFilial("CJE")+"CODREGALIQ"))
+    RecLock("CJE", .F.)
+        CJE->CJE_CONTEU := AllTrim(Padl(cValToChar(Val(cCJECod)+1),3,"0"))
+        ::setcod := Padl(cValToChar(Val(cCJECod)+1),3,"0")
+    CJE->(MsUnlock())
+EndIF
+
+CJE->(DbCloseArea())
+
+Return ::setcod
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AliquotaZero
+Verifica se a alíquota é zerada para que possa fazer a gravação
+
+@author  Juliano Fernandes
+@since   13.12.2023
+@return  lAliquotaZero - Logical - Indica se a alíquota é zerada
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method AliquotaZero(nBaseComp, cTributo, cMockServer, cPathAliqZero) Class FISGravAliquota
+
+    Local oFISGravaBase as object
+    Local oFormula      as object
+    Local oFormulaDt    as object
+    Local lAliquotaZero as logical
+    Local nI            as integer
+
+    oFISGravaBase := FISGravaBase():New()
+    oFormula := oFISGravaBase:FISGetFormulaBase(nBaseComp, cTributo, cMockServer, cPathAliqZero)
+
+    If ValType(oFormula) == "J"     
+        If ValType(oFormula["indicadorCredito"]) <> "U"
+            For nI := 1 To Len(oFormula["indicadorCredito"])
+                oFormulaDt := oFormula["indicadorCredito"][nI]
+
+                If ( cTributo $ oFormulaDt["tributo"] )
+                    If ( nBaseComp == 0 .And. ( oFormulaDt["indicador"] == "0" .Or. Empty(oFormulaDt["indicador"]) ) )
+                        
+                        lAliquotaZero := ( "zero" $ Lower(oFormulaDt["formulaBC"]) ) // "Valor do crédito = “0” (zero)"
+
+                        FreeObj(oFormulaDt)
+                        Exit
+                        
+                    EndIf
+                EndIf
+
+                FreeObj(oFormulaDt)
+            Next nI
+        EndIf
+
+    EndIf
+
+    FreeObj(oFISGravaBase)
+    FreeObj(oFormula)
+
+Return lAliquotaZero
+
+/*/{Protheus.doc} ExcluiRegraDeAliquota
+
+Método responsável por excluir uma Regra de Alíquota
+
+@author Juliano Fernandes
+@since 18/06/2024
+@version 12.1.2310
+/*/
+method ExcluiRegraDeAliquota(jRegraDeAliquota as json, jRegra as json) as logical class FISGravAliquota
+
+	local lOk as logical
+	local oModel as object
+	local aErro as array
+
+    lOk := .T.
+
+    DbSelectArea('F28')
+    F28->(DbSetOrder(1)) // F28_FILIAL+F28_CODIGO+F28_ALTERA+F28_ID
+    if ( !F28->( DbSeek( FWxFilial('F28') + jRegraDeAliquota['codigo'] + '2' ) ) )
+        lOk := .F.
+
+        jRegra['mensagemDoErro'] := STR0251 //'Regra de Alíquota não pode ser excluída'
+        jRegra['codigoDoRegistro'] := jRegraDeAliquota['codigo']
+        jRegra['detalheDoErro'] := STR0237 //'Registro não encontrado'
+    endif
+
+    if ( lOk )
+        oModel := FWLoadModel('FISA162')
+        oModel:SetOperation(MODEL_OPERATION_DELETE)
+        oModel:Activate()
+
+        if ( oModel:VldData() )
+            jAliquotasCache:DelName(F28->F28_CHVMD5)
+            oModel:CommitData()
+        else
+            lOk := .F.
+
+            aErro := oModel:GetErrorMessage()
+
+            jRegra['mensagemDoErro'] := STR0251 //'Regra de Alíquota não pode ser excluída'
+            jRegra['codigoDoRegistro'] := jRegraDeAliquota['codigo']            
+            jRegra['detalheDoErro'] := AllToChar(aErro[6])
+
+            ASize(aErro, 0)
+        endif
+
+        oModel:Deactivate()
+
+        oModel:Destroy()
+
+        FreeObj(oModel) 
+    endif
+
+    F28->(DbCloseArea())
+
+return lOk

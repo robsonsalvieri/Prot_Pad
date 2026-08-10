@@ -1,0 +1,214 @@
+#include "tlpp-core.th"
+#include "health.plan.integration.grr.error.report.ch"
+
+#define INTEGRATE_YES "1"
+#define INTEGRATE_NO "2"
+
+#define STATUS_ACTIVE "1"
+#define STATUS_FAILED "2"
+#define STATUS_CANCELED "3"
+
+namespace totvs.protheus.health.plan.integration.grr
+
+/*/{Protheus.doc} subscriptionErrorReport
+Gera o relatório com as subscrições que apresentaram erro na integração com a plataforma de Gestão de Receita Recorrente (GRR)
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 05/06/2025
+/*/
+function subscriptionErrorReport()
+
+    local oReport as object
+    local cHealthInsurerCode := plsIntPad() as character
+
+    if existsSubscriptionErrors(cHealthInsurerCode)
+        oReport := reportDef()
+        oReport:printDialog()   
+    else
+        fwAlertWarning(STR0001, "") // "Nenhuma subscrição com erro foi encontrada."
+    endif
+
+    freeObj(oReport)
+
+return
+
+/*/{Protheus.doc} reportDef
+Retorna a definição do relatório de subscrições com erro de integração para uso em exportações e visualizações
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 05/06/2025
+@return object, definição do relatório com colunas e formatação
+/*/
+static function reportDef() as object
+
+    local oReport as object
+    local oSection1 as object
+    local cTitle := STR0002 as character // "Exportar Subscrições com Erro"
+
+    oReport := TReport():new("SUBSCRIPTION-ERROR", cTitle, nil, {|oReport| printReport(oReport)})
+    oReport:setDevice(4) // Planilha
+    oReport:setLandscape()
+
+    oSection1 := TRSection():new(oReport, "subscriptionErrors")
+
+    TRCell():new(oSection1, "COMPANY_CODE", nil, STR0003, "", tamSX3("BA3_CODEMP")[1]) // "Empresa"
+    TRCell():new(oSection1, "COMPANY_NAME", nil, STR0004, "", tamSX3("BG9_DESCRI")[1]) // "Descrição"
+    TRCell():new(oSection1, "FAMILY_CODE", nil, STR0005, "", tamSX3("BA3_MATRIC")[1]) // "Família"
+    TRCell():new(oSection1, "HOLDER_NAME", nil, STR0006, "", tamSX3("BA1_NOMUSR")[1]) // "Titular"
+    TRCell():new(oSection1, "CUSTOMER_CODE", nil, STR0008, "", tamSX3("A1_COD")[1] + tamSX3("A1_LOJA")[1] + 1) // "Cliente"
+    TRCell():new(oSection1, "CUSTOMER_NAME", nil, STR0009, "", tamSX3("A1_NOME")[1]) // "Nome"
+    TRCell():new(oSection1, "ERROR_MESSAGE", nil, STR0007, "", 200) // "Erro"
+    
+return oReport
+
+/*/{Protheus.doc} printReport
+Imprime ou exporta o relatório de subscrições com erro de integração, com base na definição e nos dados informados
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 05/06/2025
+@param oReport, object, objeto de relatório contendo os dados e definição da estrutura
+/*/
+static function printReport(oReport as object)
+
+    local oSection1 := oReport:section(1) as object
+    local cAlias as character
+    local aFields as array
+    local aPDFields as array
+    local lObfuscated as logical
+    local jObfuscatedField := JsonObject():new() as object
+    local cHealthInsurerCode := plsIntPad() as character
+    local jCustomer as json
+    LOCAL cCustomerName as character
+
+    aFields := {"BA1_NOMUSR", "A1_NOME"}
+
+    cAlias := openAlias(cHealthInsurerCode)
+
+    if !(cAlias)->(eof())
+        aPDFields := FwProtectedDataUtil():usrAccessPDField(__cUserID, aFields)
+        lObfuscated := len(aPDFields) <> len(aFields)
+
+        jObfuscatedField["BA1_NOMUSR"] := lObfuscated .and. aScan(aPDFields, "BA1_NOMUSR") == 0
+        jObfuscatedField["A1_NOME"] := lObfuscated .and. aScan(aPDFields, "A1_NOME") == 0
+
+        while !(cAlias)->(eof())
+            jCustomer := getBillingCustomer(cHealthInsurerCode, (cAlias)->BA3_CODEMP, (cAlias)->BA3_MATRIC)
+            cCustomerName := posicione("SA1", 1, xFilial("SA1") + jCustomer["code"] + jCustomer["branch"], "A1_NOME")
+
+            oSection1:init()
+
+            oSection1:cell("COMPANY_CODE"):setValue((cAlias)->BA3_CODEMP)
+            oSection1:cell("COMPANY_NAME"):setValue((cAlias)->BG9_DESCRI)
+            oSection1:cell("FAMILY_CODE"):setValue((cAlias)->BA3_MATRIC)
+            oSection1:cell("HOLDER_NAME"):setValue(iif(jObfuscatedField["BA1_NOMUSR"], FwProtectedDataUtil():valueAsteriskToAnonymize((cAlias)->BA1_NOMUSR), (cAlias)->BA1_NOMUSR))
+            oSection1:cell("CUSTOMER_CODE"):setValue(jCustomer["code"] + "/" + jCustomer["branch"])
+            oSection1:cell("CUSTOMER_NAME"):setValue(iif(jObfuscatedField["A1_NOME"], FwProtectedDataUtil():valueAsteriskToAnonymize(cCustomerName), cCustomerName))
+            oSection1:cell("ERROR_MESSAGE"):setValue((cAlias)->BA3_GRRMSG)
+            
+            oSection1:printLine()
+
+            (cAlias)->(dbSkip())
+        endDo
+
+        oSection1:finish()
+    endif
+
+    (cAlias)->(dbCloseArea())
+
+    freeObj(jObfuscatedField)
+    freeObj(jCustomer)
+    fwFreeArray(aFields)
+    fwFreeArray(aPDFields)
+
+return
+
+/*/{Protheus.doc} openAlias
+Abre o alias com base no código da operadora informado
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 05/06/2025
+@param cHealthInsurerCode, character, código da operadora de saúde
+@return character, nome do alias aberto
+/*/
+static function openAlias(cHealthInsurerCode as character) as character
+
+    local cAlias := getNextAlias() as character
+    local cHolderType := superGetMV("MV_PLCDTIT", .F., "T") as character
+    local cIntegrateYes := INTEGRATE_YES as character
+    local cStatusFailed := STATUS_FAILED as character
+
+    beginSql alias cAlias
+		SELECT
+            BA3.BA3_CODEMP,
+            BG9.BG9_DESCRI,
+            BA3.BA3_MATRIC,     
+	        BA1.BA1_NOMUSR,
+            BA3.BA3_GRRMSG
+		FROM
+			%table:BA3% BA3	
+        INNER JOIN %table:BG9% BG9 ON
+            BG9.BG9_FILIAL = %xfilial:BG9% AND
+            BG9.BG9_CODINT = BA3.BA3_CODINT AND
+            BG9.BG9_CODIGO = BA3.BA3_CODEMP AND
+            BG9.%notDel%
+        INNER JOIN %table:BA1% BA1 ON
+            BA1.BA1_FILIAL = %xfilial:BA1% AND
+            BA1.BA1_CODINT = BA3.BA3_CODINT AND
+            BA1.BA1_CODEMP = BA3.BA3_CODEMP AND
+            BA1.BA1_MATRIC = BA3.BA3_MATRIC AND
+            BA1.BA1_TIPUSU = %exp:cHolderType% AND
+            BA1.%notDel%	
+		WHERE
+			BA3.BA3_FILIAL = %xfilial:BA3% AND
+			BA3.BA3_CODINT = %exp:cHealthInsurerCode% AND
+            BA3.BA3_INTGRR = %exp:cIntegrateYes% AND
+            BA3.BA3_GRRSIT = %exp:cStatusFailed% AND
+			BA3.%notDel%
+	endSql
+
+return cAlias
+
+/*/{Protheus.doc} existsSubscriptionErrors
+Verifica se existem subscrições com erro de integração para a operadora informada
+@type function
+@version 12.1.2510
+@autor vinicius.queiros
+@since 05/06/2025
+@param cHealthInsurerCode, character, código da operadora de saúde
+@return logical, verdadeiro se houver subscrições com erro de integração
+/*/
+function existsSubscriptionErrors(cHealthInsurerCode as character) as logical
+
+    local lExists := .F. as logical
+    local cQuery as character
+    local oExecStmt as object
+    local nOrder := 1 as numeric
+
+    cQuery := " SELECT COUNT(?) TOTAL "
+    cQuery += " FROM ? BA3 "
+    cQuery += " WHERE BA3.BA3_FILIAL = ? "
+    cQuery += "   AND BA3.BA3_CODINT = ? "
+    cQuery += "   AND BA3.BA3_INTGRR = ? "
+    cQuery += "   AND BA3.BA3_GRRSIT = ? "
+    cQuery += "   AND BA3.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BA3.BA3_MATRIC")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BA3"))
+	oExecStmt:setString(nOrder++, xFilial("BA3"))
+    oExecStmt:setString(nOrder++, cHealthInsurerCode)
+	oExecStmt:setString(nOrder++, INTEGRATE_YES)
+    oExecStmt:setString(nOrder++, STATUS_FAILED)
+	oExecStmt:setString(nOrder++, " ")
+
+    lExists := oExecStmt:execScalar("TOTAL") > 0
+
+    oExecStmt:destroy()
+    freeObj(oExecStmt)
+
+return lExists
