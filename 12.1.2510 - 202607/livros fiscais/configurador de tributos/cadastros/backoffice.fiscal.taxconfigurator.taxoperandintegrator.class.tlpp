@@ -1,0 +1,888 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "MATXDEF.CH"
+
+namespace totvs.protheus.backoffice.fiscal.taxoperandintegrator
+
+/*/{Protheus.doc} TaxOperandIntegrator
+
+    Classe responsável por realizar a recepção dos tributos com operando de integração.
+    Processa o JSON de tributos dos itens fiscais, valida o schema, verifica a existência dos operandos de integração,
+    realiza a inclusão dos valores dos tributos na estrutura interna e atualiza as referências conforme as regras de escrituração.
+    Permite o controle de avisos e erros durante o processamento, retornando mensagens detalhadas em formato JSON.
+    Suporta tanto tributos legados quanto novos, com mapeamento dinâmico das propriedades e referências utilizadas.
+
+    @author rhuan.carvalho
+    @since 16/09/2025
+    @version 1.0
+    /*/
+Class TaxOperandIntegrator
+    Private Data jReturnError     as json //Objeto JSON para armazenar json de erro
+    Private Data jReturnSuccess   as json //Objeto JSON para armazenar json de sucesso
+    Private Data jPropertiesTax   as json //Objeto JSON para armazenar as propriedades esperadas no JSON de tributos
+    Private Data jLegacyTaxIds    as json //Objeto JSON para armazenar os IDs dos tributos processados
+    Private Data jImputDataTax    as json //Objeto JSON para armazenar o JSON de tributos recebido
+    Private Data jPosFieldRef     as json //Objeto JSON para armazenar a posição da referência dos campos no array de referências
+    Private Data lWarning         as logical //Flag para indicar se houve aviso durante o processamento
+    Private Data jRetReference    as json //Objeto JSON para armazenar o mapeamento das referências dos campos
+    
+    Public Method new() CONSTRUCTOR //Método construtor da classe TaxOperandIntegrator
+    Public Method ProcessItemTaxJson(jData as json) //Método público para processar o JSON de tributos do item
+
+    Private Method CheckItemTaxJsonSchema(jData as json) //Método privado para validar o schema do JSON   
+    Private Method SetPropertyMesageError(cProperty as character, cMessage as character) as json //Método privado para configurar a propriedade de mensagem de erro
+    Private Method ChargePropertyTax() as json //Método privado para carregar as propriedades esperadas no JSON
+    Private Method CheckTaxItem(cIdTrib as character, nItem as numeric) as logical //Método privado para verificar se o ID do tributo esta no processamento da matxfis
+    Private Method HasWarning() as logical //Método privado para verificar se houve aviso durante o processamento
+    Private Method ExistsOperandIntegration() //Método privado para verificar se o tributo possui operando de integração
+    Private Method ImputTaxOnMatxfis() //Método privado para realizar incluir os valores dos tributos na MATXFIS
+    Private Method PositionAndUpdateTaxReferences() //Método privado para atualizar os dados na tabela F2D
+    Private Method GetReference(cProperty as character)//Método privado para retornar a posição da referência do tributo no array de referências
+    Private Method UpdateInternalReferences(cIdTrib as character, nItem as numeric, jPropertiesTax as json) //Método privado para inserir os dados na tabela F2D dos tributos legados
+    Private Method HasBookkeepingProperty(nItem as numeric, cIdTrib as character) as logical //Método privado para verificar se o tributo possui a propriedade de regra de escrituração
+    Private Method SetSuccessStatus(status as character, cMessage as character) //Método privado para configurar a propriedade de mensagem de sucesso
+    Private Method SetIncidenceOption(aNfItem as array, nItem as numeric, nPosTx as numeric, jProperties as json) //Método privado para configurar a opção de incidência dos tributos
+    Private Method destroy() //Método privado para destruir os objetos JSON criados
+
+EndClass
+
+/*/{Protheus.doc} new
+    Inicializa os atributos da classe TaxOperandIntegrator, criando os objetos JSON necessários, o array de referências de tributos e o flag de aviso.
+    Também carrega as propriedades esperadas para o processamento dos tributos.
+
+    @author user
+    @since 16/09/2025
+    @version 1.0
+    @param , , Não recebe parâmetros.
+    @return , void, Não retorna valor.
+    /*/
+Method new() Class TaxOperandIntegrator
+    self:lWarning         := .F.
+    self:jReturnError     := JsonObject():New()
+    self:jReturnSuccess   := JsonObject():New()
+    self:jPropertiesTax   := JsonObject():New()
+    self:jImputDataTax    := JsonObject():New()
+    self:jLegacyTaxIds    := JsonObject():New()
+    self:jPosFieldRef     := JsonObject():New()
+    self:jRetReference    := JsonObject():New()
+
+    self:ChargePropertyTax()
+Return 
+
+/*/{Protheus.doc} ProcessItemTaxJson
+    Processa o JSON de tributos do item, realizando as validações de schema, verificando a existência de operandos de integração e incluindo os valores dos tributos na MATXFIS.
+    Retorna o resultado do processamento em formato JSON, contendo mensagens de sucesso ou erro.
+
+    @author rhuan.carvalho
+    @since 16/09/2025
+    @version 1.0
+    @param json, json, JSON contendo os dados dos tributos dos itens a serem processados
+    @return cReturnProcess, character, JSON com o resultado do processamento (sucesso ou erro)
+    /*/
+Method ProcessItemTaxJson(jData as json) Class TaxOperandIntegrator
+    Local cReturnProcess := ""
+    
+    self:CheckItemTaxJsonSchema(jData)
+    self:ExistsOperandIntegration()
+    self:ImputTaxOnMatxfis()
+    
+    If self:HasWarning()
+        cReturnProcess := self:jReturnError:ToJson()
+    Else
+        cReturnProcess := self:jReturnSuccess:ToJson()
+    EndIf
+
+    self:destroy()
+    
+Return cReturnProcess
+
+/*/{Protheus.doc} CheckItemTaxJsonSchema
+    Valida o schema do JSON de tributos recebido, verificando se os itens e tributos estão corretos, se possuem as propriedades obrigatórias e se não há propriedades inválidas.
+    Caso encontre inconsistências, registra mensagem de aviso e interrompe o processamento.
+
+    @rhuan.carvalho
+    @since 16/09/2025
+    @version 1.0
+    @param json, json, JSON contendo os dados dos tributos dos itens a serem processados
+    @return , void, Não retorna valor. Em caso de erro, preenche o objeto de erro e ativa o flag de aviso.
+    /*/
+Method CheckItemTaxJsonSchema(jData as Json) Class TaxOperandIntegrator
+    Local aItems         := {} as array
+    Local aTributos      := {} as array
+    Local aProperties    := {} as array
+    Local cIDTrib        := "" as character
+    Local nItem          := 0  as numeric
+    Local nTributo       := 0  as numeric
+    Local nPropertNw     := 0  as numeric
+    Local nPropertLg      := 0  as numeric
+    Local jPropertiesReq := JsonObject():New()
+
+    If Valtype(jData) <> "J"
+        self:SetPropertyMesageError("warning","É Necessário enviar um Json.")
+        return
+    EndIf
+    
+    aItems := jData:GetNames()   
+    If Len(aItems) == 0 
+        self:SetPropertyMesageError("warning","O JSON informado não contém itens.")
+        return
+    EndIf
+    
+    For nItem := 1 to Len(aItems)
+        aTributos := jData[aItems[nItem]]:GetNames()
+        For nTributo := 1 to Len(aTributos)
+            cIDTrib := aTributos[nTributo]
+            // Verfica se o ID do tributo está no processamento da matxfis
+            If !self:CheckTaxItem(cIDTrib, val(aItems[nItem]))
+                self:SetPropertyMesageError("warning","O JSON informado contém o ID "+cIDTrib+", não esta amarrado na operação ou a matxfis não esta inicializada.")
+                return
+            EndIf
+            
+            self:jImputDataTax := jData  
+            aProperties    := self:jImputDataTax[aItems[nItem]][cIDTrib]:GetNames()
+            jPropertiesReq := self:jImputDataTax[aItems[nItem]][cIDTrib]
+            
+            If Len(aProperties) == 0 
+                self:SetPropertyMesageError("warning","O JSON informado não contém propriedades para o tributo: "+aTributos[nTributo])
+                return
+            EndIf
+            
+            If !self:jLegacyTaxIds:hasProperty(cIDTrib)
+                // Verifica se há propriedades inválidas para os novos tributos
+                For nPropertNw := 1 to Len(aProperties)
+                    If !self:jPropertiesTax["Propriedades"]["new"]:hasProperty(aProperties[nPropertNw])
+                        self:SetPropertyMesageError("warning","O JSON informado contém a propriedade inválida: "+aProperties[nPropertNw])
+                        return       
+                    EndIf
+                Next nPropertNw
+            Else
+                // Verifica se há propriedades inválidas para os tributos legados
+                For nPropertLg := 1 to Len(aProperties)
+                    If !self:jPropertiesTax["Propriedades"]["legacy"]:hasProperty(aProperties[nPropertLg])
+                        self:SetPropertyMesageError("warning","O JSON informado contém a propriedade inválida: "+aProperties[nPropertLg])
+                        return       
+                    EndIf
+                Next nPropertLg
+            EndIf
+            
+            // Verifica se todas as propriedades mínimas obrigatórias para os tributos estão presentes
+            If !(jPropertiesReq:hasProperty("base_valor") .and. jPropertiesReq:hasProperty("aliquota") .and. jPropertiesReq:hasProperty("valor"))
+                self:SetPropertyMesageError("warning","O JSON informado não contém as propriedades mínimas obrigatórias (base_valor, aliquota e valor) para o tributo: "+aTributos[nTributo])
+                return
+            EndIf
+            
+            // Verifica se o json do tributo possui propriedade de regra de escrituração e se todas as propriedades obrigatórias estão presentes
+            If self:HasBookkeepingProperty(val(aItems[nItem]), cIDTrib)
+                If !(jPropertiesReq:hasProperty("esc_vl_tributado") .and. jPropertiesReq:hasProperty("esc_vl_isento") .and. jPropertiesReq:hasProperty("esc_vl_outros"))
+                    self:SetPropertyMesageError("warning","O JSON informado não contém todas as propriedades obrigatórias para o tributo com regra de escrituração: "+aTributos[nTributo])
+                    return
+                EndIf
+            Endif
+        Next nTributo
+    Next nItem
+    
+    aSize(aItems, 0)
+    aSize(aTributos, 0)
+    aSize(aProperties, 0)
+    FreeObj(jPropertiesReq)   
+return
+
+/*/{Protheus.doc} SetPropertyMesageError
+    Configura uma mensagem de erro no objeto JSON de retorno, associando a mensagem à propriedade informada e ativa o flag de aviso para indicar que houve erro no processamento.
+
+    @author user
+    @since 16/09/2025
+    @version 1.0
+    @param cProperty, character, Nome da propriedade onde será registrada a mensagem de erro
+    @param cMessage, character, Mensagem de erro a ser registrada
+    @return self, json, Retorna o próprio objeto da classe para permitir encadeamento
+    /*/
+Method SetPropertyMesageError(cProperty as character, cMessage as character) as json Class TaxOperandIntegrator
+    
+    self:jReturnError[cProperty]    := cMessage
+    self:lWarning                   := .T.
+    
+Return self
+
+/*/{Protheus.doc} ChargePropertyTax
+    Carrega as propriedades esperadas no JSON de tributos, definindo quais são obrigatórias e quais são opcionais para tributos legados e novos.
+    Também configura o mapeamento das referências internas do sistema para cada propriedade, facilitando a atualização dos dados na estrutura de integração.
+    Essa configuração é utilizada durante o processamento dos tributos para validar e mapear corretamente os dados recebidos.
+
+
+    @author rhuan.carvalho
+    @since 16/09/2025
+    @version 1.0
+    @param , , Não recebe parâmetros.
+    @return self, json, Retorna o próprio objeto da classe para permitir encadeamento.
+    /*/
+Method ChargePropertyTax() as json Class TaxOperandIntegrator
+
+    self:jPropertiesTax := { "Propriedades": { ;
+        "legacy": { ;
+            "base_valor": "F2D", ;
+            "base_quantidade": "F2D", ;
+            "base_um": "F2D", ;
+            "aliquota": "F2D", ;
+            "valor": "F2D", ;
+            "mva": "F2D", ;
+            "aux_mva": "F2D", ;
+            "pauta": "F2D", ;
+            "vl_majorado": "F2D", ;
+            "aux_majoracao": "F2D", ;
+            "vl_majoracao": "F2D", ;
+            "pc_majorcao": "F2D", ;
+            "aliquota_tribut": "F2D", ;
+            "ded_dep": "F2D", ;
+            "esc_tab_CST": "CJ3", ;
+            "esc_CST": "CJ3", ;
+            "esc_vl_tributado": "CJ3", ;
+            "esc_vl_isento": "CJ3", ;
+            "esc_vl_outros": "CJ3", ;
+            "esc_vl_diferido": "CJ3", ;
+            "esc_pc_diferido": "CJ3", ;
+            "esc_pc_reducao_base": "CJ3", ;
+            "esc_base_original": "CJ3", ;
+            "esc_pc_reducao_aliq": "CJ3", ;
+            "esc_aliquota_original": "CJ3", ;
+            "esc_vl_nao_tributado": "CJ3", ;
+            "esc_vl_majorado": "CJ3", ;
+            "esc_pc_majoracao": "CJ3", ;
+            "esc_vl_pauta": "CJ3", ;
+            "esc_vl_mva": "CJ3", ;
+            "esc_vl_aux_mva": "CJ3", ;
+            "esc_vl_aux_majoracao": "CJ3", ;
+            "esc_aliquota_tributada": "CJ3" ;
+        }, ;
+        "new": { ;
+            "base_valor": "F2D", ;
+            "base_quantidade": "F2D", ;
+            "base_um": "F2D", ;
+            "aliquota": "F2D", ;
+            "valor": "F2D", ;
+            "esc_CST": "CJ3", ;
+            "esc_CCT": "CJ3", ;
+            "esc_vl_tributado": "CJ3", ;
+            "esc_vl_isento": "CJ3", ;
+            "esc_vl_outros": "CJ3", ;
+            "esc_vl_diferido": "CJ3", ;
+            "esc_pc_diferido": "CJ3", ;
+            "esc_pc_reducao_base": "CJ3", ;
+            "esc_base_original": "CJ3", ;
+            "esc_pc_reducao_aliq": "CJ3", ;
+            "esc_aliquota_original": "CJ3" ;
+        } ;
+    } }
+
+    self:jPosFieldRef := {;
+                            "TG_LF_CST": 1,;
+                            "TG_LF_VALTRIB": 2,;
+                            "TG_LF_ISENTO": 3,;
+                            "TG_LF_OUTROS": 4,;
+                            "TG_LF_NAO_TRIBUTADO": 5,;
+                            "TG_LF_DIFERIDO": 6,;
+                            "TG_LF_MAJORADO": 7,;
+                            "TG_LF_PERC_MAJORACAO": 8,;
+                            "TG_LF_PERC_DIFERIDO": 9,;
+                            "TG_LF_PERC_REDUCAO": 10,;
+                            "TG_LF_PAUTA": 11,;
+                            "TG_LF_MVA": 12,;
+                            "TG_LF_AUX_MVA": 13,;
+                            "TG_LF_AUX_MAJORACAO": 14,;
+                            "TG_LF_CSTCAB": 15,;
+                            "TG_LF_BASE_ORI": 16,;
+                            "TG_LF_ALIQTR": 17,;
+                            "TG_LF_ALQ_REDALI": 18,;
+                            "TG_LF_ALQ_ORI": 19,;
+                            "TG_LF_CCT": 20,;
+                            "TG_BAS_COD": 1,;
+                            "TG_BAS_VLORI": 2,;
+                            "TG_BAS_DESCON": 3,;
+                            "TG_BAS_FRETE": 4,;
+                            "TG_BAS_SEGURO": 5,;
+                            "TG_BAS_DESP": 6,;
+                            "TG_BAS_ICMSDES": 7,;
+                            "TG_BAS_ICMSST": 8,;
+                            "TG_BAS_REDUCAO": 9,;
+                            "TG_BAS_TPRED": 10,;
+                            "TG_BAS_UM": 11,;
+                            "TG_BAS_ID": 12,;
+                            "TG_BAS_FOR_NPI": 13,;
+                            "TG_BAS_ID_NPI": 14,;
+                            "TG_BAS_COD_FOR": 15,;
+                            "TG_BAS_FORMULA": 16,;
+                            "TG_BAS_OPINTEG": 17,;
+                            "RE_ID": 1,;
+                            "RE_INCIDE": 2,;
+                            "RE_TOTNF": 3,;
+                            "RE_PERCDIF": 4,;
+                            "RE_CST": 5,;
+                            "RE_CSTCAB": 6,;
+                            "RE_INC_PARC_RED": 7,;
+                            "RE_CCT": 8,;
+                            "RE_DADO_ADICIONAL": 9,;
+                            "TG_IT_SIGLA": 1,;
+                            "TG_IT_DESCRICAO": 2,;
+                            "TG_IT_BASE": 3,;
+                            "TG_IT_ALIQUOTA": 4,;
+                            "TG_IT_VALOR": 5,;
+                            "TG_IT_REGRA_BAS": 6,;
+                            "TG_IT_REGRA_ALQ": 7,;
+                            "TG_IT_REGRA_FIN": 8,;
+                            "TG_IT_ID_REGRA": 9,;
+                            "TG_IT_RND": 10,;
+                            "TG_IT_ITEMDEC": 11,;
+                            "TG_IT_IDTRIB": 12,;
+                            "TG_IT_FOR_NPI": 13,;
+                            "TG_IT_ID_NPI": 14,;
+                            "TG_IT_COD_FOR": 15,;
+                            "TG_IT_MVA": 16,;
+                            "TG_IT_AUX_MVA": 17,;
+                            "TG_IT_PAUTA": 18,;
+                            "TG_IT_MAJ": 19,;
+                            "TG_IT_AUX_MAJ": 20,;
+                            "TG_IT_TRB_MAJ": 21,;
+                            "TG_IT_DED_DEP": 22,;
+                            "TG_IT_TAB_PROG": 23,;
+                            "TG_IT_REGRA_DED_DEP": 24,;
+                            "TG_IT_ALQ_SERV": 25,;
+                            "TG_IT_ALQ_SERV_LEI_COMPL": 26,;
+                            "TG_IT_LF": 27,;
+                            "TG_IT_REGRA_ESCR": 28,;
+                            "TG_IT_ID_F2D": 29,;
+                            "TG_IT_FOR_ISE_NPI": 30,;
+                            "TG_IT_FOR_OUT_NPI": 31,;
+                            "TG_IT_REGRA_GUIA": 32,;
+                            "TG_IT_VL_ZERO": 33,;
+                            "TG_IT_VL_MAX": 34,;
+                            "TG_IT_VL_MIN": 35,;
+                            "TG_IT_OPR_MAX": 36,;
+                            "TG_IT_OPR_MIN": 37,;
+                            "TG_IT_ULT_AQUI": 38,;
+                            "TG_IT_ESTR_ULT_AQUI": 39,;
+                            "TG_IT_LOAD": 40,;
+                            "TG_IT_DESC_IDTRIB": 41,;
+                            "TG_IT_FORMULA_VAL": 42,;
+                            "TG_IT_ALIQTR": 43,;
+                            "TG_IT_ALQ_IPI_RASTRO": 44,;
+                            "TG_IT_REDBASEAUX": 45,;
+                            "TG_IT_STATUS": 46,;
+                            "TG_IT_ACAO_MAX": 47,;
+                            "TG_IT_ACAO_MIN": 48,;
+                            "TG_IT_DELETED_TRIB": 49,;
+                            "TG_IT_PERFOP": 50,;
+                            "TG_IT_OPINTEG": 51}
+
+    self:jRetReference :=     {;
+                    "base_valor": "TG_IT_BASE",;//ok
+                    "aliquota": "TG_IT_ALIQUOTA",;//ok
+                    "valor": "TG_IT_VALOR",;//ok
+                    "base_quantidade": "TG_IT_BASE",;//ok
+                    "base_um": "TG_BAS_UM",;//ok
+                    "mva": "TG_IT_MVA",; //ok
+                    "aux_mva": "TG_IT_AUX_MVA",; //OK
+                    "pauta": "TG_IT_PAUTA",; //OK
+                    "vl_majorado": "TG_IT_MAJ",; //OK
+                    "aux_majoracao": "TG_IT_AUX_MAJ",;
+                    "vl_majoracao": "TG_IT_VALOR",;
+                    "pc_majorcao": "TG_IT_ALIQUOTA",;
+                    "aliquota_tribut": "TG_IT_ALIQTR",;
+                    "ded_dep": "TG_IT_DED_DEP",;
+                    "esc_tab_CST": "TG_LF_CSTCAB",;
+                    "esc_CST": "TG_LF_CST",;
+                    "esc_vl_tributado": "TG_LF_VALTRIB",;
+                    "esc_vl_isento": "TG_LF_ISENTO",;
+                    "esc_vl_outros": "TG_LF_OUTROS",;
+                    "esc_vl_diferido": "TG_LF_DIFERIDO",;
+                    "esc_pc_diferido": "TG_LF_PERC_DIFERIDO",;
+                    "esc_pc_reducao_base": "TG_LF_PERC_REDUCAO",;
+                    "esc_base_original": "TG_LF_BASE_ORI",;
+                    "esc_pc_reducao_aliq": "TG_LF_ALQ_REDALI",;
+                    "esc_aliquota_original": "TG_LF_ALQ_ORI",;
+                    "esc_vl_nao_tributado": "TG_LF_NAO_TRIBUTADO",;
+                    "esc_vl_majorado": "TG_LF_MAJORADO",;
+                    "esc_pc_majoracao": "TG_LF_PERC_MAJORACAO",;
+                    "esc_vl_pauta": "TG_LF_PAUTA",;
+                    "esc_vl_mva": "TG_LF_MVA",;
+                    "esc_vl_aux_mva": "TG_LF_AUX_MVA",;
+                    "esc_vl_aux_majoracao": "TG_LF_AUX_MAJORACAO",;
+                    "esc_aliquota_tributada": "TG_LF_ALIQTR",;
+                    "esc_CCT": "TG_LF_CCT"}
+
+
+
+    self:jLegacyTaxIds["000002"] := {"TG_IT_BASE": "IT_BASEFUN"  , "TG_IT_ALIQUOTA": "IT_PERFUN"   , "TG_IT_VALOR": "IT_FUNRURAL"}
+    self:jLegacyTaxIds["000003"] := {"TG_IT_BASE": "IT_BSSENAR"  , "TG_IT_ALIQUOTA": "IT_ALSENAR"  , "TG_IT_VALOR": "IT_VLSENAR"}
+    self:jLegacyTaxIds["000004"] := {"TG_IT_BASE": "IT_BASEAFRMM", "TG_IT_ALIQUOTA": "IT_ALIQAFRMM", "TG_IT_VALOR": "IT_VALAFRMM"}
+    self:jLegacyTaxIds["000005"] := {"TG_IT_BASE": "IT_BASEFAB"  , "TG_IT_ALIQUOTA": "IT_ALIQFAB"  , "TG_IT_VALOR": "IT_VALFAB"}
+    self:jLegacyTaxIds["000006"] := {"TG_IT_BASE": "IT_BASEFAC"  , "TG_IT_ALIQUOTA": "IT_ALIQFAC"  , "TG_IT_VALOR": "IT_VALFAC"}
+    self:jLegacyTaxIds["000007"] := {"TG_IT_BASE": "IT_BASEFMD"  , "TG_IT_ALIQUOTA": "IT_ALQFMD"   , "TG_IT_VALOR": "IT_VALFMD"}
+    self:jLegacyTaxIds["000008"] := {"TG_IT_BASE": "IT_BASFASE"  , "TG_IT_ALIQUOTA": "IT_ALIFASE"  , "TG_IT_VALOR": "IT_VALFASE"}
+    self:jLegacyTaxIds["000009"] := {"TG_IT_BASE": "IT_BASEFET"  , "TG_IT_ALIQUOTA": "IT_ALIQFET"  , "TG_IT_VALOR": "IT_VALFET"}
+    self:jLegacyTaxIds["000010"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_VALFDS"}
+    self:jLegacyTaxIds["000011"] := {"TG_IT_BASE": "IT_BASFUND"  , "TG_IT_ALIQUOTA": "IT_ALIFUND"  , "TG_IT_VALOR": "IT_VALFUND"}
+    self:jLegacyTaxIds["000012"] := {"TG_IT_BASE": "IT_BASIMA"   , "TG_IT_ALIQUOTA": "IT_ALIIMA"   , "TG_IT_VALOR": "IT_VALIMA"}
+    self:jLegacyTaxIds["000013"] := {"TG_IT_BASE": "IT_BASESES"  , "TG_IT_ALIQUOTA": "IT_ALIQSES"  , "TG_IT_VALOR": "IT_VALSES"}
+    self:jLegacyTaxIds["000014"] := {"TG_IT_BASE": "IT_BASTPDP"  , "TG_IT_ALIQUOTA": "IT_ALITPDP"  , "TG_IT_VALOR": "IT_VALTPDP"}
+    self:jLegacyTaxIds["000015"] := {"TG_IT_BASE": "IT_BASEPS2"  , "TG_IT_ALIQUOTA": "IT_ALIQPS2"  , "TG_IT_VALOR": "IT_VALPS2"}
+    self:jLegacyTaxIds["000016"] := {"TG_IT_BASE": "IT_BASECF2"  , "TG_IT_ALIQUOTA": "IT_ALIQCF2"  , "TG_IT_VALOR": "IT_VALCF2"}
+    self:jLegacyTaxIds["000017"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "IT_ALIQII"   , "TG_IT_VALOR": "IT_VALII"}
+    self:jLegacyTaxIds["000018"] := {"TG_IT_BASE": "IT_BASEIRR"  , "TG_IT_ALIQUOTA": "IT_ALIQIRR"  , "TG_IT_VALOR": "IT_VALIRR"}
+    self:jLegacyTaxIds["000019"] := {"TG_IT_BASE": "IT_BASEINS"  , "TG_IT_ALIQUOTA": "IT_ALIQINS"  , "TG_IT_VALOR": "IT_VALINS"}
+    self:jLegacyTaxIds["000020"] := {"TG_IT_BASE": "IT_BASEISS"  , "TG_IT_ALIQUOTA": "IT_ALIQISS"  , "TG_IT_VALOR": "IT_VALISS"}
+    self:jLegacyTaxIds["000021"] := {"TG_IT_BASE": "IT_BASEICM"  , "TG_IT_ALIQUOTA": "IT_ALIQICM"  , "TG_IT_VALOR": "IT_VALICM"}
+    self:jLegacyTaxIds["000022"] := {"TG_IT_BASE": "IT_BASEIPI"  , "TG_IT_ALIQUOTA": "IT_ALIQIPI"  , "TG_IT_VALOR": "IT_VALIPI"}
+    self:jLegacyTaxIds["000023"] := {"TG_IT_BASE": "IT_BASECID"  , "TG_IT_ALIQUOTA": "IT_ALQCIDE"  , "TG_IT_VALOR": "IT_VALCIDE"}
+    self:jLegacyTaxIds["000024"] := {"TG_IT_BASE": "IT_BASECPB"  , "TG_IT_ALIQUOTA": "IT_ALIQCPB"  , "TG_IT_VALOR": "IT_VALCPB"}
+    self:jLegacyTaxIds["000025"] := {"TG_IT_BASE": "IT_BASFEEF"  , "TG_IT_ALIQUOTA": "IT_ALQFEEF"  , "TG_IT_VALOR": "IT_VALFEEF"}
+    self:jLegacyTaxIds["000026"] := {"TG_IT_BASE": "IT_BASECSL"  , "TG_IT_ALIQUOTA": "IT_ALIQCSL"  , "TG_IT_VALOR": "IT_VALCSL"}
+    self:jLegacyTaxIds["000027"] := {"TG_IT_BASE": "IT_BASEPRO"  , "TG_IT_ALIQUOTA": "IT_ALIQPRO"  , "TG_IT_VALOR": "IT_VALPRO"}
+    self:jLegacyTaxIds["000028"] := {"TG_IT_BASE": "IT_BASEFMP"  , "TG_IT_ALIQUOTA": "IT_ALQFMP"   , "TG_IT_VALOR": "IT_VALFMP"}
+    self:jLegacyTaxIds["000029"] := {"TG_IT_BASE": "LF_BASECPR"  , "TG_IT_ALIQUOTA": "TS_CRDPRES"  , "TG_IT_VALOR": "LF_CRDPRES"}
+    self:jLegacyTaxIds["000030"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "LF_CRPRST"}
+    self:jLegacyTaxIds["000031"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_CPPRODE"}
+    self:jLegacyTaxIds["000032"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "LF_CRDPCTR"}
+    self:jLegacyTaxIds["000033"] := {"TG_IT_BASE": "IT_BSCP15"   , "TG_IT_ALIQUOTA": "IT_ALCP15"   , "TG_IT_VALOR": "IT_VLCP15"}
+    self:jLegacyTaxIds["000034"] := {"TG_IT_BASE": "IT_BSCP20"   , "TG_IT_ALIQUOTA": "IT_ALCP20"   , "TG_IT_VALOR": "IT_VLCP20"}
+    self:jLegacyTaxIds["000035"] := {"TG_IT_BASE": "IT_BSCP25"   , "TG_IT_ALIQUOTA": "IT_ALCP25"   , "TG_IT_VALOR": "IT_VLCP25"}
+    self:jLegacyTaxIds["000036"] := {"TG_IT_BASE": "IT_BASEINP"  , "TG_IT_ALIQUOTA": "IT_PERCINP"  , "TG_IT_VALOR": "IT_VALINP"}
+    self:jLegacyTaxIds["000037"] := {"TG_IT_BASE": "IT_BASEDES"  , "TG_IT_ALIQUOTA": "IT_ALIQCMP"  , "TG_IT_VALOR": "IT_DIFAL"}
+    self:jLegacyTaxIds["000038"] := {"TG_IT_BASE": "IT_BASEDES"  , "TG_IT_ALIQUOTA": "IT_ALIQCMP"  , "TG_IT_VALOR": "IT_VALCMP"}
+    self:jLegacyTaxIds["000039"] := {"TG_IT_BASE": "IT_BASEDES"  , "TG_IT_ALIQUOTA": "IT_ALANTICMS", "TG_IT_VALOR": "IT_VALANTI"}
+    self:jLegacyTaxIds["000040"] := {"TG_IT_BASE": "IT_BASFECP"  , "TG_IT_ALIQUOTA": "IT_ALIQFECP" , "TG_IT_VALOR": "IT_VALFECP"}
+    self:jLegacyTaxIds["000041"] := {"TG_IT_BASE": "IT_BSFCPST"  , "TG_IT_ALIQUOTA": "IT_ALFCST"   , "TG_IT_VALOR": "IT_VFECPST"}
+    self:jLegacyTaxIds["000042"] := {"TG_IT_BASE": "IT_BSFCCMP"  , "TG_IT_ALIQUOTA": "IT_ALFCCMP"  , "TG_IT_VALOR": "IT_VFCPDIF"}
+    self:jLegacyTaxIds["000043"] := {"TG_IT_BASE": "IT_BASECOF"  , "TG_IT_ALIQUOTA": "IT_ALIQCOF"  , "TG_IT_VALOR": "IT_VALCOF"}
+    self:jLegacyTaxIds["000044"] := {"TG_IT_BASE": "IT_BASECF3"  , "TG_IT_ALIQUOTA": "IT_ALIQCF3"  , "TG_IT_VALOR": "IT_VALCF3"}
+    self:jLegacyTaxIds["000045"] := {"TG_IT_BASE": "IT_BASEPIS"  , "TG_IT_ALIQUOTA": "IT_ALIQPIS"  , "TG_IT_VALOR": "IT_VALPIS"}
+    self:jLegacyTaxIds["000046"] := {"TG_IT_BASE": "IT_BASEPS3"  , "TG_IT_ALIQUOTA": "IT_ALIQPS3"  , "TG_IT_VALOR": "IT_VALPS3"}
+    self:jLegacyTaxIds["000047"] := {"TG_IT_BASE": "IT_BASECPM"  , "TG_IT_ALIQUOTA": "IT_ALQCPM"   , "TG_IT_VALOR": "IT_VALCPM"}
+    self:jLegacyTaxIds["000048"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "IT_ALQPMAJ"  , "TG_IT_VALOR": "IT_VALPMAJ"}
+    self:jLegacyTaxIds["000049"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "IT_ALQCMAJ"  , "TG_IT_VALOR": "IT_VALCMAJ"}
+    self:jLegacyTaxIds["000050"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_DEDICM"}
+    self:jLegacyTaxIds["000051"] := {"TG_IT_BASE": "IT_BASEICA"  , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_VALICA"}
+    self:jLegacyTaxIds["000052"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_DESCZF"}
+    self:jLegacyTaxIds["000053"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_DESCZFPIS"}
+    self:jLegacyTaxIds["000054"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_DESCZFCOF"}
+    self:jLegacyTaxIds["000055"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_ESTCRED"}
+    self:jLegacyTaxIds["000056"] := {"TG_IT_BASE": "IT_BASESOL"  , "TG_IT_ALIQUOTA": "IT_ALIQSOL"  , "TG_IT_VALOR": "IT_VALSOL"}
+    self:jLegacyTaxIds["000057"] := {"TG_IT_BASE": "IT_BASETST"  , "TG_IT_ALIQUOTA": "IT_ALIQTST"  , "TG_IT_VALOR": "IT_VALTST"}
+    self:jLegacyTaxIds["000058"] := {"TG_IT_BASE": "Null"        , "TG_IT_ALIQUOTA": "Null"        , "TG_IT_VALOR": "IT_CROUTSP"}
+    
+Return self
+
+/*/{Protheus.doc} HasWarning
+    Verifica se houve algum aviso ou erro durante o processamento dos tributos, retornando o valor do flag interno.
+    Esse método é utilizado para controlar o fluxo de validação e processamento, indicando se o processamento deve ser interrompido ou não.
+
+    @author rhuan.carvalho
+    @since 17/09/2025
+    @version 1.0
+    @param , , Não recebe parâmetros.
+    @return lWarning, logical, Retorna .T. se houve aviso/erro no processamento, .F. caso contrário.
+    /*/
+Method HasWarning() as logical Class TaxOperandIntegrator    
+Return self:lWarning
+
+/*/{Protheus.doc} CheckTaxItem
+    Verifica se o Id do tributo informado está amarrado na operação do item fiscal, ou seja, se existe na configuração de tributos do item.
+    Utiliza a função MafisRet para buscar os tributos configurados e compara o ID informado. Retorna verdadeiro se o tributo está presente, falso caso contrário.
+
+    @author rhuan.carvalho
+    @since 17/09/2025
+    @version 1.0
+    @param cIdTrib, character, Identificador do tributo a ser verificado
+    @param nItem, numeric, Número do item do documento fiscal
+    @return lOk, logical, Retorna .T. se o tributo está amarrado na operação, .F. caso contrário
+    /*/
+Method CheckTaxItem(cIdTrib as character, nItem as numeric) as logical Class TaxOperandIntegrator
+    Local lOk             := .F. as logical
+    Local aTaxConfig      := {}  as json
+    Local nPosTx          := 0   as numeric
+
+    If MaFisFound("IT", nItem)
+        aTaxConfig      := MafisRet(nItem, "IT_TRIBGEN")
+
+        If Len(aTaxConfig) > 0 .and. !Empty(cIdTrib)
+            If (nPosTx := aScan(aTaxConfig, {|x| AllTrim(x[TG_IT_IDTRIB]) == AllTrim(cIdTrib)})) > 0
+                lOk := .T.
+            EndIf
+        EndIf
+
+        aSize(aTaxConfig, 0)
+    EndIf 
+   
+Return lOk
+
+/*/{Protheus.doc} ImputTaxOnMatxfis
+    Realiza a inclusão dos valores dos tributos na estrutura interna MATXFIS, posicionando e atualizando as referências conforme o JSON recebido.
+    Só executa o processamento caso não haja avisos ou erros prévios, garantindo a integridade dos dados.
+    Este método é chamado após as validações de schema e existência dos operandos de integração.
+
+    @author rhuan.carvalho
+    @since 17/09/2025
+    @version 1.0
+    @param , , Não recebe parâmetros.
+    @return , void, Não retorna valor. Apenas atualiza os dados internos da MATXFIS.
+    /*/
+Method ImputTaxOnMatxfis() Class TaxOperandIntegrator
+
+    If !self:HasWarning()
+        self:PositionAndUpdateTaxReferences()
+    EndIf
+
+return
+
+/*/{Protheus.doc} PositionAndUpdateTaxReferences
+    Percorre os itens do JSON de tributos recebido, identifica os tributos de cada item e posiciona os dados nas referências corretas do sistema.
+    Processa primeiro os tributos legados e depois os tributos novos, garantindo a ordem correta de processamento.
+    Para cada tributo encontrado, chama o método responsável por atualizar as referências internas, garantindo que os dados sejam inseridos corretamente na estrutura de integração.
+
+    @rhuan.carvalho
+    @since 17/09/2025
+    @version 1.1
+    @param , , Não recebe parâmetros.
+    @return cIDTAB, character, Retorna o identificador da tabela de referência utilizada (se aplicável).
+    /*/
+Method PositionAndUpdateTaxReferences() Class TaxOperandIntegrator
+    Local aItems         := self:jImputDataTax:GetNames()
+    Local aTributos      := {} as array
+    Local aTributosLegacy := {} as array
+    Local aTributosNew    := {} as array
+    Local jTributo       := JsonObject():New()
+    Local cIDTrib        := "" as character
+    Local nItem          := 0  as numeric
+    Local nTributo       := 0  as numeric
+
+    // Processa cada item
+    For nItem := 1 to Len(aItems)
+        aTributos := self:jImputDataTax[aItems[nItem]]:GetNames()
+        
+        // Separa os tributos entre legados e novos
+        aSize(aTributosLegacy, 0)
+        aSize(aTributosNew, 0)
+        
+        For nTributo := 1 to Len(aTributos)
+            cIDTrib := aTributos[nTributo]
+            
+            If self:jLegacyTaxIds:hasProperty(cIDTrib)
+                aAdd(aTributosLegacy, cIDTrib)
+            Else
+                aAdd(aTributosNew, cIDTrib)
+            EndIf
+        Next nTributo
+        
+        // Processa primeiro os tributos LEGADOS
+        For nTributo := 1 to Len(aTributosLegacy)
+            cIDTrib := aTributosLegacy[nTributo]
+            jTributo := self:jImputDataTax[aItems[nItem]][cIDTrib]
+            self:UpdateInternalReferences(cIDTrib, val(aItems[nItem]), jTributo)
+        Next nTributo
+        
+        // Depois processa os tributos NOVOS
+        For nTributo := 1 to Len(aTributosNew)
+            cIDTrib := aTributosNew[nTributo]
+            jTributo := self:jImputDataTax[aItems[nItem]][cIDTrib]
+            self:UpdateInternalReferences(cIDTrib, val(aItems[nItem]), jTributo)
+        Next nTributo
+        
+    Next nItem
+    
+    self:SetSuccessStatus("success", "referencias dos tributos atualizadas com sucesso.")
+    
+    // Limpa os arrays
+    aSize(aItems, 0)
+    aSize(aTributos, 0)
+    aSize(aTributosLegacy, 0)
+    aSize(aTributosNew, 0)
+    FreeObj(jTributo)
+
+return
+
+/*/{Protheus.doc} UpdateInternalReferences
+    Atualiza as referências internas dos tributos para cada item processado, percorrendo as propriedades do tributo e posicionando os valores nas estruturas corretas do sistema.
+    Realiza a integração dos dados conforme o tipo de referência, utilizando os métodos apropriados para cada propriedade.
+
+    @author rhuan.carvalho
+    @since 18/09/2025
+    @version 1.0
+    @param cIdTrib, character, Identificador do tributo a ser atualizado
+    @param nItem, numeric, Número do item do documento fiscal
+    @param jProperties, json, Objeto JSON contendo as propriedades e valores do tributo
+    @return , void, Não retorna valor
+    /*/
+Method UpdateInternalReferences(cIdTrib as character, nItem as numeric, jProperties as json) Class TaxOperandIntegrator
+    Local aProperties := jProperties:GetNames()
+    Local cReference  := "" as character
+    Local nProperty   := 0  as numeric
+    Local aTaxConfig  := MafisRet(nItem, "IT_TRIBGEN")
+    Local nPosTx      := aScan(aTaxConfig, {|x| AllTrim(x[TG_IT_IDTRIB]) == AllTrim(cIdTrib)})
+    Local nPosCmp     := 0  as numeric
+    Local nPosRef     := 0  as numeric
+    Local aNfItem     := GetANfITem() 
+    Local xContent     as variant   
+
+    self:SetIncidenceOption(aNfItem, nItem, nPosTx, jProperties)
+
+    MafisLoad("IT_CLASS_UPDATE", .T., nItem)
+
+    For nProperty := 1 to Len(aProperties)
+        cReference    := self:GetReference(aProperties[nProperty])
+        xContent        := jProperties[aProperties[nProperty]]
+
+        If aProperties[nProperty] $ "base_quantidade|vl_majoracao|pc_majorcao" 
+            If cReference == "TG_IT_BASE" .and. jProperties["base_quantidade"] > 0 .and. !Empty(jProperties["base_quantidade"])
+                Mafisalt("IT_TRIBGEN", xContent , nItem,,,,,,,{aTaxConfig[nPosTx][TG_IT_SIGLA],cReference})
+                nPosCmp := self:jPosFieldRef["TG_BAS_VLORI"]
+                nPosRef := self:jPosFieldRef["TG_IT_REGRA_BAS"]
+                aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := '02'
+            EndIf
+            If cReference == "TG_IT_VALOR" .and. jProperties["vl_majoracao"] > 0 .and. !Empty(jProperties["vl_majoracao"])
+                If !Empty(aNfItem[nItem][IT_TRIBGEN][nPosTx][TG_IT_TRB_MAJ])               
+                    nPosCmp := self:jPosFieldRef["TG_IT_VALOR"]
+                    aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosCmp] := xContent
+                EndIf
+            EndIf
+            If cReference == "TG_IT_ALIQUOTA" .and. jProperties["pc_majorcao"] > 0 .and. !Empty(jProperties["pc_majorcao"])               
+                If !Empty(aNfItem[nItem][IT_TRIBGEN][nPosTx][TG_IT_TRB_MAJ])
+                    nPosCmp := self:jPosFieldRef["TG_IT_ALIQUOTA"]
+                    aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosCmp] := xContent
+                EndIf
+            End
+            Loop
+        EndIf
+
+        Do Case
+            Case cReference $ "TG_IT_BASE|TG_IT_ALIQUOTA|TG_IT_VALOR"
+                If !self:jLegacyTaxIds:hasProperty(cIDTrib)
+                    Mafisalt("IT_TRIBGEN", xContent , nItem,,,,,,,{aTaxConfig[nPosTx][TG_IT_SIGLA],cReference})
+                Else
+                    If !self:jLegacyTaxIds[cIDTrib][cReference] == "Null"
+                        Mafisalt(self:jLegacyTaxIds[cIDTrib][cReference], xContent , nItem)
+                    EndIf
+                EndIf
+            Case cReference $ "TG_IT_MVA|TG_IT_AUX_MVA|TG_IT_PAUTA|TG_IT_MAJ|TG_IT_AUX_MAJ|TG_IT_DED_DEP|TG_IT_ALIQTR""
+                nPosRef := self:jPosFieldRef[cReference]
+                aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef] := xContent
+            Case cReference == "TG_BAS_UM"
+                nPosCmp := self:jPosFieldRef[cReference]
+                nPosRef := self:jPosFieldRef["TG_IT_REGRA_BAS"]
+                aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := xContent            
+            Case cReference $ "TG_LF_CSTCAB|TG_LF_CST|TG_LF_CCT"
+                nPosCmp := self:jPosFieldRef[cReference]
+                nPosRef := self:jPosFieldRef["TG_IT_LF"]
+                aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := xContent
+                If cReference == "TG_LF_CST"
+                    nPosCmp := self:jPosFieldRef["RE_CST"]
+                    nPosRef := self:jPosFieldRef["TG_IT_REGRA_ESCR"]
+                    aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := xContent
+                ElseIf cReference == "TG_LF_CSTCAB"
+                    nPosCmp := self:jPosFieldRef["RE_CSTCAB"]
+                    nPosRef := self:jPosFieldRef["TG_IT_REGRA_ESCR"]
+                    aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := xContent
+                ElseIf cReference == "TG_LF_CCT"
+                    nPosCmp := self:jPosFieldRef["RE_CCT"]
+                    nPosRef := self:jPosFieldRef["TG_IT_REGRA_ESCR"]
+                    aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := xContent
+                EndIf
+            Otherwise
+                nPosCmp := self:jPosFieldRef[cReference]
+                nPosRef := self:jPosFieldRef["TG_IT_LF"]
+                aNfItem[nItem][IT_TRIBGEN][nPosTx][nPosRef][nPosCmp] := xContent
+        EndCase
+
+    Next nProperty
+    aSize(aProperties, 0)
+return
+
+/*/{Protheus.doc} GetReference
+    Retorna o nome da referência interna do sistema correspondente à propriedade informada do tributo.
+    
+    @author rhuan.carvalho
+    @since 18/09/2025
+    @version 1.0
+    @param cProperty, character, Nome da propriedade do tributo a ser mapeada
+    @return cReference, character, Nome da referência interna correspondente à propriedade informada
+    /*/
+Method GetReference(cProperty as character) Class TaxOperandIntegrator
+return self:jRetReference[cProperty]
+
+/*/{Protheus.doc} ExistsOperandIntegration
+    Verifica se cada tributo informado no JSON possui operando de integração cadastrado na estrutura do item fiscal.
+    Para tributos legados, valida se pelo menos um dos operandos está presente. Para tributos novos, valida também a regra de escrituração.
+    Caso não encontre o operando de integração, registra mensagem de erro e interrompe o processamento.
+
+    @author rhuan.carvalho
+    @since 24/10/2025
+    @version 1.0
+    @param , , Não recebe parâmetros.
+    @return , void, Não retorna valor. Em caso de erro, preenche o objeto de erro e ativa o flag de aviso.
+    /*/
+Method ExistsOperandIntegration() Class TaxOperandIntegrator
+    Local aItems          := self:jImputDataTax:GetNames()
+    Local aTributos       := {}  as array
+    Local aITTribGen      := {}  as array
+    Local cIDTrib         := ""  as character
+    Local nItem           := 0   as numeric
+    Local nTributo        := 0   as numeric
+    Local nPosTrib        := 0   as numeric
+    Local lOPIntgrRegBase := .F. as logical
+    Local lOPIntgrRegAlq  := .F. as logical
+    Local lOPIntgrValor   := .F. as logical
+    Local cOpIntgrEscr    := ""  as character
+
+    If !self:HasWarning()
+
+        For nItem := 1 to Len(aItems)
+            aITTribGen := MafisRet(val(aItems[nItem]), "IT_TRIBGEN")
+            aTributos := self:jImputDataTax[aItems[nItem]]:GetNames()
+            For nTributo := 1 to Len(aTributos)
+                cIDTrib := aTributos[nTributo]
+                nPosTrib := aScan(aITTribGen, {|x| AllTrim(x[TG_IT_IDTRIB]) == AllTrim(cIdTrib)})
+                
+                lOPIntgrRegBase := aITTribGen[nPosTrib][TG_IT_REGRA_BAS][TG_BAS_OPINTEG]
+                lOPIntgrRegAlq  := aITTribGen[nPosTrib][TG_IT_REGRA_ALQ][TG_ALQ_OPINTEG]
+                lOPIntgrValor   := aITTribGen[nPosTrib][TG_IT_OPINTEG]
+                cOpIntgrEscr    := aITTribGen[nPosTrib][TG_IT_REGRA_ESCR][RE_INCIDE]
+                
+                If self:HasBookkeepingProperty(val(aItems[nItem]), cIDTrib)
+                    If !(lOPIntgrRegBase .and. lOPIntgrRegAlq .and. lOPIntgrValor .and. cOpIntgrEscr == "8")
+                        self:SetPropertyMesageError("warning","O tributo "+cIDTrib+" do item "+cValToChar(nItem)+" não possui operando de integração cadastrado na regra de escrituração.")
+                        return
+                    EndIf
+                Else
+                    If !(lOPIntgrRegBase .and. lOPIntgrRegAlq .and. lOPIntgrValor)
+                        self:SetPropertyMesageError("warning","O tributo"+cIDTrib+" do item "+cValToChar(nItem)+" não possui operando de integração cadastrado.")
+                        return
+                    EndIf
+                EndIf
+            Next nTributo
+        Next nItem
+        aSize(aItems, 0)
+        aSize(aTributos, 0)
+        aSize(aITTribGen, 0)
+    EndIf
+return
+
+/*/{Protheus.doc} HasBookkeepingProperty
+    Verifica se o tributo legado informado possui a propriedade de escrituração no JSON de entrada.
+    Essa verificação é importante para determinar se o tributo deve ser considerado na validação dos operandos de integração mantendo a obrigatoriedade do [RE_INCIDE].
+
+    @author rhuan.carvalho
+    @since 24/10/2025
+    @version 1.0
+    @param nItem, numeric, Número do item do documento fiscal
+    @param cIdTrib, character, Identificador do tributo a ser verificado
+    @return lHasProperty, logical, Retorna .T. se a propriedade de escrituração está presente, .F. caso contrário.
+    /*/
+method HasBookkeepingProperty(nItem as numeric, cIdTrib as character) as logical Class TaxOperandIntegrator
+   Local lOk         := .F. as logical
+   Local jProperties := self:jImputDataTax[cValToChar(nItem)][cIdTrib]
+
+   If jProperties:hasProperty("esc_tab_CST") .or. jProperties:hasProperty("esc_CST") .or. jProperties:hasProperty("esc_vl_tributado") .or. ;
+        jProperties:hasProperty("esc_vl_isento") .or. jProperties:hasProperty("esc_vl_outros") .or. jProperties:hasProperty("esc_vl_diferido") .or. ;
+        jProperties:hasProperty("esc_pc_diferido") .or. jProperties:hasProperty("esc_pc_reducao_base") .or. jProperties:hasProperty("esc_base_original") .or. ;
+        jProperties:hasProperty("esc_pc_reducao_aliq") .or. jProperties:hasProperty("esc_aliquota_original") .or. jProperties:hasProperty("esc_vl_nao_tributado") .or. ;
+        jProperties:hasProperty("esc_vl_majorado") .or. jProperties:hasProperty("esc_pc_majoracao") .or. jProperties:hasProperty("esc_vl_pauta") .or. ;
+        jProperties:hasProperty("esc_vl_mva") .or. jProperties:hasProperty("esc_vl_aux_mva") .or. jProperties:hasProperty("esc_vl_aux_majoracao") .or. ;
+        jProperties:hasProperty("esc_aliquota_tributada") .or. jProperties:hasProperty("esc_CCT")
+        
+        lOk := .T.
+    EndIf
+
+return lOk
+
+/*/{Protheus.doc} SetSuccessStatus
+    Configura uma mensagem de sucesso no objeto JSON de retorno, associando o status e a mensagem informados.
+    Este método é utilizado para registrar mensagens de sucesso após o processamento dos tributos, permitindo que o resultado seja retornado em formato JSON.
+
+    @author rhuan.carvalho
+    @since 02/10/2025
+    @version 1.0
+    @param status, character, Status do processamento (ex: "success")
+    @param cMessage, character, Mensagem de sucesso a ser registrada
+    @return , void, Não retorna valor. Apenas atualiza o objeto de sucesso interno.
+    /*/
+Method SetSuccessStatus(status as character, cMessage as character) Class TaxOperandIntegrator
+    self:jReturnSuccess[status] := cMessage
+Return
+/*/{Protheus.doc} SetIncidenceOption
+    Define a opção de incidência do tributo baseado nos valores de tributado, isento e outros.
+    Utiliza um sistema de bitmap para mapear as combinações possíveis dos valores de escrituração.
+    
+    @author rhuan.carvalho
+    @since 01/11/2025
+    @version 1.0
+    @param aNfItem, array, Array de itens da nota fiscal
+    @param nItem, numeric, Posição do item no array
+    @param nPosTx, numeric, Posição do tributo no array IT_TRIBGEN
+    @param jProperties, json, Objeto JSON contendo as propriedades de escrituração do tributo
+    @return void
+    @obs As propriedades já foram validadas anteriormente no método CheckItemTaxJsonSchema
+    /*/
+
+Method SetIncidenceOption(aNfItem as array, nItem as numeric, nPosTx as numeric, jProperties as json) Class TaxOperandIntegrator
+    Local nBitMap := 0 as numeric
+    Local cOption := "" as character
+    
+    // Cria um bitmap das propriedades: bit 1 = tributado, bit 2 = isento, bit 4 = outros
+    If jProperties["esc_vl_tributado"] > 0
+        nBitMap += 1
+    EndIf
+    If jProperties["esc_vl_isento"] > 0
+        nBitMap += 2
+    EndIf
+    If jProperties["esc_vl_outros"] > 0
+        nBitMap += 4
+    EndIf
+    
+    // Mapeia diretamente o bitmap para a opção
+    Do Case
+        Case nBitMap == 7  // todos os três
+            cOption := "7"
+        Case nBitMap == 6  // isento + outros
+            cOption := "6"
+        Case nBitMap == 5  // tributado + outros
+            cOption := "5"
+        Case nBitMap == 3  // tributado + isento
+            cOption := "4"
+        Case nBitMap == 4  // apenas outros
+            cOption := "3"
+        Case nBitMap == 2  // apenas isento
+            cOption := "2"
+        Case nBitMap == 1  // apenas tributado
+            cOption := "1"
+    EndCase
+    
+    If !Empty(cOption)
+        aNfItem[nItem][IT_TRIBGEN][nPosTx][TG_IT_REGRA_ESCR][RE_INCIDE] := cOption
+    EndIf
+
+return
+
+/*/{Protheus.doc} destroy
+    responável por liberar os objetos JSON utilizados na classe, garantindo que não haja vazamento de memória.
+    Esse método é chamado automaticamente no final do processamento dos dados da classe.
+    @author rhuan.carvalho
+    @since 02/10/2025
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method destroy() Class TaxOperandIntegrator
+
+    FreeObj(self:jReturnError)
+    self:jReturnError := nil
+    FreeObj(self:jReturnSuccess)
+    self:jReturnSuccess := nil
+    FreeObj(self:jPropertiesTax)
+    self:jPropertiesTax := nil
+    FreeObj(self:jImputDataTax)
+    self:jImputDataTax := nil
+    FreeObj(self:jLegacyTaxIds)
+    self:jLegacyTaxIds := nil
+    FreeObj(self:jPosFieldRef)
+    self:jPosFieldRef := nil
+    FreeObj(self:jRetReference)
+    self:jRetReference := nil
+
+Return 

@@ -1,0 +1,589 @@
+#Include 'Totvs.ch'
+#include 'tlpp-core.th'
+
+Using namespace totvs.protheus.backoffice.stock.iterativecost.table.manager
+Using namespace totvs.protheus.backoffice.stock.iterativecost.view.acquisitioncost
+Using Namespace totvs.protheus.backoffice.stock.iterativecost.view.transferinvoice
+Using Namespace totvs.protheus.backoffice.stock.iterativecost.table.analyticalmovementtable
+namespace totvs.protheus.backoffice.stock.iterativecost.table.aglutinattedmovementtable
+
+/*/{Protheus.doc} AgglutinatedMovementTable
+    Classe responsável por criar e popular a tabela de movimentos aglutinados
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Class AgglutinatedMovementTable From TableManager
+
+    public method New() 
+
+    Static method TableFields()
+    Static method TableIndexes()
+    Static method TableName()
+
+    public method LastKey()
+    public method CTEUpdate()
+
+    public method AvgCostMov()
+    public method DE4CostMov()
+
+    public method CopyMov()
+
+    Public Data   cCusFil As character
+    Public Data   oQueryLastKey As Object
+
+endclass
+
+/*/{Protheus.doc} New
+    Instância da classe
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Method New(aFil) Class AgglutinatedMovementTable
+    ::cCusFil  := SuperGetMv("MV_CUSFIL", .F., "A")
+    ::oQueryLastKey       := Nil
+
+    If ::cCusFil == 'E'
+        _Super:New(aFil, 'E', 'C', 'C' )
+    Else
+        _Super:New(aFil, 'E', 'E', 'E')
+    EndIf
+    ::TableManager(::TableName(),::TableFields(),::TableIndexes())
+Return
+
+/*/{Protheus.doc} TableFields
+    Campos da tabela de movimentação aglutinada
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Method TableFields() Class AgglutinatedMovementTable
+    Local aFields   := {} as array
+    
+    aFields := AnalyticalMovementTable():TableFields()
+    
+Return aFields
+
+/*/{Protheus.doc} TableIndexes
+    Índices da tabela de movimentação aglutinada
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Method TableIndexes() Class AgglutinatedMovementTable
+    Local aIndexAnl := {} As Array
+    Local aIndex    := {} As Array
+    Local nIndex    := 0 As Numeric 
+
+    aIndexAnl := AnalyticalMovementTable():TableIndexes()
+
+    For nIndex := 1 To Len(aIndexAnl)
+        AAdd(aIndex, {AgglutinatedMovementTable():TableName()+"_"+StrZero(nIndex, 2), aIndexAnl[nIndex, 2]})
+    Next
+
+    FWFreeArray(aIndexAnl)
+Return aIndex
+
+/*/{Protheus.doc} TableName
+    Retorna o nome da tabela de movimentação aglutinada
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Method TableName() Class AgglutinatedMovementTable
+    Local cAlias as character
+
+    cAlias := "TRL"+cEmpAnt+"SP"
+
+Return cAlias
+
+/*/{Protheus.doc} LastKey
+    Retorna a última chave de aglutinação gerada
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Method LastKey(cFilProc) Class AgglutinatedMovementTable
+    Local aFields  := {}
+    Local cQuery   := ""
+    Local nLastKey := 0
+
+    If ::oQueryLastKey == Nil
+        cQuery := " Select Max(CHVAGL) LASTKEY From "+AnalyticalMovementTable():TableName()
+        cQuery += " Where FILPROC = ? "
+        cQuery += "   And IGNORE  = ? "
+
+        ::oQueryLastKey := FWExecStatement():New(cQuery)
+    EndIf 
+
+    ::oQueryLastKey:SetString(1, cFilProc)
+    ::oQueryLastKey:SetString(2, 'N')
+
+    nLastKey := ::oQueryLastKey:ExecScalar('LASTKEY')
+
+    FWFreeArray(aFields)
+Return nLastKey
+
+
+/*/{Protheus.doc} CTEUpdate
+    Formata um select para CTE com update para o campo CHVAGL
+    @author Squad Entradas
+    @since 04/10/2024
+    /*/
+Method CTEUpdate(cQuery) Class AgglutinatedMovementTable
+    Local cUpdate := ""
+    Local cCTE    := ""
+    Local cRet    := ""
+    Local cQry    := ""
+    
+    If !::lOracle
+        cCTE := " With TEMPTABLE As "
+    Else
+        cCTE := " Merge Into "+AnalyticalMovementTable():TableName()+" Using "
+    EndIf
+
+    If ::lOracle
+        cQry := " TEMPTABLE "
+        cQry += " On ("
+        cQry += " "+AnalyticalMovementTable():TableName()+".R_E_C_N_O_ = TEMPTABLE.MOVREC"
+        cQry += " ) "
+        cQry += " When Matched Then "
+    EndIf
+    If !::lOracle
+        cUpdate := " Update "+AnalyticalMovementTable():TableName()+" "
+    Else
+        cUpdate := " Update "
+    EndIf
+
+    cUpdate += "    Set "
+    cUpdate += " CHVAGL = TEMPTABLE.CHVAGL "
+
+    If !::lOracle
+        cUpdate += " From TEMPTABLE "
+    EndIf
+    cUpdate += " Where "
+    cUpdate += " "+AnalyticalMovementTable():TableName()+".R_E_C_N_O_ = TEMPTABLE.MOVREC"
+
+    cRet := cCTE + "(" + cQuery + ")" + cQry + cUpdate
+
+Return cRet
+
+/*/{Protheus.doc} AvgCostMov
+    Aglutina os movimentos de requisição/devolução a custo médio
+    @author Squad Entradas
+    @since 04/10/2024
+/*/
+Method AvgCostMov(cFilProc, lDev) Class AgglutinatedMovementTable
+    Local aBind    := {}
+    Local cQuery   := ""
+    Local cCampos  := ""
+    Local nBind    := 0
+    Local oQryIns  := Nil
+    Local oQryUpd  := Nil
+    Local nKeyIni  := 0
+    Local nKeyFin  := 0
+
+    Default lDev := .F.
+
+    nKeyIni := ::LastKey(cFilProc)
+
+    //Grava a chave de aglutinação
+    cQuery := " Select "
+    cQuery += " R_E_C_N_O_ MOVREC,"
+
+    cQuery += cValToChar(nKeyIni)
+    cQuery += "+Dense_Rank() Over "
+    cQuery += "(Order By " //FILPROC+IGNORE+FILIAL+LOCARM+COD+CUSTOMEDIO
+    cQuery += " MOV.FILPROC, "
+    cQuery += " MOV.IGNORE, "
+    If ::cCusFil != 'E'
+        cQuery += " MOV.FILIAL, "
+    EndIf
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCARM, "
+    EndIf
+    cQuery += " MOV.COD "
+    
+    cQuery += ") CHVAGL "
+
+    cQuery += " From "+AnalyticalMovementTable():TableName()+" MOV "
+    cQuery += " Where "
+    cQuery += " MOV.FILPROC    = ? And "
+    cQuery += " MOV.IGNORE     = ? And " //N
+    cQuery += " MOV.CHVAGL     = ? And " //0
+    If lDev
+        cQuery += " MOV.TM <= ? And " //500
+    Else
+        cQuery += " MOV.TM > ? And " //500
+    EndIf
+    cQuery += " MOV.CUSTOMEDIO = ?  " //S
+
+    cQuery := ChangeQuery(cQuery)
+
+    oQryUpd := FWExecStatement():New(cQuery)
+
+    nBind := 1
+    oQryUpd:SetString(nBind++, cFilProc) //FILPROC
+    oQryUpd:SetString(nBind++, 'N') //IGNORE
+    oQryUpd:SetNumeric(nBind++, 0) //CHVAGL
+    oQryUpd:SetString(nBind++, '500') //TM
+    oQryUpd:SetString(nBind++, 'S') //CUSTOMEDIO
+
+    cQuery := ::CTEUpdate(oQryUpd:GetFixQuery())   
+
+    ::RunQuery(cQuery)
+
+    nKeyFin := ::LastKey(cFilProc)
+
+    //Insere os movimentos aglutinados
+    cCampos := " FILPROC, "
+    cCampos += " FILIAL, "
+    cCampos += " COD, "
+    If ::cCusFil == 'A'
+        cCampos += " LOCARM, "
+    EndIf
+    cCampos += " QUANT, "
+    cCampos += " PERDA, "
+    cCampos += " CUSTO1, "
+    cCampos += " CUSTO2, "
+    cCampos += " CUSTO3, "
+    cCampos += " CUSTO4, "
+    cCampos += " CUSTO5, "
+    cCampos += " TM, "
+    cCampos += " CF, "
+    cCampos += " ENTSAI, "
+    cCampos += " CUSTOMEDIO, "
+    cCampos += " IGNORE, "
+    cCampos += " CHVAGL "
+
+    //Inserção dos dados
+    cQuery := " Select "
+    cQuery += " MOV.FILPROC, "
+    If ::cCusFil == 'E'
+        If ::lPostgres
+            cQuery += " Char("+cValToChar(FWSizeFilial())+") "
+        EndIf
+        cQuery += " '"+PadR(FWCompany(), FWSizeFilial())+"' FILIAL, "
+    Else 
+        cQuery += " MOV.FILIAL, "
+    EndIf
+    cQuery += " MOV.COD, "
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCARM, "
+    EndIf
+    cQuery += " MOV.CHVAGL, "
+    cQuery += " Sum(MOV.QUANT)  QUANT, "
+    cQuery += " Sum(MOV.PERDA)  PERDA, "
+    cQuery += " Sum(MOV.CUSTO1) CUSTO1, "
+    cQuery += " Sum(MOV.CUSTO2) CUSTO2, "
+    cQuery += " Sum(MOV.CUSTO3) CUSTO3, "
+    cQuery += " Sum(MOV.CUSTO4) CUSTO4, "
+    cQuery += " Sum(MOV.CUSTO5) CUSTO5, "
+    If lDev
+        cQuery += ::castToChar("'499'", 3)+" TM, "
+        cQuery += ::castToChar("'DE1'", 3)+" CF, "
+    Else
+        cQuery += ::castToChar("'999'", 3)+" TM, "
+        cQuery += ::castToChar("'RE1'", 3)+" CF, "
+    EndIf
+    cQuery += " MOV.ENTSAI, "
+    cQuery += ::castToChar("'S'", 1)+" CUSTOMEDIO, "
+    cQuery += " MOV.IGNORE "
+    cQuery += " From "+AnalyticalMovementTable():TableName()+" MOV "
+    cQuery += " Where "
+    cQuery += " MOV.FILPROC = ? And "
+    cQuery += " MOV.IGNORE  = ? And "
+    cQuery += " MOV.CHVAGL  > ? And "
+    cQuery += " MOV.CHVAGL <= ?  "
+    cQuery += " Group By "
+    cQuery += " MOV.FILPROC, "
+    cQuery += " MOV.IGNORE, "
+    cQuery += " MOV.CHVAGL, "
+    If ::cCusFil != 'E'
+        cQuery += " MOV.FILIAL, "
+    EndIf
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCARM, "
+    EndIf
+    cQuery += " MOV.COD, "
+    cQuery += " MOV.ENTSAI "
+
+    cQuery := ChangeQuery(cQuery)
+
+    oQryIns := FWExecStatement():New(cQuery)
+
+    nBind := 1
+    oQryIns:SetString(nBind++, cFilProc)
+    oQryIns:SetString(nBind++, 'N')
+    oQryIns:SetNumeric(nBind++, nKeyIni) //CHVAGL
+    oQryIns:SetNumeric(nBind++, nKeyFin) //CHVAGL
+
+    cQuery := oQryIns:GetFixQuery()
+
+    cQuery := ::FormatCTE(cCampos, cQuery)
+    ::RunQuery(cQuery)
+
+    FWFreeArray(aBind) 
+Return
+
+
+/*/{Protheus.doc} DE4CostMov
+    Aglutina os movimentos de devolução de transferências
+    @author Squad Entradas
+    @since 01/06/2026
+/*/
+Method DE4CostMov(cFilProc) Class AgglutinatedMovementTable
+    Local aBind    := {}
+    Local cQuery   := ""
+    Local cCampos  := ""
+    Local nBind    := 0
+    Local oQryIns  := Nil
+    Local oQryUpd  := Nil
+    Local nKeyIni  := 0
+    Local nKeyFin  := 0
+
+    nKeyIni := ::LastKey(cFilProc)
+
+    //Grava a chave de aglutinação
+    cQuery := " Select "
+    cQuery += " R_E_C_N_O_ MOVREC,"
+
+    cQuery += cValToChar(nKeyIni)
+    cQuery += "+Dense_Rank() Over "
+    cQuery += "(Order By " //FILPROC+FILIAL+COD+LOCARM+CODORI+LOCORI
+    cQuery += " MOV.FILPROC, " 
+    If ::cCusFil != 'E'
+        cQuery += " MOV.FILIAL, "
+    EndIf
+    cQuery += " MOV.COD, "
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCARM, "
+    EndIf
+    cQuery += " MOV.CODORI "
+    If ::cCusFil == 'A'
+        cQuery += " ,MOV.LOCORI "
+    EndIf
+    cQuery += ") CHVAGL "
+
+    cQuery += " From "+AnalyticalMovementTable():TableName()+" MOV "
+    cQuery += " Where "
+    cQuery += " MOV.FILPROC    = ? And "
+    cQuery += " MOV.IGNORE     = ? And " //N
+    cQuery += " MOV.CHVAGL     = ? And " //0
+    cQuery += " MOV.CF         = ? " //DE4
+
+    cQuery := ChangeQuery(cQuery)
+
+    oQryUpd := FWExecStatement():New(cQuery)
+
+    nBind := 1
+    oQryUpd:SetString(nBind++, cFilProc) //FILPROC
+    oQryUpd:SetString(nBind++, 'N') //IGNORE
+    oQryUpd:SetNumeric(nBind++, 0) //CHVAGL
+    oQryUpd:SetString(nBind++, 'DE4') //CF
+
+    cQuery := ::CTEUpdate(oQryUpd:GetFixQuery())   
+
+    ::RunQuery(cQuery)
+
+    nKeyFin := ::LastKey(cFilProc)
+
+    //Insere os movimentos aglutinados
+    cCampos := " FILPROC, "
+    cCampos += " FILIAL, "
+    cCampos += " COD, "
+    If ::cCusFil == 'A'
+        cCampos += " LOCARM, "
+    EndIf
+    cCampos += " QUANT, "
+    cCampos += " PERDA, "
+    cCampos += " CUSTO1, "
+    cCampos += " CUSTO2, "
+    cCampos += " CUSTO3, "
+    cCampos += " CUSTO4, "
+    cCampos += " CUSTO5, "
+    cCampos += " TM, "
+    cCampos += " CF, "
+    cCampos += " ENTSAI, "
+    cCampos += " CUSTOMEDIO, "
+    cCampos += " IGNORE, "
+    cCampos += " CODORI, "
+    If ::cCusFil == 'A'
+    	cCampos += " LOCORI,"
+    EndIf
+    cCampos += " CHVAGL "
+
+    //Inserção dos dados
+    cQuery := " Select "
+    cQuery += " MOV.FILPROC, "
+    If ::cCusFil == 'E'
+        If ::lPostgres
+            cQuery += " Char("+cValToChar(FWSizeFilial())+") "
+        EndIf
+        cQuery += " '"+PadR(FWCompany(), FWSizeFilial())+"' FILIAL, "
+    Else 
+        cQuery += " MOV.FILIAL, "
+    EndIf
+    cQuery += " MOV.COD, "
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCARM, "
+    EndIf
+    cQuery += " MOV.CODORI, "
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCORI, "
+    EndIf
+    cQuery += " MOV.CHVAGL, "
+    cQuery += " Sum(MOV.QUANT)  QUANT, "
+    cQuery += " Sum(MOV.PERDA)  PERDA, "
+    cQuery += " Sum(MOV.CUSTO1) CUSTO1, "
+    cQuery += " Sum(MOV.CUSTO2) CUSTO2, "
+    cQuery += " Sum(MOV.CUSTO3) CUSTO3, "
+    cQuery += " Sum(MOV.CUSTO4) CUSTO4, "
+    cQuery += " Sum(MOV.CUSTO5) CUSTO5, "
+    cQuery += ::castToChar("'499'", 3)+" TM, "
+    cQuery += ::castToChar("'DE4'", 3)+" CF, "
+    cQuery += ::castToChar("'E'", 1)+" ENTSAI, "
+    cQuery += ::castToChar("'N'", 1)+" CUSTOMEDIO, "
+    cQuery += ::castToChar("'N'", 1)+" IGNORE "
+    cQuery += " From "+AnalyticalMovementTable():TableName()+" MOV "
+    cQuery += " Where "
+    cQuery += " MOV.FILPROC = ? And "
+    cQuery += " MOV.IGNORE  = ? And "
+    cQuery += " MOV.CHVAGL  > ? And "
+    cQuery += " MOV.CHVAGL <= ?  "
+    cQuery += " Group By " //FILPROC+FILIAL+COD+LOCARM+CODORI+LOCORI
+    cQuery += " MOV.FILPROC, "
+    If ::cCusFil != 'E'
+        cQuery += " MOV.FILIAL, "
+    EndIf
+    cQuery += " MOV.COD, "
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCARM, "
+    EndIf
+    cQuery += " MOV.CODORI, "
+    If ::cCusFil == 'A'
+        cQuery += " MOV.LOCORI, "
+    EndIf
+    cQuery += " MOV.CHVAGL "
+    
+    cQuery := ChangeQuery(cQuery)
+
+    oQryIns := FWExecStatement():New(cQuery)
+
+    nBind := 1
+    oQryIns:SetString(nBind++, cFilProc)
+    oQryIns:SetString(nBind++, 'N')
+    oQryIns:SetNumeric(nBind++, nKeyIni) //CHVAGL
+    oQryIns:SetNumeric(nBind++, nKeyFin) //CHVAGL
+
+    cQuery := oQryIns:GetFixQuery()
+
+    cQuery := ::FormatCTE(cCampos, cQuery)
+    ::RunQuery(cQuery)
+
+    FWFreeArray(aBind) 
+Return
+
+/*/{Protheus.doc} CopyMov
+    Efetua a cópia dos movimentos não aglutinados para a tabela.
+    Grava a chave de aglutinação para facilitar a localização entre as tabelas
+    @author Squad Entradas
+    @since 08/10/2024
+/*/
+Method CopyMov(cFilProc) Class AgglutinatedMovementTable
+    Local aBind    := {}
+    Local cQuery   := ""
+    Local aCampos  := {}
+    Local cCampos  := ""
+    Local cCampo   := ""
+    Local nBind    := 0
+    Local oQryIns  := Nil
+    Local oQryUpd  := Nil
+    Local nI       := 0
+    Local nKeyIni  := 0
+    Local nKeyFin  := 0
+
+    nKeyIni := ::LastKey(cFilProc)
+    
+    //Grava a chave de aglutinação - 1 por linha
+    cQuery := " Select "
+    cQuery += " R_E_C_N_O_ MOVREC,"
+    cQuery += cValToChar(nKeyIni)
+    cQuery += "+Row_Number() Over ( Order By R_E_C_N_O_ ) CHVAGL "
+    cQuery += " From "+AnalyticalMovementTable():TableName()+" MOV "
+    cQuery += " Where "
+    cQuery += " MOV.FILPROC    = ? And "
+    cQuery += " MOV.IGNORE     = ? And " //N
+    cQuery += " MOV.CHVAGL     = ? " //0
+
+    cQuery := ChangeQuery(cQuery)
+
+    oQryUpd := FWExecStatement():New(cQuery)
+
+    aBind := {}
+    AAdd(aBind, cFilProc) //FILPROC
+    AAdd(aBind, 'N') //IGNORE
+
+    For nBind := 1 To Len(aBind)
+        oQryUpd:SetString(nBind, aBind[nBind])
+    Next nBind
+    oQryUpd:SetNumeric(Len(aBind)+1, 0) //CHVAGL
+
+    cQuery := ::CTEUpdate(oQryUpd:GetFixQuery())
+
+    ::RunQuery(cQuery)
+
+    nKeyFin := ::LastKey(cFilProc)
+
+    //Insere os dados
+    aCampos := ::TableFields()
+    cCampos := ""
+    For nI := 1 To Len(aCampos)
+        cCampo := aCampos[Ni, 1]
+        If cCampo == 'FILIAL' .And. ::cCusFil == 'E'
+            cCampo := ""
+            If ::lPostgres
+                cCampo += " Char("+cValToChar(FWSizeFilial())+") "
+            EndIf
+            cCampo += " '"+PadR(FWCompany(), FWSizeFilial())+"' FILIAL"
+        EndIf
+        If cCampo == 'LOCARM' .And. ::cCusFil != 'A'
+            Loop
+        EndIf
+        cCampos += cCampo+","
+    Next nI
+    cCampos := SubStr(cCampos, 1, Len(cCampos)-1)
+
+    //Inserção dos dados
+    cQuery := " Select "
+    cQuery += cCampos
+    cQuery += " From "+AnalyticalMovementTable():TableName()+" MOV "
+    cQuery += " Where "
+    cQuery += " MOV.FILPROC = ? And "
+    cQuery += " MOV.IGNORE  = ? And "
+    cQuery += " MOV.CHVAGL  > ? And "
+    cQuery += " MOV.CHVAGL <= ?  "
+
+    cQuery := ChangeQuery(cQuery)
+
+    oQryIns := FWExecStatement():New(cQuery)
+
+    oQryIns:SetString(1, cFilProc)
+    oQryIns:SetString(2, 'N') //IGNORE
+    oQryIns:SetNumeric(3, nKeyIni) //CHVAGL
+    oQryIns:SetNumeric(4, nKeyFin) //CHVAGL
+    
+    cQuery := oQryIns:GetFixQuery()
+
+    cCampos := ""
+    For nI := 1 To Len(aCampos)
+        If ::cCusFil != 'A' .And. aCampos[Ni, 1] == 'LOCARM'
+            Loop
+        EndIf
+        cCampos += aCampos[Ni, 1]+","
+    Next nI
+    cCampos := SubStr(cCampos, 1, Len(cCampos)-1)
+
+    cQuery := ::FormatCTE(cCampos, cQuery)
+    ::RunQuery(cQuery)
+
+
+    FWFreeArray(aBind)
+    FWFreeArray(aCampos)
+Return
+

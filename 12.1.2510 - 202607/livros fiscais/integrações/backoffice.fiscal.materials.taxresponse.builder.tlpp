@@ -1,0 +1,1043 @@
+#INCLUDE "TOTVS.CH"
+#INCLUDE "TLPP-CORE.TH"
+
+//-------------------------------------------------------------------
+// Constantes
+//-------------------------------------------------------------------
+#DEFINE TAXRESPONSE_VERSION "1.0.0"
+
+// Configuração padrão de dados para TCIProcessing (CFGTRIB)
+#DEFINE CFGTRIB_DATA_ITEMS {"detalhe_livro"}
+
+// Namespace
+Using Namespace totvs.protheus.backoffice.fiscal.tciclass
+Using Namespace totvs.protheus.backoffice.fiscal.configurator.tributomapper
+
+namespace totvs.protheus.backoffice.fiscal.materials.taxresponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildTaxResponse
+Função estática para construir resposta fiscal JSON para API REST.
+Encapsula toda a lógica de criação do Builder, execução e retorno.
+
+@type function
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return json, Objeto JSON com dados fiscais ou Nil se erro
+@example
+    jResponse := totvs.protheus.backoffice.fiscal.materials.taxresponse.BuildTaxResponse()
+    If jResponse != Nil
+        // Processar JSON
+    EndIf
+/*/
+//-------------------------------------------------------------------
+Function BuildTaxResponse()
+    
+    Local aTaxesArray := {} as array
+    Local jResponse         as json
+    Local nQtdItens         as numeric
+    Local oBuilder          as object
+    
+    // Instancia o Builder TLPP
+    oBuilder := TaxResponseBuilder():New()
+    
+    // Obtém array de tributos via MaFisRodape
+    aTaxesArray := MaFisRodape(1, Nil, , , Nil, .T., , , , , , , , , , , , , , , .T.)
+    
+    // Obtém quantidade de itens
+    nQtdItens := MaFisRet(, "NF_QTDITENS")
+    
+    // Constrói JSON usando interface fluente (Builder Pattern)
+    jResponse := oBuilder:SetHeaderData():SetTaxesDetail(aTaxesArray):SetItemsData(nQtdItens):Build()    
+    
+    // Libera recursos
+    oBuilder:Destroy()
+    FreeObj(oBuilder)
+    FwFreeArray(aTaxesArray)
+    
+Return jResponse
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder
+Classe Builder para construção de resposta JSON com dados fiscais.
+Encapsula chamadas às funções MaFisRet() e MaFisRodape() seguindo 
+padrão Builder Pattern com interface fluente.
+
+@type class
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510 - TAXRESPONSE_VERSION
+@see https://tdn.totvs.com/display/tec/Namespace
+@example
+    oBuilder := TaxResponseBuilder():New()
+    jResponse := oBuilder:SetHeaderData():SetTaxesDetail():SetItemsData():Build()
+    oAPIManager:SetJson(.F., {jResponse})
+    FreeObj(oBuilder)
+/*/
+//-------------------------------------------------------------------
+Class TaxResponseBuilder
+    
+    // Membros de Dados Privados
+    Private Data jImpostos      as json      // Objeto JSON principal de resposta
+    Private Data aTaxesDetail   as array     // Array de detalhamento de tributos
+    Private Data nTotalTaxes    as numeric   // Total de impostos calculado
+    Private Data lIsValid       as logical   // Flag de validação do builder
+    Private Data cVersion       as character // Versão do builder
+    Private Data lHasTCIClass   as logical   // Flag indicando disponibilidade da classe TCIProcessing
+    Private Data oTCIProcessor  as object    // Instância única da classe TCIProcessing para CFGTRIB
+    Private Data oTribMapper    as object    // Instância de TributoMapper para resolução ID?Sigla?Nome
+    
+    // Métodos Públicos
+    Public Method New() Constructor
+    Public Method Destroy()
+    Public Method SetHeaderData() as object
+    Public Method SetTaxesDetail(aTaxesArray) as object
+    Public Method SetItemsData(nQtdItens) as object
+    Public Method Build() as json
+    Public Method IsValid() as logical
+    Public Method GetVersion() as character
+    
+    // Métodos Privados (Helpers)
+    Private Method GetMaFisValue(nItem, cField) as variant
+    Private Method CreateTaxJson(aTaxData) as json
+    Private Method CreateItemJson(nItem) as json
+    Private Method ProcessCFGTRIBData(nItem) as json
+    Private Method TransformTribGenJSON(jDadosItens, nItem) as json
+    Private Method ExtractItemTributos(jDadosItens, nItem) as json
+    Private Method TransformSingleTributo(jTributo) as json
+    Private Method PopulateTributoBasicFields(jTributo, jNewTrib)
+    Private Method ExtractTaxClassificationFields(jTributo, jNewTrib)
+    Private Method GetCFGTRIBHeaderMap() as json
+    Private Method ShouldIncludeTaxInDetail(cImposto, jCFGTRIBMap, jTaxJson) as logical
+    Private Method EnrichTaxWithCFGTRIB(cImposto, jCFGTRIBMap, jTaxJson) as logical
+    Private Method GetJsonProperty(jObject, cProperty, xDefault) as variant
+    Private Method InitializeJson() as json
+    
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:New
+Construtor da classe TaxResponseBuilder.
+Inicializa variáveis privadas, prepara estrutura JSON base e instancia
+integração com TCIProcessing (Configurador de Tributos) se disponível.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return object, Self - Instância da classe (Fluent Interface)
+@obs A classe TCIProcessing é instanciada uma única vez e reutilizada
+     por todos os itens para otimização de performance (cache interno).
+@example
+    oBuilder := TaxResponseBuilder():New()
+/*/
+//-------------------------------------------------------------------
+Method New() Class TaxResponseBuilder
+    
+    self:jImpostos     := JsonObject():New()
+    self:aTaxesDetail  := {}
+    self:nTotalTaxes   := 0
+    self:lIsValid      := .T.
+    self:cVersion      := TAXRESPONSE_VERSION
+    
+    // Valida disponibilidade da classe TCIProcessing (CFGTRIB)
+    self:lHasTCIClass := FindClass("TCIProcessing")
+    
+    If self:lHasTCIClass
+        // Instancia TCIProcessing uma única vez (reusado por todos os itens)
+        self:oTCIProcessor := TCIProcessing():New()
+    Else
+        self:oTCIProcessor := Nil
+    EndIf
+    
+    // Instancia TributoMapper para resolução de mapeamento ID ? Sigla ? Nome
+    self:oTribMapper := TributoMapper():New()
+    
+    
+    
+    // Inicializa estrutura base do JSON
+    self:InitializeJson()
+
+   
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:Destroy
+Destrutor da classe TaxResponseBuilder.
+Libera recursos alocados (JSON objects e arrays).
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return nil
+@example
+    oBuilder:Destroy()
+/*/
+//-------------------------------------------------------------------
+Method Destroy() Class TaxResponseBuilder
+    
+    // Libera objeto JSON
+    If self:jImpostos != Nil
+        FreeObj(self:jImpostos)
+        self:jImpostos := Nil
+    EndIf
+    
+    // Libera arrays
+    If ValType(self:aTaxesDetail) == "A"
+        FwFreeArray(self:aTaxesDetail)
+        self:aTaxesDetail := {}
+    EndIf
+    
+    // Libera instância TributoMapper
+    If self:oTribMapper != Nil
+        self:oTribMapper:Destroy()
+        FreeObj(self:oTribMapper)
+        self:oTribMapper := Nil
+    EndIf
+    
+    // Libera instância TCIProcessing
+    If self:oTCIProcessor != Nil
+        // Chama destrutor específico da classe TCIProcessing
+        If self:lHasTCIClass
+            self:oTCIProcessor:Destroy()
+        EndIf
+        FreeObj(self:oTCIProcessor)
+        self:oTCIProcessor := Nil
+    EndIf
+    
+    // Reset variáveis
+    self:nTotalTaxes := 0
+    self:lIsValid := .F.
+    self:lHasTCIClass := .F.
+    self:cVersion := ""
+    
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:InitializeJson
+Inicializa estrutura base do objeto JSON de resposta.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return json, Objeto JSON inicializado
+@private
+/*/
+//-------------------------------------------------------------------
+Method InitializeJson() Class TaxResponseBuilder
+    
+    self:jImpostos["valor_contabil"]               := 0
+    self:jImpostos["valor_mercadoria"]             := 0
+    self:jImpostos["total_impostos_embutidos"]     := 0
+    self:jImpostos["total_impostos_sem_incidencia"] := 0
+    self:jImpostos["total_impostos"]               := 0
+    self:jImpostos["TaxesDetail"]                  := {}
+    self:jImpostos["itens"]                        := {}
+    self:jImpostos["desconto"]                     := 0
+    self:jImpostos["base_duplicada"]               := 0
+    self:jImpostos["seguro"]                       := 0
+    self:jImpostos["frete"]                        := 0
+    self:jImpostos["despesas_acessorias"]          := 0
+    
+Return self:jImpostos
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:SetHeaderData
+Define os dados fiscais do cabeçalho (totalizadores da NF).
+Obtém valores via MaFisRet() com validações de retorno.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return object, Self - Permite chamadas encadeadas (Fluent Interface)
+@example
+    oBuilder:SetHeaderData()
+/*/
+//-------------------------------------------------------------------
+Method SetHeaderData() Class TaxResponseBuilder
+    
+    Local nValIcm as numeric
+    Local nValCof as numeric
+    Local nValCf2 as numeric
+    Local nValPis as numeric
+    Local nValPs2 as numeric
+    Local nValCsl as numeric
+    Local nValIss as numeric
+    Local nValIpi as numeric
+    Local nValSol as numeric
+    
+    // Valores do cabeçalho
+    self:jImpostos["valor_contabil"]   := self:GetMaFisValue(, "NF_TOTAL", 0)
+    self:jImpostos["valor_mercadoria"] := self:GetMaFisValue(, "NF_VALMERC", 0)
+    
+    // Impostos embutidos
+    nValIcm := self:GetMaFisValue(, "NF_VALICM")
+    nValCof := self:GetMaFisValue(, "NF_VALCOF")
+    nValCf2 := self:GetMaFisValue(, "NF_VALCF2")
+    nValPis := self:GetMaFisValue(, "NF_VALPIS")
+    nValPs2 := self:GetMaFisValue(, "NF_VALPS2")
+    nValCsl := self:GetMaFisValue(, "NF_VALCSL")
+    nValIss := self:GetMaFisValue(, "NF_VALISS")
+    
+    self:jImpostos["total_impostos_embutidos"] := nValIcm + nValCof + nValCf2 + nValPis + nValPs2 + nValCsl + nValIss
+    
+    // Impostos sem incidência
+    nValIpi := self:GetMaFisValue(, "NF_VALIPI")
+    nValSol := self:GetMaFisValue(, "NF_VALSOL")
+    
+    self:jImpostos["total_impostos_sem_incidencia"] := nValIpi + nValSol
+    
+    // Outros valores
+    self:jImpostos["desconto"]             := self:GetMaFisValue(, "NF_DESCONTO")
+    self:jImpostos["base_duplicada"]       := self:GetMaFisValue(, "NF_BASEDUP")
+    self:jImpostos["seguro"]               := self:GetMaFisValue(, "NF_SEGURO")
+    self:jImpostos["frete"]                := self:GetMaFisValue(, "NF_FRETE")
+    self:jImpostos["despesas_acessorias"]  := self:GetMaFisValue(, "NF_DESPESA")
+    
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:SetTaxesDetail
+Define o detalhamento de tributos (array de impostos).
+Recebe array retornado por MaFisRodape() e monta estrutura JSON.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param aTaxesArray, array, Array com detalhamento de impostos [nX,1]=Imposto, [nX,2]=Descrição, [nX,3]=Base, [nX,4]=Alíquota, [nX,5]=Valor
+@return object, Self - Permite chamadas encadeadas (Fluent Interface)
+@example
+    aJson := MaFisRodape(1, Nil, , , Nil, .T., , , , , , , , , , , , , , , .T.)
+    oBuilder:SetTaxesDetail(aJson)
+/*/
+//-------------------------------------------------------------------
+Method SetTaxesDetail(aTaxesArray) Class TaxResponseBuilder
+    
+    Local cImposto    as character
+    Local jCFGTRIBMap as json
+    Local jTaxJson    as json
+    Local nDetImp     as numeric
+    Local nX          as numeric
+    
+    Default aTaxesArray := {}
+    
+    nDetImp := Len(aTaxesArray)
+    
+    If nDetImp > 0
+        // Obtém mapeamento de tributos CFGTRIB do cabeçalho (cache já feito pela TCIProcessing)
+        jCFGTRIBMap := self:GetCFGTRIBHeaderMap()
+        
+        For nX := 1 To nDetImp
+            jTaxJson := self:CreateTaxJson(aTaxesArray[nX])
+            
+            If jTaxJson != Nil
+                cImposto := AllTrim(aTaxesArray[nX, 1])
+                
+                // Valida e enriquece tributo com dados CFGTRIB quando disponível
+                If self:ShouldIncludeTaxInDetail(cImposto, jCFGTRIBMap, jTaxJson)
+                    // Acumula valor total de impostos
+                    self:nTotalTaxes += aTaxesArray[nX, 5]
+                    
+                    // Adiciona ao array de detalhamento
+                    aAdd(self:jImpostos["TaxesDetail"], jTaxJson)
+                EndIf
+            EndIf
+        Next nX
+        
+        // Libera hash temporário
+        If jCFGTRIBMap != Nil
+            FreeObj(jCFGTRIBMap)
+        EndIf
+    EndIf
+    
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:SetItemsData
+Define os dados fiscais dos itens do pedido/nota.
+Processa cada item via MaFisRet() montando estrutura JSON detalhada.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param nQtdItens, numeric, Quantidade de itens a processar (obtido via MaFisRet(,"NF_QTDITENS"))
+@return object, Self - Permite chamadas encadeadas (Fluent Interface)
+@example
+    nItens := MaFisRet(, "NF_QTDITENS")
+    oBuilder:SetItemsData(nItens)
+/*/
+//-------------------------------------------------------------------
+Method SetItemsData(nQtdItens) Class TaxResponseBuilder
+    
+    Local nX        as numeric
+    Local jItens    as json
+    Local jItemDet  as json
+    
+    Default nQtdItens := 0
+    
+    If nQtdItens > 0
+        For nX := 1 To nQtdItens
+            jItens := JsonObject():New()
+            jItens["produto"] := {}
+            
+            jItemDet := self:CreateItemJson(nX)
+            
+            If jItemDet != Nil
+                jItens["produto"] := jItemDet
+                aAdd(self:jImpostos["itens"], jItens)
+            EndIf
+        Next nX
+    EndIf
+    
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:Build
+Finaliza a construção do JSON e retorna o objeto completo.
+Calcula totais finais e valida estrutura antes de retornar.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return json, Objeto JSON completo com dados fiscais ou Nil se inválido
+@example
+    jResponse := oBuilder:Build()
+    If jResponse != Nil
+        oAPIManager:SetJson(.F., {jResponse})
+    EndIf
+/*/
+//-------------------------------------------------------------------
+Method Build() Class TaxResponseBuilder
+    
+    Local jReturn as json
+    
+    If self:lIsValid
+        // Define total de impostos calculado
+        self:jImpostos["total_impostos"] := self:nTotalTaxes
+        
+        jReturn := self:jImpostos    
+    EndIf
+    
+Return jReturn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:IsValid
+Valida se o builder está em estado consistente para Build().
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return logical, .T. se válido, .F. se há erros
+@example
+    If oBuilder:IsValid()
+        jResponse := oBuilder:Build()
+    EndIf
+/*/
+//-------------------------------------------------------------------
+Method IsValid() Class TaxResponseBuilder
+Return self:lIsValid
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:GetVersion
+Retorna a versão atual do Builder.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return character, Versão do builder (ex: "1.0.0")
+@example
+    cVersao := oBuilder:GetVersion()
+/*/
+//-------------------------------------------------------------------
+Method GetVersion() Class TaxResponseBuilder
+Return self:cVersion
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:GetMaFisValue
+Encapsula chamada a MaFisRet() com validação de retorno.
+Obtém valor fiscal para item específico ou cabeçalho.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param nItem, numeric, Número do item (opcional, Nil para cabeçalho)
+@param cField, character, Campo fiscal a buscar (ex: "NF_TOTAL", "IT_VALMERC")
+@return variant, Valor do campo ou valor padrão
+@private
+/*/
+//-------------------------------------------------------------------
+Method GetMaFisValue(nItem, cField) Class TaxResponseBuilder    
+Return MaFisRet(nItem, cField)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:CreateTaxJson
+Cria objeto JSON para um tributo específico.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param aTaxData, array, Array com dados do tributo [1]=Imposto, [2]=Descrição, [3]=Base, [4]=Alíquota, [5]=Valor
+@return json, Objeto JSON do tributo ou Nil se inválido
+@private
+/*/
+//-------------------------------------------------------------------
+Method CreateTaxJson(aTaxData) Class TaxResponseBuilder
+    
+    Local jTaxJson as json
+    
+    Default aTaxData := {}
+    
+    If Len(aTaxData) >= 5
+        jTaxJson := JsonObject():New()
+        jTaxJson["imposto"]      := aTaxData[1]
+        jTaxJson["descricao"]    := Alltrim(aTaxData[2])
+        jTaxJson["base_calculo"] := aTaxData[3]
+        jTaxJson["aliquota"]     := aTaxData[4]
+        jTaxJson["valor"]        := aTaxData[5]
+    EndIf
+    
+Return jTaxJson
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:CreateItemJson
+Cria objeto JSON completo para um item do pedido/nota.
+Obtém todos os campos fiscais via MaFisRet() para o item específico.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param nItem, numeric, Número do item (1-based)
+@return json, Objeto JSON do item ou Nil se inválido
+@private
+/*/
+//-------------------------------------------------------------------
+Method CreateItemJson(nItem) Class TaxResponseBuilder
+    
+    Local jItemDet  as json    
+    Local jTribGen  as json
+    
+    Default nItem := 0
+    
+    If nItem > 0
+        jItemDet := JsonObject():New()
+        
+        // Valores monetários
+        jItemDet["valor_mercadoria"]    := self:GetMaFisValue(nItem, 'IT_VALMERC')
+        jItemDet["valor_st"]            := self:GetMaFisValue(nItem, 'IT_VALSOL')
+        jItemDet["valor_total"]         := self:GetMaFisValue(nItem, 'IT_TOTAL')
+        jItemDet["seguro"]              := self:GetMaFisValue(nItem, 'IT_SEGURO')
+        jItemDet["valor_csll"]          := self:GetMaFisValue(nItem, 'IT_VALCSL')
+        jItemDet["valor_unitario"]      := self:GetMaFisValue(nItem, 'IT_PRCUNI')
+        jItemDet["quantidade"]          := self:GetMaFisValue(nItem, 'IT_QUANT')
+        jItemDet["frete"]               := self:GetMaFisValue(nItem, 'IT_FRETE')
+        jItemDet["desconto"]            := self:GetMaFisValue(nItem, 'IT_DESCONTO')
+        jItemDet["despesas_acessorias"] := self:GetMaFisValue(nItem, 'IT_DESPESA')
+        
+        // PIS - Retido, Apuração e ST
+        jItemDet["aliquota_pis"]        := self:GetMaFisValue(nItem, 'IT_ALIQPIS')
+        jItemDet["valor_pis"]           := self:GetMaFisValue(nItem, 'IT_VALPIS')    // Valor do PIS retido
+        jItemDet["valor_pis_apur"]      := self:GetMaFisValue(nItem, 'IT_VALPS2')    // Valor do PIS via apuração
+        jItemDet["valor_pis_st"]        := self:GetMaFisValue(nItem, 'IT_VALPS3')    // Valor do PIS Subst. Tributária
+        
+        // COFINS - Retido, Apuração e ST
+        jItemDet["aliquota_cofins"]     := self:GetMaFisValue(nItem, 'IT_ALIQCOF')
+        jItemDet["valor_cofins"]        := self:GetMaFisValue(nItem, 'IT_VALCOF')    // Valor da COFINS retida
+        jItemDet["valor_cofins_apur"]   := self:GetMaFisValue(nItem, 'IT_VALCF2')    // Valor da COFINS via apuração
+        jItemDet["valor_cofins_st"]     := self:GetMaFisValue(nItem, 'IT_VALCF3')    // Valor da COFINS Subst. Tributária
+        
+        // IPI
+        jItemDet["aliquota_ipi"]        := self:GetMaFisValue(nItem, 'IT_ALIQIPI')
+        jItemDet["valor_ipi"]           := self:GetMaFisValue(nItem, 'IT_VALIPI')
+        
+        // ICMS e ST
+        jItemDet["aliquota_st"]         := self:GetMaFisValue(nItem, 'IT_ALIQSOL')
+        jItemDet["aliquota_icms"]       := self:GetMaFisValue(nItem, 'IT_ALIQICM')
+        jItemDet["valor_icms"]          := self:GetMaFisValue(nItem, 'IT_VALICM')
+        
+        // CSLL
+        jItemDet["aliquota_csll"]       := self:GetMaFisValue(nItem, 'IT_ALIQCSL')
+        
+        // Dados do produto
+        jItemDet["codigo_produto"]      := self:GetMaFisValue(nItem, 'IT_PRODUTO')
+        jItemDet["tes"]                 := self:GetMaFisValue(nItem, 'IT_TES')
+        
+        // Integração CFGTRIB - Tributos Genéricos
+        jTribGen := self:ProcessCFGTRIBData(nItem)
+        If jTribGen != Nil
+            jItemDet["tributos_genericos"] := jTribGen
+        EndIf
+    EndIf
+    
+Return jItemDet
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:ProcessCFGTRIBData
+Gerencia integração completa com TCIProcessing para obter tributos genéricos.
+Configura, executa e transforma dados retornados pelo CFGTRIB.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param nItem, numeric, Número do item a processar
+@return json, Objeto JSON com tributos genéricos ou Nil se vazio/erro
+@private
+/*/
+//-------------------------------------------------------------------
+Method ProcessCFGTRIBData(nItem) Class TaxResponseBuilder
+    
+    Local cJsonData as character
+    Local jParsed   as json
+    Local jResult   as json
+    
+    Default nItem := 0
+        
+    // Configura item atual para processamento CFGTRIB
+    self:oTCIProcessor:setItems({nItem})
+    self:oTCIProcessor:setDataItems(CFGTRIB_DATA_ITEMS)
+    
+    // Obtém dados do Configurador de Tributos
+    cJsonData := self:oTCIProcessor:getDataItems()
+    
+    // Deserializa e transforma JSON retornado
+    If !Empty(cJsonData)
+        jParsed := JsonObject():New()
+        jParsed:FromJson(cJsonData)
+        
+        // Delega transformação para método específico
+        jResult := self:TransformTribGenJSON(jParsed, nItem)
+        
+        // Libera objeto JSON temporário
+        FreeObj(jParsed)
+    EndIf
+    
+Return jResult
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:GetJsonProperty
+Obtém valor de propriedade JSON com fallback seguro.
+Valida existência da propriedade antes de retornar valor.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param jObject, json, Objeto JSON a verificar
+@param cProperty, character, Nome da propriedade
+@param xDefault, variant, Valor padrão se propriedade não existir
+@return variant, Valor da propriedade ou valor padrão
+@private
+/*/
+//-------------------------------------------------------------------
+Method GetJsonProperty(jObject, cProperty, xDefault) Class TaxResponseBuilder
+    
+    Local xValue := xDefault as variant 
+    
+    If jObject != Nil .And. ValType(jObject) == "J"
+        If jObject:HasProperty(cProperty)
+            xValue := jObject[cProperty]
+        EndIf
+    EndIf
+    
+Return xValue
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:TransformTribGenJSON
+Transforma estrutura JSON do TCIProcessing para formato simplificado.
+Extrai dados de tributos genéricos (CFGTRIB) de um item específico,
+removendo níveis desnecessários (dados_itens > nItem) e retornando
+apenas os tributos com campos relevantes.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param jDadosItens, json, Objeto JSON retornado por TCIProcessing:getDataItems()
+@param nItem, numeric, Número do item a extrair tributos
+@return json, Objeto JSON com tributos ou Nil se vazio
+@private
+@example
+    jParsed := JsonObject():New()
+    jParsed:FromJson(cJsonData)
+    jTributos := self:TransformTribGenJSON(jParsed, 1)
+    // Retorna: {"TRIB9A": {...}, "TRIB9B": {...}}
+/*/
+//-------------------------------------------------------------------
+Method TransformTribGenJSON(jDadosItens, nItem) Class TaxResponseBuilder
+    
+    Local aTribKeys     as array
+    Local cSiglaNativa  as character
+    Local cTribKey      as character
+    Local jItemTributos as json
+    Local jNewTrib      as json
+    Local jResult       as json
+    Local jTributo      as json
+    Local nX            as numeric
+    
+    Default jDadosItens := Nil
+    Default nItem := 1
+    
+    // Extrai tributos do item específico
+    jItemTributos := self:ExtractItemTributos(jDadosItens, nItem)
+    
+    // Obtém lista de tributos
+    aTribKeys := jItemTributos:GetNames()
+    
+    // Cria objeto JSON de resultado
+    jResult := JsonObject():New()
+    
+    // Transforma cada tributo individualmente
+    For nX := 1 To Len(aTribKeys)
+        cTribKey := aTribKeys[nX]
+        jTributo := jItemTributos[cTribKey]
+        
+        // Transforma tributo para formato simplificado
+        jNewTrib := self:TransformSingleTributo(jTributo)
+        
+        If jNewTrib != Nil .And. jNewTrib:HasProperty("_chave_sigla_nativa")
+            // Usa sigla_nativa como chave do objeto (ex: "PS2", "COF", "ICM")
+            cSiglaNativa := jNewTrib["_chave_sigla_nativa"]
+            jNewTrib:DelName("_chave_sigla_nativa")  // Remove campo temporário (método correto TLPP)
+            
+            If !Empty(cSiglaNativa)
+                jResult[cSiglaNativa] := jNewTrib
+            EndIf
+        EndIf
+    Next nX
+        
+Return jResult
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:ExtractItemTributos
+Extrai objeto de tributos de um item específico da estrutura TCIProcessing.
+Navega estrutura JSON até dados_itens[nItem] e retorna tributos encontrados.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param jDadosItens, json, Objeto JSON raiz retornado por TCIProcessing
+@param nItem, numeric, Número do item
+@return json, Objeto JSON com tributos do item ou Nil se não encontrado
+@private
+/*/
+//-------------------------------------------------------------------
+Method ExtractItemTributos(jDadosItens, nItem) Class TaxResponseBuilder
+    
+    Local jItemData as json
+    Local cItemKey  := cValToChar(nItem) as character
+    
+    Default jDadosItens := Nil
+    Default nItem := 1
+    
+    jItemData := jDadosItens["dados_itens"]
+     
+Return jItemData[cItemKey]
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:TransformSingleTributo
+Transforma um único objeto de tributo CFGTRIB para formato simplificado.
+Orquestra transformação delegando processamento para métodos especializados.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param jTributo, json, Objeto JSON do tributo original (TCIProcessing)
+@return json, Objeto JSON transformado ou Nil se inválido
+@private
+/*/
+//-------------------------------------------------------------------
+Method TransformSingleTributo(jTributo) Class TaxResponseBuilder
+    
+    Local cIdentTrib as character
+    Local jNewTrib   as json
+    
+    Default jTributo := Nil
+       
+    // Valida ident_trib ANTES de processar (filtro CFGTRIB)
+    cIdentTrib := self:GetJsonProperty(jTributo, "ident_trib", "")
+
+    If Empty(cIdentTrib)	
+        Return Nil  // Não processa tributo sem identificador válido	
+    EndIf
+    
+    // Cria objeto JSON de resultado
+    jNewTrib := JsonObject():New()
+    
+    // Popula campos básicos do tributo
+    self:PopulateTributoBasicFields(jTributo, jNewTrib)
+    
+    // Extrai campos de classificação fiscal
+    self:ExtractTaxClassificationFields(jTributo, jNewTrib)
+    
+Return jNewTrib
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:PopulateTributoBasicFields
+Popula campos básicos do tributo no objeto JSON de saída.
+Extrai e atribui campos principais do tributo CFGTRIB incluindo siglas nativas.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param jTributo, json, Objeto JSON do tributo original (entrada)
+@param jNewTrib, json, Objeto JSON transformado (saída - modificado por referência)
+@return nil
+@private
+/*/
+//-------------------------------------------------------------------
+Method PopulateTributoBasicFields(jTributo, jNewTrib) Class TaxResponseBuilder
+    
+    Local cCodRegra    as character
+    Local cIdentTrib   as character
+    Local cSiglaNativa as character
+    
+    Default jTributo := Nil
+    Default jNewTrib := Nil
+    
+    // Obtém campos chave
+    cCodRegra  := self:GetJsonProperty(jTributo, "cod_regra", "")
+    cIdentTrib := self:GetJsonProperty(jTributo, "ident_trib", "")
+    
+    // Resolve sigla nativa via TributoMapper (ident_trib já validado em TransformSingleTributo)
+    cSiglaNativa := ""
+    If self:oTribMapper != Nil
+        cSiglaNativa := self:oTribMapper:GetSiglaNativa(cIdentTrib)
+    EndIf
+    
+    // Campos principais do tributo
+    jNewTrib["sigla_trib"] := cCodRegra      // Ex: "TRIB03" (código regra CFGTRIB)
+    jNewTrib["desc_regra"] := self:GetJsonProperty(jTributo, "desc_regra", "")
+    jNewTrib["base_trib"]  := self:GetJsonProperty(jTributo, "base_trib", 0)
+    jNewTrib["aliq_trib"]  := self:GetJsonProperty(jTributo, "aliq_trib", 0)
+    jNewTrib["val_trib"]   := self:GetJsonProperty(jTributo, "val_trib", 0)
+    jNewTrib["ident_trib"] := cIdentTrib
+    jNewTrib["desc_trib"]  := self:GetJsonProperty(jTributo, "desc_trib", "")
+    
+    // Armazena sigla_nativa em campo temporário para uso como chave do objeto
+    If !Empty(cSiglaNativa)
+        jNewTrib["_chave_sigla_nativa"] := cSiglaNativa  // Campo temporário (removido depois)
+    EndIf
+    
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:GetCFGTRIBHeaderMap
+Obtém mapeamento de tributos CFGTRIB do cabeçalho (NF_TRIBGEN).
+Retorna hash {"SIGLA_TRIBUTO" ? "id_trib"} para enriquecimento de TaxesDetail.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@return json, Hash JSON com mapeamento sigla?id_trib ou Nil se indisponível
+@private
+@obs TCIProcessing:GetHeaderData() já faz cache interno - sem overhead adicional.
+     Estratégia híbrida: mantém tributos nativos + enriquece com dados CFGTRIB.
+@example
+    hMap := self:GetCFGTRIBHeaderMap()
+    // Retorna: {"ICMS": "000021", "DIFAL": "000037", "TG_001": "000075"}
+/*/
+//-------------------------------------------------------------------
+Method GetCFGTRIBHeaderMap() Class TaxResponseBuilder
+    
+    Local aTributos   as array
+    Local cIdTrib     as character
+    Local cJsonHeader as character
+    Local cSigla      as character
+    Local jMap        as json
+    Local jCabecalho  as json
+    Local jHeader     as json
+    Local nX          as numeric
+       
+    // Obtém dados do cabeçalho via TCIProcessing (cache interno já ativo)
+    cJsonHeader := self:oTCIProcessor:GetHeaderData()
+    
+    // Deserializa JSON do cabeçalho
+    jHeader := JsonObject():New()
+    jHeader:FromJson(cJsonHeader)
+    
+    jCabecalho := jHeader["dados_cabecalho"]
+    
+    // Cria hash de mapeamento sigla ? id_trib
+    jMap := JsonObject():New()
+    aTributos := jCabecalho:GetNames()
+    
+    // Mapeia TODOS os tributos CFGTRIB (inclusive sem id_trib)
+    // Objetivo: diferenciar tributo CFGTRIB (TRIB*) de tributo nativo (ICM, IPI)
+    For nX := 1 To Len(aTributos)
+        cSigla  := aTributos[nX]
+        
+        If jCabecalho[cSigla]:HasProperty("id_trib")
+            cIdTrib := jCabecalho[cSigla]["id_trib"]
+        EndIf
+        
+        // Armazena TODOS os tributos CFGTRIB:
+        // - Com id_trib preenchido: armazena o ID
+        // - Sem id_trib: armazena string vazia (identifica como CFGTRIB inválido)
+        jMap[cSigla] := cIdTrib
+    Next nX
+    
+    // Libera objeto JSON temporário
+    FreeObj(jHeader)
+    
+Return jMap
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:ShouldIncludeTaxInDetail
+Valida se tributo deve ser incluído no TaxesDetail aplicando regras CFGTRIB.
+Decisão de inclusão baseada em validação de dados do configurador.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param cImposto, character, Sigla do imposto (ex: "ICM", "TRIB03")
+@param jCFGTRIBMap, json, Hash com mapeamento CFGTRIB ou Nil
+@param jTaxJson, json, Objeto JSON do tributo (modificado por referência)
+@return logical, .T. se deve incluir, .F. se deve remover
+@private
+@obs Regras de inclusão:
+     1. Tributo NÃO existe no CFGTRIB ? Tributo nativo ? INCLUIR (sem id_trib)
+     2. Tributo existe no CFGTRIB E id_trib válido ? INCLUIR (com id_trib)
+     3. Tributo existe no CFGTRIB MAS id_trib vazio ? REMOVER
+@example
+    lIncluir := self:ShouldIncludeTaxInDetail("ICM", hMap, jTax)    // .T. (nativo)
+    lIncluir := self:ShouldIncludeTaxInDetail("TRIB03", hMap, jTax) // .T. (CFGTRIB válido)
+    lIncluir := self:ShouldIncludeTaxInDetail("TRIB99", hMap, jTax) // .F. (sem id_trib)
+/*/
+//-------------------------------------------------------------------
+Method ShouldIncludeTaxInDetail(cImposto, jCFGTRIBMap, jTaxJson) Class TaxResponseBuilder
+    
+    Local lIncluir as logical
+    
+    Default cImposto := ""
+    Default jCFGTRIBMap := Nil
+    Default jTaxJson := Nil
+    
+    lIncluir := .F.
+    
+    // Valida parâmetros
+    If Empty(cImposto) .Or. jTaxJson == Nil
+        Return .F.
+    EndIf
+   
+
+    // Retorna .T. se tributo foi enriquecido (CFGTRIB válido) ou .F. se CFGTRIB sem id_trib
+    lIncluir := self:EnrichTaxWithCFGTRIB(cImposto, jCFGTRIBMap, jTaxJson)
+    
+Return lIncluir
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:EnrichTaxWithCFGTRIB
+Enriquece tributo com dados do CFGTRIB quando disponível.
+Adiciona id_trib, sigla_trib, sigla_nativa e concatena no campo imposto.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param cImposto, character, Sigla do imposto
+@param jCFGTRIBMap, json, Hash com mapeamento CFGTRIB ou Nil
+@param jTaxJson, json, Objeto JSON do tributo (modificado por referência)
+@return logical, .T. se tributo é válido para inclusão, .F. se deve ser removido
+@private
+@obs Lógica de retorno:
+     - Tributo NÃO existe no CFGTRIB ? .T. (tributo nativo válido)
+     - Tributo existe E id_trib preenchido ? .T. (CFGTRIB válido, adiciona id_trib)
+     - Tributo existe MAS id_trib vazio ? .F. (CFGTRIB inválido, remover)
+/*/
+//-------------------------------------------------------------------
+Method EnrichTaxWithCFGTRIB(cImposto, jCFGTRIBMap, jTaxJson) Class TaxResponseBuilder
+    
+    Local cIdTrib          as character
+    Local cSiglaNativa     as character
+    Local lExisteNoCFGTRIB as logical
+    Local lIdTribValido    as logical
+    
+    Default cImposto := ""
+    Default jCFGTRIBMap := Nil
+    Default jTaxJson := Nil
+    
+    lExisteNoCFGTRIB := .F.
+    lIdTribValido := .F.
+    
+    // Verifica se tributo existe no mapeamento CFGTRIB
+    If jCFGTRIBMap != Nil .And. jCFGTRIBMap:HasProperty(cImposto)
+        lExisteNoCFGTRIB := .T.
+        cIdTrib := jCFGTRIBMap[cImposto]
+        lIdTribValido := !Empty(cIdTrib)
+        
+        // Enriquece JSON com id_trib, sigla_trib e substitui campo imposto por sigla_nativa
+        If lIdTribValido
+            jTaxJson["id_trib"] := cIdTrib
+            jTaxJson["sigla_trib"] := cImposto
+            
+            // Obtém sigla nativa via TributoMapper e substitui no campo "imposto"
+            If self:oTribMapper != Nil
+                cSiglaNativa := self:oTribMapper:GetSiglaNativa(cIdTrib)
+                If !Empty(cSiglaNativa)
+                    jTaxJson["imposto"] := cSiglaNativa  // Substitui sigla_trib por sigla_nativa
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+    
+    // Regras de inclusão:
+    // 1. NÃO existe no CFGTRIB ? Tributo nativo ? INCLUIR (.T.)
+    // 2. Existe no CFGTRIB E id_trib válido ? INCLUIR (.T.)
+    // 3. Existe no CFGTRIB MAS id_trib vazio ? REMOVER (.F.)
+    
+Return !lExisteNoCFGTRIB .Or. lIdTribValido
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TaxResponseBuilder:ExtractTaxClassificationFields
+Extrai campos de classificação fiscal (CST, CCT, cClassTrib) do tributo.
+Obtém campos de classificação fiscal a partir de objetos aninhados.
+
+@type method
+@author Rafael Oliveira
+@since 01/12/2025
+@version 12.1.2510
+@param jTributo, json, Objeto JSON do tributo original (entrada)
+@param jNewTrib, json, Objeto JSON transformado (saída - modificado por referência)
+@return nil
+@private
+/*/
+//-------------------------------------------------------------------
+Method ExtractTaxClassificationFields(jTributo, jNewTrib) Class TaxResponseBuilder
+    
+    Local jDetLivro  as json    
+    
+    Default jTributo := Nil
+    Default jNewTrib := Nil
+    
+    // Extrai objetos aninhados (prioridade: detalhe_livro)
+    jDetLivro  := self:GetJsonProperty(jTributo, "detalhe_livro", Nil)    
+
+    jNewTrib["cst"]        := ""
+    jNewTrib["cct"]        := ""
+    jNewTrib["cclasstrib"] := ""
+    
+    // Tenta detalhe_livro primeiro (prioridade 1)
+    If jDetLivro != Nil
+        jNewTrib["cst"]        := self:GetJsonProperty(jDetLivro, "cst", "")
+        jNewTrib["cct"]        := self:GetJsonProperty(jDetLivro, "cct", "")
+        jNewTrib["cclasstrib"] := self:GetJsonProperty(jDetLivro, "cclasstrib", "")        
+    EndIf
+    
+Return

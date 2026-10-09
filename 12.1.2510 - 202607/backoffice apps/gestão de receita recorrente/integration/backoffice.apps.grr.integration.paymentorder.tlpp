@@ -1,0 +1,508 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "GRRXDefs.CH"
+#include "fwmvcdef.ch"
+#include "backoffice.apps.grr.integration.paymentorder.ch"
+
+static _oExecHrkByInvoice := Nil
+
+namespace totvs.protheus.backoffice.apps.grr.integration.paymentorder
+using namespace totvs.protheus.backoffice.apps.grr.general
+using namespace totvs.protheus.backoffice.apps.grr.messages
+
+/*/{Protheus.doc} PaymentOrderIntegration
+    @description Classe responsável por tratar o envio dos anexos da ordem de pagamento para o GR. Os anexos devem ser fornecidos por ponto de entrada TLPP ou por chamada direta do método attachFile().
+    @type class
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+class PaymentOrderIntegration
+    private data cChargeId as character
+    private data lIsSandbox as logical
+    private data lSendSlip as logical
+    private data oPendingPaymentOrdersExec as object
+    private data oExecExistsHrk as object
+    private data oExecSetStatus as object
+    private data cPendingPaymentOrdersAlias as character
+    private data cAttachmentEntryPointName as character
+    private data lExistsAttachmentEntryPoint as logical
+
+    public method new(cChargeId as character) as object
+    public method setChargeId(cChargeId as character)
+    public method execute()
+    public method attachFile(cChargeId as character, aAttachmentsList as array) as logical
+    public method createPaymentOrderIntegration(cChargeId as character, cIdDoc as character) as json
+    
+    private method processItems()
+    private method getPendingPaymentOrders()
+    private method sendCreatedMessage() as logical
+    private method getCreatedJson() as json
+    private method sendAttachmentMessage(jFile as json, lNotify as logical) as logical
+    private method getAttachmentJson(jFile as json, lNotify as logical) as character
+    private method setStatus(cStatus as character, cHrkBranch as character, cChargeId as character) as logical
+    private method getExistsPaymentOrderIntegrationByIdDoc(cIdDoc as character) as numeric
+
+    static method getExistsPaymentOrderIntegrationByInvoice(cInvoiceSeries as character, cInvoice as character, cCustomer as character, cCustomerBranch as character) as logical
+endClass
+
+/*/{Protheus.doc} new
+    @description Inicializa uma nova instância da classe PaymentOrderIntegration com o identificador da cobrança.
+    @param cChargeId, character, Identificador único da cobrança.
+    @return object, Retorna a instância inicializada.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method new(cChargeId as character) as object class PaymentOrderIntegration
+    self:cChargeId := cChargeId
+    self:cAttachmentEntryPointName := "custom.gr.paymentorder.attachment"
+    self:lIsSandbox := GRRIsSndbox()
+    self:lSendSlip := SuperGetMV("MV_GRREBOL", .F., .T.)
+    self:lExistsAttachmentEntryPoint := existBlock(self:cAttachmentEntryPointName)
+    self:cPendingPaymentOrdersAlias := ""
+return self
+
+/*/{Protheus.doc} setChargeId
+    @description Define o identificador único da cobrança para processamento.
+    @param cChargeId, character, Identificador único da cobrança.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method setChargeId(cChargeId as character) class PaymentOrderIntegration
+    self:cChargeId := cChargeId
+return
+
+/*/{Protheus.doc} execute
+    @description Executa o fluxo de processamento de ordens de pagamento pendentes, respeitando intervalo mínimo entre execuções através de controle por lock e timestamp.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method execute() class PaymentOrderIntegration
+    local aArea := getArea() as array
+    local cLockKey := "PaymentOrderIntegration" as character
+    local lCompanyLock := .T. as logical
+    local lBranchLock := .F. as logical
+    local cLastRunParam := "grr_paymentorderintegration_last_run_" + cEmpAnt as character
+    local nNow as numeric
+    local nLastRun as numeric
+    local cLastRun as character
+    local nMinimalRunInterval := 5 as numeric
+
+    if !lockByName(cLockKey, lCompanyLock, lBranchLock)
+        FlowControl():logMessage({{"PaymentOrderIntegration - Execute", STR0001}}) //"Já existe uma execução do GRRPaymentOrderIntegration em andamento. Tente novamente mais tarde."
+        return
+    endIf
+
+    cLastRun := AppParameters():getParameter(cLastRunParam)
+    if !Empty(cLastRun)
+        nLastRun := Val(cLastRun)
+    endIf
+    nNow := val(FWTimeStamp(4))
+
+    if ( nNow - nLastRun ) < nMinimalRunInterval
+        FlowControl():logMessage({{"PaymentOrderIntegration - Execute", STR0002}}) //"O GRRPaymentOrderIntegration não será executado novamente, para respeitar o intervalo mínimo entre as execuções."
+        UnLockByName(cLockKey, lCompanyLock, lBranchLock)
+        return
+    endIf
+
+    FlowControl():logDebug({{"PaymentOrderIntegration - Execute", "Running"},{"Company", cEmpAnt}, {"Branch", cFilAnt}})
+    self:processItems()
+
+    restArea( aArea )
+    
+    aSize(aArea, 0)
+    aArea := NIL
+    UnLockByName(cLockKey, lCompanyLock, lBranchLock)
+    AppParameters():setParameter(cLastRunParam, FWTimeStamp(4))
+return
+
+/*/{Protheus.doc} attachFile
+    @description Recebe uma lista de anexos e realiza o envio de cada um para o GR. Valida e serializa os arquivos em base64 antes do envio da mensagem.
+    @param cChargeId, character, Identificador único da cobrança (HRK_CHARID).
+    @param aAttachmentsList, array, Lista de objetos JSON contendo dados dos arquivos a serem anexados.
+    @return logical, Indica se pelo menos um anexo foi enviado com sucesso.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method attachFile(cChargeId as character, aAttachmentsList as array) as logical class PaymentOrderIntegration
+    local lFilesSent := .F. as logical
+    local lNotify := .F. as logical
+    local nAttachment as numeric
+    local nLenAttachments as numeric
+
+    self:setChargeId(cChargeId)
+
+    nLenAttachments := len(aAttachmentsList)
+    for nAttachment := 1 to nLenAttachments
+        lNotify := (nAttachment == nLenAttachments)
+        if self:sendAttachmentMessage(aAttachmentsList[nAttachment], lNotify)
+            lFilesSent := .T.
+        endIf
+    next nAttachment
+return lFilesSent
+
+/*/{Protheus.doc} createPaymentOrderIntegration
+    @description Cria ou atualiza um registro de integração da ordem de pagamento na tabela HRK, validando os dados através do modelo FWFormModel.
+    @param cChargeId, character, Identificador único da cobrança.
+    @param cIdDoc, character, Identificador do documento FK7_IDDOC.
+    @return json, Retorna um JSON com o status da operação (true/false) e mensagem de erro em caso de falha.
+    @author claudio.yoshio@totvs.com.br
+    @since 29/04/2026
+    @version 12.1.2510
+*/
+method createPaymentOrderIntegration(cChargeId as character, cIdDoc as character) as json Class PaymentOrderIntegration
+    local nHrkRecno as numeric
+    local jResult := JsonObject():new() as json
+    local oModel as object
+    local oModelHRK as object
+
+    jResult['status'] := "true"
+    jResult['message'] := ""
+
+    oModel := FWLoadModel( "totvs.protheus.backoffice.apps.grr.mvc.paymentorder.integration.model" )
+    nHrkRecno := self:getExistsPaymentOrderIntegrationByIdDoc(cIdDoc)
+    if nHrkRecno == 0
+        oModel:SetOperation( MODEL_OPERATION_INSERT )
+    else
+        HRK->(DBGoTo(nHrkRecno))
+        oModel:SetOperation( MODEL_OPERATION_UPDATE )
+    endIf
+    
+    if oModel:Activate()
+        cChargeId := strTran(cChargeId, "-", "")
+
+        oModelHRK := oModel:GetModel( "HRKMASTER" )
+        oModelHRK:SetValue( "HRK_CHARID", cChargeId )
+        oModelHRK:SetValue( "HRK_IDDOC", cIdDoc )
+        
+        if oModel:VldData()
+            oModel:CommitData()
+        else
+            jResult['status'] := "false"
+            jResult['message'] := oModel:GetErrorMessage()
+        endIf
+    endIf
+    
+    fwFreeObj(oModel)
+    fwFreeObj(oModelHRK)
+return jResult
+
+/*/{Protheus.doc} processItems
+    @description Processa as ordens de pagamento pendentes, enviando mensagens de criação e anexos para o GR, e atualizando o status após processamento.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method processItems() class PaymentOrderIntegration
+    local lSetStatusAsNotified := .F. as logical
+    local aAttachmentsList as array
+    local cNotifiedStatus := "2" as character // 2=Notificado para Plataforma
+
+    self:getPendingPaymentOrders()
+
+    While ( self:cPendingPaymentOrdersAlias )->( !eof() )
+        lSetStatusAsNotified := .F.
+        self:setChargeId((self:cPendingPaymentOrdersAlias)->HRK_CHARID)
+
+        if self:sendCreatedMessage() .and. self:lExistsAttachmentEntryPoint
+            aAttachmentsList := execBlock(self:cAttachmentEntryPointName, .F., .F., {self:cChargeId})
+            lSetStatusAsNotified := self:attachFile(self:cChargeId, aAttachmentsList)
+        endIf
+
+        if lSetStatusAsNotified .or. !self:lSendSlip
+            self:setStatus(cNotifiedStatus, (self:cPendingPaymentOrdersAlias)->HRK_FILIAL, (self:cPendingPaymentOrdersAlias)->HRK_CHARID)
+        endIf
+        
+        ( self:cPendingPaymentOrdersAlias )->( dbSkip() )
+    EndDo
+    ( self:cPendingPaymentOrdersAlias )->( DbCloseArea() )
+
+    fwFreeArray(aAttachmentsList)
+return
+
+/*/{Protheus.doc} getPendingPaymentOrders
+    @description Recupera as ordens de pagamento pendentes de envio de anexo utilizando consulta SQL parametrizada, unindo as tabelas HRK, FK7 e SE1.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method getPendingPaymentOrders() class PaymentOrderIntegration
+    Local cQuery := "" as character
+    Local nParamOrder := 1 as numeric
+    
+    if self:oPendingPaymentOrdersExec == Nil
+        cQuery := "SELECT HRK.HRK_FILIAL, HRK.HRK_CHARID, E1_VENCTO, HRK.R_E_C_N_O_ HRKRECNO "
+        cQuery += "FROM " + RetSQLName( "HRK" ) + " HRK "
+
+        cQuery += "INNER JOIN " + RetSQLName( "FK7" ) + " FK7 "
+        cQuery += "ON FK7.FK7_FILIAL = ? "
+        cQuery += "AND FK7.FK7_IDDOC = HRK.HRK_IDDOC "
+        cQuery += "AND FK7.D_E_L_E_T_ = ? "
+        
+        cQuery += "INNER JOIN " + RetSQLName( "SE1" ) + " SE1 "
+        cQuery += "ON SE1.E1_FILIAL = FK7.FK7_FILTIT "
+        cQuery += "AND SE1.E1_PREFIXO = FK7.FK7_PREFIX "
+        cQuery += "AND SE1.E1_NUM = FK7.FK7_NUM "
+        cQuery += "AND SE1.E1_PARCELA = FK7.FK7_PARCEL "
+        cQuery += "AND SE1.E1_TIPO = FK7.FK7_TIPO "
+        cQuery += "AND SE1.E1_SALDO > ? "
+        cQuery += "AND SE1.E1_BAIXA = ? "
+        cQuery += "AND SE1.D_E_L_E_T_ = ? "
+
+        cQuery += "WHERE HRK_STATUS = ? "
+        cQuery += "AND HRK.D_E_L_E_T_ = ? "
+
+        self:oPendingPaymentOrdersExec := FWExecStatement():new(changeQuery(cQuery))
+    endIf
+
+    self:oPendingPaymentOrdersExec:setString(nParamOrder++, xFilial("FK7"))
+    self:oPendingPaymentOrdersExec:setString(nParamOrder++, " ")
+    self:oPendingPaymentOrdersExec:setNumeric(nParamOrder++, 0)
+    self:oPendingPaymentOrdersExec:setString(nParamOrder++, " ")
+    self:oPendingPaymentOrdersExec:setString(nParamOrder++, " ")
+    self:oPendingPaymentOrdersExec:setString(nParamOrder++, GRR_PROVIDER_CREATED) // 1=Ordem de Pagamento Criada
+    self:oPendingPaymentOrdersExec:setString(nParamOrder++, " ")
+
+    self:cPendingPaymentOrdersAlias := self:oPendingPaymentOrdersExec:openAlias()
+return
+
+/*/{Protheus.doc} sendCreatedMessage
+    @description Envia mensagem de criação da ordem de pagamento para o GR através do tipo de mensagem PaymentOrderProtheusCreated.
+    @return logical, Indica se a mensagem foi enviada com sucesso.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method sendCreatedMessage() as logical class PaymentOrderIntegration
+    local lSuccess := .F. as logical
+    local jPaymentOrderCreatedMessageJson := self:getCreatedJson() as json
+    local cMessageType := "PaymentOrderProtheusCreated" as character
+    local cMessageContent := EncodeUTF8(jPaymentOrderCreatedMessageJson:toJson())
+
+    lSuccess := GRRSLSendMsg( cMessageContent, cMessageType )
+return lSuccess
+
+/*/{Protheus.doc} getCreatedJson
+    @description Constrói o JSON com os dados da ordem de pagamento criada para envio da mensagem PaymentOrderProtheusCreated.
+    @return json, Objeto JSON com ChargeId, DueDate, IsSandbox e Notify.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method getCreatedJson() as json class PaymentOrderIntegration
+    local jCreatedJson := JsonObject():new() as json
+
+    jCreatedJson[ "ChargeId" ] := transform(( self:cPendingPaymentOrdersAlias )->HRK_CHARID, "@R NNNNNNNN-NNNN-NNNN-NNNN-NNNNNNNNNNNN")
+    jCreatedJson[ "DueDate" ] := FWTimeStamp( 5, sToD((self:cPendingPaymentOrdersAlias )->E1_VENCTO), TIME() )
+    jCreatedJson[ "IsSandbox"] :=  self:lIsSandbox
+    jCreatedJson[ "Notify"] := !self:lSendSlip
+return jCreatedJson
+
+/*/{Protheus.doc} sendAttachmentMessage
+    @description Envia mensagem de anexo da ordem de pagamento para o GR através do tipo de mensagem PaymentFileProtheusAttached.
+    @param jFile, json, Objeto JSON contendo os dados do arquivo (FileType, FileName, File).
+    @param lNotify, logical, Indica se esta é a última mensagem e deve notificar a plataforma.
+    @return logical, Indica se a mensagem foi enviada com sucesso.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method sendAttachmentMessage(jFile as json, lNotify as logical) as logical class PaymentOrderIntegration
+    local lSuccess := .F. as logical
+    local cMessageType := "PaymentFileProtheusAttached" as character
+    local cMessageContent := EncodeUTF8(self:getAttachmentJson(jFile, lNotify))
+
+    lSuccess := GRRSLSendMsg( cMessageContent, cMessageType )
+return lSuccess
+
+/*/{Protheus.doc} getAttachmentJson
+    @description Constrói o JSON com os dados do anexo para envio da mensagem PaymentFileProtheusAttached.
+    @param jFile, json, Objeto JSON contendo os dados do arquivo (FileType, FileName, File).
+    @param lNotify, logical, Indica se esta é a última mensagem e deve notificar a plataforma.
+    @return character, String JSON serializada contendo ChargeId, FileType, FileName, File, Notify e IsSandbox.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method getAttachmentJson(jFile as json, lNotify as logical) as character class PaymentOrderIntegration
+    local jAttachment := JsonObject():new() as json
+    local cMessage := "" as character
+
+    jAttachment["ChargeId"] := transform(self:cChargeId, "@R NNNNNNNN-NNNN-NNNN-NNNN-NNNNNNNNNNNN")
+    jAttachment["FileType"] := jFile["FileType"]
+    jAttachment["FileName"] := jFile["FileName"]
+    jAttachment["File"] := jFile["File"]
+    jAttachment["Notify"] := lNotify
+    jAttachment["IsSandbox"] := self:lIsSandbox
+    cMessage := jAttachment:toJson()
+
+    jAttachment:fromJson("{}")
+    freeObj(jAttachment)
+return cMessage
+
+/*/{Protheus.doc} setStatus
+    @description Atualiza o status da integração na tabela HRK através do modelo FWFormModel, validando e persistindo a alteração.
+    @param cStatus, character, Novo status para a ordem de pagamento.
+    @param cHrkBranch, character, Filial do registro HRK.
+    @param cChargeId, character, Identificador único da cobrança (HRK_CHARID).
+    @return logical, Indica se o status foi atualizado com sucesso.
+    @author claudio.yoshio@totvs.com.br
+    @since 08/05/2026
+    @version 12.1.2510
+*/
+method setStatus(cStatus as character, cHrkBranch as character, cChargeId as character) as logical class PaymentOrderIntegration
+    local cQuery as character
+    local cSetStatusAlias as character
+    Local nParamOrder := 1 as numeric
+    local lStatusUpdated := .F. as logical
+    local oModel as object
+
+    if self:oExecSetStatus == Nil
+        cQuery := "SELECT HRK.R_E_C_N_O_ HRKRECNO "
+        cQuery += "FROM " + RetSQLName( "HRK" ) + " HRK "
+        cQuery += "WHERE HRK_FILIAL = ? "
+        cQuery += "AND HRK.HRK_CHARID = ? "
+        cQuery += "AND HRK.D_E_L_E_T_ = ? "
+
+        self:oExecSetStatus := FWExecStatement():new(changeQuery(cQuery))
+    endIf
+
+    self:oExecSetStatus:setString(nParamOrder++, cHrkBranch)
+    self:oExecSetStatus:setString(nParamOrder++, cChargeId)
+    self:oExecSetStatus:setString(nParamOrder++, " ")
+
+    cSetStatusAlias := self:oExecSetStatus:openAlias()
+
+    if !(cSetStatusAlias)->(eof())
+        HRK->(dbGoTo((cSetStatusAlias)->HRKRECNO))
+
+        oModel := FWLoadModel("totvs.protheus.backoffice.apps.grr.mvc.paymentorder.integration.model")
+        oModel:SetOperation(MODEL_OPERATION_UPDATE)
+
+        If oModel:Activate()
+            oModel:SetValue("HRKMASTER", "HRK_STATUS", cStatus)
+
+            If oModel:VldData()
+                lStatusUpdated := oModel:CommitData()
+            EndIf
+
+            oModel:DeActivate()
+        EndIf
+
+        oModel:Destroy()
+    endIf
+
+    (cSetStatusAlias)->(dbCloseArea())
+return lStatusUpdated
+
+/*/{Protheus.doc} getExistsPaymentOrderIntegrationByIdDoc
+    @description Verifica se existe um registro de integração para a ordem de pagamento consultando a tabela HRK pelo identificador do documento (HRK_IDDOC).
+    @param cIdDoc, character, Identificador do documento (FK7_IDDOC).
+    @return numeric, Retorna o recno do registro encontrado ou 0 caso não exista.
+    @author claudio.yoshio@totvs.com.br
+    @since 29/04/2026
+    @version 12.1.2510
+*/
+method getExistsPaymentOrderIntegrationByIdDoc(cIdDoc as character) as numeric class PaymentOrderIntegration
+    local aArea := getArea() as array
+    local cQuery as character
+    local cAlias as character
+    local nParamOrder := 1 as numeric
+    local nHrkRecno := 0 as numeric
+
+    if self:oExecExistsHrk == NIL
+        cQuery := "SELECT HRK.R_E_C_N_O_ HRKRECNO "
+        cQuery += "FROM " + RetSQLName( "HRK" ) + " HRK "
+        cQuery += "WHERE HRK.HRK_IDDOC = ? "
+        cQuery += "AND HRK.D_E_L_E_T_ = ? "
+
+        self:oExecExistsHrk := FWExecStatement():new(changeQuery(cQuery))
+    endIf
+
+    self:oExecExistsHrk:setString(nParamOrder++, cIdDoc)
+    self:oExecExistsHrk:setString(nParamOrder++, " ")
+    cAlias := self:oExecExistsHrk:openAlias()
+
+    if (cAlias)->(!eof())
+        nHrkRecno := (cAlias)->HRKRECNO
+    endIf
+
+    (cAlias)->(dbCloseArea())
+
+    restArea(aArea)
+    
+    aSize(aArea, 0)
+    aArea := Nil
+return nHrkRecno
+
+/*/{Protheus.doc} getExistsPaymentOrderIntegrationByInvoice
+    @description Verifica se existe um registro de integração para a ordem de pagamento a partir dos dados da nota fiscal de saída, consultando as tabelas SF2, SE1, FK7 e HRK através de joins.
+    @param cInvoiceSeries, character, Série da nota fiscal.
+    @param cInvoice, character, Número da nota fiscal.
+    @param cCustomer, character, Código do cliente.
+    @param cCustomerBranch, character, Filial do cliente.
+    @return logical, Retorna .T. se existir um registro de integração ou .F. caso contrário.
+    @author claudio.yoshio@totvs.com.br
+    @since 29/04/2026
+    @version 12.1.2510
+*/
+method getExistsPaymentOrderIntegrationByInvoice(cInvoiceSeries as character, cInvoice as character, cCustomer as character, cCustomerBranch as character) as logical class PaymentOrderIntegration
+    local cQuery as character
+    local lExistsPaymentOrderIntegration := .F. as Logical
+    local nParamOrder := 1 as Numeric
+
+    if _oExecHrkByInvoice == Nil
+        cQuery := " SELECT COALESCE(COUNT(*),0) TOTAL "
+        cQuery += " FROM "+ RetSqlName("SF2") +" SF2 "
+        
+        cQuery += " INNER JOIN "+ RetSqlName("SE1") +" SE1 ON "
+        cQuery +=   FWJoinFilial("SE1", "SF2")
+        cQuery += " AND SE1.E1_PREFIXO = SF2.F2_SERIE "
+        cQuery += " AND SE1.E1_NUM = SF2.F2_DOC "
+        cQuery += " AND SE1.E1_TIPO = ? " 
+        cQuery += " AND SE1.D_E_L_E_T_ = ? "
+
+        cQuery += " INNER JOIN " + RetSQLName( "FK7" ) + " FK7 "
+        cQuery += " ON FK7.FK7_FILIAL = SE1.E1_FILIAL "
+        cQuery += " AND FK7.FK7_ALIAS = ? "
+        cQuery += " AND FK7.FK7_PREFIX = SE1.E1_PREFIXO "
+        cQuery += " AND FK7.FK7_NUM = SE1.E1_NUM "
+        cQuery += " AND FK7.FK7_PARCEL = SE1.E1_PARCELA "
+        cQuery += " AND FK7.FK7_TIPO = SE1.E1_TIPO "
+        cQuery += " AND FK7.D_E_L_E_T_ = ? "
+
+        cQuery += " INNER JOIN "+ RetSqlName("HRK") +" HRK "
+        cQuery += " ON HRK.HRK_FILIAL = ? " 
+        cQuery += " AND HRK.HRK_IDDOC = FK7.FK7_IDDOC "
+        cQuery += " AND HRK.D_E_L_E_T_ = ? " 
+        
+        cQuery += " WHERE SF2.F2_FILIAL = ? " 
+        cQuery += " AND SF2.F2_DOC = ? " 
+        cQuery += " AND SF2.F2_SERIE = ? " 
+        cQuery += " AND SF2.F2_CLIENTE = ? " 
+        cQuery += " AND SF2.F2_LOJA = ? " 
+        cQuery += " AND SF2.D_E_L_E_T_= ? "
+
+        cQuery := ChangeQuery(cQuery)
+        _oExecHrkByInvoice := FWExecStatement():New(cQuery)
+    endIf
+
+    _oExecHrkByInvoice:setString(nParamOrder++, MVNOTAFIS )
+    _oExecHrkByInvoice:setString(nParamOrder++, Space(1) )
+    _oExecHrkByInvoice:setString(nParamOrder++, "SE1" )
+    _oExecHrkByInvoice:setString(nParamOrder++, Space(1) )
+    _oExecHrkByInvoice:setString(nParamOrder++, xFilial("HRK")  )
+    _oExecHrkByInvoice:setString(nParamOrder++, Space(1) )
+    _oExecHrkByInvoice:setString(nParamOrder++, xFilial("SF2")  )
+    _oExecHrkByInvoice:setString(nParamOrder++, cInvoice   )
+    _oExecHrkByInvoice:setString(nParamOrder++, cInvoiceSeries  )
+    _oExecHrkByInvoice:setString(nParamOrder++, cCustomer)
+    _oExecHrkByInvoice:setString(nParamOrder++, cCustomerBranch)
+    _oExecHrkByInvoice:setString(nParamOrder++, Space(1) )
+    
+    lExistsPaymentOrderIntegration := _oExecHrkByInvoice:ExecScalar("TOTAL") > 0
+return lExistsPaymentOrderIntegration

@@ -1,0 +1,260 @@
+#include "totvs.ch"
+#include "msobject.ch"
+#include "tlpp-core.th"
+
+namespace totvs.protheus.backoffice.contracts.adjustment
+
+/*/{Protheus.doc} ThreadManager
+    @description Gerencia threads assincronas para processamento de ajustes de contratos. Responsavel por iniciar, monitorar e aguardar a conclusao de multiplas threads de processamento.
+    @type class
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+static _cVarPrefix := "CNTA311T" as character
+
+//Tempos em segundos
+static _nTimeout := 60*5 as numeric 
+static _nWaitInterval := 15 as numeric 
+static _nStartCheckDelay := 30 as numeric
+
+class ThreadManager
+    private data aThreadPool as array
+    private data nNextId as numeric
+    private data jThreadData as json
+
+	static method globalVarNameFromId(nThreadId as numeric) as character
+	
+    public method new() as object
+    public method startThread(cAdjustmentNumber as character, cFromContract as character, cToContract as character) as logical
+    public method waitAll() as logical
+
+    private method clear()
+    private method refresh()
+	private method getThreadDataFromGlobal(nThreadId as numeric) as json
+    private method getData(nThreadId as numeric) as json
+    private method logStatus() as logical
+    private method allThreadsFinished() as logical
+    private method getStatus(nThreadId as numeric) as character
+endClass
+
+/*/{Protheus.doc} new
+    @description Inicializa uma nova instancia de ThreadManager. Limpa variaveis globais e prepara o gerenciador de threads.
+    @return Instancia de ThreadManager inicializada.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method new() as object class ThreadManager
+    self:clear()
+return self
+
+/*/{Protheus.doc} clear
+    @description Limpa o pool de threads, dados em memoria e variaveis globais associadas.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method clear() class ThreadManager
+    self:aThreadPool := {}
+    self:jThreadData := JsonObject():New()
+    self:nNextId := 1
+    ClearGlbValue(_cVarPrefix + "*")
+return
+
+/*/{Protheus.doc} refresh
+    @description Atualiza os dados de todas as threads do pool buscando informacoes armazenadas em variaveis globais.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method refresh() class ThreadManager
+    local nThreadId as numeric
+    local jData as json
+    local nX as numeric
+    
+    for nX := 1 to len(self:aThreadPool)
+        nThreadId := self:aThreadPool[nX]
+        jData := self:getThreadDataFromGlobal(nThreadId)
+        if valType(jData) $ "J|O" .and. jData:hasProperty("status")
+            self:jThreadData[cValToChar(nThreadId)] := jData
+        endIf
+    next
+return
+
+/*/{Protheus.doc} globalVarNameFromId
+    @description Gera o nome padrao da variavel global para armazenar dados de uma thread especifica.
+    @param nThreadId Identificador unico da thread.
+    @return Nome da variavel global padronizado.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method globalVarNameFromId(nThreadId as numeric) as character class ThreadManager
+return _cVarPrefix + right("00" + tlpp.toStr(nThreadId), 2)
+
+/*/{Protheus.doc} getThreadDataFromGlobal
+    @description Recupera os dados de uma thread armazenados em variavel global.
+    @param nThreadId Identificador unico da thread.
+    @return Objeto JSON com dados da thread ou JSON vazio se nao encontrado.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method getThreadDataFromGlobal(nThreadId as numeric) as json class ThreadManager
+    local jThreadData := JsonObject():New() as json
+    local cGlobalVarName := self:globalVarNameFromId(nThreadId)
+    local cJson := GetGlbValue(cGlobalVarName)
+
+    if !empty(cJson)
+        jThreadData:fromJson(cJson)
+    endIf
+return jThreadData
+
+/*/{Protheus.doc} getData
+    @description Recupera os dados JSON armazenados em memoria para uma thread especifica.
+    @param nThreadId Identificador unico da thread.
+    @return Objeto JSON com dados da thread ou JSON vazio se nao encontrado.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method getData(nThreadId as numeric) as json class ThreadManager
+    local jData := JsonObject():New() as json
+    if self:jThreadData:hasProperty(cValToChar(nThreadId))
+        jData := self:jThreadData[cValToChar(nThreadId)]
+    endIf
+return jData
+
+/*/{Protheus.doc} startThread
+    @description Inicia uma nova thread de processamento de ajuste de contratos.
+    @param cAdjustmentNumber Numero identificador do ajuste.
+    @param cFromContract Contrato de origem.
+    @param cToContract Contrato de destino.
+    @return Verdadeiro se a thread foi inicializada com sucesso.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method startThread(cAdjustmentNumber as character, cFromContract as character, cToContract as character) as logical class ThreadManager
+    local nThreadId := self:nNextId++
+    local lWait := .F.
+    startJob("CNTA311JOB", GetEnvServer(), lWait, cEmpAnt, cFilAnt, nThreadId, cAdjustmentNumber, cFromContract, cToContract)
+    aAdd(self:aThreadPool, nThreadId)
+    self:jThreadData[cValToChar(nThreadId)] := JsonObject():New()
+return .T.
+
+/*/{Protheus.doc} waitAll
+    @description Aguarda o termino de todas as threads no pool. Monitora progresso, registra status e limpa recursos apos conclusao.
+    @return Verdadeiro apos todas as threads finalizarem e limpeza ser concluida.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method waitAll() as logical class ThreadManager
+    local lWait := .T.
+    sleep(_nStartCheckDelay * 1000) // Aguarda a thread criar a variável global
+
+    while lWait
+        self:refresh()
+        self:logStatus()
+        sleep(_nWaitInterval * 1000)
+        lWait := !self:allThreadsFinished()
+    endDo
+
+    self:logStatus() // Log final com status atualizado
+    self:clear()
+return .T.
+
+/*/{Protheus.doc} allThreadsFinished
+    @description Verifica se todas as threads do pool finalizaram seu processamento.
+    @return Verdadeiro se nenhuma thread esta em execucao.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method allThreadsFinished() as logical class ThreadManager
+    local lAllFinished := .T.
+    local nThreadId as numeric
+    local nX as numeric
+
+    for nX := 1 to len(self:aThreadPool)
+        nThreadId := self:aThreadPool[nX]
+
+        if self:getStatus(nThreadId) == "running"
+            lAllFinished := .F.
+            exit
+        endIf
+    next
+return lAllFinished
+
+/*/{Protheus.doc} logStatus
+    @description Registra o status de todas as threads atraves do sistema de logs. Inclui informacoes de progresso, timeout e avisos.
+    @return Verdadeiro apos registrar todos os logs.
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method logStatus() as logical class ThreadManager
+    local aMessages := {} as array
+    local jThreadData as json
+    local nX as numeric
+    local cMessage as character
+    local nElapsedTimeSinceLastUpdate as numeric
+    // local cTransactionID := FWUUIDV1() as character
+    local nThreadId as numeric
+
+    for nX := 1 to len(self:aThreadPool)
+        nThreadId := self:aThreadPool[nX]
+        jThreadData := self:getData(nThreadId)
+
+        nElapsedTimeSinceLastUpdate := seconds() - jThreadData["secondsStamp"]
+
+        cMessage := "[CNTA311] [THREAD: "+ padL(tlpp.toStr(jThreadData["threadId"]),2) + "]"
+        cMessage += " [STATUS: " + padR(self:getStatus(nThreadId),10) + "]"
+        cMessage += " [CONTRACTS: " + padL( tlpp.toStr(jThreadData["currentContractDone"]) + "/" + tlpp.toStr(jThreadData["totalContracts"]),10 ) + "]"
+        cMessage += " [LAST UPDATE: " + padL( tlpp.toStr(nElapsedTimeSinceLastUpdate),10 ) + "]"
+
+        aAdd(aMessages, cMessage)
+
+        if nElapsedTimeSinceLastUpdate > (_nTimeout*0.80) .and. jThreadData["status"] == "running"
+            cMessage := "Thread " + tlpp.toStr(jThreadData["threadId"]) + " is taking too long to update. Last update was " + tlpp.toStr(nElapsedTimeSinceLastUpdate) + " seconds ago. The maximum wait time is " + tlpp.toStr(_nTimeout) + " seconds."            
+            ConsoleLog():warning(cMessage)
+        endIf
+    next
+
+    for nX := 1 to len(aMessages)
+        // FwLogMsg("INFO", cTransactionID, "SIGAGCT", "CNTA311", "", "01", aMessages[nX], 0, -1, {})
+        conout("[INFO] " + aMessages[nX]) //TODO Trocar por FWLogMsg        
+    next
+
+    aSize(aMessages, 0)
+    aMessages := NIL
+return .T.
+
+/*/{Protheus.doc} getStatus
+    @description Obtem o status atual de uma thread especifica com validacao de timeout.
+    @param nThreadId Identificador unico da thread.
+    @return Descricao do status ("running", "completed", "failed", "unknown").
+    @author guilherme.sordi@totvs.com.br
+    @since 25/05/2026
+    @version 12.1.2510
+*/
+method getStatus(nThreadId as numeric) as character class ThreadManager
+    local cStatus := "unknown" as character
+    local jData := self:getData(nThreadId)
+    local nElapsedTimeSinceLastUpdate := 0 as numeric
+    
+    if valType(jData) $ "J|O" .and. jData:hasProperty("secondsStamp")
+        nElapsedTimeSinceLastUpdate := seconds() - jData["secondsStamp"]
+    endIf
+
+     if nElapsedTimeSinceLastUpdate > _nTimeout
+        return cStatus
+     endIf
+
+    if jData:hasProperty("status")
+        cStatus := jData["status"]
+    endIf
+
+return cStatus

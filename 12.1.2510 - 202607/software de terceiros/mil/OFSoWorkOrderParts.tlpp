@@ -1,0 +1,170 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#INCLUDE "FWMVCDEF.CH"
+
+//static lDebug := .T.
+
+#DEFINE CREATED 0
+#DEFINE UPDATED 2
+#DEFINE SUPPLIED 1
+
+
+
+/*/{Protheus.doc} OFSoWorkOrderParts
+	Classe com os dados de Bancos (Resource) para comunicação com o Blackbird
+
+	@type function
+	@author Guilherme Vieira
+	@since 10/06/2025
+/*/
+class OFSoWorkOrderParts from VERegistroSql
+	Public Data nOrigem //Variável para controlar a origem da chamada. 0 = Inclusão VSJ; 1 = Requisição da peça
+
+	Public Method New()
+	Public Method ToJsonApi()
+	Public Method ToJson()
+	Public Method FindByRecnoDel()
+	Public Method GetRefId()
+end class
+
+
+/*/{Protheus.doc} New 
+	Construtor basico
+
+	@type function
+	@author Iury Soares Azevedo
+	@since 10/06/2025
+/*/
+method New() class OFSoWorkOrderParts
+
+	_Super:New('VSJ')
+
+	::AddFields({"R_E_C_N_O_","VSJ_CODIGO","VSJ_CODITE","VSJ_BBRFID","VSJ_QTDINI","VSJ_VALCUS","VSJ_VALPEC","VSJ_QTDITE", "VSJ_NUMOSV"})
+	::AddRelFields({"SB1.B1_DESC","SB1.B1_CODBAR","SB1.B1_GRUPO, SB1.B1_LOCPAD, SB1.B1_COD"})
+	::LeftJoin("SB1", "SB1", "SB1.B1_FILIAL = '" + xFilial("SB1") + "' AND SB1.B1_GRUPO = VSJ.VSJ_GRUITE AND SB1.B1_CODITE = VSJ.VSJ_CODITE AND SB1.D_E_L_E_T_ = ' '")
+
+	::nOrigem := 0
+
+return self
+
+
+/*/{Protheus.doc} FindByRecnoDel
+	Busca pelo recno
+
+	@type function
+	@author Guilherme Vieira
+	@since 10/06/2025
+/*/
+Method FindByRecnoDel(nRecno) Class OFSoWorkOrderParts
+	self:Select();
+		:_From(self:cAlias);
+		:AndEq('R_E_C_N_O_', nRecno)
+
+	// busca primeiro registro
+	oReg := self:First()
+
+	// limpa a query interna
+	self:Clear()
+Return oReg
+
+
+
+
+
+/*/{Protheus.doc} ToJson
+	retorna um json object
+
+	@type method
+	@author Guilherme Vieira
+	@since 10/06/2025
+/*/
+Method ToJson() Class OFSoWorkOrderParts
+Return self:ToJsonApi()
+
+
+/*/{Protheus.doc} ToJsonApi
+	Retorna um JSON para enviar a API
+
+	@type Class
+	@author Iury Soares Azevedo
+	@since 10/07/2025
+/*/
+Method ToJsonApi() Class OFSoWorkOrderParts
+	Local jRet := JsonObject():New() as json
+	Local aQtds := GetAgroupQuantitys(Self:Get("VSJ_NUMOSV"),Self:Get("VSJ_BBRFID"))
+	Local oFSoFranchise := oFSoFranchise():New() as object
+	
+	jRet["referenceId"] := FGX_SetVlJson( self:Get("VSJ_BBRFID"))
+	jRet["partNumber"] := FGX_SetVlJson( self:Get("VSJ_CODITE"))
+	jRet["unitCost"]:= self:Get("VSJ_VALCUS")
+	jRet["unitPrice"]:= self:Get("VSJ_VALPEC")
+
+	jRet["requestedQuantity"]:= aQtds[1]
+	jRet["lineTotal"]:= Round(aQtds[1] * self:Get("VSJ_VALPEC") , 2 )
+	jRet["suppliedQuantity"] := aQtds[2]
+
+	If self:nOrigem != SUPPLIED 
+		jRet["partItemType"]:= "Part"
+		jRet["partType"]:= "RegularPart"
+		jRet["locationReferenceId"]:= cEmpAnt + "-" + cFilAnt
+		oFSoFranchise := oFSoFranchise:FindByGroup(self:Get("B1_GRUPO"))
+
+		If !Empty(oFSoFranchise) .AND. !Empty(oFSoFranchise:Get('VKB_REFID'))
+			jRet["franchiseReferenceId"] := "FR-" + oFSoFranchise:Get('VKB_REFID')
+		EndIf
+	
+
+		//Pergunta usada para trazer parametros de busca de estoque
+		Pergunte("MTA260",.F.)
+		SB2->(dbSelectArea("SB2"))
+		SB2->(dbSetOrder(1))
+		
+		If SB2->(MsSeek(xFiliaL("SB2")+self:Get("B1_COD")+self:Get("B1_LOCPAD")))
+			jRet["binQuantity"] := SaldoMov(nil, nil, nil, If(mv_par03 == 1, .F., Nil), nil, nil, nil, nil)
+		Else
+			jRet["binQuantity"]:= 0
+		EndIf
+
+		jRet["binLocation"]:= FGX_SetVlJson(self:Get("B1_LOCPAD"))	
+		jRet["taxCategory"]:= "Taxable"
+		jRet["taxRegionReferenceId"]:= Nil
+		jRet["regulatoryUnitsReferenceId"] := Nil
+		jRet["satCodeReferenceId"]:= Nil	
+		jRet["priceLevel"]:= Nil
+		jRet["description"]:= FGX_SetVlJson(self:Get("B1_DESC"))
+		jRet["serialNumber"]:= FGX_SetVlJson(self:Get("B1_CODBAR"))
+		jRet["invoiceNote"]:= ""
+	EndIf
+
+Return jRet
+
+
+/*/
+	{Protheus.doc} GetAgroupQuantitys
+	Soma o saldo das peças requisitadas com base no ID da VSJ
+	@type   Function
+	@author Iury Soares Azevedo
+	@since 15/08/2025
+/*/
+Static Function GetAgroupQuantitys(cNumOsv,cBBRFID)
+	Local cAlias := GetNextAlias() as character
+	Local aRet := {0,0} as array
+	//a devolucao mata tb a qtd inicial solicitada para não deixar aparecente no SO que ela pode ser requisitada novamente ja que isso nao e possivel
+	BeginSql Alias cAlias
+		SELECT
+			SUM(VSJ_QTDREQ - VSJ_QTDDEV) QTDREQ, SUM(VSJ_QTDINI - VSJ_QTDDEV) QTDINI
+		FROM
+			%Table:VSJ% VSJ
+		WHERE
+			VSJ.%notDel%
+			AND VSJ_FILIAL = %xFiliaL:VSJ%
+			AND VSJ_NUMOSV = %Exp:cNumOsv%
+			AND VSJ_BBRFID = %Exp:cBBRFID%
+	EndSql
+	
+	If (cAlias)->(!EOF())
+		aRet[1] := (cAlias)->QTDINI
+		aRet[2] := (cAlias)->QTDREQ
+	EndIf
+Return aRet
+

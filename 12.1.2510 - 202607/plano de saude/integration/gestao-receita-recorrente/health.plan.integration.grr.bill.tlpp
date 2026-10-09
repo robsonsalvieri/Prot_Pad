@@ -1,0 +1,252 @@
+#include "tlpp-core.th"
+
+#define POST 1
+#define PUT 2
+#define DELETE 3
+#define PATCH 4
+
+#define OPERATION_PATCH_INTEGRATION "1"
+#define OPERATION_PATCH_BILL "2"
+
+namespace totvs.protheus.health.plan.integration.grr
+
+/*/{Protheus.doc} Bills
+Classe das Faturas do GRR
+@type method
+@version 12.1.2410  
+@author vinicius.queiros
+@since 23/08/2024
+/*/
+class Bills
+
+	protected data cEndpoint as character
+	protected data cPath as character
+
+	public method new() constructor
+	public method getBills(cOperation as character) as logical
+
+	protected method setIntegration(jBill as json) as logical
+
+endclass
+
+/*/{Protheus.doc} new
+Método construtor da classe
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 23/08/2024
+@return object, objeto da instância da classe
+/*/
+method new() class Bills
+
+	self:cEndpoint := GRRUrl()
+	self:cPath := "/bills"
+
+return self
+
+/*/{Protheus.doc} getBills
+Obtem as faturas do GRR com o status "Aguadando medição" para realizar o processamento de acordo
+com a operação solicitada
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 23/08/2024
+@param cOperation, character, 1 = Atualiza os campos Reference e IntegrationId (OPERATION_PATCH_INTEGRATION)
+                              2 = Atualiza os valores da fatura (OPERATION_PATCH_BILL)
+@return logical, se o processo foi executado
+/*/
+method getBills(cOperation as character) as logical class Bills
+
+	local lSuccess := .F. as logical
+	local cStatus := "2" as character // 2 = Aguardando medição
+	local lHasNext := .T. as logical
+	local nPage := 1 as numeric
+	local oRest as object
+	local nLenArray as numeric
+	local cError as character
+	local nCount as numeric
+	local aOrganization as array
+	local cBkpFilAnt := cFilAnt as character
+	local jResponse := JsonObject():new() as json
+
+	if cOperation == OPERATION_PATCH_INTEGRATION .or. cOperation == OPERATION_PATCH_BILL
+		while lHasNext
+			lHasNext := .F.
+
+			GRRRestExec("GET", self:cEndPoint, self:cPath + "?status=" + cStatus + "&page=" + cValToChar(nPage), @oRest)
+
+			if oRest:getHttpCode() == "200" // Ok
+				cError := jResponse:fromJson(oRest:getResult())
+
+				if empty(cError)
+					lHasNext := jResponse["hasNext"]
+					nLenArray := len(jResponse["responseData"])
+
+					for nCount := 1 to nLenArray
+						if jResponse["responseData"][nCount]:hasProperty("organizationIntegrationId")
+							aOrganization := strTokArr2(jResponse["responseData"][nCount]["organizationIntegrationId"], "|")
+
+							if aOrganization[1] == cEmpAnt
+								cFilAnt := aOrganization[2]
+
+								do case
+								case cOperation == OPERATION_PATCH_INTEGRATION
+									self:setIntegration(jResponse["responseData"][nCount])
+									lSuccess := .T.
+								endcase
+							endif
+						endif
+					next nCount
+				endif
+			endif
+
+			nPage++
+		enddo
+	endif
+
+	cFilAnt := cBkpFilAnt
+
+	freeObj(oRest)
+	freeObj(jResponse)
+
+	fwFreeArray(aOrganization)
+
+return lSuccess
+
+/*/{Protheus.doc} setIntegration
+Define o integrationId e reference de uma fatura
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 26/08/2024
+@param jBill, json, dados da fatura
+@return logical, se os dados foram atualizados com sucesso
+/*/
+method setIntegration(jBill as json) as logical class Bills
+
+	local lSuccess := .F. as logical
+	local cMessage := "" as character
+	local jBody as json
+	local jResponse := JsonObject():new() as json
+	local cResponse as character
+	local cFilialSE1 as character
+
+	if valType(jBill["reference"]) == "U"
+		jBody := getTitleIdData(jBill["subscriptionIntegrationId"], formattedDate(jBill["dueDate"]))
+
+		if valType(jBody["integrationId"]) <> "U" .and. valType(jBody["reference"]) <> "U"
+			cResponse := GRRSyncData(nil, jBody, self:cEndPoint, self:cPath + "/" + jBill["id"] + "/integration", PATCH, .F., @cMessage)
+
+			if !empty(cResponse)
+				lSuccess := .T.
+
+				jResponse:fromJson(cResponse)
+
+				cFilialSE1 := xFilial("SE1")
+
+				GRRA050({cFilialSE1, "SE1", "PLSA627", jBody["integrationId"], "", ""})
+
+				GRRSetSubscriptionId({cFilialSE1, "SE1", jBody["integrationId"]}, jBill["subscriptionId"])
+				GRRSetBillId({cFilialSE1, "SE1", jBody["integrationId"]}, jBill["id"])
+			endif
+		endif
+	endif
+
+	freeObj(jBody)
+	freeObj(jResponse)
+
+return lSuccess
+
+/*/{Protheus.doc} getTitleIdData
+Obtem os dados de integration e reference do titulo de acordo com a subscrição (beneficiário) 
+e vencimento da fatura
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 26/08/2024
+@param cSubscriptionIntegrationId, character, chave da subscrição (operadora|empresa|matricula|cliente|loja)
+@param dDueDate, date, data de vencimento da fatura
+@return json, dados de integration e reference
+/*/
+static function getTitleIdData(cSubscriptionIntegrationId as character, dDueDate as date) as json
+
+	local jData := {"integrationId": nil, "reference": nil} as json
+	local oExecStmt as object
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local aIntegrationId as array
+
+	aIntegrationId := strTokArr2(cSubscriptionIntegrationId, "|")
+
+	if len(aIntegrationId) == 5
+		cQuery := " SELECT ? "
+		cQuery += " FROM ? BM1 "
+		cQuery += " INNER JOIN ? SE1 ON "
+		cQuery += "	    SE1.E1_FILIAL = ? AND "
+		cQuery += "	    SE1.E1_PREFIXO = BM1.BM1_PREFIX AND "
+		cQuery += "	    SE1.E1_NUM = BM1.BM1_NUMTIT AND "
+		cQuery += "	    SE1.E1_PARCELA = BM1.BM1_PARCEL AND "
+		cQuery += "	    SE1.E1_TIPO = BM1.BM1_TIPTIT AND "
+		cQuery += "     SE1.E1_CLIENTE = ? AND "
+		cQuery += "     SE1.E1_LOJA = ? AND "
+		cQuery += "     (SE1.E1_VENCTO = ? OR SE1.E1_VENCREA = ?) AND "
+		cQuery += "	    SE1.D_E_L_E_T_ = ? "
+		cQuery += " WHERE "
+		cQuery += "     BM1.BM1_FILIAL = ? AND "
+		cQuery += "     BM1.BM1_CODINT = ? AND "
+		cQuery += "     BM1.BM1_CODEMP = ? AND "
+		cQuery += "     BM1.BM1_MATRIC = ? AND "
+		cQuery += "     BM1.D_E_L_E_T_ = ? "
+
+		oExecStmt := FwExecStatement():new(cQuery)
+
+		oExecStmt:setUnsafe(nOrder++, "SE1.E1_FILIAL, SE1.E1_PREFIXO, SE1.E1_NUM, SE1.E1_PARCELA, SE1.E1_TIPO")
+		oExecStmt:setUnsafe(nOrder++, retSqlName("BM1"))
+		oExecStmt:setUnsafe(nOrder++, retSqlName("SE1"))
+		oExecStmt:setString(nOrder++, xFilial("SE1"))
+		oExecStmt:setString(nOrder++, aIntegrationId[4]) // 4 = Cliente
+		oExecStmt:setString(nOrder++, aIntegrationId[5]) // 5 = Loja
+		oExecStmt:setDate(nOrder++, dDueDate)
+		oExecStmt:setDate(nOrder++, dDueDate)
+		oExecStmt:setString(nOrder++, " ")
+		oExecStmt:setString(nOrder++, xFilial("BM1"))
+		oExecStmt:setString(nOrder++, aIntegrationId[1]) // 1 = Operadora
+		oExecStmt:setString(nOrder++, aIntegrationId[2]) // 2 = Empresa
+		oExecStmt:setString(nOrder++, aIntegrationId[3]) // 3 = Matricula
+		oExecStmt:setString(nOrder++, " ")
+
+		cAlias := oExecStmt:openAlias()
+
+		if !(cAlias)->(eof())
+			jData["integrationId"] := alltrim(cEmpAnt + "|" + (cAlias)->E1_FILIAL + "|" + (cAlias)->E1_PREFIXO + "|" + (cAlias)->E1_NUM + "|" + (cAlias)->E1_PARCELA + "|" + (cAlias)->E1_TIPO)
+			jData["reference"] := alltrim((cAlias)->(E1_PREFIXO + E1_NUM + E1_PARCELA + E1_TIPO))
+		endif
+
+		(cAlias)->(dbCloseArea())
+
+	endif
+
+	freeObj(oExecStmt)
+	fwFreeArray(aIntegrationId)
+
+return jData
+
+/*/{Protheus.doc} formattedDate
+Obter a data no formato de date do protheus
+@type method
+@version 12.1.2410
+@author vinicius.queiros
+@since 26/08/2024
+@param cDate, character, data no formato YYYY-MM-DDTHH:mm:ss
+@return date, data no formatada
+/*/
+static function formattedDate(cDate as character) as date
+
+	local dDate := ctod(" / / ") as date
+
+	if !empty(cDate)
+		dDate := stod(substr(strTran(cDate, "-", ""), 1, 8))
+	endif
+
+return dDate

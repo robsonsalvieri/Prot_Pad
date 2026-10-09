@@ -1,0 +1,228 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "retail.salesconnectretail.batch.obj.ch"
+
+#DEFINE BATCH_MAX_CUPONS 50
+
+namespace totvs.protheus.retail.salesconnectretail.obj
+
+using namespace totvs.protheus.retail.salesconnectretail.dto
+
+/*/{Protheus.doc} SalesConnectRetailBatchObj
+Orquestrador do POST batch (CA #19 V2). Recebe o body raw, valida
+envelope (limite 50 cupons, formato), e itera processando cada cupom
+isoladamente via SalesConnectRetailObj.
+
+Erros do envelope (JSON invalido / excede limite / cupons vazio)
+retornam HTTP 400 com cReturn de erro global.
+
+Erros de cupom individual NAO interrompem o loop - cada cupom recebe
+Status="Error" no array de resultados (transacao isolada por cupom).
+
+@author  Thalys Augusto Alves Juvenal
+@since   20/05/2026
+@version 2.0
+@type class
+/*/
+Class SalesConnectRetailBatchObj
+    Protected Data cAuthToken  as Character
+    Protected Data cBody       as Character
+    Public  Data nHttpStatus as Numeric
+    Public  Data cReturn     as Character
+    Public  Data cUuid       as Character
+
+    Protected Data oBatchReq  as Object
+    Protected Data oBatchResp as Object
+
+    Public  Method New(cAuthToken as Character, cBody as Character) as Object
+    Public  Method Process() as Logical
+    Protected Method ParseEnvelope() as Logical
+    Protected Method ProcessCupom(cCupomJson as Character) as Object
+EndClass
+
+/*/{Protheus.doc} New
+Construtor do orquestrador de batch. Normaliza token e body e instancia o
+envelope de response vazio. Gera UUID para correlacao em log.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  20/05/2026
+@param  cAuthToken, character, valor cru do header X-PASS-KEY
+@param  cBody,      character, payload JSON cru do batch { coupons: [...] }
+@return object, Self
+/*/
+Method New(cAuthToken as Character, cBody as Character) as Object Class SalesConnectRetailBatchObj
+    Default cAuthToken := ""
+    Default cBody      := ""
+
+    ::cAuthToken  := cAuthToken
+    ::cBody       := cBody
+    ::nHttpStatus := 200
+    ::cReturn     := ""
+    ::cUuid       := FwUUIDv4()
+    ::oBatchReq   := Nil
+    ::oBatchResp  := SalesConnectRetailBatchResponseDto():New()
+Return Self
+
+/*/{Protheus.doc} Process
+Orquestra o batch: valida o envelope e processa cada cupom isoladamente
+(transacao por cupom). Excecao em um cupom nao derruba os demais - o cupom
+recebe status "Error". Preenche nHttpStatus e cReturn (envelope serializado).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  20/05/2026
+@return logical, .T. batch processado, .F. envelope invalido (400)
+/*/
+Method Process() as Logical Class SalesConnectRetailBatchObj
+    Local nI         as Numeric
+    Local oCupomJson
+    Local cCupomStr  as Character
+    Local oItemResp  as Object
+    Local oErr       as Object
+    Local lRet       as Logical
+
+    lRet := .T.
+
+    LjGrvLog("SalesConnectRetailBatchObj", "[" + ::cUuid + "] batch inicio")
+
+    If !::ParseEnvelope()
+        lRet := .F.
+    Else
+        For nI := 1 To Len(::oBatchReq:aCupons)
+            Try
+                oCupomJson := ::oBatchReq:aCupons[nI]
+                If ValType(oCupomJson) != "J"
+                    oItemResp := SalesConnectRetailItemResponseDto():New("", "", "", "Error", STR0001)   // "0001: cupom invalido (nao e objeto JSON)"
+                Else
+                    cCupomStr := oCupomJson:toJson()
+                    oItemResp := ::ProcessCupom(cCupomStr)
+                EndIf
+            Catch oErr
+                // Excecao isolada por cupom - nao derruba o batch
+                LjGrvLog("SalesConnectRetailBatchObj", "[" + ::cUuid + "] cupom " + cValToChar(nI) + " excecao: " + oErr:Description + " | " + oErr:ErrorStack)
+                oItemResp := SalesConnectRetailItemResponseDto():New("", "", "", "Error", STR0002 + cValToChar(nI))   // "0099: excecao no cupom "
+            EndTry
+            ::oBatchResp:addResult(oItemResp)
+        Next nI
+
+        ::nHttpStatus := 200
+        ::cReturn     := ::oBatchResp:toJson()
+        LjGrvLog("SalesConnectRetailBatchObj", "[" + ::cUuid + "] batch fim - cupons: " + cValToChar(Len(::oBatchReq:aCupons)))
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ParseEnvelope
+Desserializa o envelope em SalesConnectRetailBatchRequestDto e valida regras
+globais: JSON valido, coupons[] nao vazio e limite de BATCH_MAX_CUPONS cupons.
+Em falha preenche nHttpStatus=400 e cReturn com ErrorDto.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  20/05/2026
+@return logical, .T. envelope valido, .F. caso contrario (400)
+/*/
+Method ParseEnvelope() as Logical Class SalesConnectRetailBatchObj
+    Local oErr as Object
+    Local nQtd as Numeric
+    Local oErrDto as Object
+    Local lRet    as Logical
+
+    lRet := .T.
+
+    Try
+        ::oBatchReq := SalesConnectRetailBatchRequestDto():New()
+        ::oBatchReq:fromJson(::cBody)
+    Catch oErr
+        lRet := .F.
+        ::nHttpStatus := 400
+        oErrDto := SalesConnectRetailErrorDto():New("0001", STR0003 + oErr:Description)   // "JSON invalido: "
+        ::cReturn := oErrDto:toJson()
+        LjGrvLog("SalesConnectRetailBatchObj", "[" + ::cUuid + "] 400: envelope invalido | " + oErr:Description + " | " + oErr:ErrorStack)
+    EndTry
+
+    If lRet
+        nQtd := Len(::oBatchReq:aCupons)
+        If nQtd == 0
+            lRet := .F.
+            ::nHttpStatus := 400
+            oErrDto := SalesConnectRetailErrorDto():New("0001", STR0004)   // "coupons[] vazio"
+            ::cReturn := oErrDto:toJson()
+            LjGrvLog("SalesConnectRetailBatchObj", "[" + ::cUuid + "] 400: cupons vazio")
+        ElseIf nQtd > BATCH_MAX_CUPONS
+            lRet := .F.
+            ::nHttpStatus := 400
+            oErrDto := SalesConnectRetailErrorDto():New("0006", STR0005 + cValToChar(BATCH_MAX_CUPONS) + STR0006)   // "Batch excede limite de " ### " cupons"
+            ::cReturn := oErrDto:toJson()
+            LjGrvLog("SalesConnectRetailBatchObj", "[" + ::cUuid + "] 400: batch excede " + cValToChar(BATCH_MAX_CUPONS))
+        EndIf
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ProcessCupom
+Processa um cupom individual via SalesConnectRetailObj e converte o resultado
+(sucesso ou erro) em SalesConnectRetailItemResponseDto para o envelope.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  20/05/2026
+@param  cCupomJson, character, JSON cru de 1 cupom
+@return object, SalesConnectRetailItemResponseDto do cupom
+/*/
+Method ProcessCupom(cCupomJson as Character) as Object Class SalesConnectRetailBatchObj
+    Local oObj       as Object
+    Local oItemResp  as Object
+    Local cKeyNfce   as Character
+    Local cStatusVda as Character
+    Local cRetorno   as Character
+    Local cCodFil    as Character
+    Local cNumero    as Character
+    Local oRespJson  as Object
+    Local oErrJson   as Object
+    Local cErrCode   as Character
+    Local cErrMsg    as Character
+
+    oObj := SalesConnectRetailObj():New(::cAuthToken, Nil, cCupomJson)
+    oObj:Process()
+
+    // Extrai chave de acesso para o response (sempre, mesmo em erro de Auth)
+    cKeyNfce := ""
+    If ValType(oObj:oRequestDto) == "O"
+        cKeyNfce := oObj:oRequestDto:cChaveAcesso
+    EndIf
+
+    If oObj:nHttpStatus == 200
+        cStatusVda := "Success"
+        cRetorno   := ""
+        oRespJson  := JsonObject():New()
+        oRespJson:fromJson(oObj:cReturn)
+        // chaves alinhadas ao SalesConnectRetailResponseDto (branch/documentNumber)
+        If ValType(oRespJson["branch"]) == "C"
+            cCodFil := oRespJson["branch"]
+        Else
+            cCodFil := ""
+        EndIf
+        If ValType(oRespJson["documentNumber"]) == "C"
+            cNumero := oRespJson["documentNumber"]
+        Else
+            cNumero := ""
+        EndIf
+        FWFreeObj(oRespJson)
+    Else
+        cStatusVda := "Error"
+        cCodFil    := ""
+        cNumero    := ""
+        oErrJson   := JsonObject():New()
+        oErrJson:fromJson(oObj:cReturn)
+        If ValType(oErrJson["code"]) == "C"
+            cErrCode := oErrJson["code"]
+        Else
+            cErrCode := "0099"
+        EndIf
+        If ValType(oErrJson["message"]) == "C"
+            cErrMsg := oErrJson["message"]
+        Else
+            cErrMsg := STR0007   // "Erro nao classificado"
+        EndIf
+        cRetorno := cErrCode + ": " + cErrMsg
+        FWFreeObj(oErrJson)
+    EndIf
+
+    oItemResp := SalesConnectRetailItemResponseDto():New(cKeyNfce, cCodFil, cNumero, cStatusVda, cRetorno)
+Return oItemResp

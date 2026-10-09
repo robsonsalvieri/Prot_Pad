@@ -1,0 +1,985 @@
+#Include "Protheus.ch"
+#Include "tlpp-core.th"
+#Include "OFSReprocessarControlTower.ch"
+
+
+#Define VK5_DATTYP_CT                   "05" // Tipo de dado VK5 para filtro de reprocessamento (VX5 chave 084, codigo 05)
+#Define LOCK_REPROC_VK5                 "OFIA617_VK5_" // Prefixo do semaforo LockByName
+#Define LOCK_SCHEDULE                   "OFIA617_SCHEDULE_"
+#Define SCHEDULE_LIMIT                  100 // Limite padrao de registros por execucao do schedule
+#Define VK5STATUS_PENDENTE              "0"
+#Define VK5STATUS_EM_PROCESSAMENTO      "1"
+#Define VK5STATUS_SUCESSO               "2"
+#Define VK5STATUS_ERRO                  "3"
+#Define VK5STATUS_CIENTE_ERRO           "4"
+#Define RETORNO_SUCESSO                 "SUCESSO"
+#Define RETORNO_ERRO                    "ERRO" 
+
+
+/*/{Protheus.doc} OFSReprocessarControlTower
+    Classe filha responsavel pelo reprocessamento de eventos do Control Tower.
+    Herda de OFSEventoControlTower e reutiliza:
+      - CarregarConfig / ConfigValida (configuracao VRN OFIA541)
+      - ObterToken (autenticacao OAuth2)
+      - TemPendenciaTecnica (validacao de sequencia por chassi na fila VK5)
+      - MontarTextoVK5 (log formatado)
+
+    Diferenças em relacao a classe pai:
+      - Nao executa EVTxxRules (regras ja foram aplicadas no momento original)
+      - Nao valida marca/contrato (ja validados no momento original)
+      - Nao verifica duplicidade (registro ja existe na VK5)
+      - IntegrarControlTower usa payload salvo (VK5_REQBOD) em vez de remontar
+      - GravarVK5 faz UPDATE no registro existente (nao INSERT via OFDMSRequest)
+      - GravarHistoricoPassagem marca integracao concluida (nao cria novos VEW/VEX)
+
+    @type    Class
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @version 1.0
+/*/
+
+Class OFSReprocessarControlTower From OFSEventoControlTower
+    
+    Protected Data nRecnoVK5        As Numeric     // R_E_C_N_O_
+    Protected Data cPayloadOriginal As Character   // VK5_REQBOD
+    Protected Data cUrlOriginal     As Character   // VK5_URLREQ
+    Protected Data cUUIDVK5         As Character   // VK5_UUID
+    Protected Data cHistoricoVK5    As Character   // VK5_HISTOR
+    Protected Data cOriKeyVK5       As Character   // VK5_ORIKEY
+    Protected Data cTipoContrato    As Character
+    Protected Data cDatIncVK5       As Character   // VK5_DATINC
+    Protected Data cEventoVK5       As Character   // VK5_MESSAG
+
+    Public Method New()                                     As Object
+    Public Method ExecutarReprocessamento( nRecno )         As Character
+    Public Method SetConfig( oConfigExt )                   As Logical
+    Public Method SetToken( cTokenExt )                     As Logical
+
+    Private Method CarregarContextoVK5()                    As Logical
+    Private Method ValidarElegibilidade()                   As Logical
+    Private Method ExtrairChassiDaOriKey()                  As Character
+    Private Method TemPendenciaTecnica()                    As Logical
+    Private Method IntegrarControlTower()                   As Logical
+    Private Method GravarVK5( cStatus )                     As Logical
+    Private Method GravarHistoricoPassagem( cEvt )          As Logical        
+    Private Method MontarLogReprocessamento( lSucesso )     As Character
+
+EndClass
+
+/*/{Protheus.doc} New
+    Construtor da classe filha. Inicializa propriedades do reprocessamento
+    e chama o construtor da classe pai.
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @return  Object  Self
+/*/
+Method New() Class OFSReprocessarControlTower
+
+    _Super:New()
+
+    ::nRecnoVK5        := 0
+    ::cPayloadOriginal := ""
+    ::cUrlOriginal     := ""
+    ::cUUIDVK5         := ""
+    ::cHistoricoVK5    := ""
+    ::cOriKeyVK5       := ""
+    ::cDatIncVK5       := ""
+    ::cEventoVK5       := ""
+    ::cTipoContrato    := ""
+
+Return Self
+
+/*/{Protheus.doc} SetConfig
+    Injeta configuracao OFIA541 pre-carregada para evitar reler VRN a cada registro.
+    Utilizado pelo schedule para reusar a mesma config em todo o lote.
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @param   oConfigExt  Object  JsonObject com configuracao OFIA541
+    @return  Logical  .T. se configuracao valida
+/*/
+Method SetConfig( oConfigExt ) Class OFSReprocessarControlTower
+
+    If ValType(oConfigExt) == "J"
+        ::oConfig := oConfigExt
+        Return .T.
+    EndIf
+
+Return .F.
+
+
+/*/{Protheus.doc} SetToken
+    Injeta token OAuth2 pre-obtido para evitar nova autenticacao a cada registro.
+    Utilizado pelo schedule para reusar o mesmo token em todo o lote.
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @param   cTokenExt  Character  Token OAuth2
+    @return  Logical  .T. se token nao vazio
+/*/
+Method SetToken( cTokenExt ) Class OFSReprocessarControlTower
+
+    Default cTokenExt := ""
+
+    If !Empty(cTokenExt)
+        ::cToken := cTokenExt
+        Return .T.
+    EndIf
+
+Return .F.
+
+
+/*/{Protheus.doc} ExecutarReprocessamento
+    Orquestrador do reprocessamento. Fluxo simplificado em relacao ao ExecutarEvento
+    da classe pai — nao executa regras de evento, nao valida marca/contrato,
+    nao verifica duplicidade. Usa o payload salvo na VK5.
+
+    Ordem de execucao:
+      1. Semaforo LockByName (evitar dupla execucao)
+      2. CarregarContextoVK5 (le registro VK5 existente)
+      3. ValidarElegibilidade (status, payload nao vazio)
+      4. Injetar contexto na classe pai (evento, chassi)
+      5. PrepararContexto (HERDADO: VV1/SA1/VO1 + cache historico)
+      6. CarregarConfig / ConfigValida (HERDADO ou injetado via SetConfig)
+      7. TemPendenciaTecnica (HERDADO: sequencia por chassi na fila VK5)
+      8. IntegrarControlTower (OVERRIDE: usa payload salvo)
+      9. GravarVK5 (OVERRIDE: UPDATE no registro existente)
+     10. GravarHistoricoPassagem (OVERRIDE: marca VEX integracao concluida)
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @param   nRecno  Numeric  R_E_C_N_O_ do registro VK5 a reprocessar
+    @return  Character  RETORNO_SUCESSO | RETORNO_ERRO | RETORNO_PENDENTE
+/*/
+Method ExecutarReprocessamento( nRecno ) Class OFSReprocessarControlTower
+
+    Local aArea      := GetArea()
+    Local cRetorno   := RETORNO_ERRO
+    Local cLockName  := ""
+
+    Default nRecno := 0
+
+    If nRecno <= 0
+        RestArea(aArea)
+        Return RETORNO_ERRO
+    EndIf
+
+    ::nRecnoVK5 := nRecno
+
+    // --- PASSO 1: Semaforo por registro ---
+    cLockName := LOCK_REPROC_VK5 + AllTrim(cFilAnt) + "_" + cValToChar(nRecno)
+    If !LockByName(cLockName, .F., .F.)
+        RestArea(aArea)
+        Return RETORNO_ERRO
+    EndIf
+
+    Begin Sequence
+
+    // --- PASSO 2: Carregar dados do registro VK5 ---
+    If !::CarregarContextoVK5()
+        ::cObservacao := STR0001 //Falha ao carregar registro VK5 para reprocessamento
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    // --- PASSO 3: Validar elegibilidade ---
+    If !::ValidarElegibilidade()
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    // --- PASSO 4: Injetar contexto na classe pai ---
+    ::cEvento          := ::cEventoVK5
+    ::cDescricaoEvento := AllTrim(OFIOA560DS("083", ::cEvento))
+    ::cChassi          := ::ExtrairChassiDaOriKey()
+    ::cChassiReduzido  := Right(::cChassi, 7)
+    ::cObservacao      := ""
+    ::lIntegrou        := .F.
+    ::cDataHoraEvento  := DtoC(Date()) + " " + Left(Time(), 5)
+    ::oRest            := Nil
+
+    // --- PASSO 5: Preparar contexto (HERDADO) ---
+    If !::PrepararContexto()
+        ::cObservacao := STR0002 //Falha ao preparar contexto (VV1/SA1) para reprocessamento
+        ::GravarVK5(VK5STATUS_ERRO)
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    // --- PASSO 6: Configuracao (HERDADO ou injetado) ---
+    If ValType(::oConfig) != "J"
+        If !::CarregarConfig() .Or. !::ConfigValida()
+            ::cObservacao := STR0003 //Falha ao carregar configuracao OFIA541
+            ::GravarVK5(VK5STATUS_ERRO)
+            cRetorno := RETORNO_ERRO
+            Break
+        EndIf
+    EndIf
+
+    // --- PASSO 7: Pendencia tecnica (HERDADO) ---
+    // Verifica se ha registro VK5 anterior do mesmo evento com status pendente/erro.
+    // Garante a sequencia de processamento por chassi.
+    If ::TemPendenciaTecnica()
+        ::cObservacao := STR0004 //Reprocessamento suspenso - evento anterior do mesmo chassi pendente
+        // NAO atualiza o registro  ele continua na fila para proxima tentativa
+        cRetorno := RETORNO_PENDENTE
+        Break
+    EndIf
+
+    // --- PASSO 6: Validação de marca ---
+    // Veículo não Scania: registra só histórico local, sem integrar.
+    If !::EhVeiculoScania()
+        ::cObservacao := STR0001 // "Veiculo de outra marca - evento nao enviado ao Control Tower"
+        ::lIntegrou := .T.
+        ::GravarHistoricoPassagem(::cEvento)
+        cRetorno := RETORNO_SUCESSO
+        Break
+    EndIf
+
+    // --- PASSO 7: Validação de contrato ---
+    ::cTipoContrato := ::ObterTipoContrato()
+
+    Do Case
+        Case Empty(::cTipoContrato) .Or. Upper(::cTipoContrato) == "NO_CONTRACT"
+            ::cObservacao := STR0002 // "Veiculo sem contrato - evento nao enviado ao Control Tower"
+            ::lIntegrou := .T.
+            ::GravarVK5(VK5STATUS_SUCESSO)
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_SUCESSO
+            Break
+
+        Case Upper(::cTipoContrato) == "UNABLE_TO_DETERMINE_CONTRACT"
+            ::cObservacao := STR0003 // "Nao foi possivel determinar o tipo de contrato"
+            ::lIntegrou := .F.
+            ::GravarVK5(VK5STATUS_ERRO)
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_ERRO
+            Break
+
+        Case !::ContratoEhElegivel(::cTipoContrato)
+            ::cObservacao := STR0004 // "Contrato fora do escopo Control Tower"
+            ::lIntegrou := .T.
+            ::GravarVK5(VK5STATUS_SUCESSO)
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_SUCESSO
+            Break
+    EndCase
+
+    // --- PASSO 8: Integracao (OVERRIDE) ---
+    If !::IntegrarControlTower()
+        ::lIntegrou := .F.
+        ::GravarVK5(VK5STATUS_ERRO)
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    // --- PASSO 9: Sucesso ---
+    ::lIntegrou := .T.
+    ::GravarVK5(VK5STATUS_SUCESSO)
+    ::GravarHistoricoPassagem(::cEvento)
+    cRetorno := RETORNO_SUCESSO
+
+    End Sequence
+
+    UnlockByName(cLockName)
+    RestArea(aArea)
+
+Return cRetorno
+
+/*/{Protheus.doc} CarregarContextoVK5
+    Le os dados do registro VK5 existente para o contexto do reprocessamento.
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @return  Logical  .T. se registro carregado com sucesso
+/*/
+Method CarregarContextoVK5() Class OFSReprocessarControlTower
+
+    Local aArea := VK5->(GetArea())
+
+    DbSelectArea("VK5")
+    VK5->(DbGoTo(::nRecnoVK5))
+
+    If VK5->(Eof()) .Or. VK5->(Deleted())
+        VK5->(RestArea(aArea))
+        Return .F.
+    EndIf
+
+    ::cPayloadOriginal := AllTrim(VK5->VK5_REQBOD)
+    ::cUrlOriginal     := AllTrim(VK5->VK5_URLREQ)
+    ::cUUIDVK5         := AllTrim(VK5->VK5_UUID)
+    ::cHistoricoVK5    := AllTrim(VK5->VK5_HISTOR)
+    ::cOriKeyVK5       := AllTrim(VK5->VK5_ORIKEY)
+    ::cDatIncVK5       := AllTrim(VK5->VK5_DATINC)
+    ::cEventoVK5       := AllTrim(VK5->VK5_MESSAG)
+
+    VK5->(RestArea(aArea))
+
+Return .T.
+
+
+/*/{Protheus.doc} ValidarElegibilidade
+    Valida se o registro VK5 e elegivel para reprocessamento:
+    - Status deve ser Pendente (0) ou Erro (3)
+    - Payload (VK5_REQBOD) nao pode estar vazio
+    - Tipo de dado deve ser Control Tower (06)
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @return  Logical  .T. se elegivel
+/*/
+Method ValidarElegibilidade() Class OFSReprocessarControlTower
+
+    Local aArea   := VK5->(GetArea())
+    Local cStatus := ""
+    Local cDatTyp := ""
+
+    DbSelectArea("VK5")
+    VK5->(DbGoTo(::nRecnoVK5))
+
+    cStatus := AllTrim(VK5->VK5_STATUS)
+    cDatTyp := AllTrim(VK5->VK5_DATTYP)
+
+    VK5->(RestArea(aArea))
+
+    // Status elegivel: Pendente ou Erro
+    If cStatus != VK5STATUS_PENDENTE .And. cStatus != VK5STATUS_ERRO
+        ::cObservacao := STR0008 + cStatus //Registro nao elegivel - status: 
+        Return .F.
+    EndIf
+
+    // Tipo de dado: Control Tower
+    If cDatTyp != VK5_DATTYP_CT
+        ::cObservacao := STR0009 //Registro nao e do tipo Control Tower
+        Return .F.
+    EndIf
+
+    // Payload salvo
+    If Empty(::cPayloadOriginal)
+        ::cObservacao := STR0010 //Registro sem payload salvo (VK5_REQBOD vazio)
+        Return .F.
+    EndIf
+
+Return .T.
+
+
+/*/{Protheus.doc} ExtrairChassiDaOriKey
+    Extrai o chassi interno do campo VK5_ORIKEY removendo o prefixo da filial.
+    VK5_ORIKEY = cFilAnt + cChassiInterno
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @return  Character  Chassi interno extraido
+/*/
+Method ExtrairChassiDaOriKey() Class OFSReprocessarControlTower
+
+    Local cChassiInt := ""
+    Local nTamFil    := Len(AllTrim(cFilAnt))
+
+    If Len(::cOriKeyVK5) > nTamFil
+        cChassiInt := SubStr(::cOriKeyVK5, nTamFil + 1)
+    EndIf
+
+Return AllTrim(cChassiInt)
+
+/*/{Protheus.doc} TemPendenciaTecnica
+    Override do metodo herdado de OFSEventoControlTower.
+
+    O metodo da classe pai consulta VK5 por filial+ORIKEY+evento+status sem
+    excluir o proprio registro. No reprocessamento o registro em processo
+    (status 0 ou 3) satisfaz esses filtros e seria retornado pela query,
+    causando auto-bloqueio (RETORNO_PENDENTE no PASSO 7 do
+    ExecutarReprocessamento).
+
+    Esta versao:
+      - Exclui o proprio registro via R_E_C_N_O_ <> ::nRecnoVK5
+      - Considera apenas predecessores via VK5_DATINC < ::cDatIncVK5
+
+    @type    Method
+    @author  Lucas Brustolin
+    @return  Logical  .T. se ha predecessor pendente do mesmo chassi+evento
+/*/
+Method TemPendenciaTecnica() Class OFSReprocessarControlTower
+
+    Local lRet   := .F.
+    Local cQuery := ""
+    Local cAlias := ""
+    Local oStmt  := Nil
+
+    cQuery := " SELECT 1 FROM " + RetSQLName("VK5")
+    cQuery += "  WHERE VK5_ORIKEY = ? "
+    cQuery += "    AND VK5_MESSAG = ? "
+    cQuery += "    AND VK5_STATUS IN (?, ?, ?) "
+    cQuery += "    AND R_E_C_N_O_ <> ? "
+    cQuery += "    AND VK5_DATINC < ? "
+    cQuery += "    AND D_E_L_E_T_ = ' ' "
+
+    oStmt := FWExecStatement():New(cQuery)
+    oStmt:SetString (1, AllTrim(cFilAnt) + ::cChassiInterno)
+    oStmt:SetString (2, ::cEvento)
+    oStmt:SetString (3, VK5STATUS_PENDENTE)
+    oStmt:SetString (4, VK5STATUS_EM_PROCESSAMENTO)
+    oStmt:SetString (5, VK5STATUS_ERRO)
+    oStmt:SetNumeric(6, ::nRecnoVK5)
+    oStmt:SetString (7, ::cDatIncVK5)
+
+    cAlias := oStmt:OpenAlias()
+
+    lRet := !(cAlias)->(Eof())
+    (cAlias)->(DbCloseArea())
+    oStmt:Destroy()
+
+Return lRet
+
+/*/{Protheus.doc} IntegrarControlTower
+    Override do metodo da classe pai. Em vez de montar payload via MontarPayload(),
+    utiliza o payload original salvo na VK5 (::cPayloadOriginal).
+    O token e obtido via ObterToken() (HERDADO) ou via SetToken() (injetado).
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @return  Logical  .T. se HTTP 2xx
+/*/
+Method IntegrarControlTower() Class OFSReprocessarControlTower
+
+    Local cUrlBase  := AllTrim(::oConfig["COTO_URLBASE"])
+    Local cEndpoint := AllTrim(::oConfig["COTO_ENDPOINT"])
+    Local nHttp     := 0
+
+    If Empty(cUrlBase) .Or. Empty(cEndpoint)
+        ::cObservacao := STR0005 //URL ou Endpoint nao configurados
+        Return .F.
+    EndIf
+
+    // Token: obtido via SetToken() ou ObterToken() herdado
+    If Empty(::cToken)
+        If !::ObterToken()
+            ::cObservacao := STR0006 //Falha ao obter token OAuth2
+            Return .F.
+        EndIf
+    EndIf
+
+    // Usa o payload ORIGINAL salvo na VK5 (nao remonta)
+    ::cPayloadJson := ::cPayloadOriginal
+
+    ::aHeader := {}
+    AAdd(::aHeader, "Content-Type:" + ::ResolverContentType(AllTrim(::oConfig["COTO_CONTENTTYPE"])))
+    AAdd(::aHeader, "Authorization: Bearer " + ::cToken)
+
+    ::oRest := FWRest():New(cUrlBase)
+    ::oRest:SetPath(cEndpoint)
+    ::oRest:SetPostParams(::cPayloadJson)
+
+    If !::oRest:Post(::aHeader)
+        ::cObservacao := STR0007 //Falha na requisicao POST
+        Return .F.
+    EndIf
+
+    nHttp := Val(::oRest:GetHttpCode())
+
+    If nHttp < 200 .Or. nHttp > 299
+        ::cObservacao := "HTTP " + AllTrim(Str(nHttp)) + " - " + ::oRest:GetLastError()
+    EndIf
+
+Return nHttp >= 200 .And. nHttp <= 299
+
+/*/{Protheus.doc} GravarVK5
+    Override do metodo da classe pai. Faz UPDATE no registro VK5 existente
+    em vez de INSERT via OFDMSRequest:Save().
+    Atualiza: status, codigo HTTP, response body, headers, historico (append).
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @param   cStatus  Character  Status VK5 resultante (0/2/3)
+    @return  Logical  .T. se atualizou com sucesso
+/*/
+Method GravarVK5( cStatus ) Class OFSReprocessarControlTower
+
+    Local lRet      := .F.
+    Local aArea     := VK5->(GetArea())
+    Local oHeader   := Nil
+    Local nHttp     := 0
+    Local lErroHttp := .F.
+    Local cLogRepr  := ""
+
+    DbSelectArea("VK5")
+    VK5->(DbGoTo(::nRecnoVK5))
+
+    If VK5->(Eof()) .Or. VK5->(Deleted())
+        VK5->(RestArea(aArea))
+        Return lRet
+    EndIf
+
+    cLogRepr := ::MontarLogReprocessamento(cStatus == VK5STATUS_SUCESSO)
+
+    If RecLock("VK5", .F.)
+
+        VK5->VK5_STATUS := cStatus
+        VK5->VK5_DATALT := DTOS(Date()) + " " + Time()
+
+        // Append no historico
+        If !Empty(::cHistoricoVK5)
+            VK5->VK5_HISTOR := ::cHistoricoVK5 + CRLF + cLogRepr
+        Else
+            VK5->VK5_HISTOR := cLogRepr
+        EndIf
+
+        // Dados HTTP (quando houve tentativa de integracao)
+        If ValType(::oRest) == "O"
+            nHttp     := Val(::oRest:GetHttpCode())
+            lErroHttp := nHttp < 200 .Or. nHttp > 299
+
+            VK5->VK5_RESCOD := nHttp
+
+            If lErroHttp
+                VK5->VK5_RESBOD := ::oRest:GetLastError()
+            Else
+                VK5->VK5_RESBOD := ::oRest:GetResult()
+            EndIf
+
+            // Atualizar headers com novo token
+            If ValType(::aHeader) == "A" .And. Len(::aHeader) > 0
+                oHeader := JsonObject():New()
+                oHeader:Set(::aHeader)
+                VK5->VK5_REQHEA := oHeader:ToJson()
+            EndIf
+        EndIf
+
+        MsUnlock()
+        lRet := .T.
+
+        // Atualizar UUID para uso no GravarHistoricoPassagem
+        ::cCodigoVK5 := ::cUUIDVK5
+    EndIf
+
+    VK5->(RestArea(aArea))
+
+Return lRet
+
+/*/{Protheus.doc} GravarHistoricoPassagem
+    Override do metodo da classe pai. No reprocessamento, NAO cria novos
+    registros VEW/VEX. Apenas localiza o VEX existente pelo VEX_CODVK5
+    (UUID da VK5) e marca integracao concluida.
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @param   cEvt  Character  Codigo do evento
+    @return  Logical  .T. se atualizou | .F. se nao encontrou VEX
+/*/
+Method GravarHistoricoPassagem( cEvt ) Class OFSReprocessarControlTower
+
+    Local aArea      := GetArea()
+    Local cAlias     := ""
+    Local cQuery     := ""
+    Local oStmt      := Nil
+    Local nRecnoVEX  := 0
+    Local cCodigoVEW := ""
+    Local lRet       := .F.
+    Local cIntegrou  := ""
+
+    Default cEvt := ::cEvento
+
+    If Empty(::cUUIDVK5)
+        RestArea(aArea)
+        Return .F.
+    EndIf
+
+    If ::lIntegrou
+        cIntegrou := "1"
+    Else
+        cIntegrou := "0"
+    EndIf
+
+    // Localizar VEX pelo VEX_CODVK5 (UUID da VK5)
+    cQuery := " SELECT VEX.R_E_C_N_O_ AS NRECNO, VEX_CODVEW "
+    cQuery += " FROM " + RetSQLName("VEX") + " VEX "
+    cQuery += " WHERE VEX_CODVK5 = ? "
+    cQuery += "   AND VEX.D_E_L_E_T_ = ' ' "
+
+    oStmt := FWExecStatement():New(cQuery)
+    oStmt:SetString(1, ::cUUIDVK5)
+
+    cAlias := oStmt:OpenAlias()
+
+    If !(cAlias)->(EoF())
+        nRecnoVEX  := (cAlias)->NRECNO
+        cCodigoVEW := AllTrim((cAlias)->VEX_CODVEW)
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    oStmt:Destroy()
+
+    If nRecnoVEX <= 0
+        RestArea(aArea)
+        Return .F.
+    EndIf
+
+    // UPDATE VEX — marcar integracao concluida
+    DbSelectArea("VEX")
+    VEX->(DbGoTo(nRecnoVEX))
+    If !VEX->(Eof()) .And. !VEX->(Deleted())
+        If RecLock("VEX", .F.)
+            VEX->VEX_INTCON := cIntegrou
+            MsUnlock()
+            lRet := .T.
+        EndIf
+    EndIf
+
+    // UPDATE VEW — marcar integracao concluida no mestre
+    If lRet .And. !Empty(cCodigoVEW)
+        DbSelectArea("VEW")
+        VEW->(DbSetOrder(1))    // VEW_FILIAL + VEW_CODIGO
+        If VEW->(DbSeek(xFilial("VEW") + cCodigoVEW))
+            If RecLock("VEW", .F.)
+                VEW->VEW_INTCRT := "1"
+                VEW->VEW_CODUST := cEvt
+                VEW->VEW_DESUST := OFIOA560DS("083", cEvt)
+                VEW->VEW_DESCTC := ::cTipoContrato
+                MsUnlock()
+            EndIf
+        EndIf
+    EndIf
+
+    RestArea(aArea)
+
+Return lRet
+
+/*/{Protheus.doc} MontarLogReprocessamento
+    Monta o texto de log para append no campo VK5_HISTOR ao reprocessar.
+    Formato identico ao MontarTextoVK5 da classe pai mas com prefixo [REPROCESSAMENTO].
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/04/2026
+    @param   lSucesso  Logical  .T. se HTTP 2xx
+    @return  Character  Texto de log formatado
+/*/
+Method MontarLogReprocessamento( lSucesso ) Class OFSReprocessarControlTower
+
+    Local cLog  := ""
+    Local cDtHr := "[" + DtoC(Date()) + " " + Time() + "] "
+    Local cSep  := "----------------------------------------" + CRLF
+    Local nHttp := 0
+
+    Default lSucesso := .F.
+
+    cLog += cSep
+    cLog += cDtHr + STR0011 + CRLF //[REPROCESSAMENTO]
+    cLog += cDtHr + STR0012 + ::cEvento + " - " + ::cDescricaoEvento + CRLF //EVENTO       : 
+    cLog += cDtHr + STR0013 + cFilAnt + CRLF //FILIAL       : 
+
+    If lSucesso
+        cLog += cDtHr + STR0014 + CRLF //STATUS       : Sucesso
+    Else
+        cLog += cDtHr + STR0015 + CRLF //STATUS       : Erro
+    EndIf
+
+    If ValType(::oRest) == "O"
+        nHttp := Val(::oRest:GetHttpCode())
+        cLog += cDtHr + "HTTP CODE    : " + AllTrim(Str(nHttp)) + CRLF
+        If lSucesso
+            cLog += cDtHr + "URL          : " + ::oRest:cHost + ::oRest:cPath + CRLF
+        Else
+            cLog += cDtHr + "URL          : " + ::oRest:cHost + ::oRest:cPath + CRLF
+            cLog += cDtHr + "RESP. BODY   : " + Left(::oRest:GetLastError(), 500) + CRLF
+        EndIf
+    Else
+        If !Empty(::cObservacao)
+            cLog += cDtHr + STR0016 + ::cObservacao + CRLF //MOTIVO       : 
+        EndIf
+    EndIf
+
+    cLog += cSep
+
+Return cLog
+
+
+/*/{Protheus.doc} OA617SCH_Processar
+    Corpo do reprocessamento automatico chamado por OFIA617 quando
+    executado via Schedule (FWGetRunSchedule = .T.).
+    O ambiente (cFilAnt/cEmpAnt) ja esta aberto pelo Schedule.
+    @type Function
+    @return Nil
+/*/
+Function OA617SCH_Processar()
+
+    Local aPendentes    := {}
+    Local oReproc       := Nil
+    Local oConfig       := Nil
+    Local cToken        := ""
+    Local nI            := 0
+    Local nSuccess      := 0
+    Local nFail         := 0
+    Local nSkip         := 0
+    Local nLimit        := 0
+    Local nRecno        := 0
+    Local cOriKey       := ""
+    Local cOriKeyAnt    := ""
+    Local lFalhouChassi := .F.
+    Local cResultado    := ""
+    Local cLockSched    := ""
+    Local nMaxTent      := 1
+    Local nTent         := 0
+    Local lProcessado   := .F.
+
+    // --- Semaforo de schedule: evitar dupla execucao na mesma filial ---
+    cLockSched := LOCK_SCHEDULE + cFilAnt
+    If !LockByName(cLockSched, .F., .F.)
+        Return
+    EndIf
+
+    If Empty(AllTrim(cFilAnt))
+        UnlockByName(cLockSched)
+        Return
+    EndIf
+
+
+    // Carregar config uma unica vez para obter token antes do loop
+    oConfig := OA617SCH_ObterConfig()
+    If oConfig == Nil
+        UnlockByName(cLockSched)
+        Return
+    EndIf
+
+    // Maximo de tentativas por evento
+    nMaxTent := IIf(oConfig:HasProperty("COTO_MAXTENT") .And. oConfig["COTO_MAXTENT"] > 0, ;
+                    oConfig["COTO_MAXTENT"], 1)
+
+    // --- Obter token unico para o lote ---
+    cToken := OA617SCH_ObterToken(oConfig)
+    If Empty(cToken)
+        UnlockByName(cLockSched)
+        Return
+    EndIf
+
+    // --- Query registros pendentes ---
+    aPendentes := OA617SCH_QueryPendentes()
+
+    If Len(aPendentes) == 0
+        UnlockByName(cLockSched)
+        Return
+    EndIf
+
+    // --- Limite por execucao ---
+    nLimit := SuperGetMV("MV_CTREPRL", .F., SCHEDULE_LIMIT)
+
+
+    // --- Processar em ordem FIFO por chassi ---
+    cOriKeyAnt    := ""
+    lFalhouChassi := .F.
+
+    For nI := 1 To Len(aPendentes)
+
+        If (nSuccess + nFail) >= nLimit
+            Exit // limite de registros atingido
+        EndIf
+
+        nRecno  := aPendentes[nI][1]
+        cOriKey := aPendentes[nI][2]
+
+        // se mudou o chassi, reseta o flag
+        If cOriKey != cOriKeyAnt
+            cOriKeyAnt    := cOriKey
+            lFalhouChassi := .F.
+        EndIf
+       
+        If lFalhouChassi
+            nSkip++
+            Loop
+        EndIf
+
+        // tenta ate nMaxTent
+        nTent       := 0
+        lProcessado := .F.
+        Do While !lProcessado .And. nTent < nMaxTent
+            nTent++
+
+            oReproc := OFSReprocessarControlTower():New()
+            oReproc:SetConfig(oConfig)
+            oReproc:SetToken(cToken)
+
+            cResultado := oReproc:ExecutarReprocessamento(nRecno)
+
+            If cResultado == RETORNO_SUCESSO
+                lProcessado := .T.
+            EndIf
+        EndDo
+
+        If lProcessado
+            nSuccess++
+        Else
+            nFail++
+            lFalhouChassi := .T.
+        EndIf
+
+    Next nI
+
+
+    UnlockByName(cLockSched)
+
+Return
+
+/*/{Protheus.doc} OA617SCH_ObterConfig
+    Le a configuracao do Control Tower a partir da VRN OFIA541 para uso no schedule.
+    @type Static Function
+    @return Object, JsonObject com configuracao ou Nil se falha
+/*/
+Static Function OA617SCH_ObterConfig()
+
+    Local oConfig := Nil
+    Local oJson   := JsonObject():New()
+    Local cAmb    := ""
+    Local aArea   := GetArea()
+
+    DbSelectArea("VRN")
+    VRN->(DbSetOrder(1))
+    If !VRN->(MsSeek(xFilial("VRN") + "OFIA541"))
+        RestArea(aArea)
+        Return oConfig
+    EndIf
+
+    oJson:FromJson(VRN->VRN_CONFIG)
+    If ValType(oJson) != "J" .Or. !oJson:HasProperty("CONTROLTOWER")
+        RestArea(aArea)
+        Return oConfig
+    EndIf
+
+    If totvs.framework.environment.type.envAppGet(.T.) $ "2|3"
+        cAmb := "HOMOLOGACAO"
+    Else
+        cAmb := "PRODUCAO"
+    EndIf
+
+    If !oJson["CONTROLTOWER"]:HasProperty(cAmb)
+        RestArea(aArea)
+        Return oConfig
+    EndIf
+
+    oConfig := oJson["CONTROLTOWER"][cAmb]
+
+    RestArea(aArea)
+
+Return oConfig
+
+
+/*/{Protheus.doc} OA617SCH_ObterToken
+    Obtem token OAuth2 para uso no schedule.
+    @type Static Function
+    @param oConfig, Object, JsonObject com configuracao
+    @return Character, Token ou vazio se falha
+/*/
+Static Function OA617SCH_ObterToken(oConfig)
+
+    Local cToken   := ""
+    Local cFullUrl := ""
+    Local aParts   := {}
+    Local cBaseUrl := ""
+    Local cPath    := ""
+    Local cBody    := ""
+    Local aHeader  := {}
+    Local oRest    := Nil
+    Local jResp    := Nil
+    Local nHttp    := 0
+
+    If ValType(oConfig) != "J"
+        Return cToken
+    EndIf
+
+    cFullUrl := AllTrim(oConfig["COTO_URL"])
+
+    If Empty(cFullUrl)
+        Return cToken
+    EndIf
+
+    aParts := StrTokArr(cFullUrl, "/")
+
+    If Len(aParts) >= 2
+        cBaseUrl := aParts[1] + "//" + aParts[2]
+    EndIf
+
+    cPath := SubStr(cFullUrl, Len(cBaseUrl) + 1)
+
+    aHeader := { "Content-Type:application/x-www-form-urlencoded" }
+
+    If oConfig["COTO_TPAUT2"] == "1"
+        AAdd(aHeader, "Authorization: Basic " + Encode64( ;
+                AllTrim(oConfig["COTO_CLIENTEID"]) + ":" + ;
+                AllTrim(oConfig["COTO_CLIENTESECRET"])))
+    EndIf
+
+    cBody := "username=" + Lower(AllTrim(oConfig["COTO_USERNAME"]))
+    cBody += "&password=" + Lower(AllTrim(oConfig["COTO_PASSWORD"]))
+    cBody += "&grant_type=" + Lower(AllTrim(oConfig["COTO_GRANTTYPE"]))
+
+    oRest := FWRest():New(cBaseUrl)
+    oRest:SetPath(cPath)
+    oRest:SetPostParams(cBody)
+
+    If !oRest:Post(aHeader)
+        Return cToken
+    EndIf
+
+    nHttp := Val(oRest:GetHttpCode())
+    If nHttp < 200 .Or. nHttp > 299
+        Return cToken
+    EndIf
+
+    jResp := JsonObject():New()
+    If ValType(jResp:FromJson(oRest:GetResult())) != "U" .Or. !jResp:HasProperty("access_token")
+        Return cToken
+    EndIf
+
+    cToken := jResp["access_token"]
+
+Return cToken
+
+
+/*/{Protheus.doc} OA617SCH_QueryPendentes
+    Consulta registros VK5 elegiveis para reprocessamento automatico.
+    @type Static Function
+    @return Array, Array de {nRecno, cOriKey}
+/*/
+Static Function OA617SCH_QueryPendentes()
+
+    Local aRet    := {}
+    Local cAlias  := ""
+    Local cQuery  := ""
+    Local oStmt   := Nil
+    Local cFil    := AllTrim(cFilAnt)
+    Local nTamFil := Len(cFil)
+
+    cQuery := " SELECT VK5.R_E_C_N_O_ AS NRECNO, VK5_ORIKEY "
+    cQuery += " FROM " + RetSQLName("VK5") + " VK5 "
+    cQuery += " WHERE VK5.D_E_L_E_T_ = ' ' "
+    cQuery += "   AND VK5_DATTYP = ? "
+    cQuery += "   AND VK5_STATUS IN (?, ?) "
+    cQuery += "   AND VK5_REQBOD <> '' "
+
+    If nTamFil > 0
+        cQuery += "   AND LEFT(VK5_ORIKEY, ?) = ? "
+    EndIf
+
+    cQuery += " ORDER BY VK5_ORIKEY, VK5_DATINC "
+
+    oStmt := FWExecStatement():New(cQuery)
+    oStmt:SetString(1, VK5_DATTYP_CT)
+    oStmt:SetString(2, VK5STATUS_PENDENTE)
+    oStmt:SetString(3, VK5STATUS_ERRO)
+
+    If nTamFil > 0
+        oStmt:SetNumeric(4, nTamFil)
+        oStmt:SetString (5, cFil)
+    EndIf
+
+    cAlias := oStmt:OpenAlias()
+
+    While !(cAlias)->(EoF())
+        AAdd(aRet, { (cAlias)->NRECNO, AllTrim((cAlias)->VK5_ORIKEY) })
+        (cAlias)->(DbSkip())
+    EndDo
+
+    (cAlias)->(DbCloseArea())
+    oStmt:Destroy()
+
+Return aRet

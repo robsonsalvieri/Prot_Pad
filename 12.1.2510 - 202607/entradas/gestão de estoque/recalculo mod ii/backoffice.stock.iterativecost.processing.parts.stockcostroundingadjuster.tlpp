@@ -1,0 +1,510 @@
+#Include 'Totvs.ch'
+#Include 'tlpp-core.th'
+
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.manager
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.balancebywarehouse
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.analyticalmovementtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.parts.analyticalmovementtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.processing.stockcostroundingadjuster
+
+namespace totvs.protheus.backoffice.stock.iterativecost.processing.parts.stockcostroundingadjuster
+
+/*/{Protheus.doc} StockCostRoundingAdjuster
+    Classe responsável por criar os movimentos de ajuste de arredondamento do custo em partes na D4N
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Class StockCostRoundingAdjusterCP From TableManager
+
+    public method New()
+
+    public method fetchProductsForProcessing()
+    public method compareBalances()
+    public method recordD4NAdjustmentMovements()
+    public method deleteRecDecRecordsForPeriod()
+    public method getMovementMsuid()
+
+    method addFieldsForBulk()
+
+    Data cAlias     as character
+    Data cFilProc   as character
+    Data cRevisao   as character
+    Data cDataIni   as character
+    Data cDocumento as character
+    Data cSeqCalc   as character
+    Data dDataFim   as date
+    Data oBulkD4N   as object
+    Data oQueryD4N  as object
+    Data oQuery     as object
+    Data aMoedas    as array
+
+endclass
+
+/*/{Protheus.doc} New
+    Instância da classe
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method new(cFilProc,aMoedas,dDataIni,dDataFim,cRevisao,cDocumento,cSeqCalc) Class StockCostRoundingAdjusterCP
+
+    _Super:New({})
+
+    ::cFilProc   := cFilProc
+    ::aMoedas    := aMoedas
+    ::cDataIni   := dToS(dDataIni)
+    ::dDataFim   := dDataFim
+    ::cRevisao   := cRevisao
+    ::cSeqCalc   := cSeqCalc
+    If Empty(cDocumento)
+        ::cDocumento := NextNumero("SD3",2,"D3_DOC",.T.)
+        ::cDocumento := A261RetINV(::cDocumento)
+    Else
+        ::cDocumento := cDocumento
+    EndIf
+
+Return
+
+/*/{Protheus.doc} fetchProductsForProcessing
+    Busca os movimentos do período para comparação dos saldos
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method fetchProductsForProcessing(cFilAtu, cMoeda) Class StockCostRoundingAdjusterCP
+    local cQuery      as character
+    Local cVWSB9CP    as character
+    Local cVWSD1CP    as character
+    Local cVWSD2CP    as character
+    Local cVWSD3CP    as character
+    Local cMoedaStr   as character
+    Local cRound      as character
+
+    If ::oQuery == Nil
+        cVWSB9CP    := Posicione('D4D',1,FWXFilial('D4D')+'VWSB9CP','D4D_VWNAME')
+        cVWSD1CP    := Posicione('D4D',1,FWXFilial('D4D')+'VWD1SDITCP','D4D_VWNAME')
+        cVWSD2CP    := Posicione('D4D',1,FWXFilial('D4D')+'VWD2SDITCP','D4D_VWNAME')
+        cVWSD3CP    := Posicione('D4D',1,FWXFilial('D4D')+'VWD3SDPRCP','D4D_VWNAME')
+        cRound      := cValToChar(TamSX3('D4K_TOTAL')[2])
+
+        cQuery := " Select "
+        cQuery += " D4K.D4K_FILIAL, "
+        cQuery += " D4K.D4K_COD, "
+        cQuery += " D4K.D4K_LOCAL, "
+        cQuery += " D4K.D4K_PARTE, "
+        cQuery += " D4K.D4K_MOEDA, "
+        cQuery += " D4K.D4K_TOTAL, "
+        cQuery += " CALC.SOMA_TOTAL "
+        cQuery += " From "+RetSQLName("D4K")+" D4K "
+        cQuery += " Inner Join "
+        cQuery += " ( "
+        //Query para cálculo do saldo em estoque pela movimentação
+        cQuery += "  Select "
+        cQuery += "  FILIAL, "
+        cQuery += "  COD, "
+        cQuery += "  ARMAZEM, "
+        cQuery += "  PARTE, "
+        cQuery += "  MOEDA, "
+        cQuery += "  Sum(SOMA_TOTAL) SOMA_TOTAL "
+        cQuery += "  From "
+        cQuery += "  ( "
+        //Saldos iniciais
+        cQuery += "   Select "
+        cQuery += "   B9_FILIAL FILIAL, "
+        cQuery += "   B9_COD    COD, "
+        cQuery += "   B9_LOCAL  ARMAZEM, "
+        cQuery += "   D4I_PARTE PARTE, "
+        cQuery += "   ?         MOEDA, " //1
+        cQuery += "   Coalesce(D4I_TOTAL, B9_VINI?) SOMA_TOTAL " //2
+        cQuery += "   From "+cVWSB9CP+" SB9CP "
+        cQuery += "   Where "
+        cQuery += "   B9_FILIAL = ? And " //3
+        cQuery += "   (D4I_MOEDA = ? Or D4I_MOEDA Is Null) " //4
+        //Ver 1*
+        cQuery += "   Union All "
+        //Notas de entrada
+        cQuery += "   Select "
+        cQuery += "   D1_FILIAL FILIAL, "
+        cQuery += "   D1_COD    COD, "
+        cQuery += "   D1_LOCAL  ARMAZEM, "
+        cQuery += "   D4L_PARTE PARTE, "
+        cQuery += "   ? MOEDA, " //5
+        cQuery += "   D4L_TOTAL SOMA_TOTAL "
+        cQuery += "   From "+cVWSD1CP+" SD1CP "
+        cQuery += "   Where "
+        cQuery += "   D1_FILIAL  = ? And " //6
+        cQuery += "   D4L_MOEDA  = ? And " //7
+        cQuery += "   D1_DTDIGIT >= ? And " //8
+        cQuery += "   D1_DTDIGIT <= ? " //9
+        cQuery += "   Union All "
+        //Notas de saída
+        cQuery += "   Select "
+        cQuery += "   D2_FILIAL FILIAL, "
+        cQuery += "   D2_COD    COD, "
+        cQuery += "   D2_LOCAL  ARMAZEM, "
+        cQuery += "   D4M_PARTE PARTE, "
+        cQuery += "   ? MOEDA, " //10
+        cQuery += "   -D4M_TOTAL SOMA_TOTAL "
+        cQuery += "   From "+cVWSD2CP+" SD2CP "
+        cQuery += "   Where "
+        cQuery += "   D2_FILIAL  = ? And " //11
+        cQuery += "   D4M_MOEDA  = ? And " //12
+        cQuery += "   D2_EMISSAO >= ? And " //13
+        cQuery += "   D2_EMISSAO <= ? " //14
+        cQuery += "   Union All "
+        //Movimentos internos
+        cQuery += "   Select "
+        cQuery += "   D3_FILIAL FILIAL, "
+        cQuery += "   D3_COD    COD, "
+        cQuery += "   D3_LOCAL  ARMAZEM, "
+        cQuery += "   D4N_PARTE PARTE, "
+        cQuery += "   ? MOEDA, " //15
+        cQuery += "   Case "
+        cQuery += "    When D3_CF > '500' Then -D4N_TOTAL "
+        cQuery += "    Else D4N_TOTAL End SOMA_TOTAL"
+        cQuery += "   From "+cVWSD3CP+" SD3CP "
+        cQuery += "   Where "
+        cQuery += "   D3_FILIAL  = ? And " //16
+        cQuery += "   D4N_MOEDA  = ? And " //17
+        cQuery += "   D3_EMISSAO >= ? And " //18
+        cQuery += "   D3_EMISSAO <= ? " //19
+        cQuery += "  ) SUB "
+        cQuery += " Group By FILIAL, COD, ARMAZEM, PARTE, MOEDA "
+        cQuery += " ) CALC "
+        cQuery += " On "
+        cQuery += " CALC.FILIAL  = D4K.D4K_FILIAL And "
+        cQuery += " CALC.COD     = D4K.D4K_COD    And "
+        cQuery += " CALC.ARMAZEM = D4K.D4K_LOCAL  And "
+        cQuery += " CALC.PARTE   = D4K.D4K_PARTE  And "
+        cQuery += " CALC.MOEDA   = D4K.D4K_MOEDA  "
+        cQuery += " Where "
+        cQuery += " D4K.D4K_FILIAL = ? And " //20
+        cQuery += " D4K.D_E_L_E_T_ = ? And " //21
+        cQuery += " Round(D4K.D4K_TOTAL, "+cRound+") <> Round(CALC.SOMA_TOTAL, "+cRound+") "
+        cQuery += " Order By "
+        cQuery += " D4K_FILIAL, D4K_MOEDA, D4K_COD, D4K_LOCAL, D4K_PARTE "
+
+        cQuery := ChangeQuery(cQuery)
+
+        ::oQuery := FWExecStatement():New(cQuery)
+    EndIf
+
+    cMoedaStr := StrZero(Val(cMoeda), 2)
+
+    ::oQuery:SetString(01, cMoedaStr) //D4I_MOEDA
+    ::oQuery:SetUnsafe(02, cMoeda) //B9_VINI
+    ::oQuery:SetString(03, cFilAtu) //B9_FILIAL
+    ::oQuery:SetString(04, cMoedaStr) //D4I_MOEDA
+    ::oQuery:SetString(05, cMoedaStr) //D4I_MOEDA
+    ::oQuery:SetString(06, cFilAtu) //D1_FILIAL
+    ::oQuery:SetString(07, cMoedaStr) //D4L_MOEDA
+    ::oQuery:SetString(08, ::cDataIni) //D1_DTDIGIT
+    ::oQuery:SetString(09, DToS(::dDataFim)) //D1_DTDIGIT
+    ::oQuery:SetString(10, cMoedaStr) //D4M_MOEDA
+    ::oQuery:SetString(11, cFilAtu) //D2_FILIAL
+    ::oQuery:SetString(12, cMoedaStr) //D4M_MOEDA
+    ::oQuery:SetString(13, ::cDataIni) //D2_EMISSAO
+    ::oQuery:SetString(14, DToS(::dDataFim)) //D2_EMISSAO
+    ::oQuery:SetString(15, cMoedaStr) //D4N_MOEDA
+    ::oQuery:SetString(16, cFilAtu) //D3_FILIAL
+    ::oQuery:SetString(17, cMoedaStr) //D4N_MOEDA
+    ::oQuery:SetString(18, ::cDataIni) //D3_EMISSAO
+    ::oQuery:SetString(19, DToS(::dDataFim)) //D3_EMISSAO
+    ::oQuery:SetString(20, FWXFilial('D4K', cFilAtu)) //D4K_FILIAL
+    ::oQuery:SetString(21, ' ') //D4K.D_E_L_E_T_
+
+    ::cAlias := ::oQuery:OpenAlias()
+
+//1*
+//Tratamento necessário, pois saldos iniciais não distribuidos são transferidos
+//para a parte 99
+Return
+
+/*/{Protheus.doc} compareBalances
+    Compara o custo calculado com o custo contabil 
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method compareBalances() Class StockCostRoundingAdjusterCP
+    local cFilAtu    as character
+    local cMsUID     as character
+    local cLocal     as character
+    local cParte     as character
+    local cMoeda     as character
+    local aFields    as array
+    local aCustoReq  := {} as array
+    local aCustoDev  := {} as array
+    local lCanBulk   as logical
+    local aMaxLimit  as array
+    local nDif       as numeric
+    local nPosMoeda  as integer
+    local nX         as integer
+    local nDecimal   as numeric
+
+	nDecimal := TamSX3("D4N_TOTAL")[2]
+    ::oBulkD4N := FWBulk():New(RetSqlName("D4N"), 500)
+    ::oBulkD4N:SetOption(1)
+    lCanBulk   := ::oBulkD4N:CanBulk()
+
+    If lCanBulk
+        //Posiciona no primeiro índice da SB1
+        SB1->(dbSetOrder(1))
+
+        //Posiciona no quarto índice da SD3
+        SD3->(DbSetOrder(3))
+
+        // Define os campos que serão utilizados no FWBulk
+        aFields := ::addFieldsForBulk()
+        ::oBulkD4N:SetFields(aFields)
+
+        (::cAlias)->(DbGoTop())
+        Do While (::cAlias)->(!Eof())
+            cCod   := (::cAlias)->D4K_COD
+            cLocal := (::cAlias)->D4K_LOCAL
+            cParte := (::cAlias)->D4K_PARTE
+
+            //Atualiza os limites com a configuração da filial
+            If cFilAtu <> (::cAlias)->D4K_FILIAL
+                cFilAtu   := (::cAlias)->D4K_FILIAL
+                aMaxLimit := {}
+                For nX := 1 to Len(::aMoedas)
+                    AAdd(aMaxLimit,{StrZero(Val(::aMoedas[nX]),2),SuperGetMv("MV_E330AJ"+::aMoedas[nX],.F.,1,cFilAtu)})
+                Next nX
+            EndIf
+
+            cMoeda    := (::cAlias)->D4K_MOEDA
+            nPosMoeda := AScan(aMaxLimit, {|x| x[1] == cMoeda})
+
+            //Compara o custo por movimento com o custo calculado
+            nDif := (::cAlias)->(SOMA_TOTAL - D4K_TOTAL)
+            nDif     := Round(nDif, nDecimal)
+            If Abs(nDif) > 0 .And. nDif <= aMaxLimit[nPosMoeda][2]
+                If nDif > 0
+                    AAdd(aCustoReq,{nDif, (::cAlias)->D4K_MOEDA})
+                Else
+                    AAdd(aCustoDev,{Abs(nDif), (::cAlias)->D4K_MOEDA})
+                EndIf 
+            EndIf
+
+            //Gera o movimento de reajuste caso tenha divergências
+            If !Empty(aCustoReq)
+                cMsUID := ::getMovementMsuid(aCustoReq,,cCod,cLocal,cFilAtu,.T.)
+                ::recordD4NAdjustmentMovements(aCustoReq,cFilAtu,cMsUID,cParte)
+                aCustoReq := {}
+            ElseIf !Empty(aCustoDev)
+                cMsUID := ::getMovementMsuid(,aCustoDev,cCod,cLocal,cFilAtu,.F.)
+                ::recordD4NAdjustmentMovements(aCustoDev,cFilAtu,cMsUID,cParte)
+                aCustoDev := {}
+            EndIf
+            (::cAlias)->(DbSkip())
+        EndDo
+
+        If !::oBulkD4N:Close()
+            UserException(::oBulkD4N:GetError())
+        EndIf
+    EndIf
+
+    If Select(::cAlias) > 0
+        (::cAlias)->(DbCloseArea())
+    EndIf
+
+    ::oBulkD4N:Destroy()
+	FreeObj(::oBulkD4N)
+
+Return
+
+/*/{Protheus.doc} recordD4NAdjustmentMovements
+    Adiciona o registro para gravação na tabela D4N
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method recordD4NAdjustmentMovements(aCusto,cFilAtu,cMsUID,cParte) Class StockCostRoundingAdjusterCP
+    local aData  as array
+    local nX     as integer
+
+    For nX := 1 to Len(aCusto)
+        aData := {}
+        AAdd(aData, FWxFilial("D4N",cFilAtu)) //1 - FILIAL
+        AAdd(aData, Upper(cMsUID))                   //2 - MSUID
+        AAdd(aData, ::cRevisao)               //3 - REVISAO
+        AAdd(aData, cParte)                   //4 - PARTE
+        AAdd(aData, aCusto[nX][2])            //5 - MOEDA
+        AAdd(aData, aCusto[nX][1])            //6 - TOTAL
+
+        If !::oBulkD4N:AddData(aData)
+            UserException(::oBulkD4N:GetError())
+        EndIf
+    Next nX
+
+Return
+
+/*/{Protheus.doc} deleteRecDecRecordsForPeriod
+    Deleta os movimentos REC/DEC existentes no período
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method deleteRecDecRecordsForPeriod(aFiliais) Class StockCostRoundingAdjusterCP
+    local oDelD4N  as object
+    local cDataFim := dToS(::dDataFim) as character
+    local cQuery   as character
+    local nX       as integer
+
+    For nX := 1 to Len(aFiliais)
+        If oDelD4N == Nil
+            cQuery := " DELETE FROM "+RetSQLName("D4N")+" "
+            cQuery += " WHERE R_E_C_N_O_ In  "
+            cQuery += " ( "
+            cQuery += " SELECT D4NSUB.R_E_C_N_O_ "
+            cQuery += " FROM "+RetSQLName("SD3")+" SD3SUB "
+            cQuery += " Inner Join "+RetSQLName('D4N')+" D4NSUB On "
+            cQuery += " D4NSUB.D4N_FILIAL = SD3SUB.D3_FILIAL And "
+            cQuery += " D4NSUB.D4N_IDSD3  = SD3SUB.D3_MSUID "
+            cQuery += " And D4NSUB.D_E_L_E_T_  = ? "
+            cQuery += " Where SD3SUB.D3_FILIAL = ? "
+            cQuery += "   AND SD3SUB.D3_EMISSAO >= ? "
+            cQuery += "   AND SD3SUB.D3_EMISSAO <= ? "
+            cQuery += "   AND SD3SUB.D3_CF IN (?) "
+            cQuery += "   AND SD3SUB.D_E_L_E_T_ = ? ) "
+
+            oDelD4N := FWExecStatement():New(cQuery)
+        EndIf
+
+        If nX == 1
+            oDelD4N:SetString(1, ' ') //D4NSUB.D_E_L_E_T_
+            oDelD4N:SetString(2, FWXFilial('SD3', aFiliais[nX])) //D3_FILIAL
+            oDelD4N:SetString(3, ::cDataIni) //D3_EMISSAO
+            oDelD4N:SetString(4, cDataFim) //D3_EMISSAO
+            oDelD4N:SetIn(5, {'REC','DEC'}) //D3_CF
+            oDelD4N:SetString(6, ' ') //SD3SUB.D_E_L_E_T_
+        Else
+            oDelD4N:SetString(2, FWXFilial('SD3', aFiliais[nX])) //D3_FILIAL
+        EndIf
+
+        cQuery := oDelD4N:GetFixQuery()
+
+        ::RunQuery(cQuery)
+    Next nX
+
+Return
+
+/*/{Protheus.doc} addFieldsForBulk
+    Adiciona os campos para o Bulk
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method addFieldsForBulk() Class StockCostRoundingAdjusterCP
+    local aFields := {} as array
+    
+    AAdd(aFields, {"D4N_FILIAL"})
+    AAdd(aFields, {"D4N_IDSD3"})
+    AAdd(aFields, {"D4N_REVISA"}) 
+    AAdd(aFields, {"D4N_PARTE"})
+    AAdd(aFields, {"D4N_MOEDA"}) 
+    AAdd(aFields, {"D4N_TOTAL"})
+
+Return aFields
+
+/*/{Protheus.doc} getMovementMsuid
+    Retorna o MsUID do movimento de requisição e devolução
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method getMovementMsuid(aCustoReq,aCustoDev,cCod,cLocArm,cFilAtu,lReq) Class StockCostRoundingAdjusterCP
+    local cQuery   as character
+    local cAlias   as character
+    Local cNumSeq  as character
+    local cMsUID   as character
+    Local cDataFim := DtoS(::dDataFim) as character
+
+    If ::oQueryD4N == Nil
+        cQuery := " SELECT D3_CF CF,D3_NUMSEQ NUMSEQ,D3_MSUID MSUID "
+        cQuery += " FROM "+RetSQLName("SD3")+" SD3 "
+        cQuery += " WHERE SD3.D3_FILIAL = ? "
+        cQuery += " AND SD3.D3_COD = ? "
+        cQuery += " AND SD3.D3_LOCAL = ? "
+        cQuery += " AND SD3.D3_EMISSAO = ? "
+        cQuery += " AND SD3.D3_CF IN (?) "
+        cQuery += " AND SD3.D_E_L_E_T_ = ? "
+        cQuery += " ORDER BY D3_CF ? "
+        cQuery := ChangeQuery(cQuery)
+
+        ::oQueryD4N:= FWExecStatement():New(cQuery)
+    EndIf
+
+    ::oQueryD4N:SetString(1,cFilAtu)
+    ::oQueryD4N:SetString(2,cCod)
+    ::oQueryD4N:SetString(3,cLocArm)
+    ::oQueryD4N:SetString(4,cDataFim)
+    ::oQueryD4N:SetIn(5,{'DEC','REC'})
+    ::oQueryD4N:SetString(6,' ')
+    If lReq
+        ::oQueryD4N:SetUnsafe(7,'DESC')
+    Else
+        ::oQueryD4N:SetUnsafe(7,'ASC')
+    EndIf
+
+    cAlias := ::oQueryD4N:OpenAlias()
+
+    If (cAlias)->(!Eof())
+        If lReq
+            If (cAlias)->CF == 'REC'
+                cMsUID  := (cAlias)->MSUID
+            Else
+                cNumSeq := (cAlias)->NUMSEQ
+            EndIf
+        Else
+            If (cAlias)->CF == 'DEC'
+                cMsUID  := (cAlias)->MSUID
+            Else
+                cNumSeq := (cAlias)->NUMSEQ
+            EndIf
+        EndIf
+    EndIf
+
+    If Empty(cMsUID)
+        // Posiciona no Produto
+        SB1->(MsSeek(FWxFilial("SB1")+cCod))
+
+        If Empty(cNumSeq)
+            cNumSeq := ProxNum()
+        EndIf
+
+        If lReq
+            cTM := '999'
+            cCF := 'REC'
+        Else
+            cTM := '499'
+            cCF := 'DEC'
+        EndIf
+
+        Reclock("SD3",.T.)
+        SD3->D3_FILIAL  := FWxFilial("SD3",cFilAtu)
+        SD3->D3_COD     := cCod
+        SD3->D3_LOCAL   := cLocArm
+        SD3->D3_DOC     := ::cDocumento
+        SD3->D3_TM      := cTM
+        SD3->D3_CF      := cCF
+        SD3->D3_CHAVE   := 'EC'
+        SD3->D3_EMISSAO := ::dDataFim
+        SD3->D3_NUMSEQ  := cNumSeq
+        SD3->D3_USUARIO := cUserName
+        SD3->D3_TIPO    := SB1->B1_TIPO
+        SD3->D3_GRUPO   := SB1->B1_GRUPO
+        SD3->D3_UM      := SB1->B1_UM
+        SD3->D3_SEQCALC := ::cDataIni+::cSeqCalc
+        SD3->(MsUnlock())
+        ::cSeqCalc      := Soma1(::cSeqCalc)
+
+        SD3->(DbGoto(SD3->(Recno())))
+        cMsUID := SD3->D3_MSUID
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+Return cMsUID

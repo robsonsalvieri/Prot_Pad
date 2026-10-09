@@ -1,0 +1,880 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+namespace totvs.protheus.retail.rmi.classes.extractor.pshDynamicQueryBuilder
+
+Class dynamicQueryBuilder
+
+    Public Data cSGBD as Character
+
+    Public Method new() as Object
+    Public Method Build(cJsonPayload as Character) as Character
+    
+    Private Method ParseFields(aFields as Array) as Character
+    Private Method ParseSingleField(oField as Json) as Character
+    Private Method BuildRelationship(oConfig as Json, cAlias as Character) as Character
+    Private Method BuildPosicione(oConfig as Json) as Character
+    Private Method BuildJsonExtract(oConfig as Json) as Character
+    Private Method BuildCase(oLogic as Json) as Character
+    Private Method BuildConcat(oLogic as Json) as Character
+    Private Method BuildArithmetic(oLogic as Json) as Character
+    Private Method BuildProprietary(jConfig as Json) as Character
+    Private Method ParseTransformations(cColumn as Character, aTransforms as Array) as Character
+    Private Method ParseFilters(oFilterNode as Json) as Character
+    Private Method ParseValue(uValue as Variant) as Character    
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Método construtor da Classe
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method new() as object class dynamicQueryBuilder
+    ::cSGBD := TCGetDB()
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Build
+Constrói a query SQL de acordo com o JSON Schema recebido
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method Build(jJsonPayload as json) as character Class dynamicQueryBuilder
+    Local cSQL              as Character
+    Local jTable            as Json
+    Local cTableFullName    as Character
+    Local cSelect           as Character
+    Local cWhere            as Character
+    Local cAliasPrincipal   as Character
+    Local cNomeTabela       as Character
+
+    jTable          := jJsonPayload['table']
+    cAliasPrincipal := jTable['alias']
+    cNomeTabela     := jTable['name']
+
+    cTableFullName := RetSqlName(cNomeTabela) + " " + cAliasPrincipal
+
+    If ::cSGBD $ "ORACLE"
+        cSelect := "SELECT JSON_SERIALIZE(JSON_OBJECT( " + self:ParseFields(jJsonPayload['fields']) + " )) as json_result "
+    Else
+        cSelect := "SELECT (" 
+        cSelect += "  SELECT " + self:ParseFields(jJsonPayload['fields'])
+        cSelect += "  FOR JSON PATH, WITHOUT_ARRAY_WRAPPER "
+        cSelect += ") as json_result "
+    EndIf
+
+    cSQL := cSelect + " FROM " + cTableFullName + IIf(::cSGBD $ "MSSQL", " (NOLOCK)", "")
+
+    If jJsonPayload:HasProperty("filters")
+        cWhere := self:ParseFilters(jJsonPayload['filters'])
+        If !Empty(cWhere)
+            cSQL += " WHERE " + cWhere
+        EndIf
+    EndIf
+
+    If !Empty(cWhere)
+        cSQL += " AND "
+    Else
+        cSQL += " WHERE "
+    EndIf
+
+    cSQL += cAliasPrincipal + "." + PrefixoCpo(cAliasPrincipal) + "_FILIAL = '" + xFilial(cAliasPrincipal) + "' "
+    cSQL += " AND " + cAliasPrincipal + ".D_E_L_E_T_ = ' ' "
+
+Return cSQL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ParseFields
+Constrói a lista de campos do SELECT a partir da definição de campos do JSON.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method ParseFields(aFields as array) as character Class dynamicQueryBuilder
+    Local cFieldList as Character
+    Local nI         as Numeric
+    Local jField     as Json
+    Local cValueSQL  as Character
+
+    cFieldList := ""
+
+    For nI := 1 to Len(aFields)
+        jField := aFields[nI]
+
+        cValueSQL := ::ParseSingleField(jField)
+
+        If nI > 1
+            cFieldList += ", "  
+        EndIf
+
+        If ::cSGBD $ "ORACLE"
+            cFieldList += "'" + jField['alias'] + "' VALUE " + cValueSQL
+        Else
+            cFieldList += cValueSQL + " AS [" + jField['alias'] + "] "
+        EndIf
+    Next
+
+Return cFieldList
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ParseSingleField
+Gera a expressão SQL para um único campo, incluindo constantes, funções, relacionamentos e casts.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method ParseSingleField(jField as json) as character Class dynamicQueryBuilder
+    Local cRet  as Character
+    Local cType as Character
+    
+    If jField:HasProperty("is_constant") .And. jField['is_constant']
+        Return ::ParseValue(jField['static_value']) + IIF(::cSGBD $ "ORACLE" .And. ValType(jField['static_value']) == "L", " FORMAT JSON", " ")
+    EndIf
+
+    If jField:HasProperty("db_function")
+        Return jField['db_function']
+    EndIf
+
+    If jField:HasProperty("is_posicione") .And. jField['is_posicione']
+        cRet := ::BuildPosicione(jField['posicione_config'])
+        
+        If jField:HasProperty("transformations")
+            cRet := ::ParseTransformations(cRet, jField['transformations'])
+        EndIf
+        
+        Return cRet
+    EndIf
+
+    If jField:HasProperty("is_json_extract") .And. jField['is_json_extract']
+        Return ::BuildJsonExtract(jField['json_extract_config'])
+    EndIf
+
+    If jField:HasProperty("logic_operation")
+        If jField['logic_operation']['type'] == "CASE"
+            Return ::BuildCase(jField['logic_operation'])
+        ElseIf jField['logic_operation']['type'] == "CONCAT"
+            Return ::BuildConcat(jField['logic_operation'])
+        ElseIf jField['logic_operation']['type'] == "ARITHMETIC"
+            Return ::BuildArithmetic(jField['logic_operation'])
+        EndIf
+    EndIf
+
+    If jField:HasProperty("is_relationship") .And. jField['is_relationship']
+        Return ::BuildRelationship(jField['relationship_config'], "")
+    EndIf
+
+    If jField:HasProperty("is_proprietary") .And. jField['is_proprietary']
+        Return ::BuildProprietary(jField['proprietary_config'])
+    EndIf
+
+    If jField:HasProperty("is_physical") .And. jField['is_physical']
+        cRet := jField['column_name']
+        
+        If jField:HasProperty("transformations")
+            cRet := ::ParseTransformations(cRet, jField['transformations'])
+        EndIf
+        
+        If jField:HasProperty("cast_to")
+            cType := jField['cast_to']
+            
+            If cType == "TEXT"
+                cType := iif(::cSGBD $ "ORACLE", "CLOB", "VARCHAR(MAX)")
+            EndIf
+            If cType == "BOOLEAN"
+                cType := iif(::cSGBD $ "ORACLE", "NUMBER(1)", "BIT")
+            EndIf
+            
+            cRet := "CAST(" + cRet + " AS " + cType + ")"
+        EndIf
+
+        Return cRet
+    EndIf
+
+Return "NULL"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildRelationship
+Monta a subquery para campos de relacionamento (ONE_TO_ONE / ONE_TO_MANY), retornando JSON apropriado.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildRelationship(jConfig as json, cAlias as character) as character Class dynamicQueryBuilder
+    Local cSQL       as Character
+    Local cSubField  as Character
+    Local cJsonMode  as Character
+    Local cLimit     as Character
+    Local cWhere     as Character
+    Local cTabTarget as Character
+    Local cAliasTarget as Character
+
+    cSubField    := ::ParseFields(jConfig['fields'])
+    cTabTarget   := jConfig['target_table']
+    cAliasTarget := jConfig['table_alias']
+    
+    If ::cSGBD $ "ORACLE"
+        
+        jConfig['child_key'] := StrTran(jConfig['child_key'],"+","||" )
+        jConfig['parent_key'] := StrTran(jConfig['parent_key'],"+","||" )
+
+        If jConfig:HasProperty("relationship_type") .And. jConfig['relationship_type'] == "ONE_TO_ONE"
+            cSQL := "( SELECT JSON_OBJECT( " + cSubField + " ) "
+            cLimit := " AND ROWNUM = 1 " // Limite 1 registro no Oracle
+        Else
+            cSQL := "( SELECT JSON_ARRAYAGG(JSON_OBJECT( " + cSubField + " )) "
+            cLimit := ""
+        EndIf
+        
+        cSQL += " FROM " + RetSqlName(cTabTarget) + " " + cAliasTarget
+        cSQL += " WHERE (" + jConfig['child_key'] + " = " + jConfig['parent_key']+ ") "
+        cJsonMode := ""
+    Else
+
+        jConfig['child_key'] := StrTran(jConfig['child_key'],"||","+" )
+        jConfig['parent_key'] := StrTran(jConfig['parent_key'],"||","+")
+        
+        cJsonMode := " FOR JSON PATH"
+        cLimit    := ""
+
+        If jConfig:HasProperty("relationship_type") .And. jConfig['relationship_type'] == "ONE_TO_ONE"
+            cJsonMode += ", WITHOUT_ARRAY_WRAPPER"
+            cLimit    := "TOP 1 " 
+        EndIf
+
+        cSQL := "ISNULL(( SELECT " + cLimit + cSubField 
+        cSQL += " FROM " + RetSqlName(cTabTarget) + " " + cAliasTarget
+        cSQL += " WHERE (" + jConfig['child_key'] + " = " + jConfig['parent_key']+ ") "
+    EndIf
+
+    If jConfig:HasProperty("filters")
+        cWhere := self:ParseFilters(jConfig['filters'])
+        cSQL += "AND " + cWhere + " "
+    EndIf
+
+    cSQL += " AND " + cAliasTarget + "." + PrefixoCpo(cTabTarget) + "_FILIAL = '" + xFilial(cTabTarget) + "' "
+    cSQL += " AND " + cAliasTarget + ".D_E_L_E_T_ = ' ' " 
+    
+    If ::cSGBD $ "ORACLE"
+        cSQL += cLimit
+        cSQL += " )"
+    Else
+        cSQL += cJsonMode
+        cSQL += " ), '[]')" 
+    EndIf
+
+Return cSQL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildPosicione
+Monta subquery para leitura de dados usando a integração Posicione (lookup em tabela alvo).
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildPosicione(jConfig as json) as character Class dynamicQueryBuilder
+    Local cSQL      as Character
+    Local cWhere    as Character
+    Local cTable    as Character
+    Local cAlias    as Character
+    Local cTabName  as Character
+
+    cTabName := jConfig['target_table']
+    cTable   := RetSqlName(cTabName)
+    cAlias   := jConfig['target_alias']
+    
+    If ::cSGBD $ "ORACLE"
+        cSQL := "(SELECT " + jConfig['target_column']
+    Else
+        cSQL := "(SELECT TOP 1 " + jConfig['target_column']
+    EndIf
+    
+    cSQL += " FROM " + cTable + " " + cAlias
+
+    If jConfig:HasProperty("match_filter")
+        cWhere := ::ParseFilters(jConfig['match_filter'])
+        cSQL += " WHERE " + cWhere
+        cSQL += " AND " + cAlias + ".D_E_L_E_T_ = ' ' "
+        cSQL += " AND " + cAlias + "." + PrefixoCpo(cTabName) + "_FILIAL = '" + xFilial(cTabName) + "' "
+    EndIf
+
+    If ::cSGBD $ "ORACLE"
+        cSQL += " FETCH FIRST 1 ROWS ONLY)"
+    Else
+        cSQL += ")"
+    EndIf
+
+Return cSQL
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildJsonExtract
+Gera expressão SQL para extração de campos de um JSON (JSON_TABLE / OPENJSON), com casts e filtros.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildJsonExtract(jConfig as json) as character Class dynamicQueryBuilder
+    Local cSQL       as Character
+    Local cSelect    as Character
+    Local cWith      as Character
+    Local nI         as Numeric
+    Local aFields    as Array
+    Local jFld       as Json
+    Local cPathArg   as Character
+    Local cColExpr   as Character
+    Local cType      as Character
+    Local cSource    as Character
+    Local lBool      as Logical
+    Local cWhere     as Character
+
+    aFields := jConfig['fields']
+    cSelect := ""
+    cWith   := ""
+    cPathArg:= ""
+    cSQL    := ""
+    lBool   := .F.
+    cWhere   := ""
+
+    If jConfig:HasProperty("root_path") .And. !Empty(jConfig['root_path'])
+        cPathArg := ", '" + jConfig['root_path'] +IIF(::cSGBD $ "ORACLE", "[*]", "") + "'"
+    ElseIf ::cSGBD $ "ORACLE"
+        cPathArg := ", '$'"
+    EndIf
+
+    For nI := 1 to Len(aFields)
+        jFld := aFields[nI]
+
+        If nI > 1            
+            cWith   += ", "
+        EndIf
+
+        If ::cSGBD $ "ORACLE"
+            
+            If jFld['type'] == "NVARCHAR"
+                jFld['type'] := "NUMBER"
+            ElseIf jFld['type'] == "BIT"
+                lBool := .T.
+                jFld['type'] := "VARCHAR(5)"
+            EndIf
+
+            cWith += jFld['alias'] + " " + jFld['type'] + " PATH '" + jFld['json_path'] + "'"
+        Else
+            cWith += "[" + jFld['alias'] + "] " + jFld['type'] + " '" + jFld['json_path'] + "'"
+        EndIf
+        
+        cColExpr := iif(::cSGBD $ "ORACLE", jFld['alias'], "[" + jFld['alias'] + "]")
+
+        If jFld:HasProperty("transformations")
+            cColExpr := ::ParseTransformations(cColExpr, jFld['transformations'])
+        EndIf
+
+        If jFld:HasProperty("cast_to")
+            cType := jFld['cast_to']
+             
+            Do Case
+                Case cType == "BOOLEAN"
+                    cType := iif(::cSGBD $ "ORACLE", "NUMBER(1)", "BIT")
+                Case cType == "TEXT"
+                    cType := iif(::cSGBD $ "ORACLE", "CLOB", "VARCHAR(MAX)")    
+                Case cType == "INT" .And. ::cSGBD $ "ORACLE"
+                    cColExpr := "NVL(TRIM("+cColExpr+"),'0')"
+            End Case
+             
+             cColExpr := "CAST(" + cColExpr + " AS " + cType + ")"
+        EndIf
+        
+        If jFld:HasProperty("extract_field") .And. jFld['extract_field']
+            cSelect += cColExpr + " AS " + jFld['alias']
+        EndIf
+    Next
+
+    If jConfig:HasProperty("filters")
+        cWhere := self:ParseFilters(jConfig['filters'])
+    EndIf
+
+    If jConfig:HasProperty("is_source_posicione") .And. jConfig['is_source_posicione']
+        cSource := ::BuildPosicione(jConfig['posicione_config'])
+    Else
+        cSource := jConfig['source_column']
+    EndIf
+
+    cSQL += " ( SELECT " + cSelect
+    
+    If ::cSGBD $ "ORACLE"
+        cSQL += "  FROM JSON_TABLE(" + cSource + cPathArg + " COLUMNS (" + cWith + ")) "
+    Else
+        cSQL += "  FROM OPENJSON(" + cSource + cPathArg + ") "
+        cSQL += "  WITH (" + cWith + ") "
+    EndIf
+    
+    If !Empty(cWhere)
+        cSQL += " WHERE " + cWhere
+    EndIf    
+    
+    cSQL += " ) " + iif(::cSGBD $ "ORACLE" .and. lBool, "FORMAT JSON", "")
+
+Return cSQL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildCase
+Monta a expressão CASE conforme a lógica definida no JSON (conditions, then, else) e tratamentos.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildCase(jLogic as json) as character Class dynamicQueryBuilder
+    Local cCaseSQL as Character
+    Local aCases   as Array
+    Local jItem    as Json
+    Local jWhen    as Json
+    Local jThen    as Json
+    Local nI       as Numeric
+    Local cCol     as Character
+    Local cValThen as Character
+    Local cValElse as Character
+
+    cCaseSQL := "CASE "
+    aCases   := jLogic['cases']
+
+    For nI := 1 to Len(aCases)
+        jItem := aCases[nI]
+        jWhen := jItem['when']
+        jThen := jItem['then']
+
+        If jWhen:HasProperty("logic_group")
+            cCaseSQL += "WHEN " + ::ParseFilters(jWhen) + " "
+        Else
+            cCol := jWhen['column']
+
+            If jWhen:HasProperty("is_posicione") .And. jWhen['is_posicione']
+                cCol := ::BuildPosicione(jWhen['posicione_config'])
+            EndIf
+            If jWhen:HasProperty("transformations")
+                cCol := ::ParseTransformations(cCol, jWhen['transformations'])
+            EndIf
+            
+            cCaseSQL += "WHEN " + cCol + " "
+            
+            If jWhen['operator'] == "EQUALS"
+                cCaseSQL += "= " + ::ParseValue(jWhen['compare_value']) + " "
+            ElseIf jWhen['operator'] == "NOT_EQUALS"
+                cCaseSQL += "<> " + ::ParseValue(jWhen['compare_value']) + " "
+            ElseIf jWhen['operator'] == "IS_NULL"
+                 cCaseSQL += "IS NULL "
+            ElseIf jWhen['operator'] == "IS_NULL_OR_EMPTY"                 
+                cCaseSQL += "IS NULL OR LTRIM(RTRIM(" + cCol + ")) = ' ' "
+            ElseIf jWhen['operator'] == "GREATER_THAN"
+                cCaseSQL += "> " + ::ParseValue(jWhen['compare_value']) + " "    
+            EndIf
+        EndIf
+
+        cCaseSQL += "THEN "
+        If jThen['value_type'] == "STATIC"
+            cCaseSQL += ::ParseValue(jThen['value']) + " "
+        Else
+            cValThen := jThen['value']
+
+            If jThen:HasProperty("is_posicione") .And. jThen['is_posicione']
+                cValThen := ::BuildPosicione(jThen['posicione_config'])
+            EndIf    
+                        
+            If jThen:HasProperty("transformations")
+                cValThen := ::ParseTransformations(cValThen, jThen['transformations'])
+            EndIf
+            cCaseSQL += cValThen + " "
+        EndIf
+    Next
+
+    If jLogic:HasProperty("else")
+        cCaseSQL += "ELSE "
+        If jLogic['else']['value_type'] == "STATIC"
+            cCaseSQL += ::ParseValue(jLogic['else']['value'])
+        Else
+            cValElse := jLogic['else']['value']
+
+            If jLogic['else']:HasProperty("is_posicione") .And. jLogic['else']['is_posicione']
+                cValElse := ::BuildPosicione(jLogic['else']['posicione_config'])
+            EndIf            
+            
+            If jLogic['else']:HasProperty("transformations")
+                cValElse := ::ParseTransformations(cValElse, jLogic['else']['transformations'])
+            EndIf
+            cCaseSQL += cValElse
+        EndIf
+    EndIf
+
+    cCaseSQL += " END" + iIf(::cSGBD $ "ORACLE" .AND. ValType(jThen['value']) == "L" ," FORMAT JSON" , " ")
+Return cCaseSQL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildConcat
+Monta a expressão de concatenação (`CONCAT`) a partir das partes definidas na lógica.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildConcat(jLogic as json) as character Class dynamicQueryBuilder
+    Local cConcatSQL as Character
+    Local aParts     as Array
+    Local nI         as Numeric
+    Local jPart      as Json
+
+    If ::cSGBD $ "MSSQL"
+        cConcatSQL := "CONCAT("
+    EndIf
+    aParts := jLogic['parts']
+
+    For nI := 1 to Len(aParts)
+        jPart := aParts[nI]
+        If nI > 1
+            cConcatSQL += IIF(::cSGBD $ "MSSQL", ", ", " || ")
+        EndIf
+
+        If jPart['value_type'] == "COLUMN"
+            cConcatSQL += jPart['value']
+        Else
+            cConcatSQL += ::ParseValue(jPart['value'])
+        EndIf
+    Next
+    If ::cSGBD $ "MSSQL"
+        cConcatSQL += ")"
+    EndIf
+Return cConcatSQL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildArithmetic
+Gera expressão aritmética (ADD, SUBTRACT, MULTIPLY, DIVIDE) a partir dos operandos configurados.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildArithmetic(jLogic as json) as character Class dynamicQueryBuilder
+    Local cSqlCalc  as Character
+    Local cOp       as Character
+    Local cSymbol   as Character
+    Local aOps      as Array
+    Local nI        as Numeric
+    Local jPart     as Json
+
+    cOp     := jLogic['operator']
+    aOps    := jLogic['operands']
+    cSqlCalc:= "("
+
+    If cOp == "MULTIPLY"
+        cSymbol := " * "
+    ElseIf cOp == "DIVIDE"
+        cSymbol := " / "
+    ElseIf cOp == "ADD"
+        cSymbol := " + "
+    ElseIf cOp == "SUBTRACT"
+        cSymbol := " - "
+    EndIf
+
+    For nI := 1 to Len(aOps)
+        jPart := aOps[nI]
+        If nI > 1
+            cSqlCalc += cSymbol
+        EndIf
+
+        If jPart['value_type'] == "COLUMN"
+            cSqlCalc += jPart['value']
+        Else
+            cSqlCalc += ::ParseValue(jPart['value'])
+        EndIf
+    Next
+
+    cSqlCalc += ")"
+Return cSqlCalc
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ParseTransformations
+Aplica as transformações definidas (TRIM, SUBSTR, TO_DATE, SPLIT, etc.) a uma expressão de coluna.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method ParseTransformations(cColumn as character, aTransforms as array) as character Class dynamicQueryBuilder
+    Local nI        as Numeric
+    Local jTrans    as Json
+    Local cFunc     as Character
+    Local jParams   as Json
+    Local nStart    as Numeric
+    Local nEnd      as Numeric
+    Local cChar     as Character
+
+    For nI := 1 to Len(aTransforms)
+        jTrans := aTransforms[nI]
+        cFunc  := jTrans['function']
+
+        If jTrans:HasProperty("params")
+            jParams := jTrans['params']
+        EndIf
+
+        If cFunc == "TRIM"
+            cColumn := "LTRIM(RTRIM(" + cColumn + "))"
+            If ::cSGBD $ "ORACLE"
+                cColumn := "NVL(" + cColumn + ",' ')"
+            EndIf
+        ElseIf cFunc == "UPPER"
+            cColumn := "UPPER(" + cColumn + ")"
+        
+        ElseIf cFunc == "LOWER"
+            cColumn := "LOWER(" + cColumn + ")"
+        
+        ElseIf cFunc == "REPLACE"
+            cColumn := "REPLACE(" + cColumn + ", '" + jParams['search'] + "', '" + jParams['replace'] + "')"
+
+        ElseIf cFunc == "SUBSTR"
+            If ::cSGBD $ "ORACLE"
+                cColumn := "SUBSTR(" + cColumn + ", " + cValToChar(jParams['start']) + ", " + cValToChar(jParams['length']) + ")"
+            Else
+                cColumn := "SUBSTRING(" + cColumn + ", " + cValToChar(jParams['start']) + ", " + cValToChar(jParams['length']) + ")"
+            EndIf
+        ElseIf cFunc == "COALESCE"
+            cColumn := "COALESCE(" + cColumn + ", " + ::ParseValue(jParams['fallback_value']) + ")"
+
+        ElseIf cFunc == "LPAD"
+            cColumn := "RIGHT(REPLICATE('" + jParams['fill_char'] + "', " + cValToChar(jParams['length']) + ") + " + cColumn + ", " + cValToChar(jParams['length']) + ")"
+        
+        ElseIf cFunc == "RPAD"
+            cColumn := "LEFT(" + cColumn + " + REPLICATE('" + jParams['fill_char'] + "', " + cValToChar(jParams['length']) + "), " + cValToChar(jParams['length']) + ")"
+
+        ElseIf cFunc == "TO_DATE"
+            If ::cSGBD $ "ORACLE"
+                cColumn := "TO_DATE(NVL(TRIM(" + cColumn + "),'19000101'), 'YYYYMMDD')"                
+            Else
+                cColumn := "CAST(" + cColumn + " AS DATE)"
+            EndIf
+        ElseIf cFunc == "FORMAT_DATE"
+            If ::cSGBD $ "ORACLE"
+                jParams['format'] := StrTran(StrTran(jParams['format'], 'T', '"T"'), 'Z', '"Z"')                
+                cColumn := "TO_CHAR(" + cColumn + ", '" + jParams['format'] + "')"
+            Else
+                cColumn := "FORMAT(" + cColumn + ", '" + jParams['format'] + "')"
+            EndIf
+
+        ElseIf cFunc == "MASK"
+            nStart := jParams['visible_start']
+            nEnd   := jParams['visible_end']
+            cChar  := jParams['mask_char']
+            
+            cColumn := "CONCAT(LEFT(" + cColumn + ", " + cValToChar(nStart) + "), " + ;
+                       "REPLICATE('" + cChar + "', LEN(" + cColumn + ") - " + cValToChar(nStart + nEnd) + "), " + ;
+                       "RIGHT(" + cColumn + ", " + cValToChar(nEnd) + "))"
+        ElseIf cFunc == "SPLIT"
+            If ::cSGBD $ "ORACLE"
+                
+                If jParams['part'] == 1
+                    jParams['part'] := "-"
+                Else
+                    jParams['part'] := "+"
+                EndIf
+
+                cColumn := "SUBSTR("+cColumn+", INSTR("+cColumn+", '"+cValToChar(jParams['character'])+"') "+jParams['part']+" 1)"
+            Else                
+                cColumn := "(SELECT value FROM string_split("+cColumn+", '"+cValToChar(jParams['character'])+"',1) where ordinal = "+cValToChar(jParams['part'])+")"
+            EndIf
+        EndIf
+    Next
+
+Return cColumn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ParseFilters
+Parseia a estrutura de filtros (condições e grupos lógicos) e gera a expressão WHERE correspondente.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method ParseFilters(jFilterNode as json) as character Class dynamicQueryBuilder
+    Local cSQL          as Character
+    Local nI            as Numeric
+    Local aConditions   as Array
+    Local jCond         as Json
+    Local cLogic        as Character
+    Local cPart         as Character
+    Local cVal          as Character
+
+    If jFilterNode:HasProperty("logic") .Or. jFilterNode:HasProperty("logic_group")
+        If jFilterNode:HasProperty("logic")
+             cLogic := " " + jFilterNode['logic'] + " "
+        Else
+             cLogic := " " + jFilterNode['logic_group'] + " "
+        EndIf
+        
+        aConditions := jFilterNode['conditions']
+        cSQL := "("
+
+        For nI := 1 to Len(aConditions)
+            jCond := aConditions[nI]
+            cPart := ::ParseFilters(jCond) 
+
+            If nI > 1
+                cSQL += cLogic
+            EndIf
+            cSQL += cPart
+        Next
+        cSQL += ")"
+        
+        Return cSQL
+    EndIf
+
+    If jFilterNode['operator'] == "IS_NULL_OR_EMPTY"
+        cSQL := "(" + jFilterNode['column'] + " IS NULL OR LTRIM(RTRIM(" + jFilterNode['column'] + ")) = ' ')"
+        Return cSQL
+    EndIf
+
+    If jFilterNode:HasProperty("value_type") .And. jFilterNode['value_type'] == "COLUMN"
+        cVal := jFilterNode['compare_value']
+    Else
+        cVal := ::ParseValue(jFilterNode['compare_value'])
+    EndIf
+
+    If jFilterNode:HasProperty("is_posicione") .And. jFilterNode['is_posicione']
+        cSQL := ::BuildPosicione(jFilterNode['posicione_config'])
+    Else        
+        cSQL := jFilterNode['column']
+    EndIf
+        
+    cSQL += " "   
+
+    If jFilterNode['operator'] == "EQUALS"
+        cSQL += "= " + cVal
+    ElseIf jFilterNode['operator'] == "NOT_EQUALS"
+        cSQL += "<> " + cVal
+    ElseIf jFilterNode['operator'] == "GREATER_THAN"
+        cSQL += "> " + cVal
+    ElseIf jFilterNode['operator'] == "IN"
+        cSQL += "IN " + cVal
+    EndIf
+
+Return cSQL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ParseValue
+Formata valores literais (strings, números, booleanos, arrays) para uso direto na SQL.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method ParseValue(uValue as variant) as character Class dynamicQueryBuilder
+    Local cType as Character
+    Local nX    as Numeric
+    Local cList as Character
+
+    cType := ValType(uValue)
+
+    If cType == "C" 
+        Return "'" + uValue + "'"
+    ElseIf cType == "N" 
+        Return cValToChar(uValue)
+    ElseIf cType == "L" 
+        If uValue
+            Return iif(::cSGBD $ "ORACLE", "'true'", "CAST(1 AS BIT)")
+        Else
+            Return iif(::cSGBD $ "ORACLE", "'false'", "CAST(0 AS BIT)")
+        EndIf
+    ElseIf cType == "A" 
+        cList := "("
+        For nX := 1 to Len(uValue)
+            If nX > 1
+                cList += ","
+            EndIf
+            cList += ::ParseValue(uValue[nX])
+        Next
+        cList += ")"
+        Return cList
+    ElseIf cType == "U" 
+        Return "NULL"
+    EndIf
+
+Return "'" + cValToChar(uValue) + "'"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BuildProprietary
+Monta subquery para recuperar valores proprietários (MIH), aplicando filtros por nível, loja e tabela.
+
+@author  Evandro Pattaro
+@Date    12/05/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method BuildProprietary(jConfig as Json) as Character Class dynamicQueryBuilder
+    Local cSQL as Character
+    Local cValue as Character
+
+/* MIHCOMP.Components[2].ComponentContent = nivel
+    MIHCOMP.Components[7].ComponentContent = tabelaPreco
+    MIHCOMP.Components[4].ComponentContent = idLoja
+    MIHLOJA.Components[2].ComponentContent = idFilialProtheus */
+
+    cSQL += "( SELECT MIHCOMP.MIH_ID"
+    cSQL += " FROM "+RetSqlName("MIH")+" MIHCOMP"
+    cSQL += " left JOIN "+RetSqlName("MIH")+" MIHLOJA"
+    // Função JSON_VALUE funciona nativamente no Oracle a partir da versão 12c e SQL Server 2016+
+    cSQL += " ON MIHLOJA.MIH_ID = JSON_VALUE(MIHCOMP.MIH_CONFIG, '$.Components[4].ComponentContent') "
+    cSQL += " AND MIHLOJA.MIH_TIPCAD = 'CADASTRO DE LOJA    '"
+    cSQL += " WHERE MIHCOMP.MIH_TIPCAD = 'COMPARTILHAMENTOS   '"
+    cSQL += " AND MIHCOMP.D_E_L_E_T_ = ' ' "
+
+    cSQL += " AND JSON_VALUE(MIHCOMP.MIH_CONFIG, '$.Components[2].ComponentContent') = '"+cValToChar(jConfig['level'])+"'"
+
+    If jConfig['level'] == 1 .And. jConfig:HasProperty("price_table")
+        If ValType(jConfig['price_table']) == "J" .And. jConfig['price_table']:HasProperty("logic_operation")
+
+            If jConfig['price_table']['logic_operation']['type'] == "CASE"
+                cValue := ::BuildCase(jConfig['price_table']['logic_operation'])
+            ElseIf jConfig['price_table']['logic_operation']['type'] == "CONCAT"
+                cValue := ::BuildConcat(jConfig['price_table']['logic_operation'])
+            ElseIf jConfig['price_table']['logic_operation']['type'] == "ARITHMETIC"
+                cValue := ::BuildArithmetic(jConfig['price_table']['logic_operation'])
+            EndIf
+        ElseIf jConfig:HasProperty("value_type") .And. jConfig['value_type'] == "COLUMN"
+            cValue := jConfig['price_table']
+        Else
+            cValue := "'" + ::ParseValue(jConfig['price_table']) + "'"
+        EndIf
+
+        cSQL += " AND JSON_VALUE(MIHCOMP.MIH_CONFIG, '$.Components[7].ComponentContent') = "+cValue      
+    ElseIf jConfig['level'] == 2 .And. jConfig:HasProperty("id_branch")
+
+        If jConfig:HasProperty("value_type") .And. jConfig['value_type'] == "COLUMN"
+            cValue := jConfig['id_branch']
+        Else
+            cValue := "'" + ::ParseValue(jConfig['id_branch']) + "'"
+        EndIf
+
+        cSQL += " AND JSON_VALUE(MIHLOJA.MIH_CONFIG, '$.Components[2].ComponentContent')  = "+cValue
+    EndIf
+
+    cSQL += " )"
+
+Return cSQL

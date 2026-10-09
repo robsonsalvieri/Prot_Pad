@@ -1,0 +1,566 @@
+#Include 'totvs.ch'
+
+Namespace backoffice.stock.populateSD3
+
+static __lNumCQ := NIL
+
+static __nSF1FIL   := NIL
+static __nSF1DOC   := NIL 
+static __nSF1SER   := NIL 
+static __nSF1FOR   := NIL 
+static __nSF1LOJ   := NIL 
+static __nSD3CHVF1 := NIL
+static __oQrySD3   := NIL
+static __lBindParam := NIL
+static __lNumDOC    := NIL
+
+
+/*/{Protheus.doc} start
+   faz a chamada de 2 job individuais e independentes para atualização de novos campos na tabela SD3
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param nenhum
+   @return .T., logical, 
+/*/
+Function start()
+
+   updNumCQ()
+
+   updChaveF1()
+
+Return
+
+/*/{Protheus.doc} updNumCQ
+   faz a chamada de 1 para atualizacao do campo D3_NUMCQ
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param nenhum
+   @return .T., logical, 
+/*/
+Function updNumCQ()
+Local cRoutine          As Character
+Local cEnvironment      As Character
+Local lWait             As Logical
+
+   if __lNumCQ == NIL
+      __lNumCQ := SD3->(FieldPos("D3_NUMCQ")) > 0 
+   EndIf
+
+   cEnvironment :=  Upper( GetEnvServer() )
+   lWait := .F.
+
+   cRoutine := 'backoffice.stock.populateSD3.job'
+   cField := "D3_NUMCQ" 
+
+   if __lNumCQ 
+      StartJob( cRoutine, cEnvironment, lWait, cEmpAnt, cFilAnt, {cField} ) // 
+   EndIf
+
+Return
+
+/*/{Protheus.doc} Job
+   Job para montagem de ambiente RPC para chamada da função
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param nenhum
+   @return .T., logical, 
+/*/
+Function Job(cEmpAnt as Character, cFilAnt as Character, aParam as array)
+Local cField as character
+
+   cField := aParam[1]
+
+   if cField == "D3_NUMCQ" .or. cField == "D3_CHAVEF1"
+      if CheckFileLog(cField)
+
+         RpcSetType(3)
+         RpcSetEnv(cEmpAnt, cFilAnt)  
+
+         If LockByName( cField, .F., .F. )
+
+            if cField == "D3_NUMCQ" 
+               initializeNUMCQ(cField+".job")
+            EndIf
+            
+            if cField == "D3_CHAVEF1"
+               initializeCHAVEF1(cField+".job")
+            EndIf
+
+            UnLockByName( cField, .T., .F., .F. )
+
+         endif
+
+         RpcClearEnv() //Encerra o ambiente, fechando as devidas conexões
+      EndIf
+   EndIf
+      
+Return
+
+
+/*/{Protheus.doc} TopRows
+   Tratamento para retornar a sintaxe da clausula de limite de linhas de um SELECT de acordo com o banco de dados
+   @version 1.0
+   @param lTop, Logical, se esta chamada esta apos o SELECT 
+   @param nNumberRows, Numeric, Quantidade de linhas para serem selecionadas 
+   @return cClausula, character, sintaxe da clausula a ser retornada de acordo com o banco de dados
+/*/
+Static Function TopRows(lTop as Logical, nNumberRows as numeric)
+Local cDbType   as Character
+Local cClausula as Character 
+
+DEFAULT lTop := .T.
+
+   cDbType   := TCGetDB()
+   cClausula := ""
+
+   if nNumberRows > 0
+      If lTop
+         If "MSSQL" $ cDbType
+            cClausula := " TOP " + cValToChar(nNumberRows) + " "
+         EndIf
+      Else
+         If "ORACLE" $ cDbType
+            cClausula := " FETCH FIRST "+ cValToChar(nNumberRows) + " ROWS ONLY "
+         Elseif "POSTGRES" $ cDbType
+            cClausula := " LIMIT "+ cValToChar(nNumberRows) + " "
+         EndIf      
+      EndIf
+
+   EndIf
+
+Return cClausula
+
+
+
+Static Function CheckFileLog(cField)
+Local cNameFile
+Local lContinua
+Local cLinha
+Local cDataLog
+Local oFileLog
+
+   lContinua := .T. 
+
+   cNameFile := cField+".job"  
+   if file(cNameFile)
+      oFileLog := FWFileReader():New(cNameFile)
+      lOpen := oFileLog:Open()
+      if lOpen
+         lhasLine := oFileLog:hasLine()
+         If oFileLog:hasLine()
+            aLinhas  := oFileLog:getAllLines()
+            if len(aLinhas) >0
+               cLinha := aLinhas[1]
+               cDataLog := left(cLinha,8)
+               lContinua := (date()-stod(cDataLog)) > 30
+            EndIf
+         EndIf
+         oFileLog:Close()
+      endif      
+   endIf
+Return lContinua
+
+/*/{Protheus.doc} initializeNumCQ
+   Seleciona os registros na tabela SD3 referente a controle de CQ no documento de entrada para preenchimento do D3_NUMCQ para 
+   para assim deixar de pesquisar o campo D7_NUMERO da tabela SD7 com o campo D3_DOC, a qual esta associado a um grupo de campo.
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param lAll, Logical, se processa todos os registros ou não
+   @return .T., logical, 
+/*/
+Function initializeNumCQ(cFileJob as Character, lAll As Logical)
+Local cQry       := ""
+Local oQrySD3    := NIL
+Local cAliQrySD3 := ""
+Local aBindValues := {}
+Local cBlankOP   := ""
+Local nCntFilial := 0
+
+Local aArea     := {}
+Local aAreaSD3  := {}
+
+Local cD3_NUMCQ  := ""
+Local nTopRows    := 0
+Local nCntParam := 0
+Local nTamD3_OP := TamSX3("D3_OP")[1]
+Local nTam      := TamSX3("D7_NUMERO")[1]
+
+Default cFileJob := "D3_NUMCQ.job"
+Default lAll := .F.
+
+   dbSelectArea("SD3")
+
+   if __lNumCQ == NIL
+      __lNumCQ := SD3->(FieldPos("D3_NUMCQ")) > 0 
+   EndIf
+
+   if __lNumCQ
+
+      aArea := GetArea()
+
+      lUpdateOk := .F.
+
+      aSM0 := FWLoadSM0()
+
+      //
+      // faz loop das filiais da empresa corrente
+      //
+      for nCntFilial := 1 to len(aSM0)
+
+         if aSM0[nCntFilial, SM0_GRPEMP] == cEmpAnt
+
+            cCodFilial := aSM0[nCntFilial, SM0_CODFIL]
+
+            IF empty(cQry)
+
+               nTopRows := 0
+               if !lAll
+                  nTopRows := 10000
+               EndIf
+
+               cBlankOP   := space(nTamD3_OP)
+
+               cQry := "select " 
+               cQry += TopRows(.T.,nTopRows)  // se for MSSQL insere a clausula TOP
+               cQry += "D3_DOC, SD3.R_E_C_N_O_ "
+               cQry += "from " +retSQLName("SD3")+ " SD3 "
+               cQry += "inner join " +retSQLName("SD7")+ " SD7 "
+               cQry += "on D7_FILIAL = ? "
+               cQry += " AND SD7.D7_NUMERO=SD3.D3_DOC "
+               cQry += " AND SD7.D7_PRODUTO=SD3.D3_COD "
+               cQry += " AND SD7.D7_NUMSEQ=SD3.D3_NUMSEQ "
+               cQry += " AND SD7.D_E_L_E_T_ = ? " 
+               cQry += "where "
+               cQry += "D3_FILIAL = ? " 
+               cQry += "AND D3_NUMCQ = ? " 
+               cQry += "AND SD3.D_E_L_E_T_ = ? " 
+               cQry += TopRows(.F.,nTopRows)   
+         
+               cQry := changeQuery(cQry)
+
+               oQrySD3 := FwExecStatement():New(cQry)
+
+            EndIf
+
+            nCntParam := 1
+            oQrySD3:SetString( nCntParam++, fwxFilial("SD7", cCodFilial)) // D3_FILIAL
+            oQrySD3:SetString( nCntParam++, ' ') // SD7.D_E_L_E_T_
+
+            oQrySD3:SetString( nCntParam++, fwxFilial("SD3", cCodFilial)) // D3_FILIAL
+            oQrySD3:SetString( nCntParam++, ' ') // D3_NUMCQ
+            oQrySD3:SetString( nCntParam++, ' ') // SD3.D_E_L_E_T_
+
+            cAliQrySD3 := oQrySD3:OpenAlias()
+
+            if (cAliQrySD3)->(!Eof())
+               lUpdateOk := .t.
+
+               aAreaSD3 := SD3->(GetArea())
+               While (cAliQrySD3)->(!Eof())
+
+                  cD3_NUMCQ  := left((cAliQrySD3)->D3_DOC,nTam)
+
+                  SD3->(dbGoto((cAliQrySD3)->R_E_C_N_O_))
+                  if Empty(SD3->D3_NUMCQ)
+                     If SD3->(SimpleLock())
+                        reclock("SD3", .F.)
+                        SD3->D3_NUMCQ  := cD3_NUMCQ
+                        SD3->(msUnLock())
+                     EndIf
+                  endif
+                  (cAliQrySD3)->(dbSkip())
+               End
+               restArea(aAreaSD3)
+               aSize(aAreaSD3,0)
+               aAreaSD3 := nil
+            EndIf
+            (cAliQrySD3)->(dbCloseArea())
+            
+            aSize(aBindValues, 0)
+
+         EndIf
+      Next nCntFilial
+      If oQrySD3 <> nil
+         oQrySD3:Destroy()
+         oQrySD3 := nil
+         FreeObj(oQrySD3)
+      EndIf
+      FwFreeArray(aSM0)
+
+      // nçao houve atuaizacao de registro na SD3. Grava log para registrar
+      if ! lUpdateOk
+         oFileLog := FWFileWriter():New(cFileJob, .F.)
+         If oFileLog:Create()
+            oFileLog:write( dtos(date())+" - Registros atualizados." )
+         endIf
+         oFileLog:close()
+         FreeObj(oFileLog)
+      EndIf 
+   EndIf
+   restArea(aArea)
+   aSize(aArea,0)
+   aArea := nil
+Return .T.
+
+/*/{Protheus.doc} updChaveF1()
+   faz a chamada de 1 para atualizacao do campo D3_ChaveF1
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param nenhum
+   @return .T., logical, 
+/*/
+Function updChaveF1()
+Local cRoutine          As Character
+Local cEnvironment      As Character
+Local lWait             As Logical
+
+   if __lNumDOC == NIL
+      __lNumDOC :=  SD3->(FieldPos("D3_NUMDOC")) > 0 .AND. SD3->(FieldPos("D3_SERDOC")) > 0 .AND. SD3->(FieldPos("D3_FORMDOC")) > 0
+   EndIf
+
+   If __lNumDOC
+      cEnvironment :=  Upper( GetEnvServer() )
+      lWait := .F.
+
+      cRoutine := 'backoffice.stock.populateSD3.job'
+      cField := "D3_CHAVEF1" 
+
+      StartJob( cRoutine, cEnvironment, lWait, cEmpAnt, cFilAnt, {cField} ) // 
+   EndIf
+
+Return
+
+/*/{Protheus.doc} AtuDocNumD3
+   Seleciona os registros na tabela SD3 referente a retorno de beneficamento para preenchimento dos campos D3_NUMDOC, D3_SERDOC 
+   e D3FORMDOC para substituir e tornar obsoleto o campo D3_CHAVEF1. O campo D3_CHAVEF1 não pode ser utilizado por seu conteudo ser
+   concatenação de campos que fazer parte de grupos de campo.
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param lAll, Logical, seleciona todos os registros de uma vez ou não
+   @return .T., logical, 
+/*/
+Function AtuDocNumD3( cCodFilial, lAll, aParam )
+
+local nTopRows := 0
+local cQry     := 0
+local nCntPar  := 0
+local aAreaSD3 := {}
+local lCriaObj := .F.
+local lUpdateOk := .F.
+
+default cCodFilial := cFilAnt
+default lAll       := .T.
+default aParam     := {}
+
+   if __nSF1FIL == NIL
+      __nSF1FIL := TamSX3('F1_FILIAL')[1]
+   endIf
+   if __nSF1DOC == NIL
+      __nSF1DOC := 9 //TamSX3('F1_DOC')[1]
+   endIf
+   if __nSF1SER == NIL
+      __nSF1SER := 3 //TamSX3('F1_SERIE')[1]
+   endIf
+   if __nSF1FOR == NIL
+      __nSF1FOR := TamSX3('F1_FORNECE')[1]
+   endIf
+   if __nSF1LOJ == NIL
+      __nSF1LOJ := TamSX3('F1_LOJA')[1]
+   endIf
+
+   if __nSD3CHVF1 == NIL
+      __nSD3CHVF1 := TamSX3('D3_CHAVEF1')[1]
+   endIf
+
+   if __lNumDOC == NIL
+      __lNumDOC :=  SD3->(FieldPos("D3_NUMDOC")) > 0 .AND. SD3->(FieldPos("D3_SERDOC")) > 0 
+   EndIf
+
+   If __lNumDOC
+      nTopRows := 0
+      if !lAll
+         nTopRows := 10000
+      EndIf
+
+      IF __lBindParam == NIL
+         __lBindParam := len(aParam) == 2
+      EndIf
+
+      IF __oQrySD3 == nil
+         lCriaObj := .T.
+      Else
+         if __lBindParam <> (len(aParam) == 2) 
+            lCriaObj := .T.
+            __lBindParam := len(aParam) == 2
+         endIf
+      EndIf
+
+      IF lCriaObj 
+         cQry := "select " 
+         cQry += TopRows(.T.,nTopRows) // se for MSSQL insere a clausula TOP
+         cQry += "SD3.R_E_C_N_O_ "
+         cQry += ",substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+1)+","+cValToChar(__nSF1DOC)+") D3_NUMDOC "
+         cQry += ",substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+__nSF1DOC+1)+","+cValToChar(__nSF1SER)+") D3_SERDOC "
+         cQry += ",substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+__nSF1DOC+__nSF1SER+1)+","+cValToChar(__nSF1FOR)+") D3_FORNDOC "
+         cQry += ",substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+__nSF1DOC+__nSF1SER+__nSF1FOR+1)+","+cValToChar(__nSF1LOJ)+") D3_LOJADOC "
+         cQry += ",F1_FORMUL D3_FORMDOC "
+         cQry += "from "+RetSQLName("SD3")+" SD3 "
+         cQry += "inner join "+RetSQLName("SF1")+" SF1 "
+         cQry += "on F1_FILIAL = ? "
+         cQry += "and F1_DOC = substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+1)+","+cValToChar(__nSF1DOC)+") "
+         cQry += "and F1_SERIE = substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+__nSF1DOC+1)+","+cValToChar(+__nSF1SER)+") "
+         cQry += "and F1_FORNECE = substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+__nSF1DOC+__nSF1SER+1)+","+cValToChar(__nSF1FOR)+") "
+         cQry += "and F1_LOJA = substring(D3_CHAVEF1,"+cValToChar(__nSF1FIL+__nSF1DOC+__nSF1SER+__nSF1FOR+1)+","+cValToChar(__nSF1LOJ)+") "
+         cQry += "and SF1.D_E_L_E_T_ = ? "
+         cQry += "where "
+         cQry += "D3_FILIAL = ? "
+         cQry += "and D3_CHAVEF1 <> ? "
+         cQry += "and D3_NUMDOC = ? "
+         cQry += "and D3_SERDOC = ? "
+         if len(aParam) == 2
+            cQry += "and D3_EMISSAO >= ? "
+            cQry += "and D3_EMISSAO <= ? "
+         endif
+         cQry += "and SD3.D_E_L_E_T_ = ? "
+         cQry += TopRows(.F.,nTopRows) // se for ORACLE/POSTGRES insere a clausula FETCH FIRST ou LIMIT
+         cQry := changeQuery(cQry)
+
+         If __oQrySD3 <> nil
+            __oQrySD3:Destroy()
+            FreeObj(__oQrySD3)
+            __oQrySD3 := nil
+         EndIf
+         __oQrySD3 := FwExecStatement():New(cQry)
+
+      EndIf
+
+      nCntPar := 1
+      __oQrySD3:SetString(nCntPar++, xFilial("SD1" ,cCodFilial ) )
+      __oQrySD3:SetString(nCntPar++, ' ' )
+
+      __oQrySD3:SetString(nCntPar++, xFilial("SD3" ,cCodFilial ) )
+      __oQrySD3:SetString(nCntPar++, SPACE(__nSD3CHVF1) )
+      __oQrySD3:SetString(nCntPar++, SPACE(__nSF1DOC) )
+      __oQrySD3:SetString(nCntPar++, SPACE(__nSF1SER) )
+
+      if len(aParam) == 2
+         __oQrySD3:SetString(nCntPar++, aParam[1] )
+         __oQrySD3:SetString(nCntPar++, aParam[2] )
+
+      endIf
+      __oQrySD3:SetString(nCntPar++, ' ' )
+
+      cAliQrySD3 := __oQrySD3:OpenAlias()
+      
+      if (cAliQrySD3)->(!Eof())
+
+         lUpdateOk := .T.
+
+         aAreaSD3 := SD3->(GetArea())
+         While (cAliQrySD3)->(!Eof())
+
+            SD3->(dbGoto((cAliQrySD3)->R_E_C_N_O_))
+
+            if Empty(SD3->D3_NUMDOC)
+               If SD3->(SimpleLock())
+                  reclock("SD3", .F.)
+                  SD3->D3_NUMDOC  := (cAliQrySD3)->D3_NUMDOC 
+                  SD3->D3_SERDOC  := (cAliQrySD3)->D3_SERDOC
+                  SD3->D3_FORNDOC := (cAliQrySD3)->D3_FORNDOC
+                  SD3->D3_LOJADOC := (cAliQrySD3)->D3_LOJADOC
+                  SD3->D3_FORMDOC := (cAliQrySD3)->D3_FORMDOC
+                  SD3->(msUnLock())
+
+               EndIf
+            EndIf
+            (cAliQrySD3)->(dbSkip())
+         End
+         restArea(aAreaSD3)
+         aSize(aAreaSD3,0)
+         aAreaSD3 := nil
+      EndIf
+      (cAliQrySD3)->(dbCloseArea())
+   EndIf
+   
+Return lUpdateOk
+
+/*/{Protheus.doc} initializeCHAVEF1
+   Seleciona os registros na tabela SD3 referente a retorno de beneficamento para preenchimento dos campos D3_NUMDOC, D3_SERDOC 
+   e D3FORMDOC para substituir e tornar obsoleto o campo D3_CHAVEF1. O campo D3_CHAVEF1 não pode ser utilizado por seu conteudo ser
+   concatenação de campos que fazer parte de grupos de campo.
+   author reynaldo
+   @type 24/02/2026
+   @version 1.0
+   @param lAll, Logical, seleciona todos os registros de uma vez ou não
+   @return .T., logical, 
+/*/
+Function initializeCHAVEF1(cFileJob as Character, lAll As Logical)
+
+Local aArea     := {}
+Local aAreaSD3  := {}
+
+Local nCntFilial  := 0
+Local oFileLog
+Local lUpdateOk := .F.
+Local lResult := .F.
+
+Default cFileJob := "D3_CHAVEF1.job"
+Default lAll := .F.
+
+   aArea := GetArea()
+   
+   dbSelectArea("SD3")
+   aAreaSD3  := SD3->(GetArea())
+   if __lNumDOC == NIL
+      __lNumDOC :=  SD3->(FieldPos("D3_NUMDOC")) > 0 .AND. SD3->(FieldPos("D3_SERDOC")) > 0 .AND. SD3->(FieldPos("D3_FORMDOC")) > 0
+   EndIf
+
+   If __lNumDOC
+
+      lUpdateOk := .F.
+
+      aSM0 := FWLoadSM0()
+
+      //
+      // faz loop das filiais da empresa corrente
+      //
+      for nCntFilial := 1 to len(aSM0)
+
+         if aSM0[nCntFilial, SM0_GRPEMP] == cEmpAnt
+
+            cCodFilial := aSM0[nCntFilial, SM0_CODFIL]
+
+            // Seleciona os registros na tabela SD3 referente a retorno de beneficamento para preenchimento dos campos D3_NUMDOC, D3_SERDOC 
+            // e D3FORMDOC para substituir e tornar obsoleto o campo D3_CHAVEF1.
+            lResult := AtuDocNumD3( cCodFilial, lAll )
+            
+            // variavel de controle (lResult) para verificar se houve atualizacao de alguma filial(lUpdateOk).
+            if lResult 
+               lUpdateOk := lResult  
+            Endif
+
+         EndIf
+      Next nCntFilial
+      FwFreeArray(aSM0)
+
+      // nçao houve atuaizacao de registro na SD3. Grava log para registrar
+      if ! lUpdateOk
+         oFileLog := FWFILEWRITER():New(cFileJob, .F.)
+         If oFileLog:Create()
+            oFileLog:write(dtos(date())+" - Registros atualizados.")
+         endIf
+         oFileLog:close()
+         FreeObj(oFileLog)
+      EndIf
+   EndIf
+   restArea(aAreaSD3)
+   restArea(aArea)
+   aSize(aArea,0)
+   aArea := nil
+Return .T.

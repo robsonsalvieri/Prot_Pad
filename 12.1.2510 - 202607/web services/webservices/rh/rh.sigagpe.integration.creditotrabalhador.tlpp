@@ -1,0 +1,394 @@
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#Include "totvs.ch"
+#Include "FWLIBVERSION.ch"
+#Include "rh.sigagpe.integration.creditotrabalhador.ch"
+
+Static oStatmRJ9
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} GPECreditoTrabalhador
+@description	Serviço para importação de informações do Programa Crédito do Trabalhador
+@author		    martins.marcio
+@since			02/06/2025
+/*/
+//---------------------------------------------------------------------
+class GPECreditoTrabalhador
+
+	// Recebe os empréstimos do Crédito do Trabalhador e grava na tabela SRK/RUO
+	@Post("api/rh/v1/credito-trabalhador")
+	public method gravaCreditoTrabalhador()
+
+	// Retorna se o novo schedule esta rodando
+	@Get("api/rh/v1/credito-trabalhador/status-schedule")
+	public method getStatusSchedule()
+
+	// Retorna a lista de empregadores (filiais)
+	@Get("api/rh/v1/creditoTrabalhadorEmployers")
+	public method getEmployers()
+
+	public method new() constructor
+
+endclass
+
+
+//-------------------------------------------------------------------------------//
+// new                                                                           //
+//-------------------------------------------------------------------------------//
+method new() class GPECreditoTrabalhador
+return self
+
+/*/{Protheus.doc} GPECreditoTrabalhador::gravaCreditoTrabalhador
+Limpa os dados da RJP - Tabela de Fila NG para fazer o reenvio.
+@author martins.marcio
+@since 02/06/2025
+/*/
+method gravaCreditoTrabalhador() class GPECreditoTrabalhador
+
+	Local nErroCod     := 0								as Numeric
+	Local jQueryParams := oRest:getQueryRequest()		as Json
+	Local cBody        := oRest:getBodyRequest()
+	Local cMsgErro     := ""							as Character
+	Local lSimula      := .F.							as Logical
+	Local lAtualiza    := .T.							as Logical
+	Local aBranches    := {}							as Array
+	Local cBranches    := ""							as Character
+	Local oFWriter     := Nil							as Object
+	Local jPrintInfo   := JsonObject():New()			as Json
+	Local cFilePath    := ""							as Character
+	Local aMVPar       := {}							as Array
+	Local lValid       := .F.							as Logical
+	Local cLibVersion  := ""							as Character
+	Local oTask        := Nil							as Object
+	Local lIsMensal    := .T.							as Logical
+
+	Private cErro										as Character
+	Private cErroDesc									as Character
+	Private cErroTipo									as Character
+	Private oResponse	:= JsonObject():New()			as Json
+	Private oJson		:= JsonObject():New()			as Json
+	Private cTipoImp	:= "json"						as Character
+	Private cJsnVers	:= "1.4"						as Character
+
+	oRest:updateKeyHeaderResponse("Content-Type", "application/json; charset=utf-8")
+
+	Begin Sequence
+
+		oJson:fromJson(cBody)
+
+		If oJson:hasProperty("items")
+			If oJson:hasProperty("branches")
+				aBranches := oJson["branches"]
+				If ValType(aBranches) == "A" .And. !Empty(aBranches)
+					If !Empty(aBranches[1]) .And. ValType(aBranches[1]) == "C"
+						cBranches := "((AllTrim(RA_FILIAL) $ '"
+						aEval(aBranches, { |x| cBranches += x + "," })
+						cBranches := LEFT(cBranches, Len(cBranches)-1)
+						cBranches += "'))"
+					EndIf
+				EndIf
+			EndIf
+			If oJson:hasProperty("atualiza")
+				lAtualiza := oJson["atualiza"]
+			EndIf
+
+			If oJson:hasProperty("isMensal")
+				lIsMensal := oJson["isMensal"]
+			EndIf
+
+			If oJson:hasProperty("lSched") .AND. oJson["lSched"] == .T.
+				jPrintInfo['name'] := "GPEM944_"+FWTimeStamp()
+				jPrintInfo['path'] := "\spool\"
+				jPrintInfo['extension'] := "json"
+
+				cFilePath := jPrintInfo['path']+jPrintInfo['name']+"."+jPrintInfo['extension']
+			
+				//Se o arquivo existir, irá apagar
+				If File(cFilePath)
+					FErase(cFilePath)
+				EndIf
+			
+				//Cria o arquivo de logs
+				oFWriter := FWFileWriter():New(cFilePath, .T.)
+			
+				If ! oFWriter:Create()
+					nErroCod 	:= 500
+					cErro 		:= "Houve um erro ao criar o arquivo"  //"Atenção - Inconsistência"
+					cErroDesc 	:= oFWriter:Error():Message  //"Não foi possível fazer a importação dos empréstimos, tente novamente."
+					cErroTipo	:= "error
+				Else
+					oFWriter:Write(oJson:toJSON())
+					oFWriter:Close()
+
+					aMVPar := {;
+						cBranches,;
+						lAtualiza,;
+						cFilePath;
+					}
+
+					lValid := .F.
+
+					cLibVersion := FwLibVersion()
+
+					If (cLibVersion >= "20240408" .and. totvs.framework.smartschedule.startSchedule.smartSchedIsRunning() .and. totvs.framework.eventviewer.checkNewEventViewer())
+						oTask := totvs.framework.schedule.utils.createTask(GetEnvServer(), cEmpAnt, cFilAnt, "GPEM944SCH", 7, RetCodUsr(), NIL, aMVPar)
+
+						// Verifica se a tarefa foi criada com sucesso
+						If (oTask != NIL .and. !Empty(oTask:cID))
+							lValid := .T.
+						EndIf
+					Endif
+
+					If !lValid
+						nErroCod 	:= 500
+						cMsg 		:= "Erro"
+						cMsgDesc := IIf(cLibVersion < "20240408", "A versão da lib do sistema é inferior a 20240408." + CRLF + CRLF + "A execução em segundo plano somente está disponível a partir da lib 20240408.",;
+							IIf(!totvs.framework.smartschedule.startSchedule.smartSchedIsRunning(), "O Smart Scheduler não está ativo." + CRLF + CRLF + "Para a execução em segundo plano, é necessário estar com o Smart Scheduler ativo.",;
+							"A versão do Event Viewer está desatualizada." + CRLF + CRLF + "Para executar em segundo plano, é necessário atualizar o Event Viewer (basta executar a rotina FwRebuildIndex)."))
+						cMsgTipo	:= "error"
+					EndIf
+
+				Endif
+			Else
+				f944IniGrv(oJson['items'], @cMsgErro, lSimula, lAtualiza, @oResponse, cBranches, lIsMensal)
+			Endif
+		EndIf
+
+		If jQueryParams:hasProperty("forcaErro")
+			break
+		EndIf
+
+		recover
+
+		nErroCod 	:= 500
+		cErro 		:= OemToAnsi(STR0001)  //"Atenção - Inconsistência"
+		cErroDesc 	:= OemToAnsi(STR0002)  //"Não foi possível fazer a importação dos empréstimos, tente novamente."
+		cErroTipo	:= "error"
+
+	End Sequence
+
+	fSetResponse(nErroCod, cErro, cErroDesc, cErroTipo)
+
+Return
+
+
+/*/{Protheus.doc} getStatusSchedule
+	Retorna se o novo schedule esta rodando
+	@type Method
+	@version 12.1.2410
+	@author Caio Kretzer
+	@since 26/11/2025
+	@return Variant, Retorno nulo pre-fixado
+/*/
+method getStatusSchedule() class GPECreditoTrabalhador
+	Local jQueryParams 	:= oRest:getQueryRequest()		as Json
+	Local nErroCod 		:= 0 							as Numeric
+	Local cMsg			:= ""							as Character
+	Local cMsgDesc		:= ""							as Character
+	Local cMsgTipo		:= ""							as Character
+	Local cLibVersion as Character
+
+	Private oResponse := JsonObject():New()			as Json
+
+	oRest:updateKeyHeaderResponse("Content-Type", "application/json; charset=utf-8")
+
+	BEGIN SEQUENCE
+		If jQueryParams:hasProperty("forcaErro")
+			BREAK
+		Endif
+
+		cLibVersion := FwLibVersion()
+
+		If (cLibVersion >= "20240408" .and. totvs.framework.smartschedule.startSchedule.smartSchedIsRunning() .and. totvs.framework.eventviewer.checkNewEventViewer())
+			oResponse["lValidSchedule"] := .T.
+		Else
+			oResponse["lValidSchedule"] := .F.
+		Endif
+	RECOVER
+		nErroCod 	:= 500
+		cMsg 		:= STR0001
+		cMsgDesc 	:= "Internal Server Error"
+		cMsgTipo	:= "error"
+
+		(cAlias)->(dbCloseArea())
+	END SEQUENCE
+
+	fSetResponse(nErroCod, cMsg, cMsgDesc, cMsgTipo)
+return
+
+/*/{Protheus.doc} GPECreditoTrabalhador::getEmployers
+retorna uma lista de empregadores(filiais) para o Crédito do Trabalhador
+@author martins.marcio
+@since 16/09/2025
+/*/
+method getEmployers() class GPECreditoTrabalhador
+
+	local aSM0										as Array
+    local nSM0         	:= 1						as Numeric
+    local cSearch      	:= "" 						as Character // Termo de busca
+    local jQueryParams 	:= oRest:getQueryRequest()	as Json
+	Local nErroCod 		:= 0 						as Numeric
+	Local cMsg			:= ""						as Character
+	Local cMsgDesc		:= ""						as Character
+	Local cMsgTipo		:= ""						as Character
+	Local lMiddleware	:= SuperGetMv("MV_MID",, .F.)	as Logical
+	Local cQuery  	 	:= ""						as Character
+	Local lMatriz		:= .F.						as Logical
+	Local cFilComp		:= ""						as Character
+
+	Default oStatmRJ9 := Nil
+
+	Private oResponse := JsonObject():New()			as Json
+
+	cSearch := IIf(jQueryParams:hasProperty("filter"), jQueryParams["filter"], "")
+
+	oRest:updateKeyHeaderResponse("Content-Type", "application/json; charset=utf-8")
+
+	begin sequence
+
+		If jQueryParams:hasProperty("forcaErro")
+			break
+		Endif
+
+		oResponse["items"] := {}
+
+		If lMiddleware
+			If oStatmRJ9 == Nil
+				cQuery := "SELECT RJ9_FILIAL, RJ9_NOME, RJ9_NRINSC, RJ9_IDENT "
+				cQuery += "FROM "+ RetSqlName("RJ9") + " RJ9 "
+				cQuery += "WHERE RJ9.D_E_L_E_T_ = ? "
+
+				cQuery := ChangeQuery(cQuery)
+				oStatmRJ9 := FwExecStatement():New(cQuery)
+			EndIf
+			oStatmRJ9:SetString(1, " " )
+			cQrAlias := oStatmRJ9:OpenAlias()
+			(cQrAlias)->(DBGoTop())
+
+			While (cQrAlias)->(!Eof())
+
+				oItem := JSonObject():new()
+				oItem["employerCode"]		:= EncodeUTF8(AllTrim((cQrAlias)->RJ9_IDENT))
+				oItem["employerName"]		:= EncodeUTF8(AllTrim((cQrAlias)->RJ9_FILIAL) + " - "+ AllTrim((cQrAlias)->RJ9_NOME))
+
+				aadd(oResponse["items"], oItem)
+
+				(cQrAlias)->(DBSkip())
+			EndDo
+			(cQrAlias)->(DbCloseArea())
+
+		Else
+			aSM0 := FwLoadSM0()
+			// Percorre as filiais adicionando cada item no JSON de resposta
+			For nSM0 := 1 To Len(aSM0)
+
+				cFilComp := aSM0[nSM0][1] + AllTrim(aSM0[nSM0][SM0_CODFIL])
+				// Se o termo de busca estiver preenchido, filtra as filiais com base nele
+				If (!Empty(cSearch) .and. !(Upper(cSearch) $ Upper(cFilComp)) .and. !(Upper(cSearch) $ Upper(aSM0[nSM0][SM0_NOMRED])))
+					LOOP
+				EndIf
+
+				DbSelectArea("C1E")
+				C1E->(DbSetOrder(1)) //C1E_FILIAL+C1E_CODFIL+C1E_DTINI+C1E_DTFIN+C1E_ATIVO
+				// Pula as filiais de empresa diferente da empresa logada ou que não estejam na C1E
+				If (aSM0[nSM0][SM0_GRPEMP] != cEmpAnt) .Or. !(C1E->(Dbseek(xFilial("C1E") + cFilComp)))
+					LOOP
+				EndIf
+
+				// Considera somente matriz ativa
+				lMatriz := .F.
+				While !C1E->(Eof()) .And. (C1E->C1E_FILIAL == xFilial("C1E")) .And. (AllTrim(C1E->C1E_CODFIL) == cFilComp)
+					If  C1E->C1E_ATIVO == "1" .And. C1E->C1E_MATRIZ
+						lMatriz := .T.
+						Exit
+					EndIf
+					C1E->(DbSkip())
+				EndDo
+				If !lMatriz
+					LOOP
+				EndIf
+
+				oItem := JSonObject():new()
+				oItem["employerCode"]		:= EncodeUTF8(cFilComp)
+				oItem["employerName"]		:= EncodeUTF8(AllTrim(aSM0[nSM0][SM0_NOMRED]))
+
+				aadd(oResponse["items"], oItem)
+
+			Next nSM0
+		EndIf
+	recover
+
+		nErroCod 	:= 500
+		cMsg 		:= "Erro"
+		cMsgDesc 	:= "Internal Server Error"
+		cMsgTipo	:= "error"
+
+	end sequence
+
+	fSetResponse(nErroCod, cMsg, cMsgDesc, cMsgTipo)
+
+return
+
+/*/{Protheus.doc} fSetResponse
+Foi necessária a criação para passar no issue x cobertura de todas as APIs
+@author martins.marcio
+@since 16/09/2025
+/*/
+Static Function fSetResponse(nErroCod, cMsg, cMsgDesc, cMsgTipo)
+
+	Default nErroCod 	:= 0
+	Default cMsg 		:= ""
+	Default cMsgDesc 	:= ""
+	Default cMsgTipo 	:= ""
+
+	if nErroCod > 0
+		oRest:setStatusCode(nErroCod)
+		oRest:setFault(fGetJsonErro(nErroCod, cMsg, cMsgDesc, cMsgTipo))
+	else
+		oRest:setResponse(fGetJsonMsg(cMsg, cMsgDesc, cMsgTipo))
+	endif
+Return
+
+/*/{Protheus.doc} fGetJsonErro
+Retorna o json de erro para o PO-UI
+@author martins.marcio
+@since 02/06/2025
+/*/
+Static Function fGetJsonErro(nErroCod, cMsg, cMsgDesc, cMsgTipo)
+	Local oPouiError                 		:= JsonObject():new() as Json
+
+	Default nErroCod 	:= 0
+	Default cMsg 		:= ""
+	Default cMsgDesc 	:= ""
+	Default cMsgTipo 	:= ""
+
+	oPouiError["message"]         	:= cMsg
+	oPouiError["detailedMessage"] 	:= cMsgDesc
+	oPouiError["type"]            	:= cMsgTipo
+
+Return EncodeUTF8(FwCutOff(oPouiError:toJson()))
+
+/*/{Protheus.doc} fGetJsonMsg
+retorna o json para o PO-UI (com alguma mensagem, se necessário)
+@author martins.marcio
+@since 02/06/2025
+/*/
+Static Function fGetJsonMsg(cMsg, cMsgDesc, cMsgTipo)
+
+	Local oItemMsg 			  as Json
+
+	Default cMsg 		:= ""
+	Default cMsgDesc 	:= ""
+	Default cMsgTipo 	:= ""
+
+	If !Empty(cMsg)
+		// oResponse["_messages"] 		:= {}
+		// oItemMsg                 	:= JsonObject():new()
+		// oItemMsg["message"]         := cMsg
+		// oItemMsg["detailedMessage"] := cMsgDesc
+		// oItemMsg["type"]            := cMsgTipo
+
+		// aadd(oResponse["_messages"],oItemMsg)
+	EndIf
+
+Return EncodeUTF8(FwCutOff(oResponse:toJson()))

@@ -1,0 +1,574 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "retail.autoparts.catalog.product.controller.ch"
+
+namespace totvs.protheus.retail.autoparts.catalog.product.controller
+
+/*/{Protheus.doc} RetailAutopartsCatalogProductController
+    API relacionadas a produto do catalogo de autopecas
+    @type   class
+    @author Bruno Almeida
+    @since  09/06/2026
+/*/
+Class RetailAutopartsCatalogProductController
+
+    private data lHasNext   as Logical
+    private data nStart     as Numeric
+    private data nEnd       as Numeric
+    private data cErrMsg    as Character
+
+    private Method FindProduct(cAlias as Character) as Array
+    private Method ExecQuery(cCode as Character, cName as Character, lTotal as Logical) as Character
+    private Method ValidateInput(cCode as Character, cName as Character, cMark as Character, cSendPdv as Character) as Logical
+    private Method UpdateSB1(cCode as Character, cName as Character) as Logical
+    private Method UpdateD4Z(cCode as Character, cMark as Character, cSendPdv as Character) as Logical
+    private Method SetDefaultHeaders() as Logical
+    private Method CountPendingPdv() as Numeric
+
+    public Method New()
+
+    @Get("/api/retail/v1/retailAutopartsCatalogProduct/getDataForProduct", description="Consulta os produtos do catalogo de auto pecas.")
+    public Method getDataForProduct()
+
+    @Get("/api/retail/v1/retailAutopartsCatalogProduct/getCountPendingPdv", description="Retorna a contagem de produtos com Envio PDV pendente (D4Z_ENVPDV = 1).")
+    public Method getCountPendingPdv()
+
+    @Put("/api/retail/v1/retailAutopartsCatalogProduct/putDataForProduct", description="Atualiza os produtos do catalogo de auto pecas.")
+    public Method putDataForProduct()
+
+EndClass
+
+/*/{Protheus.doc} New
+    Metodo construtor
+    @type   method
+    @author Bruno Almeida
+    @since  09/06/2026
+/*/
+Method New() Class RetailAutopartsCatalogProductController
+    self:lHasNext := .F.    
+Return self
+
+/*/{Protheus.doc} SetDefaultHeaders
+    Define os headers padroes para as respostas dessa API
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @return  logical, retorno padrão .T.
+/*/
+Method SetDefaultHeaders() Class RetailAutopartsCatalogProductController
+    oRest:setKeyHeaderResponse("Content-Type", "application/json")
+Return .T.
+
+/*/{Protheus.doc} getDataForProduct
+    Retorna os produtos do catalogo de auto pecas
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @return  logical, retorno padrão .T.
+/*/
+Method getDataForProduct() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo    as Object
+    Local oJParametr    as Object
+    Local aItens        as Array
+    Local cCode         as Character
+    Local cName         as Character
+    Local nPage         as Numeric
+    Local nPageSize     as Numeric
+    Local cAliasQry     as Character
+    Local aArea         as Array
+
+    Self:SetDefaultHeaders()
+
+    aArea       := GetArea()
+    oJsonRespo  := JsonObject():New()
+    aItens      := {}
+    oJParametr  := oRest:getQueryRequest()
+
+    If oJParametr['code'] == Nil .Or. Empty(oJParametr['code'])
+        cCode := ""
+    Else
+        cCode := oJParametr['code']
+    EndIf
+
+    If oJParametr['name'] == Nil .Or. Empty(oJParametr['name'])
+        cName := ""
+    Else
+        cName := oJParametr['name']
+    EndIf
+
+    If oJParametr['page'] == Nil .Or. Empty(oJParametr['page'])
+        nPage := 1
+    Else
+        nPage := Val(oJParametr['page'])
+    EndIf
+
+    If oJParametr['pagesize'] == Nil .Or. Empty(oJParametr['pagesize'])
+        nPageSize := 20
+    Else
+        nPageSize := Val(oJParametr['pagesize'])
+    EndIf
+
+    Self:nStart := (nPage - 1) * nPageSize + 1
+
+    //-- O +1 é necessário para corrigir o cálculo da linha final, pois a função ROW_NUMBER() inicia a contagem em 1
+    Self:nEnd := nPage * nPageSize + 1
+    cAliasQry := Self:ExecQuery(cCode, cName, .F.)
+
+    If !Empty(cAliasQry)
+        aItens := Self:FindProduct(cAliasQry)
+    EndIf
+
+    If Len(aItens) > 0
+        cAliasQry := ""
+        cAliasQry := Self:ExecQuery(cCode, cName, .T.)
+
+        oJsonRespo["items"]                      := aItens
+        oJsonRespo["pagination"]                 := JsonObject():New()
+        oJsonRespo["pagination"]["page"]         := nPage
+        oJsonRespo["pagination"]["pagesize"]     := nPageSize
+        oJsonRespo["pagination"]["totalitems"]   := (cAliasQry)->TOTAL
+        oJsonRespo["pagination"]["totalpages"]   := Int(((cAliasQry)->TOTAL + nPageSize - 1) / nPageSize)
+        oJsonRespo["pagination"]["nextpage"]     := self:lHasNext
+        oJsonRespo["pagination"]["previouspage"] := nPage > 1
+
+        (cAliasQry)->(dbCloseArea())
+
+        oRest:setStatusCode(200)
+    Else
+        oJsonRespo["items"]   := {}
+        oJsonRespo["message"] := STR0001 //"Dados não encontrados para o filtro informado"
+        oRest:setStatusCode(404)
+    EndIf
+
+    oRest:setResponse(oJsonRespo:toJson())
+    
+    RestArea(aArea)
+    FreeObj(oJsonRespo)
+    FreeObj(oJParametr)
+
+Return .T.
+
+
+/*/{Protheus.doc} FindProduct
+    Consulta produtos do catalogo de auto pecas
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @param   cAlias, Character, alias temporario
+    @return  array,  Array,     array de itens encontrados
+/*/
+Method FindProduct(cAliasQry as Character) as Array Class RetailAutopartsCatalogProductController
+    Local jItem         as Object
+    Local aItens        as Array
+
+    aItens := {}
+
+    While (cAliasQry)->(!EOF())
+
+        If (cAliasQry)->LINHA > (Self:nEnd - 1)
+            Self:lHasNext := .T.
+            Exit
+        EndIf
+
+        jItem := JsonObject():New()
+        jItem["branch"]   := AllTrim((cAliasQry)->B1_FILIAL)
+        jItem["code"]     := AllTrim((cAliasQry)->B1_COD)
+        jItem["ncm"]      := AllTrim((cAliasQry)->B1_POSIPI)
+        jItem["un"]       := AllTrim((cAliasQry)->B1_UM)
+        jItem["mark"]     := AllTrim((cAliasQry)->MG0_NOME)
+        jItem["name"]     := AllTrim((cAliasQry)->B1_DESC)
+        jItem["group"]    := AllTrim((cAliasQry)->BM_DESC)
+        jItem["type"]     := AllTrim((cAliasQry)->X5_DESCRI)
+
+        If AllTrim((cAliasQry)->D4Z_ENVPDV) == "1"
+            jItem["sendpdv"]  := "Pendente"
+        ElseIf AllTrim((cAliasQry)->D4Z_ENVPDV) == "2"
+            jItem["sendpdv"]  := "Liberado"
+        Else
+            jItem["sendpdv"]  := ""
+        EndIf
+
+        aAdd(aItens, jItem)
+        jItem := Nil
+        (cAliasQry)->(dbSkip())
+    EndDo
+
+    (cAliasQry)->(dbCloseArea())
+
+Return(aItens)
+
+
+/*/{Protheus.doc} ExecQuery
+    Consulta produtos do catalogo de auto pecas
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @param   cCode   , Character , filtro pelo codigo do fornecedor
+    @param   cName   , Character , filtro pelo nome do fornecedor
+    @param   lTotal  , Logical   , indica se deve retornar o total de itens
+    @return  cTable  , Character , alias temporario com os itens encontrados
+/*/
+Method ExecQuery(cCode as Character, cName as Character, lTotal as Logical) as Character Class RetailAutopartsCatalogProductController
+
+    Local cTable    as Character
+    Local cQry      as Character
+    Local oQueryQry as Object
+    Local nSeq      as Numeric
+
+    Default lTotal := .F.
+
+    nSeq := 1
+
+    dbSelectArea("D4Z")
+
+    If !lTotal
+        cQry := " SELECT * FROM ("
+        cQry += " SELECT ROW_NUMBER() OVER(ORDER BY SB1.B1_DESC ASC) AS LINHA, B1_FILIAL, B1_COD, B1_POSIPI, B1_UM, MG0_NOME, B1_DESC, BM_DESC, X5_DESCRI, D4Z_ENVPDV "
+    Else
+        cQry := " SELECT COUNT(SB1.B1_COD) AS TOTAL "
+    EndIf
+
+    cQry += "   FROM " + RetSqlName("SB1") + " SB1 "
+    cQry += "        LEFT JOIN " + RetSqlName("D4Z") + " D4Z ON D4Z.D4Z_FILIAL = SB1.B1_FILIAL AND D4Z.D4Z_COD = SB1.B1_COD "
+    cQry += "        LEFT JOIN " + RetSqlName("MG0") + " MG0 ON MG0.MG0_FILIAL = ?  AND MG0.MG0_CODMAR = D4Z.D4Z_CODMAR "
+    cQry += "        LEFT JOIN " + RetSqlName("SX5") + " SX5 ON SX5.X5_TABELA  = ?  AND SX5.X5_CHAVE   = SB1.B1_TIPO "
+    cQry += "        LEFT JOIN " + RetSqlName("SBM") + " SBM ON SBM.BM_FILIAL  = ?  AND SBM.BM_GRUPO   = SB1.B1_GRUPO "
+    cQry += "  WHERE SB1.B1_FILIAL = ? AND "
+
+    If !Empty(cCode)
+        cQry += " SB1.B1_COD = ? AND "
+    ElseIf !Empty(cName)
+        cQry += " SB1.B1_DESC LIKE ? AND "
+    EndIf
+
+    cQry += " SB1.D_E_L_E_T_ = ? "
+
+    If !lTotal
+        cQry += ") TAB"
+        cQry += " WHERE LINHA BETWEEN ? AND ?"
+    EndIf
+    
+    cQry := ChangeQuery(cQry)
+
+    oQueryQry := FwExecStatement():New(cQry)
+
+    oQueryQry:SetString(nSeq++, xFilial("MG0"))
+    oQueryQry:SetString(nSeq++, "02")
+    oQueryQry:SetString(nSeq++, xFilial("SBM"))
+    oQueryQry:SetString(nSeq++, xFilial("SB1"))
+
+    If !Empty(cCode)
+        oQueryQry:SetString(nSeq++, cCode)
+    ElseIf !Empty(cName)
+        //-- Ajuste para evitar problemas com acentos na consulta
+        cName := DecodeUTF8(cName, "cp1252")
+        oQueryQry:SetString(nSeq++, "%" + Upper(cName) + "%")
+    EndIf
+
+    oQueryQry:SetString(nSeq++, Space(1))
+
+    If !lTotal
+        oQueryQry:SetNumeric(nSeq++, Self:nStart)
+        oQueryQry:SetNumeric(nSeq++, Self:nEnd)
+    EndIf
+
+    cTable := oQueryQry:OpenAlias(GetNextAlias())
+
+    oQueryQry:Destroy()
+    oQueryQry := Nil
+
+Return cTable
+
+/*/{Protheus.doc} ValidateInput
+    Valida os dados de entrada do metodo putDataForProduct
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @param   cCode, Character, codigo do produto
+    @param   cName, Character, nova descricao do produto
+    @param   cMark, Character, codigo da marca (D4Z_CODMAR). Vazio = nao atualiza
+    @param   cSendPdv, Character, valor do envio PDV (D4Z_ENVPDV). Vazio = nao atualiza
+    @return  logical, Logical, .T. se os dados sao validos, .F. caso contrario
+/*/
+Method ValidateInput(cCode as Character, cName as Character, cMark as Character, cSendPdv as Character) as Logical Class RetailAutopartsCatalogProductController
+    Local nTamDesc  as Numeric
+
+    If Empty(cCode)
+        self:cErrMsg := STR0009 //"Código do produto é obrigatório"
+        oRest:setStatusCode(422)
+        Return .F.
+    EndIf
+
+    //-- Valida que ao menos um campo de atualizacao foi enviado
+    If Empty(cName) .And. Empty(cMark) .And. Empty(cSendPdv)
+        self:cErrMsg := STR0002 //"Nenhuma informação enviada para atualização"
+        oRest:setStatusCode(422)
+        Return .F.
+    EndIf
+
+    //-- Valida tamanho e conteudo da descricao
+    If !Empty(cName)
+        nTamDesc := TamSx3("B1_DESC")[1]
+        If Len(AllTrim(cName)) > nTamDesc
+            self:cErrMsg := STR0003 + cValToChar(nTamDesc) + STR0004 //"Descrição inválida ou maior que o tamanho permitido (" # " caracteres)"
+            oRest:setStatusCode(422)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida valor do campo envio PDV
+    If !Empty(cSendPdv)
+        If cSendPdv != "1" .And. cSendPdv != "2"
+            self:cErrMsg := STR0005 //"Valor inválido para envio PDV. Informe 1 ou 2"
+            oRest:setStatusCode(422)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida existencia da marca na MG0
+    If !Empty(cMark)
+        dbSelectArea("MG0")
+        MG0->(dbSetOrder(1))
+        If !MG0->(dbSeek(xFilial("MG0") + padR(cMark , TamSx3("MG0_CODMAR")[1])))
+            self:cErrMsg := STR0006 //"Código de marca não encontrado"
+            oRest:setStatusCode(404)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida existencia do produto na SB1
+    dbSelectArea("SB1")
+    SB1->(dbSetOrder(1))
+    If !SB1->(dbSeek(xFilial("SB1") + cCode))
+        self:cErrMsg := STR0007 //"Produto não encontrado"
+        oRest:setStatusCode(404)
+        Return .F.
+    EndIf
+
+Return .T.
+
+/*/{Protheus.doc} UpdateSB1
+    Atualiza a descricao do produto na tabela SB1
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @param   cCode  , Character, codigo do produto
+    @param   cName  , Character, nova descricao do produto
+    @return  logical, Logical, .T. se atualizou com sucesso, .F. caso contrario
+/*/
+Method UpdateSB1(cCode as Character, cName as Character) as Logical Class RetailAutopartsCatalogProductController
+
+    RecLock("SB1",.F.,,,IsBlind())
+
+    SB1->B1_DESC := Upper(cName)
+
+    SB1->(MsUnlock())
+
+Return .T.
+
+/*/{Protheus.doc} UpdateD4Z
+    Atualiza ou cria o registro do produto na tabela D4Z (marca e envio PDV)
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @param   cCode    , Character, codigo do produto
+    @param   cMark    , Character, codigo da marca (D4Z_CODMAR). Vazio = nao atualiza
+    @param   cSendPdv , Character, valor do envio PDV (D4Z_ENVPDV). Vazio = nao atualiza
+    @return  logical, Logical, .T. se atualizou/criou com sucesso, .F. caso contrario
+/*/
+Method UpdateD4Z(cCode as Character, cMark as Character, cSendPdv as Character) as Logical Class RetailAutopartsCatalogProductController
+
+    dbSelectArea("D4Z")
+    D4Z->(dbSetOrder(1))
+
+    If D4Z->(dbSeek(xFilial("D4Z") + cCode))
+        //-- Registro existente: atualiza
+        RecLock("D4Z",.F.,,,IsBlind())
+    Else
+        //-- Registro nao existe: cria novo
+        RecLock("D4Z", .T.)
+        D4Z->D4Z_FILIAL := xFilial("D4Z")
+        D4Z->D4Z_COD    := cCode
+    EndIf
+
+    If !Empty(cMark)
+        D4Z->D4Z_CODMAR := cMark
+    EndIf
+
+    If !Empty(cSendPdv)
+        D4Z->D4Z_ENVPDV := cSendPdv
+    EndIf
+
+    D4Z->(MsUnlock())
+
+Return .T.
+
+/*/{Protheus.doc} putDataForProduct
+    Atualiza os dados do produto do catalogo de auto pecas.
+    Campos atualizaveis: descricao (SB1.B1_DESC), marca (D4Z.D4Z_CODMAR) e envio PDV (D4Z.D4Z_ENVPDV).
+    Ao menos um dos tres campos deve ser informado.
+    A atualizacao e atomica: se qualquer gravacao falhar, um RollBack e realizado em todas as tabelas.
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @return  logical, Logical, retorno padrao .T.
+/*/
+Method putDataForProduct() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo as Object
+    Local oBody      as Object
+    Local cCode      as Character
+    Local cName      as Character
+    Local cMark      as Character
+    Local cSendPdv   as Character
+    Local aArea      as Array
+    Local lOk        as Logical
+    Local oErr       as Object
+
+    Self:SetDefaultHeaders()
+
+    aArea      := GetArea()
+    oJsonRespo := JsonObject():New()
+    lOk        := .T.
+
+    //-- Desserializa o body
+    oBody := JsonObject():New()
+    oBody:fromJson(oRest:getBodyRequest())
+
+    self:cErrMsg := ""
+
+    //-- Extrai os valores do body para as variaveis locais
+    cCode    := ""
+    cName    := ""
+    cMark    := ""
+    cSendPdv := ""
+
+    If oBody['code'] != Nil .And. !Empty(oBody['code'])
+        cCode := padR(AllTrim(oBody['code']), TamSx3("B1_COD")[1])
+    EndIf
+
+    If oBody['name'] != Nil .And. !Empty(oBody['name'])
+        cName := AllTrim(oBody['name'])
+        cName := DecodeUTF8(cName, "cp1252")
+    EndIf
+
+    If oBody['mark'] != Nil .And. !Empty(oBody['mark'])
+        cMark := AllTrim(oBody['mark'])
+    EndIf
+
+    If oBody['sendpdv'] != Nil .And. !Empty(oBody['sendpdv'])
+        cSendPdv := AllTrim(oBody['sendpdv'])
+    EndIf
+
+    //-- Valida os dados de entrada
+    If !Self:ValidateInput(cCode, cName, cMark, cSendPdv)
+        oJsonRespo['success'] := .F.
+        oJsonRespo["message"] := self:cErrMsg
+        oRest:setResponse(oJsonRespo:toJson())
+        RestArea(aArea)
+        FreeObj(oJsonRespo)
+        FreeObj(oBody)
+        Return .T.
+    EndIf
+
+    //-- Atualiza dentro de transacao atomica
+    Begin Transaction
+        Try
+            If !Empty(cName)
+                Self:UpdateSB1(cCode, cName)
+            EndIf
+
+            If lOk .And. (!Empty(cMark) .Or. !Empty(cSendPdv))
+                Self:UpdateD4Z(cCode, cMark, cSendPdv)
+            EndIf
+        Catch oErr
+            DisarmTransaction()
+            lOk          := .F.
+            self:cErrMsg := oErr:Description
+        EndTry
+
+    End Transaction
+
+    If lOk
+        oRest:setStatusCode(200)
+        oJsonRespo['success']  := .T.
+        oJsonRespo["message"] := STR0008 //"Dados atualizados com sucesso"
+    Else
+        oRest:setStatusCode(500)
+        oJsonRespo['success']  := .F.
+        oJsonRespo["message"] := self:cErrMsg
+    EndIf
+
+    oRest:setResponse(oJsonRespo:toJson())
+
+    RestArea(aArea)
+    FreeObj(oJsonRespo)
+    FreeObj(oBody)
+
+Return .T.
+
+/*/{Protheus.doc} getCountPendingPdv
+    Retorna a contagem de produtos com Envio PDV pendente (D4Z_ENVPDV = 1)
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version p12
+    @return  logical, retorno padrao .T.
+/*/
+Method getCountPendingPdv() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo := JsonObject():New() as Object
+
+    Self:SetDefaultHeaders()
+
+    oJsonRespo['total'] := Self:CountPendingPdv()
+    oRest:setStatusCode(200)
+    oRest:setResponse(oJsonRespo:toJson())
+
+    FreeObj(oJsonRespo)
+
+Return .T.
+
+/*/{Protheus.doc} CountPendingPdv
+    Retorna a quantidade de registros D4Z com D4Z_ENVPDV = '1' (Pendente)
+    Aplica filtro de filial e descarta registros excluidos logicamente
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version p12
+    @return  Numeric, Quantidade de produtos com Envio PDV pendente
+/*/
+Method CountPendingPdv() as Numeric Class RetailAutopartsCatalogProductController
+    Local oQueryQry := Nil as Object
+    Local cQry      := "" as Character
+    Local nSeq      := 1 as Numeric
+    Local nTotal    := 0 as Numeric
+    Local aArea     := GetArea() as Array
+
+    cQry := " SELECT COUNT(1) AS TOTAL "
+    cQry += " FROM " + RetSqlName('D4Z') + " D4Z "
+    cQry += " WHERE D4Z.D4Z_FILIAL = ? "
+    cQry += " AND D4Z.D4Z_ENVPDV  = ? "
+    cQry += " AND D4Z.D_E_L_E_T_  = ? "
+
+    cQry := ChangeQuery(cQry)
+
+    oQueryQry := FwExecStatement():New(cQry)
+    oQueryQry:SetString(nSeq++, xFilial('D4Z'))
+    oQueryQry:SetString(nSeq++, "1")
+    oQueryQry:SetString(nSeq++, Space(1))
+    nTotal := Val(cValToChar(oQueryQry:ExecScalar('TOTAL')))
+
+    oQueryQry:Destroy()
+    oQueryQry := Nil
+
+    RestArea(aArea)
+
+Return nTotal

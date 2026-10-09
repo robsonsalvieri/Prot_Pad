@@ -1,0 +1,458 @@
+#include "protheus.ch"
+#include "tlpp-core.th"
+#include "tlpp-object.th"
+#include "TOTVS.PROTHEUS.FISCAL.TAF.PROCESSINGQUEUE.CH"
+
+namespace totvs.protheus.fiscal.taf.event
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} Processingqueue
+Classe responsável por gerar e enviar os XMLs dos eventos da reforma tributária
+
+@type class
+@author Pâmela Bernardo
+@since 05/02/2026
+@version 1.0
+-------------------------------------------------------------------------------*/
+Class Processingqueue
+
+    public method New() 						as object
+    public method TafProcessingqueue() 			as object
+	public method TafScheduleProcessingqueue() 	as object
+	public method RetornacCodtribEvento(cChvNf As Character, cItemXml As Character, cTributo As Character, oSearchCodtri As Object) 	As Character
+    public method retEventCancel(oJsParams As json) As Json
+    protected method LocalizaC20PorChvNfe(cChvNfe As Character) 	As Character
+    protected Method processT7B(oJsTempEventos As Json, cAliasQry As Character)
+    protected Method processT7C(oJsTempEventos As Json, cAliasQry As Character)
+
+EndClass
+/*-------------------------------------------------------------------------------
+{Protheus.doc} New()
+Método de instância da classe
+
+@type method
+@author Pâmela Bernardo
+@since 05/02/2026
+@version 1.0
+-------------------------------------------------------------------------------*/
+method New() as object class Processingqueue  
+return Self
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafScheduleProcessingqueue()
+Metodo responsável por agendar a execução do monitor de eventos via Smart Schedule
+
+@type method
+@author Pâmela Bernardo
+@since 05/02/2026
+@version 1.0
+-------------------------------------------------------------------------------*/
+method TafScheduleProcessingqueue() as object class Processingqueue
+    Local cAmbiente:= "" as character
+
+	TAFConout(STR0002,,, STR0001) //"Agendamento na fila de processamento"##"Inclusão de eventos"
+	cAmbiente:= TafContScd()
+	If !Empty(cAmbiente)
+		If totvs.framework.schedule.utils.createTask(cAmbiente, /*cEmpAnt*/, /*cFilAnt*/, 'TAFA621EFL', 84, __cUserID, '', {}, .T.) != Nil
+			TAFConout(STR0005,,, STR0001) //"Processo de envio dos eventos agendado"##"Inclusão de eventos"
+		Else
+			TAFConout(STR0004,,, STR0001) //"Falha na criação da task via Smart Schedule."##"Inclusão de eventos"
+		EndIf
+	EndIf
+
+return Self
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafProcessingqueue()
+Metodo responsável por processar a fila de eventos do TAF (T7S).
+
+@type method
+@author Pâmela Bernardo
+@since 05/02/2026
+@version 1.0
+-------------------------------------------------------------------------------*/
+method TafProcessingqueue() as object class Processingqueue
+
+    Local jRequest           As Json
+    Local jEvent           As Json
+    Local jSaveEvents      As Json
+    Local cChvNfe          As Character
+    Local cChaveC20        As Character
+    Local aItems           As Array
+    Local cCodEvent        As Character
+    Local nx               As Numeric
+	Local aDadosLog		   As array
+	Local cKeyErp		   As character
+	Local cChave	       As character
+    Local cIdT7A	       As character
+	Local oSaveEvents	   As Object
+	Local oSearchCodtri	   As Object
+	Local jResponse	   	   As Json
+
+    Private oStPesquisaLog as object // necessário para execução da função LogIntegra
+    
+    TAFConout(STR0003,,, STR0001) //"Processo de envio dos eventos iniciado.."##"Inclusão de eventos"
+	jRequest := JsonObject():New()
+	DbSelectArea("T7S")
+	T7S->(DbGoTop())
+	While !T7S->(Eof()) .AND. T7S->(DbSeek(FWxFilial("T7S"))) //Processa somente os registros da filial atual
+		cChvNfe := T7S->T7S_CHVNFE
+		cCodEvent:= T7S->T7S_EVENTO
+		cKeyErp := FWxFilial(T7S->T7S_TABELA) +'|'+ cChvNfe + '|'+cCodEvent
+		cChave := FWxFilial('T7A') +'|'+ cChvNfe + '|'+cCodEvent
+		cChaveC20 := Self:LocalizaC20PorChvNfe(cChvNfe)
+	    jRequest:FromJSON(T7S->T7S_XML)
+		
+        If !Empty(cChaveC20)
+			aItems           := jRequest['event']['items']
+			oSaveEvents 	 := WSEventsRepository():New("POST")
+
+			For nx:=1 to Len(aItems)
+				aItems[nx]["codTriCbs"]:= Self:RetornacCodtribEvento(cChaveC20, aItems[nx]["item"], oSaveEvents:cCodCredCbs+','+oSaveEvents:cCodTribCbs, oSearchCodtri)
+				aItems[nx]["codTriIbs"]:= Self:RetornacCodtribEvento(cChaveC20, aItems[nx]["item"], oSaveEvents:cCodCredIbs+','+oSaveEvents:cCodTribIbs, oSearchCodtri)
+			Next nx
+
+			//-- Monta o json para salvar o evento
+            jEvent    := JsonObject():New()
+			jEvent["event"] := cCodEvent
+            jEvent["fields"] := jRequest['event']['fields']
+            jEvent["items"] := aClone(aItems)
+            jSaveEvents := JsonObject():New()
+			jSaveEvents['chvnf'] := cChaveC20
+			jSaveEvents['event'] := jEvent
+			jResponse:= oSaveEvents:postSaveEvents(jSaveEvents)
+
+			If oSaveEvents:lOk
+                cIdT7A := jResponse['id']
+				aDadosLog := {"T7A", cIdT7A, STR0006, '', .T., T7S->T7S_TABELA} //'Evento incluso com sucesso'
+                TAFConout(STR0006+cKeyErp,,, STR0001) //"'Evento incluso com sucesso'"##"Inclusão de eventos"
+			EndIf
+	
+		Else //-- Documento não localizado
+			aDadosLog := {"T7A", cChave, STR0007, STR0008, .T., T7S->T7S_TABELA} //'Documento Fiscal Não encontrado no TAF'###'verifique possiveis falhas na importação para TAF'
+            TAFConout(STR0007+cKeyErp,,, STR0001) //""Documento Fiscal Não encontrado no TAF  ""##"Inclusão de eventos"
+		EndIf
+		LogIntegra( aDadosLog, cKeyErp)
+        FreeObj(oSaveEvents)
+        FreeObj(jEvent)
+        FreeObj(jResponse)
+        FreeObj(jSaveEvents)
+		
+		RecLock("T7S",.F.)
+			dbDelete()
+		T7S->(MsUnlock())
+        T7S->(DbSkip())
+	EndDo
+    TAFConout(STR0009,,, STR0001) //"Processo de envio dos eventos Finalizado"##"Inclusão de eventos"
+	FreeObj(oSearchCodtri)
+	
+return Self
+
+/*/{Protheus.doc} LocalizaC20PorChvNfe
+Função para buscar a C20_CHVNF para montagem do Evento.
+@author Pâmela Bernardo
+@since 28/01/2025
+@param cChvNfe, character, chave da nota fiscal eletrônica.
+@return cChaveC20, character, chave do documento fiscal.
+/*/
+method LocalizaC20PorChvNfe(cChvNfe As Character) As Character class Processingqueue
+    Local cChaveC20 As Character
+    Local lUsaSmartSchedule := TafUsaISCH() As Logical
+    
+    Default cChvNfe := ''
+    
+    cChaveC20 := ''
+    C20->(DbSetOrder(3)) // C20_FILIAL+C20_CHVELE
+    
+    If C20->(MsSeek(FWxFilial('C20') + cChvNfe))
+        cChaveC20 := C20->C20_CHVNF
+    Else 
+        //Importa a nota fiscal eletrônica para o TAF
+        If !lUsaSmartSchedule
+            TSI({cEmpAnt,cFilAnt})
+        Else 
+            While !LockByName("613TAFInitInt",.T.,.F.)
+                Sleep(10000)
+            Enddo
+            UnlockByName("613TAFInitInt",.T.,.F.)
+        EndIf
+        C20->(DbSetOrder(3)) // C20_FILIAL+C20_CHVELE
+        If C20->(MsSeek(FWxFilial('C20') + cChvNfe))
+            cChaveC20 := C20->C20_CHVNF
+        EndIf
+    EndIf
+Return cChaveC20
+
+/*/{Protheus.doc} RetornacCodtribEvento
+Função para buscar a C35_CODTRIB para montagem do Evento.
+@author Pâmela Bernardo
+@since 28/01/2025
+@param cChvNf, character, chave da nota fiscal.
+@param cItemXml, character, item do xml.
+@param cTributo, character, tributo que será buscado.
+@return cCodigotrib, character, código do tributo encontrado.
+/*/
+method RetornacCodtribEvento(cChvNf As Character, cItemXml As Character, cTributo As Character, oSearchCodtri As Object) As Character class Processingqueue
+    Local cCodigotrib As Character
+    Local cQuery As character
+    
+    Default cChvNf := ''
+    Default cItemXml := ''
+    Default cTributo := ''
+    
+    cCodigotrib := ''
+    
+    If oSearchCodtri == Nil
+
+        cQuery += " SELECT C35.C35_CODTRI  "
+        cQuery += " 	FROM " + RetSQLName("C35") + " C35 "
+        cQuery += " 	INNER JOIN " + RetSQLName("C30") + " C30 ON "
+        cQuery += " 		C30.C30_FILIAL = C35.C35_FILIAL "
+        cQuery += " 		AND C30.C30_CHVNF = C35.C35_CHVNF "
+        cQuery += " 	WHERE C35.C35_FILIAL = ? "
+        cQuery += "						AND C35.C35_CHVNF  = ? "
+        cQuery += " 					AND C35.C35_CODTRI IN (?) "
+        cQuery += " 					AND C35.D_E_L_E_T_ =  ? "
+        cQuery += " 					AND C30.C30_ITEXML = ? "
+        cQuery += " 					AND C30.D_E_L_E_T_ = ? "
+
+        cQuery := ChangeQuery(cQuery)
+        oSearchCodtri := FwExecStatement():New(cQuery)
+    EndIf
+
+    oSearchCodtri:SetString(01, FWxFilial('C35'))
+    oSearchCodtri:SetString(02, cChvNf)
+    oSearchCodtri:SetIn(03, StrTokArr(cTributo, "', '"  ))
+    oSearchCodtri:SetString(04, ' ')
+    oSearchCodtri:SetString(05, cItemXml)
+    oSearchCodtri:SetString(06, ' ')
+
+    cCodigotrib	:= oSearchCodtri:ExecScalar("C35_CODTRI")
+
+Return cCodigotrib
+
+/*/{Protheus.doc} retEventCancel
+Função para localizar o registro na T7A que será cancelado ao
+ser chamado via método 
+@author Carla Bianca Santos latorre
+@since 27/03/2026
+@param oJsParams contendo: cChvNfe - chave da nota fiscal, 
+cCodEvent - codigo do evento, cDataEmis - data envio do evento(opcional)
+@return oJsRetEventos - jSon com os IDs retornados pelo método
+/*/
+
+Method retEventCancel(oJsParams As json) As Json Class Processingqueue
+    Local oJsTempEventos As json
+    Local oJsRetEventos  As Json 
+    Local aEventos := {}  As Array
+    Local cChvNfe   := '' As character
+    Local cCodEvent := '' As character
+    Local cDataEmis := '' As character
+    Local cEventItem := "|112120|112130|112140|211120|211124|211130|211140|211150|" as character
+    Local cQuery as character
+    Local cAliasQry as character
+    Local cIdAtual as character
+    Local nPos := 0 as numeric
+
+    Local oStatement      As Object
+
+    oJsRetEventos := JsonObject():New() 
+
+    If ValType(oJsParams) == "J" .and. oJsParams:HasProperty("chvnfe") .and. !Empty(oJsParams["chvnfe"]) .and. ; 
+       oJsParams:HasProperty("event") .and. !Empty(oJsParams["event"])
+
+        cChvNfe := oJsParams['chvnfe']
+        cCodEvent := oJsParams['event']
+
+        If oJsParams:HasProperty("dataEmis")
+            cDataEmis := oJsParams['dataEmis']
+        EndIf
+
+        cQuery := " SELECT T7A.T7A_IDENT, T7A.T7A_TPEVEN, T7A.T7A_DTEMIS, T7A.T7A_CHVELE, T7A.T7A_DTPREV, "
+        cQuery += "        T7B.T7B_ITEM, T7B.T7B_CODTRI, T7B.T7B_VALOR, T7B.T7B_CODCRE, " 
+        cQuery += "        T7C.T7C_ITEM, T7C.T7C_QUANT, T7C.T7C_CODTRI, T7C.T7C_VALOR "
+        cQuery += " FROM " + RetSqlName("T7A") + " T7A "
+        cQuery += " LEFT JOIN " + RetSqlName("T7B") + " T7B "
+        cQuery += "   ON T7B.T7B_FILIAL = ? "         //1
+        cQuery += "     AND T7B.T7B_IDENT = T7A.T7A_IDENT "
+        cQuery += "     AND T7B.D_E_L_E_T_ = ? "      //2
+        cQuery += " LEFT JOIN " + RetSqlName("T7C") + " T7C "
+        cQuery += "   ON T7C.T7C_FILIAL = ? "         //3
+        cQuery += "     AND T7C.T7C_IDENT = T7A.T7A_IDENT "
+        cQuery += "     AND T7C.D_E_L_E_T_ = ? "      //4
+        cQuery += "       WHERE T7A.T7A_FILIAL = ? "  //5
+        cQuery += "         AND T7A.T7A_CHVELE = ? "  //6
+        cQuery += "         AND T7A.T7A_TPEVEN = ? "  //7
+        cQuery += "         AND T7A.T7A_STATUS = ? "  //8
+        cQuery += "         AND T7A.D_E_L_E_T_ = ? "  //9
+        
+        If !Empty(cDataEmis)
+            cQuery += " AND T7A.T7A_DTEMIS = ? "      //10
+        EndIf
+
+        cQuery += " ORDER BY T7A.T7A_IDENT, T7B.T7B_ITEM, T7C.T7C_ITEM "
+
+        cQuery := ChangeQuery(cQuery)
+        oStatement := FwExecStatement():New(cQuery)
+
+        oStatement:SetString(01, FwXFilial("T7B")) 
+        oStatement:SetString(02, Space(01))
+        oStatement:SetString(03, FwXFilial("T7C")) 
+        oStatement:SetString(04, Space(01))
+        oStatement:SetString(05, FwXFilial("T7A")) 
+        oStatement:SetString(06, cChvNfe)          
+        oStatement:SetString(07, cCodEvent)   
+        oStatement:SetString(08, '2')
+        oStatement:SetString(09, Space(01))  
+        
+        If !Empty(cDataEmis)
+            oStatement:SetString(10, cDataEmis) 
+        EndIf
+
+        cAliasQry := oStatement:OpenAlias()
+        
+        While (cAliasQry)->(!EOF())
+            
+            cIdAtual := (cAliasQry)->T7A_IDENT
+            
+            nPos := AScan(aEventos, {|jObj| jObj["id"] == cIdAtual})
+            
+            If nPos == 0
+                oJsTempEventos := JsonObject():New()
+                oJsTempEventos["id"]     := cIdAtual
+                oJsTempEventos["evento"] := (cAliasQry)->T7A_TPEVEN
+                oJsTempEventos["data"]   := (cAliasQry)->T7A_DTEMIS
+                oJsTempEventos["chave"]  := (cAliasQry)->T7A_CHVELE   
+    
+                AAdd(aEventos, oJsTempEventos)
+            Else
+                oJsTempEventos := aEventos[nPos] 
+            EndIf
+
+            Do Case
+                Case cCodEvent == "112150"
+                    oJsTempEventos["dataEntrega"] := (cAliasQry)->T7A_DTPREV
+                        
+                Case cCodEvent == "211110"
+                    ::processT7B(oJsTempEventos, cAliasQry)
+                        
+                Case cCodEvent $ cEventItem
+                    ::processT7C(oJsTempEventos, cAliasQry) 
+            EndCase
+            
+            (cAliasQry)->(DbSkip())
+
+        EndDo
+
+        (cAliasQry)->(DbCloseArea())  
+
+        oJsRetEventos["registros"] := aEventos
+        oJsRetEventos["total"]     := Len(aEventos)
+        oJsRetEventos["errorMsg"]  := ""
+
+        FreeObj(oStatement)
+
+    Else
+
+        oJsRetEventos["registros"]    := {}
+        oJsRetEventos["total"]        := 0
+        oJsRetEventos["errorMsg"] := STR0010 //"Parâmetros inválidos. As chaves 'chvnfe' e 'event' são obrigatórias."
+
+    EndIf
+
+Return oJsRetEventos
+
+/*/{Protheus.doc} processT7B
+Função para gravar o json de retorno com os itens da T7B
+@author Carla Bianca Santos latorre
+@since 27/03/2026
+@param oJsTempEventos - json temporário com os dados do evento 
+/*/
+Method processT7B(oJsTempEventos As Json, cAliasQry As Character) Class Processingqueue
+
+    Local nI := 0 As Numeric
+    Local oJsNovoItem As Json
+    Local aTempItens As Array 
+    
+    If oJsTempEventos <> Nil .And. cAliasQry <> Nil    
+
+        If !oJsTempEventos:HasProperty("itens")
+            oJsTempEventos["itens"] := {}
+        EndIf
+        
+        nI := Len(oJsTempEventos["itens"])
+        
+        If nI == 0 .Or. AllTrim(oJsTempEventos["itens"][nI]["item"]) != AllTrim((cAliasQry)->T7B_ITEM)
+            
+            oJsNovoItem := JsonObject():New()
+            oJsNovoItem["item"] := (cAliasQry)->T7B_ITEM
+            
+            aTempItens := oJsTempEventos["itens"]
+            AAdd(aTempItens, oJsNovoItem)
+            oJsTempEventos["itens"] := aTempItens
+            
+            nI := Len(oJsTempEventos["itens"]) 
+            
+        EndIf 
+        
+        If (cAliasQry)->T7B_CODTRI == "000033"
+            oJsTempEventos["itens"][nI]["codtribCBS"] := (cAliasQry)->T7B_CODTRI
+            oJsTempEventos["itens"][nI]["codCredCBS"] := (cAliasQry)->T7B_CODCRE
+            oJsTempEventos["itens"][nI]["valorCBS"]   := (cAliasQry)->T7B_VALOR
+
+        ElseIf (cAliasQry)->T7B_CODTRI == "000046"
+            oJsTempEventos["itens"][nI]["codtribIBS"] := (cAliasQry)->T7B_CODTRI
+            oJsTempEventos["itens"][nI]["codCredIBS"] := (cAliasQry)->T7B_CODCRE
+            oJsTempEventos["itens"][nI]["valorIBS"]   := (cAliasQry)->T7B_VALOR
+        EndIf
+
+    EndIf
+
+Return
+
+/*/{Protheus.doc} processT7C
+Função para gravar o json de retorno com os itens da T7C
+@author Carla Bianca Santos latorre
+@since 27/03/2026
+@param oJsTempEventos - json temporário com os dados do evento 
+/*/
+Method processT7C(oJsTempEventos As Json, cAliasQry As Character) Class Processingqueue
+    
+    Local cCodCBS := "|000031|000032|000039|000040|000041|" As Character
+    Local cCodIBS := "|000042|000043|000044|000045|000047|000048|000049|" As Character
+    Local nI := 0 As Numeric
+    Local oJsNovoItem As Json
+    Local aTempItens As Array
+
+    If oJsTempEventos <> Nil .And. cAliasQry <> Nil
+        
+        If !oJsTempEventos:HasProperty("itens")
+            oJsTempEventos["itens"] := {}
+        EndIf
+        
+        nI := Len(oJsTempEventos["itens"])
+        
+        If nI == 0 .Or. AllTrim(oJsTempEventos["itens"][nI]["item"]) != AllTrim((cAliasQry)->T7C_ITEM)
+            
+            oJsNovoItem := JsonObject():New()
+            oJsNovoItem["item"] := (cAliasQry)->T7C_ITEM
+            oJsNovoItem["qtde"] := (cAliasQry)->T7C_QUANT
+            
+            aTempItens := oJsTempEventos["itens"]
+            AAdd(aTempItens, oJsNovoItem)
+            oJsTempEventos["itens"] := aTempItens
+            
+            nI := Len(oJsTempEventos["itens"]) 
+            
+        EndIf
+        
+        If (cAliasQry)->T7C_CODTRI $ cCodCBS 
+            oJsTempEventos["itens"][nI]["codtribCBS"] := (cAliasQry)->T7C_CODTRI
+            oJsTempEventos["itens"][nI]["valorCBS"]   := (cAliasQry)->T7C_VALOR
+
+        ElseIf (cAliasQry)->T7C_CODTRI $ cCodIBS
+            oJsTempEventos["itens"][nI]["codtribIBS"] := (cAliasQry)->T7C_CODTRI
+            oJsTempEventos["itens"][nI]["valorIBS"]   := (cAliasQry)->T7C_VALOR
+        EndIf
+
+    EndIf
+
+Return

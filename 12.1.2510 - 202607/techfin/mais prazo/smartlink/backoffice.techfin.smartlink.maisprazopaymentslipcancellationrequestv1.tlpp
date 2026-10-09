@@ -1,0 +1,462 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "FwMVCDef.ch"
+
+NAMESPACE totvs.protheus.backoffice.techfin.smartlink.maisprazopaymentslipcancellationrequestv1
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+
+Static __cProdTF := "2" as character
+
+Static __cStatusCancelamentoEmAnalise := "6" as character
+
+/*/{Protheus.doc} MaisPrazoPaymentSlipCancellationRequestv1
+    
+    @type class
+    @author squad.techfin 
+    @since 02/10/2025
+/*/
+class MaisPrazoPaymentSlipCancellationRequestv1
+    data cSolicitacao           as character
+    data cJustification         as character
+    data aPaymentSlips          as Array
+    data aEligibilityRules      as Array
+    data aEligibilityRulesSlips as Array
+    data nRequestId             as numeric
+    data cCodError              as character
+    data cReqKey                as character
+
+    public method new() 
+    public method setCancelation(cSolicitacao as character,cJustificativa as character) as array
+    public method isValidStatus() as logical
+    public method getCodError()   as character
+    public method goTo(cSolicitacao as character) as logical
+    public method setEligibilityRules()
+    
+    private method setSolicitacao(cSolicitacao as character)
+    private method setJustification(cJustification as character) 
+    private method setPaymentSlips()
+    private method setRequestId(nRequestId as numeric)
+    private method setCodError(cCodError as character)
+    private method setReqKey(cReqKey as character)
+
+    private method getRequestId()        as numeric
+    private method getJustification()    as character
+    private method getSolicitacao()      as character
+    private method getPaymentSlips()     as array
+    private method getEligibilityRules() as array
+    private method getReqKey()           as character
+
+    private method send()               as logical
+    private method isValidStatusSlip()  as logical
+    private method isEligibility(cAlias as character,aEligibilityRules as Array) as logical
+    private method updateStatusSolicitacao()
+end class
+
+/*/{Protheus.doc} new
+    Inicializa uma nova instância da classe MaisPrazoPaymentSlipCancellationRequestv1
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return self, object, Instância de MaisPrazoPaymentSlipCancellationRequestv1
+/*/
+Method new() class MaisPrazoPaymentSlipCancellationRequestv1
+    ::cSolicitacao           := ""
+    ::cJustification         := ""
+    ::aPaymentSlips          := {}
+    ::aEligibilityRules      := {}
+    ::aEligibilityRulesSlips := {}
+    ::nRequestId             := 0
+    ::cCodError              := ""
+Return self
+
+/*/{Protheus.doc} setCancelation
+    Processa a solicitação de cancelamento de boletos com base no número da solicitação.
+    Valida elegibilidade, status da solicitação e dos boletos, e envia para a fila Smartlink
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cSolicitacao, character, Número da solicitação para cancelamento
+    @param cJustificativa, character, Justificativa para o cancelamento
+    @return aReturn, array, Array contendo [logical (sucesso), character (código de erro)]
+/*/
+Method setCancelation(cSolicitacao as character,cJustificativa as character) as array class MaisPrazoPaymentSlipCancellationRequestv1
+    local aAreas    := {}  as Array
+    local lRet      := .F. as logical
+    local cError    := ""  as character
+    local lPosOK    := .F. as logical
+    
+    aAdd(aAreas, ARG->(FwGetArea())) 
+    aAdd(aAreas, ARH->(FwGetArea())) 
+    
+    Try
+        Begin Transaction     
+            ::setEligibilityRules()
+            lPosOK := ::goTo(cSolicitacao) 
+            if lPosOK .And. ARG->ARG_STATUS < __cStatusCancelamentoEmAnalise //Verifica se a solicitação não está cancelada ou em cancelamento
+                If ::isValidStatus()
+                    ::setJustification(cJustificativa) 
+                    lRet := ::send()
+                EndIf
+            ElseIf lPosOK .And. ARG->ARG_STATUS >= __cStatusCancelamentoEmAnalise
+                ::setCodError("1")
+            Else
+                ::setCodError("2")
+            EndIf
+
+        End Transaction
+    Catch oError
+
+        DisarmTransaction()
+
+        cError := oError:description()
+        ::setCodError("2")
+        FwLogMsg("ERROR",,"TECHFIN",FunName(),,"01","Erro ao processar solicitação de cancelamento: " + cError,0,0, {})
+    
+    EndTry
+
+    aEval(aAreas, {|x| FwRestArea(x)})
+    FwFreeArray(aAreas)    
+Return {lRet,::getCodError()}
+
+/*/{Protheus.doc} goTo
+    Navega até o registro da solicitação na tabela ARG e, se encontrado,
+    inicializa o número da solicitação, o ID da requisição financeira e a chave única (MSUID)
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cSolicitacao, character, Número da solicitação para navegar
+    @return lRet, logical, Verdadeiro se o registro da solicitação foi encontrado
+/*/
+Method goTo(cSolicitacao as character) as logical class MaisPrazoPaymentSlipCancellationRequestv1
+    local lRet := .F.
+    ARG->(DbSetOrder(1))
+    If (lRet := ARG->(MsSeek(FwXFilial("ARG")+cSolicitacao)))
+        ::setSolicitacao(ARG->ARG_NUM)
+        ::setRequestId(ARG->ARG_FNCOND)
+        ::setReqKey(ARG->ARG_MSUID)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} isValidStatus
+    Valida se o status é apropriado para cancelamento
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return lRet, logical, Verdadeiro se o status é válido para cancelamento
+/*/
+Method isValidStatus() as logical class MaisPrazoPaymentSlipCancellationRequestv1
+    local lRet := .F. as logical
+    
+    If ::isEligibility("ARG", ::getEligibilityRules()[1])
+        If !(lRet := ::isValidStatusSlip())
+            ::setCodError("2") 
+        EndIf
+    Else
+        If ARG->ARG_STATUS == __cStatusCancelamentoEmAnalise
+            ::setCodError("1") //Solicitação já em análise para cancelamento
+        Else
+            ::setCodError("2") 
+        EndIf
+    EndIf
+        
+Return lRet
+
+/*/{Protheus.doc} isValidStatusSlip
+    Valida o status dos boletos e coleta os IDs dos boletos elegíveis
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return lRet, logical, Verdadeiro se todos os boletos têm status válido para cancelamento
+/*/
+Method isValidStatusSlip() as logical class MaisPrazoPaymentSlipCancellationRequestv1
+    local lRet         := .T.                as logical
+    local cSolicitacao := ::getSolicitacao() as character
+    local cFilialARH   := FwXFilial("ARH")   as character
+    local aIdDoc       := {}                 as Array
+    local aEligibility := {}                 as Array
+
+    ARH->(DbSetOrder(1)) //ARH_FILIAL, ARH_NUM, ARH_IDDOC, R_E_C_N_O_, D_E_L_E_T_
+    If ARH->(MsSeek(cFilialARH+cSolicitacao))
+        aEligibility := ::getEligibilityRules()[2]
+        While ARH->(ARH_FILIAL+ARH_NUM) == cFilialARH+cSolicitacao .And. lRet
+            If (lRet := ::isEligibility("ARH", aEligibility))
+                ::setPaymentSlips()    
+            EndIf
+        ARH->(DbSkip())
+        EndDo
+    EndIf
+    
+    FwFreeArray(aIdDoc)
+    FwFreeArray(aEligibility)
+Return lRet
+
+/*/{Protheus.doc} isEligibility
+    Verifica se o registro atual do alias informado atende a pelo menos uma das regras de elegibilidade
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cAlias, character, Alias da tabela a ser verificada (ex: "ARG" ou "ARH")
+    @param aEligibilityRules, array, Array de regras de elegibilidade no formato {cNome, cExpressao, cExtra}
+    @return lRet, logical, Verdadeiro se o registro atende a pelo menos uma regra de elegibilidade
+/*/
+Method isEligibility(cAlias as character,aEligibilityRules as Array) as logical class MaisPrazoPaymentSlipCancellationRequestv1
+    local lRet              := .F.                     as logical
+    local nX                := 1                       as numeric
+    local nTotalRules       := Len(aEligibilityRules)  as numeric
+    local cRule             := ""                      as character
+    
+    Try
+        For nX := 1 To nTotalRules
+            cRule := aEligibilityRules[nX][2] 
+            If Alltrim(cAlias) $ cRule .And. &(cRule)
+                lRet := .T.
+                Exit
+            EndIf
+        Next
+    Catch oError
+        lRet := .F.
+        FwLogMsg("ERROR",,"TECHFIN",FunName(),,"01","Erro ao avaliar regra de elegibilidade: " + oError:description(),0,0, {})
+    EndTry
+Return lRet
+
+/*/{Protheus.doc} setEligibilityRules
+    Configura as regras de elegibilidade para solicitações (ARG) e boletos (ARH).
+    Tenta carregar as regras a partir do banco de dados via loadEligibilityRules; caso não existam
+    regras cadastradas para ARG ou ARH, aplica regras padrão (DEFAULT)
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+/*/
+Method setEligibilityRules() class MaisPrazoPaymentSlipCancellationRequestv1
+    local nX                     := 1   as numeric
+    local nTotal                 := 0   as numeric
+    local lARG                   := .F. as logical
+    local lARH                   := .F. as logical
+    local aEligibility           := {}  as Array
+    local aEligibilityRules      := {}  as Array
+    local aEligibilityRulesSlips := {}  as Array
+    local cCnpj := FWSM0Util():GetSM0Data( cEmpAnt , cFilAnt, {"M0_CGC"})[1][2] as character
+
+    aEligibility := loadEligibilityRules(__cProdTF, cCnpj)
+    lARG := (aScan(aEligibility,{|x| "ARG" $ x[2]}) == 0)
+    lARH := (aScan(aEligibility,{|x| "ARH" $ x[2]}) == 0)
+    If Len(aEligibility) == 0 .Or. lARG .Or. lARH
+        If lARG
+            aAdd(aEligibilityRules     , {"DEFAULT","(ARG->ARG_STATUS == '1' .Or. ARG->ARG_STATUS == '2' .Or. ARG->ARG_STATUS == '3')",""})     
+        EndIf
+        If lARH
+            aAdd(aEligibilityRulesSlips, {"DEFAULT","DateDiffDay(DataValida(Date(),.T.),ARH->ARH_VENCRE) > 1 .And. (ARH->ARH_STATUS == '2' .Or. ARH->ARH_STATUS == '3' .Or. ARH->ARH_STATUS == '4')",""})
+        EndIf
+    Else
+        nTotal := Len(aEligibility)
+        For nX := 1 To nTotal
+            If "ARG" $ aEligibility[nX][2]
+                aAdd(aEligibilityRules     , aEligibility[nX])
+            EndIf
+            If "ARH" $ aEligibility[nX][2]
+                aAdd(aEligibilityRulesSlips, aEligibility[nX])
+            EndIf
+        Next
+    EndIf
+
+    ::aEligibilityRules      := aClone(aEligibilityRules)
+    ::aEligibilityRulesSlips := aClone(aEligibilityRulesSlips)
+
+    FwFreeArray(aEligibility)
+    FwFreeArray(aEligibilityRules)
+    FwFreeArray(aEligibilityRulesSlips)
+Return 
+
+/*/{Protheus.doc} getEligibilityRules
+    Retorna o array das regras de elegibilidade para solicitações e boletos.
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return {array} Array de arrays de regras de elegibilidade
+/*/
+Method getEligibilityRules() as array class MaisPrazoPaymentSlipCancellationRequestv1
+Return {::aEligibilityRules, ::aEligibilityRulesSlips}
+
+/*/{Protheus.doc} setSolicitacao
+    Define o número da solicitação para a solicitação de pagamento
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cSolicitacao, character, Número da solicitação a ser definido
+/*/
+Method setSolicitacao(cSolicitacao as character) class MaisPrazoPaymentSlipCancellationRequestv1
+    ::cSolicitacao := cSolicitacao
+Return
+
+/*/{Protheus.doc} getSolicitacao
+    Retorna o número da solicitação da solicitação de pagamento
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return cSolicitacao, character, Número da solicitação
+/*/
+Method getSolicitacao() as character class MaisPrazoPaymentSlipCancellationRequestv1
+Return ::cSolicitacao    
+
+/*/{Protheus.doc} send
+    Envia a solicitação de cancelamento para o sistema Smartlink via fila
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return lSuccess, logical, Verdadeiro se a solicitação foi enviada com sucesso
+/*/
+Method send() as logical class MaisPrazoPaymentSlipCancellationRequestv1
+    local cFila      := "MaisPrazoPaymentSlipCancellationRequestV1" as character
+    local lSuccess   := .F.                   as logical
+    local jData      := jsonObject():new()    as json
+    local oSmartUtil := SmartlinkUtil():new() as object
+    
+    jData["requestId"] := ::getRequestId()
+    jData["justificationCancellationDesc"] := ::getJustification()
+    jData["paymentSlips"] := ::getPaymentSlips()
+    
+    If (lSuccess := oSmartUtil:send(cFila, jData:toJson(), .T./*lReqID*/,::getReqKey()/*cReqId*/, .F./*lHelp*/))
+        ::updateStatusSolicitacao()
+    EndIf
+
+    FwFreeObj(jData)
+    FwFreeObj(oSmartUtil)
+Return lSuccess
+
+/*/{Protheus.doc} setJustification
+    Define a descrição da justificativa para a solicitação de cancelamento
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cJustification, character, Descrição da justificativa (não utilizada, padrão é aplicado)
+/*/
+Method setJustification(cJustification as character) class MaisPrazoPaymentSlipCancellationRequestv1
+    ::cJustification := cJustification
+Return
+
+/*/{Protheus.doc} getJustification
+    Retorna a descrição da justificativa para a solicitação de cancelamento
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return cJustification, character, Descrição da justificativa
+/*/
+Method getJustification() as character class MaisPrazoPaymentSlipCancellationRequestv1
+Return ::cJustification
+
+/*/{Protheus.doc} setPaymentSlips
+    Adiciona o boleto ARH atual à coleção com seu ID
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+/*/
+Method setPaymentSlips() class MaisPrazoPaymentSlipCancellationRequestv1
+    local jPaymentSlip   := jsonObject():new() as json
+    
+    jPaymentSlip["paymentSlipId"] := ARH->ARH_IDDOC
+    aAdd(::aPaymentSlips, jPaymentSlip)
+
+Return
+
+/*/{Protheus.doc} getPaymentSlips
+    Retorna o array de boletos a serem cancelados
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return aPaymentSlips, array, Array de objetos de boletos
+/*/
+Method getPaymentSlips() as array class MaisPrazoPaymentSlipCancellationRequestv1
+Return ::aPaymentSlips
+
+/*/{Protheus.doc} setRequestId
+    Define o ID da requisição financeira vinculada à solicitação
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param nRequestId, numeric, ID da requisição financeira
+/*/
+Method setRequestId(nRequestId as numeric) class MaisPrazoPaymentSlipCancellationRequestv1
+    ::nRequestId := nRequestId
+Return
+
+/*/{Protheus.doc} getRequestId
+    Retorna o ID da requisição financeira vinculada à solicitação
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return nRequestId, numeric, ID da requisição financeira
+/*/
+Method getRequestId() as numeric class MaisPrazoPaymentSlipCancellationRequestv1
+Return ::nRequestId
+
+/*/{Protheus.doc} setCodError
+    Define o código de erro ocorrido durante o processamento da solicitação
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cCodError, character, Código do erro (ex: "1" - já em análise, "2" - erro genérico)
+/*/
+Method setCodError(cCodError as character) class MaisPrazoPaymentSlipCancellationRequestv1
+    ::cCodError := cCodError
+Return
+
+/*/{Protheus.doc} getCodError
+    Retorna o código de erro ocorrido durante o processamento da solicitação
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return cCodError, character, Código do erro (ex: "1" - já em análise, "2" - erro genérico)
+/*/
+Method getCodError() as character class MaisPrazoPaymentSlipCancellationRequestv1
+Return ::cCodError
+
+/*/{Protheus.doc} updateStatusSolicitacao
+    Atualiza o status da solicitação (ARG) e de todos os boletos vinculados (ARH)
+    para "Em Análise de Cancelamento" (status __cStatusCancelamentoEmAnalise)
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+/*/
+Method updateStatusSolicitacao() class MaisPrazoPaymentSlipCancellationRequestv1
+    local cSolicitacao := ::getSolicitacao() as character
+    local cKeyARG       := FwXFilial("ARG")+cSolicitacao as character
+    local cKeyARH       := FwXFilial("ARH")+cSolicitacao as character
+    
+    ARG->(DbSetOrder(1))
+    ARH->(DbSetOrder(1))
+    
+    If ARG->(MsSeek(cKeyARG)) .And. ARH->(MsSeek(cKeyARH))
+        RecLock("ARG",.F.)
+            ARG->ARG_STATUS := __cStatusCancelamentoEmAnalise
+        ARG->(MsUnlock())
+            
+        While ARH->(ARH_FILIAL+ARH_NUM) == cKeyARH
+            RecLock("ARH",.F.)
+                ARH->ARH_STATUS := __cStatusCancelamentoEmAnalise
+            ARH->(MsUnlock())
+        ARH->(DbSkip())
+        EndDo
+
+    EndIf
+Return
+        
+/*/{Protheus.doc} setReqKey
+    Define a chave única (MSUID) da solicitação utilizada como identificador na fila Smartlink
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @param cReqKey, character, Chave única (ARG_MSUID) da solicitação
+/*/
+Method setReqKey(cReqKey as character) class MaisPrazoPaymentSlipCancellationRequestv1
+    ::cReqKey := cReqKey
+Return
+
+/*/{Protheus.doc} getReqKey
+    Retorna a chave única (MSUID) da solicitação utilizada como identificador na fila Smartlink
+    @author Squad Techfin
+    @since 20/05/2026
+    @version 1.0
+    @return cReqKey, character, Chave única (ARG_MSUID) da solicitação
+/*/
+Method getReqKey() as character class MaisPrazoPaymentSlipCancellationRequestv1
+Return ::cReqKey

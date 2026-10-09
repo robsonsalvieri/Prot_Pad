@@ -1,0 +1,728 @@
+#Include 'totvs.ch'
+#Include 'tlpp-core.th'
+
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.manager
+Using namespace totvs.protheus.backoffice.stock.iterativecost.view.laborproduct
+Using Namespace totvs.protheus.backoffice.stock.iterativecost.view.laborrequests
+Using Namespace totvs.protheus.backoffice.stock.iterativecost.table.analyticalmovementtable
+Using Namespace totvs.protheus.backoffice.stock.iterativecost.table.laborbycostcenter
+Using Namespace totvs.protheus.backoffice.stock.iterativecost.table.processingtable
+
+namespace totvs.protheus.backoffice.stock.iterativecost.accounting.laborproductvalue
+
+
+/*/{Protheus.doc} LaborProductValue
+    Classe responsável pela integração do custo do centro de custos para os produtos MOD
+    @type Class
+    @author Squad Entradas
+    @since 28/10/2024
+    @version version
+    /*/
+Class LaborProductValue
+    public method new()
+
+    public method GetValueByCostCenter()
+    public method UpdProcTableCostCenterAvgCost()
+    Public Method UpdMovements()
+    Public Method InstallProc()
+
+    Private Method SelectCostByProductBySD3()
+    Private Method SelectCostByProductBySB2()
+    Private Method SelectModMovements()
+
+    Public Data cAssProc26 As Character
+    Public Data cCTB250    As Character
+    Public Data oCTB250    As Object
+    Public Data lCTB250    As Logical
+    Public Data oTabCC     As Object
+    Public Data oQryUpdD3  As Object
+    Public Data oQryUpdB2  As Object
+    Public Data oQryMov    As Object
+    Public Data oQryZera   As Object
+    Public Data cCusFil    As Character
+    Public Data lOracle    As Logical
+    Public Data jParams    As Json
+
+EndClass
+
+/*/{Protheus.doc} New
+    Instância da classe
+    @type Method
+    @author Squad Entradas
+    @since 28/10/2024
+/*/
+Method New(oTabCC, jParams) Class LaborProductValue
+
+    ::oTabCC  := oTabCC
+    ::lOracle := ::oTabCC:lOracle
+    ::cCusFil  := SuperGetMv("MV_CUSFIL", .F., "A")
+    ::oQryUpdD3 := Nil   
+    ::jParams   := jParams
+Return Self
+
+
+Method InstallProc() Class LaborProductValue
+    If SPSMigrated()
+        M330Proced() //Instala a procedure contábil
+    Else
+        UserException("O instalador de procedures deve ser migrado para a nova versão no configurador")
+    EndIf
+
+    ::cAssProc26 := EngSPS26Signature("26")
+
+    ::cCTB250 := "CTB250"
+    If FindFunction("GetSPName")
+        ::cCTB250   := GetSPName("CTB250","26")
+    EndIf
+    ::oCTB250   := EngSPSStatus('26', cEmpAnt)
+    ::lCTB250   := ::oCTB250['signature'] == ::cAssProc26
+Return
+
+/*/{Protheus.doc} GetValueByCostCenter
+    Pega o custo total por Centro de Custos
+    @type Method
+    @author Squad Entradas
+    @since 28/10/2024
+    /*/
+Method GetValueByCostCenter(cFilAtu, cCodCC, dDtIni, dDtFim, cGrupo, cCTBIni, cCTBFim, cConta, cItemC, cClVlr) Class LaborProductValue
+    Local aSaldos        As Array
+    Local cUsaGrupo      As Character
+
+    Default cConta := " "
+    Default cItemC := " "
+    Default cClVlr := " "
+
+    If !Empty(cGrupo)
+        cUsaGrupo := '1'
+    Else
+        cUsaGrupo := '0'
+    EndIf
+    
+    aSaldos := TCSPExec( xProcedures(::cCTB250),;
+						cFilAtu,;       // Filial corrente
+						cCodCC,;        // Centro de Custo
+						Dtos(dDtIni),;  // data inicio para o processo
+						Dtos(dDtFim),;  // Data final para o processo
+						cUsaGrupo,;     // usa Grupo Contábil
+						cGrupo,;        //Grupo Contábil
+						cCTBIni,;       //Conta Inicial a Excluir
+						cCTBFim,;       //Conta Final a Excluir
+                        cConta,;
+                        cItemC,;
+                        cClVlr,;
+						'0';           // Custo por Empresa (MV_CUSFIL="E")
+                        )
+
+    If Empty(aSaldos) .Or. aSaldos == Nil
+        UserException("Erro no Calculo da MOD: "+TCSQLError())
+    EndIf
+Return aSaldos
+
+/*/{Protheus.doc} UpdProcTableCostCenterAvgCost
+    Atualiza o custo médio dos produtos MOD na tabela de processamento
+    @type Method
+    Parâmetro:
+    Calcula MOD?
+        1-Sim --> Busca o custo do centro de custo na CT2
+        2-Não --> Busca o custo da tabela SB2
+    @author Squad Entradas
+    @since 30/10/2024
+    /*/
+Method UpdProcTableCostCenterAvgCost(cFilProc, dDtIni, dDtFim) Class LaborProductValue
+    Local cQuery      As Character
+    Local aFiliais    As Array
+    Local nMoeda      As Numeric
+    Local nFil        As Numeric
+    Local cCTE        As Character
+    Local cTabProc    As Character
+    Local cAlTRCC     As Character
+    Local cUpdate     As Character
+    Local cMoeda      As Character
+    Local cNull       As Character
+    Local nPercInc    As Numeric
+    Local cPercInc    As Character
+    Local cFilAtu     As Character
+    Local cViewSB1MOD As Character
+    Local nTamConta   As Numeric
+    Local aMatch   := {} As Array
+    Local aUpdate  := {} As Array
+    Local aCpoDest := {} As Array
+    Local aInsert  := {} As Array
+    Local cMerge   := "" As Character
+    Local cGrupo      As Character
+    Local cCodCC      As Character
+    Local cCTBIni     As Character
+    Local cCTBFim     As Character
+    Local nCalcula    As Integer
+    
+    cNull := MatIsNull()
+
+    cTabProc := ProcessingTable():TableName()
+    nTamConta  := TamSX3('CT1_CONTA')[1]
+    nPercInc   := 100+::jParams["percmod"]
+    cCTBIni    := ::jParams["contini"]
+    cCTBFim    := ::jParams["contfin"]
+    D4D->(DbSetOrder(1)) //D4D_FILIAL+D4D_IDVIEW
+    If D4D->(DbSeek(FWXFilial('D4D')+ViewLaborProduct():GetViewID()))
+        cViewSB1MOD := D4D->D4D_VWNAME
+    EndIf
+    nCalcula := ::jParams["calcmod"]
+
+    If nCalcula == 1
+        //Pega o custo do centro de custo para a tabela de saldos por CC
+        cAlTRCC := LaborByCostCenter():TableName()
+        TableManager():UseArea(cAlTRCC, LaborByCostCenter():tableIndexes())
+
+        (cAlTRCC)->(DbSetOrder(1)) //FILPROC+FILIAL+CCUSTO+GCC
+        (cAlTRCC)->(DbSeek(cFilProc))
+        While !(cAlTRCC)->(EoF()) .And. (cAlTRCC)->FILPROC == cFilProc
+            cFilAtu := (cAlTRCC)->FILIAL
+            cCodCC  := (cAlTRCC)->CCUSTO
+            cGrupo  := (cAlTRCC)->GCC
+            
+            aSaldos := ::GetValueByCostCenter(cFilAtu, cCodCC, dDtIni, dDtFim, cGrupo, cCTBIni, cCTBFim)
+
+            RecLock(cAlTRCC, .F.)
+            For nMoeda := 1 To Len(::jParams["moedas"])
+                cMoeda := ::jParams["moedas", nMoeda]
+                (cAlTRCC)->(&('CUSTO'+cMoeda)) := aSaldos[val(cMoeda)] * (nPercInc/100)
+            Next
+            (cAlTRCC)->(MsUnlock())
+
+            (cAlTRCC)->(DbSkip())
+        EndDo
+
+        For nFil := 1 To Len(::oTabCC:aFilProc)
+            cFilAtu := ::oTabCC:aFilProc[nFil, 1]
+            cQuery := ::SelectCostByProductBySD3(cFilProc, cFilAtu, dDtIni, dDtFim)
+
+            //Filtro
+            ASize(aMatch, 0)
+            aMatch := {}
+            AAdd(aMatch, {"FILPROC", "FILPROC"})
+            AAdd(aMatch, {"FILIAL", "FILIAL"})
+            AAdd(aMatch, {"COD", "COD"})
+            If ::cCusFil == 'A'
+                AAdd(aMatch, {"ARMAZEM", "ARMAZEM"})
+            EndIf
+
+            //Expressões de update
+            ASize(aUpdate, 0)
+            aUpdate := {}
+            AAdd(aUpdate, "QTDHIST = Destino.QTDHIST + Origem.QUANT")
+            AAdd(aUpdate, "QTDPROC = Destino.QTDPROC + Origem.QUANT")
+            For nMoeda := 1 To Len(::jParams['moedas'])
+                cMoeda := ::jParams['moedas',nMoeda]
+                AAdd(aUpdate, "CSTHIST"+cMoeda+" = Destino.CSTHIST"+cMoeda+" + Origem.CUSTO"+cMoeda)
+                AAdd(aUpdate, "CSTPROC"+cMoeda+" = Destino.CSTPROC"+cMoeda+" + Origem.CUSTO"+cMoeda)
+                cUpdate := "CMHIST"+cMoeda+" = "
+                cUpdate += " Case "
+                cUpdate += " When (Destino.QTDHIST + Origem.QUANT) > 0 "
+                cUpdate += "    Then "
+                cUpdate += "   ((Destino.CSTHIST"+cMoeda+" + Origem.CUSTO"+cMoeda+")"
+                cUpdate += "   / "
+                cUpdate += "   (Destino.QTDHIST + Origem.QUANT))"
+                cUpdate += "   Else Destino.CMHIST"+cMoeda+" "
+                cUpdate += " End "
+                AAdd(aUpdate, cUpdate)
+                cUpdate := "CMPROC"+cMoeda+" = "
+                cUpdate += " Case "
+                cUpdate += " When (Destino.QTDPROC + Origem.QUANT) > 0 "
+                cUpdate += "    Then "
+                cUpdate += "   ((Destino.CSTPROC"+cMoeda+" + Origem.CUSTO"+cMoeda+")"
+                cUpdate += "   / "
+                cUpdate += "   (Destino.QTDPROC + Origem.QUANT))"
+                cUpdate += "   Else Destino.CMPROC"+cMoeda+" "
+                cUpdate += " End "
+                AAdd(aUpdate, cUpdate)
+            Next nMoeda
+            
+            //Expressões de insert
+            ASize(aCpoDest, 0)
+            aCpoDest := {}
+            AAdd(aCpoDest, "FILPROC")
+            AAdd(aCpoDest, "FILIAL")
+            AAdd(aCpoDest, "COD")
+            If ::cCusFil == 'A'
+                AAdd(aCpoDest, "ARMAZEM")
+            EndIf
+            AAdd(aCpoDest, "QTDHIST")
+            AAdd(aCpoDest, "QTDPROC")
+            For nMoeda := 1 To Len(::jParams['moedas'])
+                cMoeda := ::jParams['moedas',nMoeda]
+                AAdd(aCpoDest, "CSTHIST"+cMoeda)
+                AAdd(aCpoDest, "CSTPROC"+cMoeda)
+                AAdd(aCpoDest, "CMHIST"+cMoeda)
+                AAdd(aCpoDest, "CMPROC"+cMoeda)
+            Next
+            
+            ASize(aInsert, 0)
+            aInsert := {}
+            AAdd(aInsert, "Origem.FILPROC")
+            AAdd(aInsert, "Origem.FILIAL")
+            AAdd(aInsert, "Origem.COD")
+            If ::cCusFil == 'A'
+                AAdd(aInsert, "Origem.ARMAZEM")
+            EndIf
+            AAdd(aInsert, "Origem.QUANT")
+            AAdd(aInsert, "Origem.QUANT")
+            For nMoeda := 1 To Len(::jParams['moedas'])
+                cMoeda := ::jParams['moedas',nMoeda]
+                AAdd(aInsert, "Origem.CUSTO"+cMoeda)
+                AAdd(aInsert, "Origem.CUSTO"+cMoeda)
+                cInsert := "Case "
+                cInsert += "When Origem.QUANT > 0 "
+                cInsert += "Then (Origem.CUSTO"+cMoeda+" / Origem.QUANT ) "
+                cInsert += "Else 0 "
+                cInsert += "End "
+                AAdd(aInsert, cInsert)
+                AAdd(aInsert, cInsert)
+            Next
+
+            cMerge := ::oTabCC:MergeStatement(cTabProc, cQuery, aMatch, aUpdate, aCpoDest, aInsert)
+
+            ::oTabCC:RunQuery(cMerge)
+
+        Next nFil
+
+        //Zera saldo de quantidade/custo de MOD
+        For nFil := 1 To Len(::oTabCC:aFilProc)
+            cFilAtu := ::oTabCC:aFilProc[nFil, 1]
+            
+            If ::oQryZera == Nil
+                cQuery := " Select "
+                cQuery += " PRC.FILPROC, "
+                cQuery += " PRC.FILIAL, "
+                cQuery += " PRC.COD, "
+                cQuery += " PRC.ARMAZEM "
+                cQuery += " From "+cTabProc+" PRC "
+                cQuery += " Inner Join "+cViewSB1MOD+" SB1 On "
+                cQuery += " SB1.B1_FILIAL = ? And "
+                cQuery += " SB1.B1_COD    = PRC.COD "
+                cQuery := ChangeQuery(cQuery)
+
+                ::oQryZera := FWExecStatement():New(cQuery)
+            EndIf
+
+            ::oQryZera:SetString(1, FWXFilial("SB1", cFilAtu))
+
+            cQuery := ::oQryZera:GetFixQuery()
+
+            //Filtro
+            ASize(aMatch, 0)
+            aMatch := {}
+            AAdd(aMatch, {"FILPROC", "FILPROC"})
+            AAdd(aMatch, {"FILIAL", "FILIAL"})
+            AAdd(aMatch, {"COD", "COD"})
+            AAdd(aMatch, {"ARMAZEM", "ARMAZEM"})
+
+            //Expressões de update
+            ASize(aUpdate, 0)
+            aUpdate := {}
+            AAdd(aUpdate, "QTDHIST = 0")
+            AAdd(aUpdate, "QTDPROC = 0")
+            For nMoeda := 1 To Len(::jParams['moedas'])
+                cMoeda := ::jParams['moedas',nMoeda]
+                AAdd(aUpdate, "CSTHIST"+cMoeda+" = 0")
+                AAdd(aUpdate, "CSTPROC"+cMoeda+" = 0")
+            Next
+            
+            //Expressões de insert
+            ASize(aCpoDest, 0)
+            aCpoDest := {}
+            AAdd(aCpoDest, "FILPROC")
+            AAdd(aCpoDest, "FILIAL")
+            AAdd(aCpoDest, "COD")
+            AAdd(aCpoDest, "ARMAZEM")
+            AAdd(aCpoDest, "QTDHIST")
+            AAdd(aCpoDest, "QTDPROC")
+            For nMoeda := 1 To Len(::jParams['moedas'])
+                cMoeda := ::jParams['moedas',nMoeda]
+                AAdd(aCpoDest, "CSTHIST"+cMoeda)
+                AAdd(aCpoDest, "CSTPROC"+cMoeda)
+            Next
+            
+            ASize(aInsert, 0)
+            aInsert := {}
+            AAdd(aInsert, "Origem.FILPROC")
+            AAdd(aInsert, "Origem.FILIAL")
+            AAdd(aInsert, "Origem.COD")
+            AAdd(aInsert, "Origem.ARMAZEM")
+            AAdd(aInsert, "0")
+            AAdd(aInsert, "0")
+            For nMoeda := 1 To Len(::jParams['moedas'])
+                AAdd(aInsert, "0")
+                AAdd(aInsert, "0")
+            Next
+            
+            cMerge := ::oTabCC:MergeStatement(cTabProc, cQuery, aMatch, aUpdate, aCpoDest, aInsert)
+
+            ::oTabCC:RunQuery(cMerge)
+
+        Next nFil
+    Else
+        cPercInc := cValToChar(nPercInc/100)
+
+        //Prepara o update na tabela de processamento
+        If !::lOracle
+            cCTE := " With TEMPTABLE As "
+        Else
+            cCTE := " Merge Into "+cTabProc+" Using "
+        EndIf
+
+        If !::lOracle
+            cUpdate := " Update "+cTabProc+" "
+        Else
+            cUpdate := " Update "
+        EndIf
+        cUpdate += "    Set "
+
+        For nMoeda := 1 To Len(::jParams['moedas'])
+            cMoeda := ::jParams['moedas',nMoeda]
+            cUpdate += " CMHIST"+cMoeda+" = "+cNull+"(TEMPTABLE.CM"+cMoeda+"*"+cPercInc+", 0),"
+            cUpdate += " CMPROC"+cMoeda+" = "+cNull+"(TEMPTABLE.CM"+cMoeda+"*"+cPercInc+", 0),"
+        Next nMoeda
+        cUpdate := Substr(cUpdate, 1, Len(cUpdate)-1)
+
+        If !::lOracle
+            cUpdate += " From TEMPTABLE "
+        EndIf
+        cUpdate += " Where "
+        cUpdate += " "+cTabProc+".FILPROC = '"+cFilProc+"'   And "
+        If ::cCusFil != 'E'
+            cUpdate += " "+cTabProc+".FILIAL  = TEMPTABLE.FILIAL And "
+        EndIf
+        cUpdate += " "+cTabProc+".COD     = TEMPTABLE.COD     "
+        If ::cCusFil == 'A'
+            cUpdate += " And "+cTabProc+".ARMAZEM = TEMPTABLE.ARMAZEM "
+        EndIf
+
+        For nFil := 1 To Len(::oTabCC:aFilProc)
+            cFilAtu := ::oTabCC:aFilProc[nFil, 1]
+            If ::cCusFil == 'E'
+                aFiliais := {}
+                AEval(::oTabCC:aFilProc, {|x| AAdd(aFiliais, x[1])})
+            EndIf
+            cQuery := ::SelectCostByProductBySB2(cFilProc, cFilAtu, dDtIni, dDtFim, aFiliais)
+
+            If ::lOracle
+                cQuery += " TEMPTABLE "
+                cQuery += " On ("
+                cQuery += " "+cTabProc+".FILPROC = '"+cFilProc+"'   And "
+                If ::cCusFil != 'E'
+                    cQuery += " "+cTabProc+".FILIAL  = TEMPTABLE.FILIAL  And "
+                EndIf
+                cQuery += " "+cTabProc+".COD     = TEMPTABLE.COD     "
+                If ::cCusFil == 'A'
+                    cQuery += " And "+cTabProc+".ARMAZEM = TEMPTABLE.ARMAZEM "
+                EndIf
+                cQuery += " ) "
+                cQuery += " When Matched Then "
+            EndIf
+            
+            ::oTabCC:RunQuery(cCTE+cQuery+cUpdate)
+
+            If ::cCusFil == 'E'
+                Exit
+            EndIf
+        Next nFil
+    EndIf
+    
+Return
+
+/*/{Protheus.doc} SelectCostByProductBySD3
+    Monta o select para pegar o custo por produto MOD com base na SD3
+    @type Method
+    @author Squad Entradas
+    @since 30/10/2024
+    /*/
+Method SelectCostByProductBySD3(cFilProc, cFilAtu, dDtIni, dDtFim) Class LaborProductValue
+    Local cQuery      As Character
+    Local cViewSD3MOD As Character
+    Local nMoeda      As Numeric
+    Local nBind       As Numeric
+
+    D4D->(DbSetOrder(1)) //D4D_FILIAL+D4D_IDVIEW
+    If D4D->(DbSeek(FWXFilial('D4D')+ViewLaborRequests():GetViewID()))
+        cViewSD3MOD := D4D->D4D_VWNAME
+    EndIf
+
+    If ::oQryUpdD3 == Nil
+        cQuery := " Select "
+        cQuery += " TRCC.FILPROC FILPROC, "
+        If ::cCusFil != 'E'
+            cQuery += " TRCC.FILIAL FILIAL, "
+        Else
+            cQuery += " Cast('"+PadR(FWCompany(), FWSizeFilial())+"' As"
+            cQuery += " Char("+cValToChar(FWSizeFilial())+")) FILIAL, "
+        EndIf
+        cQuery += " SD3.D3_COD COD, "
+        If ::cCusFil == 'A'
+            cQuery += ' SD3.D3_LOCAL ARMAZEM, '
+        EndIf
+        cQuery += " Abs(Sum(SD3.D3_QUANT)) QUANT, "
+        For nMoeda := 1 To 5
+            cMoeda := cValToChar(nMoeda)
+            cQuery += " Sum(SD3.D3_QUANT * (TRCC.CUSTO"+cMoeda+" / TRCC.QUANT)) CUSTO"+cMoeda+","
+        Next nMoeda
+        cQuery := SubStr(cQuery, 1, Len(cQuery)-1)
+        cQuery += " From "+cViewSD3MOD+" SD3 "
+        cQuery += " Inner Join "+::oTabCC:TableName()+" TRCC On "
+        cQuery += " TRCC.FILPROC = ? And "
+        cQuery += " TRCC.FILIAL = SD3.D3_FILIAL   And "
+        cQuery += " TRCC.CCUSTO = SD3.B1_CCCUSTO  And "
+        cQuery += " TRCC.GCC    = SD3.B1_GCCUSTO  "
+        cQuery += " Where "
+        cQuery += " SD3.D3_FILIAL   = ? And "
+        cQuery += " SD3.D3_EMISSAO >= ? And "
+        cQuery += " SD3.D3_EMISSAO <= ?  "
+        If  FWModeAccess("SB1", 1) != FWModeAccess("SD3", 1) .Or. ;
+            FWModeAccess("SB1", 2) != FWModeAccess("SD3", 2) .Or. ;
+            FWModeAccess("SB1", 3) != FWModeAccess("SD3", 3)
+            cQuery += " And SD3.B1_FILIAL = ? "
+        EndIf
+        cQuery += " Group By "
+        cQuery += " TRCC.FILPROC, "
+        If ::cCusFil != 'E'
+            cQuery += " TRCC.FILIAL, "
+        EndIf
+        cQuery += " SD3.D3_COD"
+        If ::cCusFil == 'A'
+            cQuery += ' ,SD3.D3_LOCAL '
+        EndIf
+        cQuery := ChangeQuery(cQuery)
+
+        ::oQryUpdD3 := FWExecStatement():New(cQuery)
+    EndIf
+
+    nBind := 1
+    ::oQryUpdD3:SetString(nBind++, cFilProc)
+    ::oQryUpdD3:SetString(nBind++, FWXFilial('SD3', cFilAtu))
+    ::oQryUpdD3:SetString(nBind++, DToS(dDtIni))
+    ::oQryUpdD3:SetString(nBind++, DToS(dDtFim))
+    If  FWModeAccess("SB1", 1) != FWModeAccess("SD3", 1) .Or. ;
+        FWModeAccess("SB1", 2) != FWModeAccess("SD3", 2) .Or. ;
+        FWModeAccess("SB1", 3) != FWModeAccess("SD3", 3)
+        ::oQryUpdD3:SetString(nBind++, FWXFilial('SB1', cFilAtu))
+    EndIf
+
+    cQuery := "("+::oQryUpdD3:GetFixQuery()+")"
+Return cQuery
+
+/*/{Protheus.doc} SelectCostByProductBySB2
+    Monta o select para pegar o custo por produto MOD com base na SB2
+    @type Method
+    @author Squad Entradas
+    @since 30/10/2024
+    /*/
+Method SelectCostByProductBySB2(cFilProc, cFilAtu, dDtIni, dDtFim, aFiliais) Class LaborProductValue
+    Local cQuery      As Character
+    Local aFilSB2     As Array
+    Local aFilSB1     As Array
+    Local cFilSB2     As Character
+    Local cFilSB1     As Character
+    Local cViewSB1MOD As Character
+    Local nMoeda      As Numeric
+    Local nBind       As Numeric
+    Local nFil        As Numeric
+
+    D4D->(DbSetOrder(1)) //D4D_FILIAL+D4D_IDVIEW
+    If D4D->(DbSeek(FWXFilial('D4D')+ViewLaborProduct():GetViewID()))
+        cViewSB1MOD := D4D->D4D_VWNAME
+    EndIf
+
+    If ::oQryUpdB2 == Nil
+        cQuery := " Select "
+        If ::cCusFil != 'E'
+            cQuery += " SB2.B2_FILIAL FILIAL, "
+        EndIf
+        cQuery += " SB2.B2_COD COD, "
+        If ::cCusFil == 'A'
+            cQuery += ' SB2.B2_LOCAL ARMAZEM, '
+        EndIf
+        For nMoeda := 1 To Len(::jParams['moedas'])
+            cMoeda := ::jParams['moedas',nMoeda]
+            cQuery += " Avg(SB2.B2_CMFIM"+cMoeda+")  CM"+cMoeda+","
+        Next nMoeda
+        cQuery := SubStr(cQuery, 1, Len(cQuery)-1)
+        cQuery += " From "+RetSQLName('SB2')+" SB2 "
+        cQuery += " Inner Join "+cViewSB1MOD+" SB1 On "
+        If  FWModeAccess("SB1", 1) == FWModeAccess("SB2", 1) .And. ;
+            FWModeAccess("SB1", 2) == FWModeAccess("SB2", 2) .And. ;
+            FWModeAccess("SB1", 3) == FWModeAccess("SB2", 3)
+            cQuery += " SB1.B1_FILIAL = SB2.B2_FILIAL And "
+        EndIf
+        cQuery += " SB1.B1_COD = SB2.B2_COD "
+        cQuery += " Where "
+        If ::cCusFil == 'E'
+            cQuery += " SB2.B2_FILIAL In (?) And "
+        Else
+        cQuery += " SB2.B2_FILIAL   = ? And "
+        EndIf
+        cQuery += " SB2.D_E_L_E_T_  = ? "
+        If  FWModeAccess("SB1", 1) != FWModeAccess("SB2", 1) .Or. ;
+            FWModeAccess("SB1", 2) != FWModeAccess("SB2", 2) .Or. ;
+            FWModeAccess("SB1", 3) != FWModeAccess("SB2", 3)
+            If ::cCusFil == 'E'
+                cQuery += " And SB1.B1_FILIAL In (?) "
+            Else
+            cQuery += " And SB1.B1_FILIAL = ? "
+        EndIf
+        EndIf
+        cQuery += " Group By "
+        If ::cCusFil != 'E'
+            cQuery += " SB2.B2_FILIAL, "
+        EndIf
+        cQuery += " SB2.B2_COD "
+        If ::cCusFil == 'A'
+            cQuery += ' ,SB2.B2_LOCAL '
+        EndIf
+        cQuery := ChangeQuery(cQuery)
+
+        ::oQryUpdB2 := FWExecStatement():New(cQuery)
+    EndIf
+
+    If ::cCusFil == 'E'
+        aFilSB1 := {}
+        aFilSB2 := {}
+        For nFil := 1 To Len(aFiliais)
+            cFilSB1 := FWXFilial('SB1', aFiliais[nFil])
+            If AScan(aFilSB1, {|x| x == cFilSB1}) <= 0
+                AAdd(aFilSB1, cFilSB1)
+            EndIf
+
+            cFilSB2 := FWXFilial('SB2', aFiliais[nFil])
+            If AScan(aFilSB2, {|x| x == cFilSB2}) <= 0
+                AAdd(aFilSB2, cFilSB2)
+            EndIf
+        Next nFil
+    EndIf
+
+    nBind := 1
+    If ::cCusFil == 'E'
+        ::oQryUpdB2:SetIn(nBind++, aFilSB2)
+    Else
+    ::oQryUpdB2:SetString(nBind++, FWXFilial('SB2', cFilAtu))
+    EndIf
+    ::oQryUpdB2:SetString(nBind++, ' ')
+    If  FWModeAccess("SB1", 1) != FWModeAccess("SD3", 1) .Or. ;
+        FWModeAccess("SB1", 2) != FWModeAccess("SD3", 2) .Or. ;
+        FWModeAccess("SB1", 3) != FWModeAccess("SD3", 3)
+        If ::cCusFil == 'E'
+            ::oQryUpdB2:SetIn(nBind++, aFilSB1)
+        Else
+        ::oQryUpdB2:SetString(nBind++, FWXFilial('SB1', cFilAtu))
+    EndIf
+    EndIf
+
+    cQuery := "("+::oQryUpdB2:GetFixQuery()+")"
+Return cQuery
+
+
+/*/{Protheus.doc} UpdMovements
+    Atualiza a tabela de movimentos analítica para marcar os movimentos com
+    MOD para pré processar e serem ignorados do loop
+    @type Method
+    @author Squad Entradas
+    @since 05/11/2024
+    /*/
+Method UpdMovements(cFilProc, dDtIni, dDtFim) Class LaborProductValue
+    Local cQuery      As Character
+    Local nFil        As Numeric
+    Local cCTE        As Character
+    Local cTabMov     As Character
+    Local cUpdate     As Character
+    Local cFilAtu     As Character
+
+    cTabMov     := AnalyticalMovementTable():TableName()
+
+    If !::lOracle
+        cCTE := " With TEMPTABLE As "
+    Else
+        cCTE := " Merge Into "+cTabMov+" Using "
+    EndIf
+
+    If !::lOracle
+        cUpdate := " Update "+cTabMov+" "
+    Else
+        cUpdate := " Update "
+    EndIf
+    cUpdate += "    Set "
+    cUpdate += " IGNORE =  'S', "
+    cUpdate += " PREPROC = 'S' "
+
+    If !::lOracle
+        cUpdate += " From TEMPTABLE "
+    EndIf
+    cUpdate += " Where "
+    cUpdate += " "+cTabMov+".R_E_C_N_O_ = TEMPTABLE.MOVREC "
+
+    For nFil := 1 To Len(::oTabCC:aFilProc)
+        cFilAtu := ::oTabCC:aFilProc[nFil, 1]
+        cQuery := ::SelectModMovements(cFilProc, cFilAtu, dDtIni, dDtFim)
+
+        If ::lOracle
+            cQuery += " TEMPTABLE "
+            cQuery += " On ("
+            cQuery += " "+cTabMov+".R_E_C_N_O_ = TEMPTABLE.MOVREC "
+            cQuery += " ) "
+            cQuery += " When Matched Then "
+        EndIf
+        
+        ::oTabCC:RunQuery(cCTE+cQuery+cUpdate)
+    Next nFil
+Return
+
+/*/{Protheus.doc} SelectModMovements
+    Monta o select para filtrar os movimentos de produtos MOD
+    @type Method
+    @author Squad Entradas
+    @since 30/10/2024
+    /*/
+Method SelectModMovements(cFilProc, cFilAtu, dDtIni, dDtFim) Class LaborProductValue
+    Local cQuery      As Character
+    Local cViewSB1MOD As Character
+    Local cTabMov     As Character
+    Local nBind       As Numeric
+
+    D4D->(DbSetOrder(1)) //D4D_FILIAL+D4D_IDVIEW
+    If D4D->(DbSeek(FWXFilial('D4D')+ViewLaborProduct():GetViewID()))
+        cViewSB1MOD := D4D->D4D_VWNAME
+    EndIf
+    cTabMov     := AnalyticalMovementTable():TableName()
+
+    If ::oQryMov == Nil
+        cQuery := " Select "
+        cQuery += " MOV.R_E_C_N_O_ MOVREC "
+        cQuery += " From "+cTabMov+" MOV "
+        cQuery += " Inner Join "+cViewSB1MOD+" SB1 On "
+        If  FWModeAccess("SB1", 1) == FWModeAccess("SB2", 1) .And. ;
+            FWModeAccess("SB1", 2) == FWModeAccess("SB2", 2) .And. ;
+            FWModeAccess("SB1", 3) == FWModeAccess("SB2", 3)
+            cQuery += " SB1.B1_FILIAL = MOV.FILIAL And "
+        EndIf
+        cQuery += " SB1.B1_COD = MOV.COD "
+        cQuery += " Where "
+        cQuery += " MOV.FILPROC  = ? And "
+        cQuery += " MOV.FILIAL   = ? "
+        If  FWModeAccess("SB1", 1) != FWModeAccess("SB2", 1) .Or. ;
+            FWModeAccess("SB1", 2) != FWModeAccess("SB2", 2) .Or. ;
+            FWModeAccess("SB1", 3) != FWModeAccess("SB2", 3)
+            cQuery += " And SB1.B1_FILIAL = ? "
+        EndIf
+        cQuery := ChangeQuery(cQuery)
+
+        ::oQryMov := FWExecStatement():New(cQuery)
+    EndIf
+
+    nBind := 1
+    ::oQryMov:SetString(nBind++, cFilProc)
+    ::oQryMov:SetString(nBind++, cFilAtu)
+    If  FWModeAccess("SB1", 1) != FWModeAccess("SD3", 1) .Or. ;
+        FWModeAccess("SB1", 2) != FWModeAccess("SD3", 2) .Or. ;
+        FWModeAccess("SB1", 3) != FWModeAccess("SD3", 3)
+        ::oQryMov:SetString(nBind++, FWXFilial('SB1', cFilAtu))
+    EndIf
+
+    cQuery := "("+::oQryMov:GetFixQuery()+")"
+Return cQuery

@@ -1,0 +1,1010 @@
+#Include 'Totvs.ch'
+#include 'tlpp-core.th'
+
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.manager
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.analyticalmovementtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.aglutinattedmovementtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.processingtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.productstructleveltable
+using namespace totvs.protheus.backoffice.stock.iterativecost.processing.threads
+
+namespace totvs.protheus.backoffice.stock.iterativecost.update.movement
+
+#Define THIS "totvs.protheus.backoffice.stock.iterativecost.update.movement."
+#Define TAMTHREAD 100 //ORACLE ATENÇÃO: Não definir para valores >= 1000, pois a cláusula IN no oracle suporta somente 1000 opções
+
+/*/{Protheus.doc} movementValuation
+    Classe responsavel por calcular e valorizar os movimentos
+    @author Squad Entradas
+    @since 06/11/2024
+/*/
+Class Movement From TableManager
+
+    public data cAnalyTable       as character
+    public data cAgglutTable      as character
+    public data cProcTable        as character
+    public data cNivTable         as character
+    Public data cFProc            as character
+    Public data cViewSD1          as character
+    Public data cFilProc          as character
+    Public data cFilAtu           as character
+    Public data nCountNFs         as numeric
+    Public data cCusFil           as character
+    Public data lE330REA          as logical
+    Public data aMoedas           as array
+    Public data aFiliais          as array
+    Public data aSD1              as array
+    Public data aSD2              as array
+    Public data aSD3              as array
+    Public data oQuerySD1         as object
+    Public data oEntryMovement    as object
+    Public data oOutboundMovement as object
+    Public data oPurchaseReturn   as object
+    public data oQuerySB6         as object
+    public data cDbType           As Character
+    public data jDecCM            As json
+    public data jDecCst           As json
+    Public data jParams           As Json
+    Public Data oThrManager       As Object
+    Public Data oProc             As Object
+
+    public method new()
+    public method updateStockMovements()
+    public method updateCalculationSequenceForPurchaseNotes()
+    public method updateMovementCost()
+    public method getCostFieldPositions()
+    public method setTableIndexes()
+    public method updateThirdPartiesMovementCost()
+    public method updateEntryMovement()
+    public method updateOutboundMovement()
+    public method updatePurchasereturnMovement()
+    public method gravaMov()
+
+End Class
+
+/*/{Protheus.doc} new
+    Instacia a classe
+    @author Squad.Entradas
+    @since 06/11/2024
+    @version 1.0
+    @return self, object, self
+    /*/
+Method new(cFilProc,aFiliais,aMoedas, jParams, oProc) class Movement
+    Local nMoeda as numeric
+    Local cMoeda as character
+
+    //Inicia as propriedades da classe TableManager para utilizar os seus métodos de query
+    _Super:New({})
+
+    ::cFilProc          := cFilProc
+    ::aFiliais          := aFiliais
+    ::nCountNFs         := 0
+    ::cAnalyTable       := AnalyticalMovementTable():TableName()
+    ::cAgglutTable      := AgglutinatedMovementTable():TableName()
+    ::cProcTable        := ProcessingTable():TableName()
+    ::cNivTable         := ProductStructLevelTable():TableName()
+    ::cViewSD1          := "VW_" + totvs.protheus.backoffice.stock.iterativecost.view.acquisitioncost.ViewAcquisitionCost():GetViewID() + "_" + cEmpAnt
+    ::aMoedas           := aMoedas
+    ::oQuerySD1         := Nil
+    ::oEntryMovement    := Nil
+    ::oOutboundMovement := Nil
+    ::oPurchaseReturn   := Nil
+    ::cDbType           := TCGetDB()
+    ::jDecCM            := JsonObject():New()
+    ::jDecCst           := JsonObject():New()
+    ::aSD1              := {}
+    ::aSD2              := {}
+    ::aSD3              := {}
+    ::lE330REA          := SuperGetMv("MV_E330REA",.F.,.F.)
+    For nMoeda := 1 To 5
+        cMoeda := cValToChar(nMoeda)
+        ::jDecCM[cMoeda]  := TamSX3("B2_CMFIM"+cMoeda)[2] 
+        ::jDecCst[cMoeda] := TamSX3("B2_VFIM"+cMoeda)[2] 
+    Next
+    ::jParams     := jParams
+    ::oProc       := oProc
+
+Return self
+
+/*/{Protheus.doc} PrepThr
+    Faz a abertura das tabelas utilizadas nas threads
+    @type  Function
+    @author Squad Entradas
+    @since 20/05/2025
+    /*/
+Function PrepThr()
+
+Return .T.
+
+/*/{Protheus.doc} updateStockMovements
+    Grava o custo e seqcalc dos movimentos
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    @param  oMovement, object, objeto com dados do movimento
+    /*/
+Method updateStockMovements(dDataIni,dDataFim) class Movement
+    local cDataIni   as character
+    local cDataFim   as character
+    local cCusFilAtu as character
+    local nX         as integer
+
+    cDataIni  := DtoS(dDataIni)
+    cDataFim  := DtoS(dDataFim)
+
+    //Loop de Filiais
+    For nX := 1 to Len(::aFiliais)
+        ::cFilAtu  := ::aFiliais[nX]
+        cCusFilAtu := SuperGetMv("MV_CUSFIL",.F.,"A",::cFilAtu)
+
+        //Caso as filiais tenham o cusfil diferente, recria os objetos
+        //e atualiza a propriedade ::cCusFil
+        If Empty(::cCusFil) .Or. (!Empty(::cCusFil) .And. ::cCusFil <> cCusFilAtu)
+            ::cCusFil           := cCusFilAtu
+            ::oEntryMovement    := Nil
+            ::oOutboundMovement := Nil
+            ::oPurchaseReturn   := Nil
+        EndIf
+
+        //Grava o seqcalc para as notas de aquisição
+        ::updateCalculationSequenceForPurchaseNotes(cDataIni,cDataFim)
+
+        //Atualiza o custo e grava o seqcalc dos movimentos SD1,SD2 e SD3
+        ::updateMovementCost(cDataIni)
+
+        //Atualiza custo de poder de/em terceiros
+        ::updateThirdPartiesMovementCost()
+
+    Next nX
+
+    ::oQuerySB6:Destroy()
+    FreeObj(::oQuerySB6)
+    ::oQuerySB6 := Nil
+
+    ::oQuerySD1:Destroy()
+    FreeObj(::oQuerySD1)
+    ::oQuerySD1 := Nil
+
+    ::oEntryMovement:Destroy()
+    FreeObj(::oEntryMovement)
+    ::oEntryMovement := Nil
+
+    ::oOutboundMovement:Destroy()
+    FreeObj(::oOutboundMovement)
+    ::oOutboundMovement := Nil
+
+    ::oPurchaseReturn:Destroy()
+    FreeObj(::oPurchaseReturn)
+    ::oPurchaseReturn := Nil
+
+Return
+
+/*/{Protheus.doc} updateCalculationSequenceForPurchaseNotes
+    Grava o seqcalc para as notas de aquisição
+    @Type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method updateCalculationSequenceForPurchaseNotes(cDataIni,cDataFim) class Movement
+    local cAliasTemp as character
+    local cQuery     as character
+    Local cSeqBas36  as character
+
+    //Grava o SEQCALC das notas de compra
+    If ::oQuerySD1 == Nil
+        cQuery := " SELECT SD1.D1RECNO "
+        cQuery += " FROM "+::cViewSD1+" SD1 "
+        cQuery += " INNER JOIN "+::cNivTable+" NIV ON "
+        cQuery += " NIV.FILIAL = SD1.D1_FILIAL AND "
+        cQuery += " NIV.COD = SD1.D1_COD "
+        cQuery += " WHERE SD1.D1_FILIAL = ? AND "
+        cQuery += " SD1.D1_DTDIGIT >= ? AND 
+        cQuery += " SD1.D1_DTDIGIT <= ? "
+        cQuery += " GROUP BY SD1.D1RECNO, SD1.D1_FILIAL, NIV.NIVINV "
+        cQuery += " ORDER BY SD1.D1_FILIAL, NIV.NIVINV "
+
+        cQuery := ChangeQuery(cQuery)
+            
+        ::oQuerySD1 := FwExecStatement():New(cQuery)
+    EndIf
+
+    ::oQuerySD1:SetString(1,::cFilAtu)
+    ::oQuerySD1:SetString(2,cDataIni)
+    ::oQuerySD1:SetString(3,cDataFim)
+        
+    cAliasTemp := ::oQuerySD1:OpenAlias()
+
+    Do While (cAliasTemp)->(!Eof())
+        SD1->(DBGoTo((cAliasTemp)->D1RECNO))
+        If !SD1->(EoF())
+
+            // Converte valor para Base36
+            ::nCountNFs++
+            cSeqBas36 := TableManager():IntToB36(::nCountNFs)
+
+            Reclock("SD1",.F.)
+            SD1->D1_SEQCALC := cDataIni+cSeqBas36
+            SD1->(MsUnlock())
+        EndIf
+        (cAliasTemp)->(DbSkip())
+    EndDo
+
+    (cAliasTemp)->(DbCloseArea())
+
+Return
+
+/*/{Protheus.doc} updateMovementCost
+    Atualiza o custo e o seqcalc das movimentações
+    @Type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method updateMovementCost(cDataIni) class Movement
+    local lRound    := SuperGetMV("MV_CMROUND",.F.,.F.) as logical
+
+    //Pega a posição fisica dos campos de custo nas tabelas SD1/SD2/SD3 
+    ::getCostFieldPositions()
+
+    //Seta o indice das tabelas SD1/SD2/SD3
+    ::setTableIndexes()
+
+    //Grava o custo e seqcalc dos movimentos de entrada
+    ::updateEntryMovement(lRound, cDataIni)
+
+    //Grava o custo e seqcalc dos movimentos de saída
+    ::updateOutboundMovement(lRound, cDataIni)
+
+    //Grava o custo e seqcalc das devoluções de compra
+    ::updatePurchasereturnMovement(lRound, cDataIni)
+Return
+
+/*/{Protheus.doc} updateEntryMovement
+    Atualiza o custo e o seqcalc das movimentações de entrada
+    @Type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method updateEntryMovement(lRound, cDataIni) class Movement
+    local cQuery    as character
+    local cAliasMov as character
+    local nX := 1   as integer
+    Local aRecs     as array
+    Local nCount    as integer
+    Local cError    as character
+
+    ::oThrManager := ThreadManager():New(2, "EST330UPDE_"+cEmpAnt, ::jParams["IDEXEC"], THIS+"PrepThr")
+    If !::oThrManager:Prepare()
+        //Gravar log e finalizar
+        ::oProc:IncRegua1(oThrManager:GetError())
+        UserException(oThrManager:GetError())
+    EndIf
+
+    If ::oEntryMovement == Nil
+        cQuery := " SELECT TRG.R_E_C_N_O_ RECNO "
+        cQuery += " FROM "+::cAnalyTable+" TRG "
+        cQuery += " WHERE TRG.FILPROC = ? AND "
+        cQuery += " TRG.FILIAL = ? AND "
+        cQuery += " TRG.ENTSAI = ? AND "
+        cQuery += " TRG.RECORISD2 = ? "
+        If !::lE330REA
+            cQuery += " AND TRG.MOEDA = ? "
+        EndIf
+        cQuery := ChangeQuery(cQuery)
+                
+        ::oEntryMovement := FwExecStatement():New(cQuery)
+    EndIf
+    
+    nX := 1
+    ::oEntryMovement:SetString(nX++,::cFilProc) //TRG.FILPROC
+    ::oEntryMovement:SetString(nX++,::cFilAtu) //TRG.FILIAL
+    ::oEntryMovement:SetString(nX++,'E') //TRG.ENTSAI
+    ::oEntryMovement:SetNumeric(nX++,0) //TRG.RECORISD2
+    If !::lE330REA
+        ::oEntryMovement:SetString(nX++,' ') //TRG.MOEDA
+    EndIf
+
+    cAliasMov := ::oEntryMovement:OpenAlias()
+
+    aRecs := {}
+    While !(cAliasMov)->(EoF())
+        nCount++
+        If nCount <= TAMTHREAD
+            AAdd(aRecs, (cAliasMov)->RECNO)
+        EndIf
+        If nCount == TAMTHREAD
+            ::oThrManager:Execute(THIS+"updateEntryMovement", {aRecs, ::aMoedas, cDataIni, ::cCusFil, ::nCountNFs})
+
+            ASize(aRecs, 0)
+            aRecs := {}
+            nCount := 0
+        EndIf
+        (cAliasMov)->(DbSkip())
+    EndDo
+
+    If nCount > 0
+        ::oThrManager:Execute(THIS+"updateEntryMovement", {aRecs, ::aMoedas, cDataIni, ::cCusFil, ::nCountNFs})
+
+        ASize(aRecs, 0)
+        aRecs := {}
+        nCount := 0
+    EndIf
+    (cAliasMov)->(DbCloseArea())
+
+    cError := ""
+    While Empty(cError)
+        cError := ::oThrManager:CheckForErrors()
+
+        If ::oThrManager:CheckIfDone()
+            Exit
+        EndIf
+        Sleep(500)
+    EndDo
+
+    ::oThrManager:Terminate()
+    
+    If cError != ""
+        //Gravar tabela de log
+        ::oProc:IncRegua1(::oThrManager:cError+::oThrManager:cErrorStack+::oThrManager:cErrorEnv)
+        UserException(::oThrManager:cError+::oThrManager:cErrorStack+::oThrManager:cErrorEnv)
+    EndIf
+
+Return
+
+/*/{Protheus.doc} updateEntryMovement
+    Executa a gravação dos valores finais nas tabelas de movimentos
+    @type  Function
+    @author Squad Entradas
+    @since 08/06/2026
+    /*/
+Static __oEntryMovement := Nil
+Function updateEntryMovement(aParams)
+    Local aRecs     As Array
+    Local aMoedas   As Array
+    Local cDataIni  As character
+    Local cCusFil   As character
+    local cQuery    as character
+    local cAliasMov as character
+    local nX := 1   as integer
+    local nY        as integer
+    Local nCountNFs as numeric
+    Local cMoeda    as character
+    local lRound    := SuperGetMV("MV_CMROUND",.F.,.F.) as logical
+    Local jDecCM    As Json
+
+    aRecs    := aParams[1]
+    aMoedas  := aParams[2]
+    cDataIni := aParams[3]
+    cCusFil  := aParams[4]
+    nCountNFs:= aParams[5]
+
+    If __oEntryMovement == Nil
+        jDecCM := JsonObject():New()
+        For nY := 1 To 5
+            cMoeda := cValToChar(nY)
+            jDecCM[cMoeda]  := TamSX3("B2_CMFIM"+cMoeda)[2] 
+        Next
+
+        cQuery := " SELECT TRG.FILIAL, TRG.ALIAS TABELA, TRG.RECNO, TRG.TM, TRG.CF, TRG.SEQCALC "
+        For nY := 1 to Len(aMoedas)
+            cMoeda := aMoedas[nY]
+            cQuery += " , "
+            cQuery += " Case When TRG.CALCREQ = 'S'  "
+            cQuery += "    Then TRG.CSTRE"+cMoeda+" "
+            cQuery += " Else "
+            cQuery += "    CASE WHEN TRG.CUSTOMEDIO = 'S' THEN "
+            cQuery +=        TableManager():formatRound(lRound, 'TRH.CMPROC'+cMoeda, jDecCM[cMoeda]) +" * TRG.QTDORI "
+            cQuery += "      ELSE "
+            cQuery += "      CASE WHEN TRL.QUANT > 0 THEN "
+            cQuery += "        (TRL.CUSTO"+cMoeda+" / TRL.QUANT) * TRG.QTDORI "
+            cQuery += "      ELSE TRG.CSTOR"+cMoeda+" "
+            cQuery += "      END "
+            cQuery += "    End "
+            cQuery += " END CUSTO"+aMoedas[nY]
+        Next nY
+        cQuery += " FROM "+AnalyticalMovementTable():TableName()+" TRG "
+        cQuery += " LEFT JOIN "+AgglutinatedMovementTable():TableName()+" TRL ON "
+        cQuery += " TRL.FILPROC = TRG.FILPROC AND"
+        cQuery += " TRL.CHVAGL = TRG.CHVAGL "
+        cQuery += " INNER JOIN "+ProcessingTable():TableName()+" TRH ON "
+        cQuery += " TRH.FILPROC = TRG.FILPROC AND "
+        If cCusFil == "E"
+            cQuery += " TRH.FILIAL = ? AND "
+        Else
+            cQuery += " TRH.FILIAL  = TRG.FILIAL AND "
+        EndIf
+        cQuery += " TRH.COD = TRG.COD "
+        If cCusFil == "A"
+            cQuery += " AND TRH.ARMAZEM = TRG.LOCARM "
+        EndIf
+        cQuery += " WHERE "
+        cQuery += " TRG.R_E_C_N_O_ In (?) "
+
+        cQuery := ChangeQuery(cQuery)
+                
+        __oEntryMovement := FwExecStatement():New(cQuery)
+    EndIf
+    
+    nX := 1
+    If cCusFil == "E"
+        __oEntryMovement:SetString(nX++,PadR(FWCompany(), FWSizeFilial())) //TRH.FILIAL
+        EndIf
+    __oEntryMovement:SetIn(nX++, aRecs) //TRG.R_E_C_N_O_
+
+    cAliasMov := __oEntryMovement:OpenAlias()
+
+    gravaMov(cAliasMov, cDataIni, aMoedas, nCountNFs)
+
+Return
+
+/*/{Protheus.doc} updateOutboundMovement
+    Atualiza o custo e o seqcalc das movimentos de saída
+    @type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method updateOutboundMovement(lRound, cDataIni) class Movement
+    local cQuery    as character
+    local cAliasMov as character
+    local nX := 1   as integer
+    Local aRecs     as array
+    Local nCount    as integer
+    Local cError    as character
+
+    ::oThrManager := ThreadManager():New(2, "EST330UPDO_"+cEmpAnt, ::jParams["IDEXEC"], THIS+"PrepThr")
+    If !::oThrManager:Prepare()
+        //Gravar log e finalizar
+        ::oProc:IncRegua1(oThrManager:GetError())
+        UserException(oThrManager:GetError())
+    EndIf
+
+    If ::oOutboundMovement == Nil
+        cQuery := " SELECT TRG.R_E_C_N_O_ RECNO "
+        cQuery += " FROM "+::cAnalyTable+" TRG "
+        cQuery += " WHERE TRG.FILPROC = ? AND "
+        cQuery += " TRG.FILIAL = ? AND "
+        cQuery += " TRG.ENTSAI = ? "
+        If !::lE330REA
+            cQuery += " AND TRG.MOEDA = ? "
+        EndIf
+
+        cQuery := ChangeQuery(cQuery)
+                
+        ::oOutboundMovement := FwExecStatement():New(cQuery)
+    EndIf
+    
+    nX := 1
+    ::oOutboundMovement:SetString(nX++,::cFilProc) //TRG.FILPROC
+    ::oOutboundMovement:SetString(nX++,::cFilAtu) //TRG.FILIAL
+    ::oOutboundMovement:SetString(nX++,'S') //TRG.ENTSAI
+    If !::lE330REA
+        ::oOutboundMovement:SetString(nX++,' ') //TRG.MOEDA
+    EndIf
+
+    cAliasMov := ::oOutboundMovement:OpenAlias()
+
+    aRecs := {}
+    While !(cAliasMov)->(EoF())
+        nCount++
+        If nCount <= TAMTHREAD
+            AAdd(aRecs, (cAliasMov)->RECNO)
+        EndIf
+        If nCount == TAMTHREAD
+            ::oThrManager:Execute(THIS+"updateOutboundMovement", {aRecs, ::aMoedas, cDataIni, ::cCusFil, ::cFilAtu, ::nCountNFs})
+
+            ASize(aRecs, 0)
+            aRecs := {}
+            nCount := 0
+        EndIf
+        (cAliasMov)->(DbSkip())
+    EndDo
+
+    If nCount > 0
+        ::oThrManager:Execute(THIS+"updateOutboundMovement", {aRecs, ::aMoedas, cDataIni, ::cCusFil, ::cFilAtu, ::nCountNFs})
+
+        ASize(aRecs, 0)
+        aRecs := {}
+        nCount := 0
+    EndIf
+    (cAliasMov)->(DbCloseArea())
+
+    cError := ""
+    While Empty(cError)
+        cError := ::oThrManager:CheckForErrors()
+
+        If ::oThrManager:CheckIfDone()
+            Exit
+        EndIf
+        Sleep(500)
+    EndDo
+
+    ::oThrManager:Terminate()
+    
+    If cError != ""
+        //Gravar tabela de log
+        ::oProc:IncRegua1(::oThrManager:cError+::oThrManager:cErrorStack+::oThrManager:cErrorEnv)
+        UserException(::oThrManager:cError+::oThrManager:cErrorStack+::oThrManager:cErrorEnv)
+    EndIf
+
+Return 
+
+/*/{Protheus.doc} updateOutboundMovement
+    Atualiza o custo e o seqcalc das movimentos de saída
+    @type Function
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+
+Static __oOutboundMovement := Nil
+Function updateOutboundMovement(aParams)
+    Local aRecs     As Array
+    Local aMoedas   As Array
+    Local cDataIni  As character
+    Local cCusFil   As character
+    Local cFilAtu   As character
+    local cQuery    as character
+    local cAliasMov as character
+    local cMoeda    as character
+    local cCoalesce := MatIsNull() as character
+    local nX := 1   as integer
+    local nY        as integer
+    local nCountNFs as numeric
+    local lRound    := SuperGetMV("MV_CMROUND",.F.,.F.) as logical
+    Local jDecCM    As Json
+
+    aRecs    := aParams[1]
+    aMoedas  := aParams[2]
+    cDataIni := aParams[3]
+    cCusFil  := aParams[4]
+    cFilAtu  := aParams[5]
+    nCountNFs:= aParams[6]
+
+    If __oOutboundMovement == Nil
+        jDecCM := JsonObject():New()
+        For nY := 1 To 5
+            cMoeda := cValToChar(nY)
+            jDecCM[cMoeda]  := TamSX3("B2_CMFIM"+cMoeda)[2] 
+        Next
+
+        cQuery := " SELECT TRG.FILIAL,TRG.ALIAS TABELA, TRG.RECNO, TRG.TM, TRG.CF, "
+        cQuery += " TRG.COD, TRG.LOCARM, TRG.SEQ, TRG.CUSTOMEDIO, TRG.ENTSAI, TRG.SEQCALC "
+        For nY := 1 to Len(aMoedas)
+            cMoeda := aMoedas[nY]
+            cQuery += " , "
+            cQuery += " Case When TRG.CALCREQ = 'S'  "
+            cQuery += "    Then TRG.CSTRE"+cMoeda+" "
+            cQuery += " Else "
+            cQuery += " CASE WHEN TRG.CUSTOMEDIO = 'S' THEN "
+            cQuery += TableManager():formatRound(lRound, 'TRH.CMPROC'+cMoeda, jDecCM[cMoeda]) +" * TRG.QTDORI "
+            cQuery += "    ELSE "
+            cQuery += " CASE WHEN TRG.RECORISD1 > 0 AND TRG.ALIAS = 'SD2' AND TRG.PODER3 = 'N' AND TRG.TIPONF <> 'C' THEN "
+            If aMoedas[nY] == "1"
+                cQuery += " (SD1.D1_CUSTO / SD1.D1_QUANT ) * TRG.QUANT ELSE "
+            Else
+                cQuery += " (SD1.D1_CUSTO"+aMoedas[nY]+" / SD1.D1_QUANT ) * TRG.QUANT ELSE "
+            EndIf
+            cQuery += " CASE WHEN TRG.PODER3 = 'D' AND TRG.ALIAS = 'SD2' AND TRG.IGNORE = 'S' THEN "
+            If aMoedas[nY] == "1"
+                cQuery += " ((SD1.D1_CUSTO + "+cCoalesce+"(SB6.CUSTO,0)) / (SD1.D1_QUANT + "+cCoalesce+"(SB6.QUANT,0)) ) * TRG.QUANT ELSE "
+            Else
+                cQuery += " ((SD1.D1_CUSTO"+aMoedas[nY]+" + "+cCoalesce+"(SB6.CUSTO,0)) / (SD1.D1_QUANT + "+cCoalesce+"(SB6.QUANT,0)) ) * TRG.QUANT ELSE "
+            EndIf
+            cQuery += " CASE WHEN TRL.QUANT > 0 THEN (TRL.CUSTO"+aMoedas[nY]+" / TRL.QUANT) * TRG.QTDORI ELSE TRG.CSTOR"+aMoedas[nY]+" "
+            cQuery += " END END END END End CUSTO"+aMoedas[nY]
+        Next nY
+        cQuery += " FROM "+AnalyticalMovementTable():TableName()+" TRG "
+        cQuery += " LEFT JOIN "+AgglutinatedMovementTable():TableName()+" TRL ON "
+        cQuery += " TRL.FILPROC = TRG.FILPROC AND "
+        cQuery += " TRL.CHVAGL = TRG.CHVAGL "
+        cQuery += " INNER JOIN "+ProcessingTable():TableName()+" TRH ON "
+        cQuery += " TRH.FILPROC = TRG.FILPROC AND "
+        If cCusFil == "E"
+            cQuery += " TRH.FILIAL = ? AND "
+        Else
+            cQuery += " TRH.FILIAL  = TRG.FILIAL AND "
+        EndIf
+        cQuery += " TRH.COD = TRG.COD "
+        If cCusFil == "A"
+            cQuery += " AND TRH.ARMAZEM = TRG.LOCARM "
+        EndIf
+        cQuery += " LEFT JOIN "+RetSQLName("SD1")+" SD1 ON "
+        cQuery += " SD1.R_E_C_N_O_ = TRG.RECORISD1 "
+        cQuery += " LEFT JOIN (SELECT SB6.B6_FILIAL FILIAL,SB6.B6_IDENTB6 IDENTB6, "
+        cQuery += " SUM(SB6.B6_CUSTO1) CUSTO, SUM(SB6.B6_QUANT) QUANT "
+        cQuery += " FROM "+RetSQLName("SB6")+" SB6 "
+        cQuery += " WHERE SB6.B6_FILIAL = ? "
+        cQuery += " AND SB6.B6_PODER3 = ? "
+        cQuery += " AND SB6.B6_QUANT = ? "
+        cQuery += " AND SB6.D_E_L_E_T_ = ? "
+        cQuery += " GROUP BY SB6.B6_FILIAL,SB6.B6_IDENTB6) SB6 "
+        cQuery += " ON SB6.FILIAL = TRG.FILIAL "
+        cQuery += " AND SB6.IDENTB6 = TRG.IDENTB6 "
+        cQuery += " WHERE "
+        cQuery += " TRG.R_E_C_N_O_ In (?) "
+
+        cQuery := ChangeQuery(cQuery)
+                
+        __oOutboundMovement := FwExecStatement():New(cQuery)
+    EndIf
+
+    nX := 1
+    If cCusFil == "E"
+        __oOutboundMovement:SetString(nX++,PadR(FWCompany(), FWSizeFilial())) //TRH.FILIAL
+    EndIf
+    __oOutboundMovement:SetString(nX++,FWxFilial("SB6", cFilAtu)) //SB6.B6_FILIAL
+    __oOutboundMovement:SetString(nX++, 'R') //SB6.B6_PODER3
+    __oOutboundMovement:SetNumeric(nX++, 0) //SB6.B6_QUANT
+    __oOutboundMovement:SetString(nX++, ' ') //SB6.D_E_L_E_T_
+    __oOutboundMovement:SetIn(nX++, aRecs) //TRG.R_E_C_N_O_
+
+    cAliasMov := __oOutboundMovement:OpenAlias()
+
+    gravaMov(cAliasMov, cDataIni, aMoedas, nCountNFs)
+
+Return
+
+/*/{Protheus.doc} updatePurchasereturnMovement
+    Grava o custo e seqcalc das devoluções de compra
+    @type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method updatePurchasereturnMovement(lRound, cDataIni) class Movement
+    local cQuery    as character
+    local cAliasMov as character
+    local nX := 1   as integer
+    Local aRecs     as array
+    Local nCount    as integer
+    Local cError    as character
+
+    ::oThrManager := ThreadManager():New(2, "EST330UPDPR_"+cEmpAnt, ::jParams["IDEXEC"], THIS+"PrepThr")
+    If !::oThrManager:Prepare()
+        //Gravar log e finalizar
+        ::oProc:IncRegua1(oThrManager:GetError())
+        UserException(oThrManager:GetError())
+    EndIf
+
+    If ::oPurchaseReturn == Nil
+        cQuery := " SELECT TRG.R_E_C_N_O_ RECNO "
+        cQuery += " FROM "+::cAnalyTable+" TRG "
+        cQuery += " INNER JOIN "+RetSQLName("SD2")+" SD2 ON "
+        cQuery += " SD2.R_E_C_N_O_ = TRG.RECORISD2 "
+        cQuery += " WHERE TRG.FILPROC = ? AND "
+        cQuery += " TRG.FILIAL = ? AND "
+        cQuery += " TRG.RECORISD2 > ? "
+
+        cQuery := ChangeQuery(cQuery)
+                
+        ::oPurchaseReturn := FwExecStatement():New(cQuery)
+    EndIf
+
+    nX := 1
+    ::oPurchaseReturn:SetString(nX++,::cFilProc) //TRG.FILPROC
+    ::oPurchaseReturn:SetString(nX++,::cFilAtu) //TRG.FILIAL
+    ::oPurchaseReturn:SetNumeric(nX++,0) //TRG.RECORISD2
+
+    cAliasMov := ::oPurchaseReturn:OpenAlias()
+
+    aRecs := {}
+    While !(cAliasMov)->(EoF())
+        nCount++
+        If nCount <= TAMTHREAD
+            AAdd(aRecs, (cAliasMov)->RECNO)
+        EndIf
+        If nCount == TAMTHREAD
+            ::oThrManager:Execute(THIS+"updatePurchasereturnMovement", {aRecs, ::aMoedas, cDataIni, ::cCusFil, ::nCountNFs})
+
+            ASize(aRecs, 0)
+            aRecs := {}
+            nCount := 0
+        EndIf
+        (cAliasMov)->(DbSkip())
+    EndDo
+
+    If nCount > 0
+        ::oThrManager:Execute(THIS+"updatePurchasereturnMovement", {aRecs, ::aMoedas, cDataIni, ::cCusFil, ::nCountNFs})
+
+        ASize(aRecs, 0)
+        aRecs := {}
+        nCount := 0
+    EndIf
+    (cAliasMov)->(DbCloseArea())
+
+    cError := ""
+    While Empty(cError)
+        cError := ::oThrManager:CheckForErrors()
+
+        If ::oThrManager:CheckIfDone()
+            Exit
+        EndIf
+        Sleep(500)
+    EndDo
+
+    ::oThrManager:Terminate()
+    
+    If cError != ""
+        //Gravar tabela de log
+        ::oProc:IncRegua1(::oThrManager:cError+::oThrManager:cErrorStack+::oThrManager:cErrorEnv)
+        UserException(::oThrManager:cError+::oThrManager:cErrorStack+::oThrManager:cErrorEnv)
+    EndIf
+
+Return
+
+/*/{Protheus.doc} updatePurchasereturnMovement
+    Grava o custo e seqcalc das devoluções de compra
+    @type Function
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Static __oPurchaseReturn := Nil
+Function updatePurchasereturnMovement(aParams)
+    Local aRecs     As Array
+    Local aMoedas   As Array
+    Local cDataIni  As character
+    Local cCusFil   As character
+    local cQuery    as character
+    local cAliasMov as character
+    local nX := 1   as integer
+    local nY        as integer
+
+    aRecs    := aParams[1]
+    aMoedas  := aParams[2]
+    cDataIni := aParams[3]
+    cCusFil  := aParams[4]
+    nCountNFs:= aParams[5]
+
+    If __oPurchaseReturn == Nil
+        cQuery := " SELECT TRG.FILIAL,TRG.ALIAS TABELA, TRG.RECNO,"
+        cQuery += " TRG.COD, TRG.LOCARM, TRG.SEQ, TRG.CUSTOMEDIO, TRG.ENTSAI, TRG.SEQCALC "
+        For nY := 1 to Len(aMoedas)
+            cQuery += " ,CASE WHEN TRG.PODER3 IN ('D','N') THEN (SD2.D2_CUSTO"+aMoedas[nY]+" / SD2.D2_QUANT ) * TRG.QUANT ELSE TRG.CUSTO"+aMoedas[nY]
+            cQuery += " END CUSTO"+aMoedas[nY]
+        Next nY
+        cQuery += " FROM "+AnalyticalMovementTable():TableName()+" TRG "
+        cQuery += " INNER JOIN "+RetSQLName("SD2")+" SD2 ON "
+        cQuery += " SD2.R_E_C_N_O_ = TRG.RECORISD2 "
+        cQuery += " WHERE "
+        cQuery += " TRG.R_E_C_N_O_ In (?) "
+
+        cQuery := ChangeQuery(cQuery)
+                
+        __oPurchaseReturn := FwExecStatement():New(cQuery)
+    EndIf
+
+    nX := 1
+    __oPurchaseReturn:SetIn(nX++, aRecs) //TRG.R_E_C_N_O_
+
+    cAliasMov := __oPurchaseReturn:OpenAlias()
+
+    gravaMov(cAliasMov, cDataIni, aMoedas, nCountNFs)
+Return
+
+Method gravaMov(cAliasMov, cDataIni) class Movement
+    gravaMov(cAliasMov, cDataIni, ::aMoedas, ::nCountNFs)
+Return
+
+/*/{Protheus.doc} gravaMov
+    Atualiza o custo e o seqcalc das movimentações
+    @type Function
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Static __aSD1 := Nil
+Static __aSD2 := Nil
+Static __aSD3 := Nil
+Function gravaMov(cAliasMov, cDataIni, aMoedas, nCountNFs)
+    local cTable    as character
+    local cSeqBas36 as character
+    local nY        as integer
+
+    If __aSD1 == Nil
+        __aSD1 := {}
+        __aSD2 := {}
+        __aSD3 := {}
+        For nY := 1 To Len(aMoedas)
+            If nY == 1
+                AAdd(__aSD1, SD1->(FieldPos("D1_CUSTO")))
+            Else
+                AAdd(__aSD1, SD1->(FieldPos("D1_CUSTO"+aMoedas[nY])))
+            EndIf
+            AAdd(__aSD2, SD2->(FieldPos("D2_CUSTO"+aMoedas[nY])))
+            AAdd(__aSD3, SD3->(FieldPos("D3_CUSTO"+aMoedas[nY])))
+        Next nY
+    EndIf
+
+    Do While (cAliasMov)->(!Eof())
+        cTable := (cAliasMov)->TABELA
+        (cTable)->(DbGoTo((cAliasMov)->RECNO))
+        If !(cTable)->(EoF())
+
+            // Soma seqcalc gerado ao ultimo seqcalc da NFs de compra e converte valor para Base36
+            cSeqBas36 := TableManager():IntToB36((cAliasMov)->SEQCALC + nCountNFs)
+
+            Reclock(cTable,.F.)
+            If cTable == "SD1"
+                (cTable)->D1_SEQCALC := cDataIni+cSeqBas36
+                For nY := 1 to Len(aMoedas)
+                    (cTable)->(FieldPut(__aSD1[nY],(cAliasMov)->&("CUSTO"+aMoedas[nY])))
+                Next nY
+            ElseIf cTable == "SD2"
+                (cTable)->D2_SEQCALC := cDataIni+cSeqBas36
+                For nY := 1 to Len(aMoedas)
+                    (cTable)->(FieldPut(__aSD2[nY],(cAliasMov)->&("CUSTO"+aMoedas[nY])))
+                Next nY
+            Else
+                (cTable)->D3_SEQCALC := cDataIni+cSeqBas36
+                For nY := 1 to Len(aMoedas)
+                    (cTable)->(FieldPut(__aSD3[nY],(cAliasMov)->&("CUSTO"+aMoedas[nY])))
+                Next nY
+                If (cTable)->D3_CF $ "REA|DEA" .And. (cTable)->D3_CF <> (cAliasMov)->CF
+                    (cTable)->D3_TM := (cAliasMov)->TM
+                    (cTable)->D3_CF := (cAliasMov)->CF
+                EndIf
+            EndIf
+            (cTable)->(MsUnlock())
+        EndIf
+        (cAliasMov)->(DbSkip())
+    EndDo
+
+    (cAliasMov)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} getCostFieldPositions
+    Pega o tamanho dos campos de custos na SD1/SD2/SD3
+    @type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method getCostFieldPositions() class Movement
+    local nY as integer
+
+    For nY := 1 To Len(::aMoedas)
+        If nY == 1
+            AAdd(::aSD1, SD1->(FieldPos("D1_CUSTO")))
+        Else
+            AAdd(::aSD1, SD1->(FieldPos("D1_CUSTO"+::aMoedas[nY])))
+        EndIf
+		AAdd(::aSD2, SD2->(FieldPos("D2_CUSTO"+::aMoedas[nY])))
+        AAdd(::aSD3, SD3->(FieldPos("D3_CUSTO"+::aMoedas[nY])))
+	Next nY
+
+Return
+
+/*/{Protheus.doc} setTableIndexes
+    Seta os índices que serão utilizados das tabelas SD1/SD2/SD3
+    @type Method
+    @author Squad.Entradas
+    @since 23/06/2025
+    @version 1.0
+    /*/
+Method setTableIndexes() class Movement
+
+    DbSelectArea("SD1")
+    DbSetOrder(5)
+    DbSelectArea("SD2")
+    DbSetOrder(1)
+    DbSelectArea("SD3")
+    DbSetOrder(3)
+
+Return
+
+/*/{Protheus.doc} updateThirdPartiesMovementCost
+    Atualiza custo na SB6
+    @type Method
+    @author Squad.Entradas
+    @since 26/06/2025
+    @version 1.0
+    /*/
+Method updateThirdPartiesMovementCost() class Movement
+    Local cQuery     as character
+    Local cAliasTemp as character
+    Local cField     as character
+    Local nMoeda     as numeric
+    Local nBind      as numeric
+
+    If ::oQuerySB6 == Nil
+        cQuery := "SELECT "
+        For nMoeda := 1 To Len(::aMoedas)
+            cQuery += "   CASE "
+            cQuery += "       WHEN TRG.ALIAS = ? "
+            If ::aMoedas[nMoeda] == "1"
+                cQuery += "       THEN SD1.D1_CUSTO "
+            Else
+                cQuery += "       THEN SD1.D1_CUSTO? "
+            EndIf
+            cQuery += "       ELSE SD2.D2_CUSTO? "
+            cQuery += "   END CUSTO?, "
+        Next nMoeda
+        cQuery += "       CASE "
+        cQuery += "           WHEN TRG.ALIAS = ? "
+        cQuery += "               THEN COALESCE(B6XD1.R_E_C_N_O_, 0) "
+        cQuery += "           ELSE COALESCE(B6XD2.R_E_C_N_O_, 0) "
+        cQuery += "       END B6RECNO "
+        cQuery += "FROM " + ::cAnalyTable + " TRG "
+        cQuery += "LEFT JOIN " + RetSQLName("SD1") + " SD1 "
+        cQuery += "    ON  SD1.D1_FILIAL = ? "
+        cQuery += "    AND SD1.D1_NUMSEQ = TRG.SEQ "
+        cQuery += "    AND SD1.D_E_L_E_T_ = ? "
+        cQuery += "LEFT JOIN " + RetSQLName("SD2") + " SD2 "
+        cQuery += "    ON  SD2.D2_FILIAL = ? "
+        cQuery += "    AND SD2.D2_NUMSEQ = TRG.SEQ "
+        cQuery += "    AND SD2.D_E_L_E_T_ = ? "
+        cQuery += "LEFT JOIN " + RetSQLName("SB6") + " B6XD1 "
+        cQuery += "    ON  B6XD1.B6_FILIAL = ? "
+        cQuery += "    AND B6XD1.B6_IDENT = TRG.IDENTB6 "
+        cQuery += "    AND B6XD1.B6_PRODUTO = TRG.COD "
+        cQuery += "    AND B6XD1.B6_PODER3 = TRG.PODER3 "
+        cQuery += "    AND B6XD1.B6_DOC = SD1.D1_DOC "
+        cQuery += "    AND B6XD1.B6_SERIE = SD1.D1_SERIE "
+        cQuery += "    AND B6XD1.B6_CLIFOR = SD1.D1_FORNECE "
+        cQuery += "    AND B6XD1.B6_LOJA = SD1.D1_LOJA "
+        cQuery += "    AND B6XD1.B6_TES = SD1.D1_TES "
+        cQuery += "    AND B6XD1.B6_TIPO <> ? "
+        cQuery += "    AND B6XD1.D_E_L_E_T_ = ? "
+        cQuery += "LEFT JOIN " + RetSQLName("SB6") + " B6XD2 "
+        cQuery += "    ON B6XD2.B6_FILIAL = ? "
+        cQuery += "    AND B6XD2.B6_IDENT = TRG.IDENTB6 "
+        cQuery += "    AND B6XD2.B6_PRODUTO = TRG.COD "
+        cQuery += "    AND B6XD2.B6_PODER3 = TRG.PODER3 "
+        cQuery += "    AND B6XD2.B6_DOC = SD2.D2_DOC "
+        cQuery += "    AND B6XD2.B6_SERIE = SD2.D2_SERIE "
+        cQuery += "    AND B6XD2.B6_CLIFOR = SD2.D2_CLIENTE "
+        cQuery += "    AND B6XD2.B6_LOJA = SD2.D2_LOJA "
+        cQuery += "    AND B6XD2.B6_TES = SD2.D2_TES "
+        cQuery += "    AND B6XD2.D_E_L_E_T_ = ? "
+        cQuery += "WHERE TRG.FILPROC = ? "
+        cQuery += "  AND TRG.PODER3 IN (?)"
+
+        ::oQuerySB6 := FwExecStatement():New(cQuery)
+    EndIf
+
+    nBind := 1
+    For nMoeda := 1 To Len(::aMoedas)
+        ::oQuerySB6:SetString(nBind++, "SD1")
+        If ::aMoedas[nMoeda] <> "1"
+            ::oQuerySB6:SetUnsafe(nBind++, ::aMoedas[nMoeda])
+        EndIf
+        ::oQuerySB6:SetUnsafe(nBind++, ::aMoedas[nMoeda])
+        ::oQuerySB6:SetUnsafe(nBind++, ::aMoedas[nMoeda])
+    Next nMoeda
+    ::oQuerySB6:SetString(nBind++, "SD1")
+    ::oQuerySB6:SetString(nBind++, FWXFilial("SD1", ::cFilAtu))
+    ::oQuerySB6:SetString(nBind++, " ")
+    ::oQuerySB6:SetString(nBind++, FWXFilial("SD2", ::cFilAtu))
+    ::oQuerySB6:SetString(nBind++, " ")
+    ::oQuerySB6:SetString(nBind++, FWXFilial("SB6", ::cFilAtu))
+    ::oQuerySB6:SetString(nBind++, "D")
+    ::oQuerySB6:SetString(nBind++, " ")
+    ::oQuerySB6:SetString(nBind++, FWXFilial("SB6", ::cFilAtu))
+    ::oQuerySB6:SetString(nBind++, " ")
+    ::oQuerySB6:SetString(nBind++, ::cFilProc)
+    ::oQuerySB6:SetIn(nBind++, {"R","D"})
+
+    cAliasTemp := ::oQuerySB6:OpenAlias()
+
+    While (cAliasTemp)->(!Eof())
+        If (cAliasTemp)->B6RECNO > 0
+            SB6->(DBGoTo((cAliasTemp)->B6RECNO))
+            If SB6->(!Eof())
+                RecLock("SB6", .F.)
+                For nMoeda := 1 To Len(::aMoedas)
+                    cField := "CUSTO" + ::aMoedas[nMoeda]
+                    SB6->(FieldPut(FieldPos("B6_"+cField), (cAliasTemp)->(&(cField))))
+                Next nMoeda
+                SB6->(MsUnlock())
+            EndIf
+        EndIf
+        (cAliasTemp)->(DbSkip())
+    End
+
+    (cAliasTemp)->(DbCloseArea())
+
+Return

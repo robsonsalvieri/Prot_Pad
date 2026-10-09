@@ -1,0 +1,798 @@
+#include "totvs.ch"
+#include "msobject.ch"
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+
+namespace totvs.protheus.backoffice.contracts.adjustment
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ContractAdjustmentLegacyAdapter
+	    @description Representa a fronteira unica autorizada para acessar o stack legado de reajuste de contratos.
+	    @type class
+	    @author guilherme.sordi@totvs.com.br
+	    @since 11/05/2026
+	    @version 12.1.2510
+*/
+//-------------------------------------------------------------------
+class ContractAdjustmentLegacyAdapter
+	private data oModel as object
+	private data cLastErrorCode as character
+	private data cLastErrorMessage as character
+	private data cNewRevision as character
+	private data nAdjustedValue as numeric
+
+	public method new() as object
+	public method execute(oContext as object) as object
+
+	private method resetState() as object
+	private method validateContext(oContext as object) as logical
+	private method positionContractRevision(oContext as object) as logical
+	private method positionGeneratedRevision(oContext as object) as logical
+	private method resolveModelId(oContext as object) as character
+	private method resolveModelIdFromSpecies(cContractSpecies as character) as character
+	private method loadModelAndPrepareAdjustmentRevision(oContext as object) as object
+	private method enableAdjustmentLogQueryMode() as logical
+	private method executeMainAdjustment(oContext as object) as logical
+	private method executeRetroactiveAdjustmentIfNeeded(oContext as object) as logical
+	private method commitAdjustmentModel() as logical
+	private method approveRevisionIfNeeded(oContext as object) as logical
+	private method prepareAdjustedModelResult(oContext as object) as logical
+	private method appendAdjustmentLogEntries(oResult as object, oContext as object) as object
+	private method appendWorksheetLogEntry(aEntries as array, oWorksheetModel as object, cContract as character, cRevision as character) as logical
+	private method appendItemLogEntries(aEntries as array, oItemModel as object, cContract as character, cRevision as character) as logical
+	private method isGeneratedRevisionWaitingApproval() as logical
+	private method shouldApproveRevision(oContext as object) as logical
+	private method shouldRunRetroactive(oContext as object) as logical
+	private method extractAdjustedValue() as numeric
+	private method buildSuccessResult(oContext as object) as object
+	private method buildErrorResult(oContext as object) as object
+	private method appendModelErrorDetails(oResult as object, oLegacyModel as object) as object
+	private method registerError(cErrorCode as character, cErrorMessage as character) as logical
+	private method registerModelError(oLegacyModel as object, cFallbackCode as character, cFallbackMessage as character) as logical
+	private method writeModelErrorLog(cContract as character, oLegacyModel as object) as logical
+	private method contractRevisionKey(cBranch as character, cContract as character, cRevision as character) as character
+	private method purchaseContractSpeciesCode() as character
+	private method adjustmentRevisionCode() as character
+	private method revisionStatusInReviewCode() as character
+	private method defaultAdjustmentJustification() as character
+	private method finalizeLegacyState()
+endClass
+
+/*/{Protheus.doc} new
+	@description Inicializa o adapter legado com o estado interno limpo.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method new() as object class ContractAdjustmentLegacyAdapter
+	self:resetState()
+return self
+
+/*/{Protheus.doc} execute
+	@description Executa o fluxo completo de reajuste de uma unidade usando o stack legado.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method execute(oContext as object) as object class ContractAdjustmentLegacyAdapter
+	local oResult := NIL as object
+	local lSuccess := .T. as logical
+	local aArea := {} as array
+
+	self:resetState()
+	aArea := FWGetArea()
+
+	lSuccess := self:validateContext(oContext)
+
+	if lSuccess
+		lSuccess := self:positionContractRevision(oContext)
+	endIf
+
+	if lSuccess
+		self:oModel := self:loadModelAndPrepareAdjustmentRevision(oContext)
+		lSuccess := (self:oModel != NIL)
+	endIf
+
+	if lSuccess
+		lSuccess := self:executeMainAdjustment(oContext)
+	endIf
+
+	if lSuccess
+		self:nAdjustedValue := self:extractAdjustedValue()
+		lSuccess := self:executeRetroactiveAdjustmentIfNeeded(oContext)
+	endIf
+
+	if lSuccess
+		lSuccess := self:commitAdjustmentModel()
+	endIf
+
+	if lSuccess
+		lSuccess := self:approveRevisionIfNeeded(oContext)
+	endIf
+
+	if lSuccess
+		lSuccess := self:prepareAdjustedModelResult(oContext)
+	endIf
+
+	if lSuccess
+		oResult := self:buildSuccessResult(oContext)
+	else
+		oResult := self:buildErrorResult(oContext)
+	endIf
+
+	self:finalizeLegacyState()
+	FWRestArea(aArea)
+return oResult
+
+/*/{Protheus.doc} resetState
+	@description Reinicializa o estado interno transient do adapter.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method resetState() as object class ContractAdjustmentLegacyAdapter
+	self:oModel := NIL
+	self:cLastErrorCode := ""
+	self:cLastErrorMessage := ""
+	self:cNewRevision := ""
+	self:nAdjustedValue := 0
+return self
+
+/*/{Protheus.doc} validateContext
+	@description Valida se o contexto recebido esta apto para iniciar a execucao.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method validateContext(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	if oContext == NIL
+		return self:registerError("CTX001", "Contract adjustment context was not informed")
+	endIf
+
+	if !oContext:isValid()
+		return self:registerError("CTX002", oContext:validationMessage())
+	endIf
+return .T.
+
+/*/{Protheus.doc} positionContractRevision
+	@description Posiciona a revisao original do contrato na tabela CN9.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method positionContractRevision(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	local lFound := .F. as logical
+	local cKey := self:contractRevisionKey(oContext:cBranch, oContext:cContract, oContext:cRevision) as character
+
+	DbSelectArea("CN9")
+	CN9->(DbSetOrder(1))
+	lFound := CN9->(DbSeek(cKey))
+
+	if !lFound
+		return self:registerError("CN9001", "Contract revision was not found in CN9")
+	endIf
+
+	if CN9->CN9_ESPCTR != oContext:cContractSpecies
+		return self:registerError("CN9002", "Contract species from context does not match CN9")
+	endIf
+return .T.
+
+/*/{Protheus.doc} positionGeneratedRevision
+	@description Posiciona a nova revisao gerada pelo reajuste na tabela CN9.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method positionGeneratedRevision(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	local lFound := .F. as logical
+	local cKey := self:contractRevisionKey(oContext:cBranch, oContext:cContract, self:cNewRevision) as character
+
+	DbSelectArea("CN9")
+	CN9->(DbSetOrder(1))
+	lFound := CN9->(DbSeek(cKey))
+
+	if !lFound
+		return self:registerError("CN9003", "Generated contract revision was not found in CN9")
+	endIf
+return .T.
+
+/*/{Protheus.doc} resolveModelId
+	@description Resolve o identificador do modelo legado pelo contexto.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method resolveModelId(oContext as object) as character class ContractAdjustmentLegacyAdapter
+return self:resolveModelIdFromSpecies(oContext:cContractSpecies)
+
+/*/{Protheus.doc} resolveModelIdFromSpecies
+	@description Resolve o identificador do modelo legado pela especie do contrato.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method resolveModelIdFromSpecies(cContractSpecies as character) as character class ContractAdjustmentLegacyAdapter
+	local cModelId := "CNTA301" as character
+
+	if cContractSpecies == self:purchaseContractSpeciesCode()
+		cModelId := "CNTA300"
+	endIf
+return cModelId
+
+/*/{Protheus.doc} loadModelAndPrepareAdjustmentRevision
+	@description Carrega e prepara o modelo legado para inclusao da revisao de reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method loadModelAndPrepareAdjustmentRevision(oContext as object) as object class ContractAdjustmentLegacyAdapter
+	local lActivated := .F. as logical
+	local cModelId := self:resolveModelId(oContext) as character
+	local oLoadedModel := FWLoadModel(cModelId) as object
+
+	if oLoadedModel == NIL
+		self:registerError("MDL001", "Legacy contract model could not be loaded")
+		return NIL
+	endIf
+
+	A300STpRev(self:adjustmentRevisionCode())
+	oLoadedModel:Deactivate()
+	oLoadedModel:SetOperation(MODEL_OPERATION_INSERT)
+	lActivated := oLoadedModel:Activate(.T.)
+
+	if !lActivated
+		self:registerModelError(oLoadedModel, "MDL002", "Legacy model could not activate the adjustment revision")
+		return NIL
+	endIf
+
+	self:oModel := oLoadedModel
+	self:enableAdjustmentLogQueryMode()
+return self:oModel
+
+/*/{Protheus.doc} enableAdjustmentLogQueryMode
+	@description Ajusta o submodelo de log para consulta durante o reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method enableAdjustmentLogQueryMode() as logical class ContractAdjustmentLegacyAdapter
+	local oLogDetailModel := NIL as object
+
+	if self:oModel == NIL
+		return .T.
+	endIf
+
+	oLogDetailModel := self:oModel:GetModel("CXLDETAIL")
+
+	if oLogDetailModel != NIL
+		oLogDetailModel:SetOnlyQuery(.T.)
+	endIf
+return .T.
+
+/*/{Protheus.doc} executeMainAdjustment
+	@description Preenche os campos obrigatorios e executa a rotina legado principal de reajuste do contrato.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+
+method executeMainAdjustment(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	local lAdjusted := .F. as logical
+	local oModelCN9 := NIL as object
+	local cJustification := oContext:cJustification as character
+
+	if Empty(cJustification)
+		cJustification := self:defaultAdjustmentJustification()
+	endIf
+
+	if self:oModel == NIL
+		return self:registerError("ADJ001", "Legacy model was not available for adjustment execution")
+	endIf
+
+	oModelCN9 := self:oModel:GetModel("CN9MASTER")
+
+	if oModelCN9 == NIL
+		return self:registerError("MDL003", "CN9 model was not available in the legacy model")
+	endIf
+
+	oModelCN9:LoadValue("CN9_TIPREV", oContext:cAdjustmentRevisionTypeCode)
+	oModelCN9:LoadValue("CN9_DREFRJ", oContext:dReferenceDate)
+	oModelCN9:LoadValue("CN9_DTREAJ", oContext:dAdjustmentDate)
+	oModelCN9:LoadValue("CN9_JUSTIF", cJustification)
+
+	self:cNewRevision := AllTrim(oModelCN9:GetValue("CN9_REVISA"))
+
+	lAdjusted := CN300REAJU(self:oModel)
+
+	if !lAdjusted
+		return self:registerModelError(self:oModel, "ADJ001", "Legacy adjustment execution failed")
+	endIf
+return .T.
+
+/*/{Protheus.doc} executeRetroactiveAdjustmentIfNeeded
+	@description Executa o reajuste retroativo quando o contexto exigir esse processamento.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method executeRetroactiveAdjustmentIfNeeded(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	if self:shouldRunRetroactive(oContext)
+		if self:oModel == NIL
+			return self:registerError("ADJ002", "Legacy model was not available for retroactive adjustment")
+		endIf
+
+		//TODO Trazer essa função para os novos fontes.
+		CN310Retro(self:oModel, oContext:dAdjustmentDate, oContext:dReferenceDate)
+	endIf
+return .T.
+
+/*/{Protheus.doc} commitAdjustmentModel
+	@description Valida e persiste os dados do modelo legado apos o reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method commitAdjustmentModel() as logical class ContractAdjustmentLegacyAdapter
+	if self:oModel == NIL
+		return self:registerError("MDL004", "Legacy model was not available for commit")
+	endIf
+
+	if !self:oModel:VldData()
+		return self:registerModelError(self:oModel, "MDL004", "Legacy model validation failed after adjustment")
+	endIf
+
+	self:oModel:CommitData()
+return .T.
+
+/*/{Protheus.doc} approveRevisionIfNeeded
+	@description Executa a aprovacao automatica da revisao quando aplicavel.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method approveRevisionIfNeeded(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	local oApprovalModel := NIL as object
+	local cApprovalRevisionType := "" as character
+	local lApproved := .T. as logical
+
+	if !self:shouldApproveRevision(oContext)
+		return .T.
+	endIf
+
+	cApprovalRevisionType := Cn300RetSt("TIPREV")
+	if self:oModel == NIL
+		return self:registerError("APR000", "Legacy model was not available for approval flow")
+	endIf
+
+	self:oModel:Deactivate()
+	Cn300Clear()
+
+	if !self:positionGeneratedRevision(oContext)
+		return .F.
+	endIf
+
+	if !self:isGeneratedRevisionWaitingApproval()
+		return .T.
+	endIf
+
+	A300SATpRv(cApprovalRevisionType)
+	oApprovalModel := FWLoadModel(self:resolveModelIdFromSpecies(CN9->CN9_ESPCTR))
+
+	if oApprovalModel == NIL
+		lApproved := self:registerError("APR001", "Approval model could not be loaded")
+	else
+		oApprovalModel:SetOperation(MODEL_OPERATION_UPDATE)
+		lApproved := oApprovalModel:Activate()
+
+		if !lApproved
+			lApproved := self:registerModelError(oApprovalModel, "APR002", "Approval model could not be activated")
+		elseif !oApprovalModel:VldData()
+			lApproved := self:registerModelError(oApprovalModel, "APR003", "Approval model validation failed")
+		else
+			oApprovalModel:CommitData()
+		endIf
+	endIf
+
+	if !lApproved
+		self:writeModelErrorLog(oContext:cContract, oApprovalModel)
+	endIf
+
+	if oApprovalModel != NIL
+		oApprovalModel:Deactivate()
+		FwFreeObj(oApprovalModel)
+	endIf
+
+	Cn300Clear()
+return lApproved
+
+/*/{Protheus.doc} isGeneratedRevisionWaitingApproval
+	@description Verifica se a nova revisao esta em revisao e sem aprovacao definida.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method isGeneratedRevisionWaitingApproval() as logical class ContractAdjustmentLegacyAdapter
+return AllTrim(CN9->CN9_SITUAC) == self:revisionStatusInReviewCode() .And. Empty(AllTrim(CN9->CN9_APROV))
+
+/*/{Protheus.doc} prepareAdjustedModelResult
+	@description Reabre o modelo da revisao gerada quando necessario para montar o resultado estruturado do reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method prepareAdjustedModelResult(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	local oViewModel := NIL as object
+	local cModelId := "" as character
+	local lNeedsReload := self:shouldApproveRevision(oContext) as logical
+
+	if !lNeedsReload
+		return .T.
+	endIf
+
+	if self:oModel != NIL
+		self:oModel:Deactivate()
+		FwFreeObj(self:oModel)
+		self:oModel := NIL
+	endIf
+
+	Cn300Clear()
+
+	if !self:positionGeneratedRevision(oContext)
+		return .F.
+	endIf
+
+	cModelId := self:resolveModelIdFromSpecies(CN9->CN9_ESPCTR)
+	oViewModel := FWLoadModel(cModelId)
+
+	if oViewModel == NIL
+		return self:registerError("LOG001", "Adjusted contract model could not be loaded for log update")
+	endIf
+
+	oViewModel:SetOperation(MODEL_OPERATION_VIEW)
+	if !oViewModel:Activate()
+		self:writeModelErrorLog(oContext:cContract, oViewModel)
+		return self:registerModelError(oViewModel, "LOG002", "Adjusted contract model could not be activated for result assembly")
+	endIf
+
+	self:oModel := oViewModel
+return .T.
+
+/*/{Protheus.doc} appendAdjustmentLogEntries
+	@description Adiciona ao resultado as entradas estruturadas necessarias para o logger atualizar CXK e CXL.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method appendAdjustmentLogEntries(oResult as object, oContext as object) as object class ContractAdjustmentLegacyAdapter
+	local oModelCN9 := NIL as object
+	local oModelCNA := NIL as object
+	local oModelCNB := NIL as object
+	local aEntries := {} as array
+	local nIndex := 0 as numeric
+
+	if self:oModel == NIL .or. oResult == NIL
+		return oResult
+	endIf
+
+	oModelCN9 := self:oModel:GetModel("CN9MASTER")
+	oModelCNA := self:oModel:GetModel("CNADETAIL")
+	oModelCNB := self:oModel:GetModel("CNBDETAIL")
+
+	if oModelCN9 == NIL .or. oModelCNA == NIL .or. oModelCNB == NIL
+		return oResult
+	endIf
+
+ 	for nIndex := 1 to oModelCNA:Length()
+		oModelCNA:GoLine(nIndex)
+		if oModelCNA:GetValue("CNA_FLREAJ") == "1"
+			self:appendWorksheetLogEntry(aEntries, oModelCNA, oContext:cContract, oContext:cRevision)
+			self:appendItemLogEntries(aEntries, oModelCNB, oContext:cContract, oContext:cRevision)
+		endIf
+	next
+
+	oResult:addJsonDetail("logEntries", aEntries)
+return oResult
+
+/*/{Protheus.doc} appendWorksheetLogEntry
+	@description Adiciona uma entrada estruturada de atualizacao de log no nivel da planilha.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method appendWorksheetLogEntry(aEntries as array, oWorksheetModel as object, cContract as character, cRevision as character) as logical class ContractAdjustmentLegacyAdapter
+	local jEntry := JsonObject():New() as json
+	local cContractType := "" as character
+	local cWorksheetType := "" as character
+	local lFixed := .F. as logical
+	local lFinancialForecast := .F. as logical
+	local lSemiFinished := .F. as logical
+
+	if self:oModel == NIL
+		return .T.
+	endIf
+
+	cContractType := self:oModel:GetModel("CN9MASTER"):GetValue("CN9_TPCTO")
+	cWorksheetType := oWorksheetModel:GetValue("CNA_TIPPLA")
+	lFixed := CN300PlaSt("FIXO", cContractType, cWorksheetType)
+	lFinancialForecast := CN300PlaSt("PREVFINANC", cContractType, cWorksheetType)
+	lSemiFinished := CN300PlaSt("SEMIPROD", cContractType, cWorksheetType)
+
+	if (!lFixed .and. !lSemiFinished) .and. lFinancialForecast
+		jEntry["contract"] := cContract
+		jEntry["revision"] := cRevision
+		jEntry["plan"] := oWorksheetModel:GetValue("CNA_NUMERO")
+		jEntry["adjustmentDate"] := oWorksheetModel:GetValue("CNA_DTREAJ")
+		jEntry["nextDate"] := oWorksheetModel:GetValue("CNA_PROXRJ")
+		jEntry["currentValue"] := oWorksheetModel:GetValue("CNA_VLTOT")
+		jEntry["status"] := "C"
+		aAdd(aEntries, jEntry)
+	endIf
+return .T.
+
+/*/{Protheus.doc} appendItemLogEntries
+	@description Adiciona as entradas estruturadas de atualizacao de log no nivel dos itens da planilha.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method appendItemLogEntries(aEntries as array, oItemModel as object, cContract as character, cRevision as character) as logical class ContractAdjustmentLegacyAdapter
+	local jEntry := JsonObject():New() as json
+	local cItemOrigin := "" as character
+	local cItemDestination := "" as character
+	local cContractType := "" as character
+	local cWorksheetType := "" as character
+	local nItemIndex := 0 as numeric
+	local lFixed := .F. as logical
+	local lFinancialForecast := .F. as logical
+	local lSemiFinished := .F. as logical
+
+	if self:oModel == NIL
+		return .T.
+	endIf
+
+	cContractType := self:oModel:GetModel("CN9MASTER"):GetValue("CN9_TPCTO")
+	cWorksheetType := self:oModel:GetModel("CNADETAIL"):GetValue("CNA_TIPPLA")
+	lFixed := CN300PlaSt("FIXO", cContractType, cWorksheetType)
+	lFinancialForecast := CN300PlaSt("PREVFINANC", cContractType, cWorksheetType)
+	lSemiFinished := CN300PlaSt("SEMIPROD", cContractType, cWorksheetType)
+
+	if (!lFixed .and. !lSemiFinished) .and. lFinancialForecast
+		return .T.
+	endIf
+
+	for nItemIndex := 1 to oItemModel:Length()
+		oItemModel:GoLine(nItemIndex)
+		if oItemModel:GetValue("CNB_FLREAJ") <> "2"
+			cItemOrigin := oItemModel:GetValue("CNB_ITEM")
+			cItemDestination := oItemModel:GetValue("CNB_ITMDST")
+			jEntry := JsonObject():New()
+			jEntry["contract"] := cContract
+			jEntry["revision"] := cRevision
+			jEntry["plan"] := oItemModel:GetValue("CNB_NUMERO")
+			jEntry["item"] := cItemOrigin
+
+			if Empty(cItemDestination)
+				jEntry["adjustmentDate"] := oItemModel:GetValue("CNB_DTREAJ")
+				jEntry["nextDate"] := oItemModel:GetValue("CNB_PROXRJ")
+				jEntry["currentValue"] := oItemModel:GetValue("CNB_VLUNIT")
+				jEntry["status"] := "C"
+			else
+				jEntry["newItem"] := cItemDestination
+			endIf
+
+			aAdd(aEntries, jEntry)
+		endIf
+	next
+return .T.
+
+/*/{Protheus.doc} shouldApproveRevision
+	@description Decide se a aprovacao automatica deve ser executada nesta unidade.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method shouldApproveRevision(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+	local lApprove := oContext:lApproveAfterAdjustment as logical
+return lApprove
+
+/*/{Protheus.doc} shouldRunRetroactive
+	@description Decide se o fluxo retroativo deve ser executado para o contexto.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method shouldRunRetroactive(oContext as object) as logical class ContractAdjustmentLegacyAdapter
+return oContext:lRunRetroactive
+
+/*/{Protheus.doc} extractAdjustedValue
+	@description Extrai do modelo legado o valor reajustado consolidado.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method extractAdjustedValue() as numeric class ContractAdjustmentLegacyAdapter
+	local nAdjustedValue := 0 as numeric
+	local oModelCN9 := NIL as object
+
+	if self:oModel == NIL
+		return nAdjustedValue
+	endIf
+
+	oModelCN9 := self:oModel:GetModel("CN9MASTER")
+
+	if oModelCN9 != NIL
+		nAdjustedValue := oModelCN9:GetValue("CN9_VLREAJ")
+	endIf
+return nAdjustedValue
+
+/*/{Protheus.doc} buildSuccessResult
+	@description Monta o resultado padronizado para uma execucao bem-sucedida.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method buildSuccessResult(oContext as object) as object class ContractAdjustmentLegacyAdapter
+	local oResult := ContractAdjustmentResult():New() as object
+
+	oResult:copyTraceFromContext(oContext)
+	oResult:setAdjustedValue(self:nAdjustedValue)
+	oResult:setNewRevision(self:cNewRevision)
+	oResult:addDetail("adapter", "ContractAdjustmentLegacyAdapter")
+	self:appendAdjustmentLogEntries(oResult, oContext)
+	oResult:markSuccess("Contract adjustment executed successfully")
+return oResult
+
+/*/{Protheus.doc} buildErrorResult
+	@description Monta o resultado padronizado para uma execucao com falha.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method buildErrorResult(oContext as object) as object class ContractAdjustmentLegacyAdapter
+	local oResult := ContractAdjustmentResult():New() as object
+
+	if Empty(self:cLastErrorCode)
+		self:registerError("ADJ999", "Contract adjustment failed")
+	endIf
+
+	oResult:copyTraceFromContext(oContext)
+	oResult:setAdjustedValue(self:nAdjustedValue)
+	oResult:setNewRevision(self:cNewRevision)
+	oResult:markError(self:cLastErrorCode, self:cLastErrorMessage)
+	self:appendModelErrorDetails(oResult, self:oModel)
+return oResult
+
+/*/{Protheus.doc} appendModelErrorDetails
+	@description Copia para o resultado os detalhes relevantes do erro de modelo legado.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method appendModelErrorDetails(oResult as object, oLegacyModel as object) as object class ContractAdjustmentLegacyAdapter
+	local xModelError as variant
+
+	if oLegacyModel == NIL
+		return oResult
+	endIf
+
+	xModelError := oLegacyModel:GetErrorMessage()
+
+	if ValType(xModelError) == "A" .And. Len(xModelError) >= 9
+		oResult:addDetail("modelSourceForm", cValToChar(xModelError[1]))
+		oResult:addDetail("modelSourceField", cValToChar(xModelError[2]))
+		oResult:addDetail("modelErrorForm", cValToChar(xModelError[3]))
+		oResult:addDetail("modelErrorField", cValToChar(xModelError[4]))
+		oResult:addDetail("modelErrorId", cValToChar(xModelError[5]))
+		oResult:addDetail("modelErrorMessage", cValToChar(xModelError[6]))
+		oResult:addDetail("modelErrorSolution", cValToChar(xModelError[7]))
+		oResult:addDetail("modelAssignedValue", cValToChar(xModelError[8]))
+		oResult:addDetail("modelPreviousValue", cValToChar(xModelError[9]))
+	endIf
+return oResult
+
+/*/{Protheus.doc} registerError
+	@description Registra no estado interno um erro padronizado do adapter.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method registerError(cErrorCode as character, cErrorMessage as character) as logical class ContractAdjustmentLegacyAdapter
+	self:cLastErrorCode := AllTrim(cErrorCode)
+	self:cLastErrorMessage := AllTrim(cErrorMessage)
+return .F.
+
+/*/{Protheus.doc} registerModelError
+	@description Registra um erro baseado na mensagem retornada pelo modelo legado.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method registerModelError(oLegacyModel as object, cFallbackCode as character, cFallbackMessage as character) as logical class ContractAdjustmentLegacyAdapter
+	local xModelError as variant
+	local cMessage := cFallbackMessage as character
+
+	if oLegacyModel != NIL
+		xModelError := oLegacyModel:GetErrorMessage()
+
+		if ValType(xModelError) == "A" .And. Len(xModelError) >= 6 .And. !Empty(xModelError[6])
+			cMessage := cValToChar(xModelError[6])
+		endIf
+	endIf
+return self:registerError(cFallbackCode, cMessage)
+
+/*/{Protheus.doc} writeModelErrorLog
+	@description Replica no AutoGrLog os detalhes do erro retornado por um modelo legado quando disponiveis.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method writeModelErrorLog(cContract as character, oLegacyModel as object) as logical class ContractAdjustmentLegacyAdapter
+	if !Empty(cContract) .and. oLegacyModel != NIL
+		SetAutoLog(cContract, oLegacyModel)
+	endIf
+return .T.
+
+/*/{Protheus.doc} contractRevisionKey
+	@description Monta a chave composta de busca da revisao do contrato em CN9.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method contractRevisionKey(cBranch as character, cContract as character, cRevision as character) as character class ContractAdjustmentLegacyAdapter
+	local nBranchSize := TamSX3("CN9_FILIAL")[1] as numeric
+	local nContractSize := TamSX3("CN9_NUMERO")[1] as numeric
+	local nRevisionSize := TamSX3("CN9_REVISA")[1] as numeric
+
+return PadR(AllTrim(cBranch), nBranchSize) + PadR(AllTrim(cContract), nContractSize) + PadR(AllTrim(cRevision), nRevisionSize)
+
+/*/{Protheus.doc} purchaseContractSpeciesCode
+	@description Retorna o codigo da especie de contrato de compra.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method purchaseContractSpeciesCode() as character class ContractAdjustmentLegacyAdapter
+return "1"
+
+/*/{Protheus.doc} adjustmentRevisionCode
+	@description Retorna o codigo estrutural da revisao de reajuste usado pelo legado.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method adjustmentRevisionCode() as character class ContractAdjustmentLegacyAdapter
+return "2"
+
+/*/{Protheus.doc} revisionStatusInReviewCode
+	@description Retorna o codigo de status correspondente a revisao em andamento.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method revisionStatusInReviewCode() as character class ContractAdjustmentLegacyAdapter
+return "09"
+
+/*/{Protheus.doc} defaultAdjustmentJustification
+	@description Retorna a justificativa padrao utilizada na revisao automatica.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method defaultAdjustmentJustification() as character class ContractAdjustmentLegacyAdapter
+return "Automatic contract adjustment"
+
+/*/{Protheus.doc} finalizeLegacyState
+	@description Finaliza o modelo legado e limpa o estado estatico residual da execucao.
+	@author guilherme.sordi@totvs.com.br
+	@since 11/05/2026
+	@version 12.1.2510
+/*/
+method finalizeLegacyState() class ContractAdjustmentLegacyAdapter
+	if self:oModel != NIL
+		self:oModel:Deactivate()
+		FwFreeObj(self:oModel)
+		self:oModel := NIL
+	endIf
+
+	Cn300Clear()
+return

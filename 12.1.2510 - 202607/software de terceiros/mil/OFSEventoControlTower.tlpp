@@ -1,0 +1,4083 @@
+#Include "protheus.ch"
+#Include "tlpp-core.th"
+#Include "OFSEventoControlTower.ch"
+
+//  +---------------------------------------------------------------------------+
+//  |  Empresa  : TOTVS DMS                                                     |
+//  |  Sistema  : SIGAOFI /                                                     |
+//  |  Fonte    : OFSEventoControlTower.tlpp                                    |
+//  |  Assunto  : Orquestrador de eventos do Control Tower Scania               |
+//  |  Modulo   : Oficina / Integracao                                          |
+//  |  Autor    : Lucas Brustolin                                               |
+//  |  Data     : 07/02/2026                                                    |
+//  +---------------------------------------------------------------------------+
+//  |  Historico de Alteracoes                                                  |
+//  +---------------------------------------------------------------------------+
+//  |  Data       | Autor            | Descricao                                |
+//  +-------------+------------------+------------------------------------------+
+//  | 07/02/2026  | Lucas Brustolin  | Criacao do fonte                         |
+//  +---------------------------------------------------------------------------+
+
+// ------------------------------------------------------------
+// EVENTOS CONTROL TOWER
+// ------------------------------------------------------------
+#Define EVT_AGENDAMENTO                 "28"
+#Define EVT_REAGENDAMENTO               "29"
+#Define EVT_CANCELAMENTO_AGENDAMENTO    "30"
+#Define EVT_OS_ABERTA_SEM_ORCAMENTO     "32"
+#Define EVT_OS_ABERTA_AGUARD_CREDITO    "33"
+#Define EVT_OS_ABERTA_AGUARD_APROV_ORC  "34"
+#Define EVT_ORC_APROVADO_AGUARD_SERVICO "35"
+#Define EVT_SERVICO_EM_ANDAMENTO        "36"
+#Define EVT_SERVICO_INTERROMPIDO        "37"
+#Define EVT_SERVICO_PENDENTE            "38"
+#Define EVT_SERVICO_FINALIZADO          "39"
+#Define EVT_VEICULO_LIBERADO           	"40"
+#Define EVT_OS_FECHADA_PROC_FINALIZADO 	"41"
+
+
+// ------------------------------------------------------------
+// STATUS VK5 (VK5_STATUS)
+// 0=Pendente | 1=Em Processamento | 2=Sucesso | 3=Erro | 4=Ciente do Erro
+// ------------------------------------------------------------
+#Define VK5STATUS_PENDENTE                    "0"
+#Define VK5STATUS_EM_PROCESSAMENTO            "1"
+#Define VK5STATUS_SUCESSO                     "2"
+#Define VK5STATUS_ERRO                        "3"
+#Define VK5STATUS_CIENTE_ERRO                 "4"
+
+// ------------------------------------------------------------
+// RETORNOS DO ORQUESTRADOR
+// ------------------------------------------------------------
+#Define RETORNO_SUCESSO                      "SUCESSO"
+#Define RETORNO_DUPLICADO                    "DUPLICADO"     // bloqueio silencioso, sem persistência
+#Define RETORNO_IGNORADO                     "IGNORADO"      // regra de negócio:  histórico
+#Define RETORNO_ERRO                         "ERRO"          // falha: grava VK5(3) + histórico
+#Define RETORNO_PENDENTE                     "PENDENTE"      // precursor não resolvido: grava VK5(0) + histórico
+#Define RETORNO_SEM_ACAO                     "SEM_ACAO"      // precursor não resolvido: grava VK5(0) + histórico
+
+// ------------------------------------------------------------
+// STATUS DE SERVIÇO (retorno de AnalisarStatusServicos)
+// ------------------------------------------------------------
+#Define STATUS_SERV_EM_ANDAMENTO             "EM_ANDAMENTO"
+#Define STATUS_SERV_INTERROMPIDO             "INTERROMPIDO"
+#Define STATUS_SERV_PENDENTE                 "SRV_PENDENTE"
+#Define STATUS_SERV_FINALIZADO               "FINALIZADO"
+#Define STATUS_SERV_INDEFINIDO               "INDEFINIDO"
+
+/*/{Protheus.doc} OFSEventoControlTower
+    Classe responsavel por orquestrar o envio de eventos de servico veicular
+    ao Control Tower Scania (EVT 28/29/30/32/33).
+
+    Fluxo principal (ExecutarEvento):
+      1. Prepara contexto (VV1/SA1/VO1) e carrega historico em cache
+      2. Carrega e valida configuracao (VRN OFIA541)
+      3. Verifica duplicidade - bloqueio silencioso, sem persistencia
+      4. Verifica marca Scania - grava so historico local se nao for Scania
+      5. Verifica contrato - grava so historico local se sem contrato / fora do escopo
+      6. Verifica pendencia tecnica na VK5 - suspende integracao se houver
+      7. Executa regras especificas do evento (EVT28Rules...EVT33Rules)
+         Cada Rules e responsavel por validar seus proprios pre-requisitos e
+         chamar GarantirEventoPrecursor quando necessario.
+      8. Integra com Control Tower (token + payload + POST)
+      9. Persiste VK5 (auditoria tecnica) e VEW/VEX (historico funcional)
+
+    Retornos dos Rules:
+      RETORNO_SUCESSO   - prossegue para integracao
+      RETORNO_PENDENTE  - precursor nao resolvido: grava VK5(0) + historico
+      RETORNO_IGNORADO  - regra de negocio:  histórico
+      RETORNO_ERRO      - falha tecnica: grava VK5(3) + historico
+      RETORNO_DUPLICADO - bloqueio silencioso, sem persistencia
+
+    @type    Class
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @version 1.1
+/*/
+
+Class OFSEventoControlTower
+
+    // Contexto do evento corrente
+    Protected Data cEvento              As Character   // código (28/29/30/32/33)
+    Protected Data cDescricaoEvento     As Character
+    Protected Data cChassi              As Character
+    Protected Data cNumeroOS            As Character
+    Protected Data cNumeroOrcamento     As Character
+    Protected Data cNumAge              As Character   // número do agendamento (VSO)
+    Protected Data cPlacaVeiculo        As Character
+    Protected Data cMarcaVeiculo        As Character
+    Protected Data cChassiInterno       As Character
+    Protected Data cChassiReduzido      As Character   // últimos 7 dígitos, para comparação com histórico legado (VEW_CHASSI)  
+    Protected Data cCodigoCliente       As Character
+    Protected Data cLojaCliente         As Character
+    Protected Data cNomeCliente         As Character
+    Protected Data cTipoContrato        As Character
+	Protected Data cIdMotivo            As Character   // código do motivo de pausa (EVT37)
+	Protected Data cDescMotivo          As Character   // descrição do motivo de pausa (EVT37)
+
+    // Estado da execução
+    Protected Data cObservacaoOverride  As Character   // observação injetada externamente (retrocesso)
+    Protected Data cDataHoraOcorrOverride As Character // data/hora ocorrência injetada externamente 
+    Protected Data cObservacao          As Character   // motivo de bloqueio/erro/ignore
+    Protected Data cHistoricoVK5Observacao As Character   // motivo de bloqueio/erro/ignore
+    Protected Data cStatusPassagem      As Character   // 0=Em andamento | 1=Fechada
+    Protected Data lIntegrou            As Logical     // .T. quando HTTP 2xx confirmado
+    Protected Data cCodigoVK5           As Character
+    Protected Data cDataHoraEvento      As Character   // data/hora do disparo (now)
+    Protected Data cDataHoraOcorrencia  As Character   // data/hora real da ocorrência
+    Protected Data cDataHoraAnterior    As Character   // data/hora ANTES da alteração (EVT29)
+    Protected Data cDataHoraAgendamento As Character   // data/hora do agendamento VSO (EVT28/EVT29/EVT32/EVT33)
+    Protected Data cPayloadJson         As Character
+    Protected Data oRest                As Object
+    Protected Data aHeader              As Array
+
+    // Cache de histórico (VEX) carregado uma vez por execução
+    // All = qualquer registro | Int = somente integrados (VEX_INTCON='1')
+    Protected Data aHistChassiAll       As Array
+    Protected Data aHistChassiInt       As Array
+    Protected Data aHistNumAgeAll       As Array
+    Protected Data aHistNumAgeInt       As Array
+    Protected Data aHistNumOsAll        As Array
+    Protected Data aHistNumOsInt        As Array
+
+    // Configuração e integração
+    Protected Data oConfig              As Object      // VRN OFIA541 -> CONTROLTOWER[ambiente]
+    Protected Data cToken               As Character
+    Protected Data oDMSRequest          As Object
+
+    // --------------------------------------------------------
+    // Público
+    // --------------------------------------------------------
+    Public Method New()             As Object
+    Public Method SetDataHoraAnterior( cDataHora As Character ) As Logical
+    Public Method SetObservacao( cObs As Character ) As Logical
+    Public Method SetDataHoraOcorrencia( cDataHora As Character ) As Logical
+    Public Method ExecutarEvento( cCodEvento, cChassi, cNumeroOS, cNumeroOrcamento, cNumeroAgendamento ) As Character
+    Public Method AvaliarEventoServico( cNumeroOS As Character ) As Character
+
+    // --------------------------------------------------------
+    // Privado — preparação
+    // --------------------------------------------------------
+    Private Method PrepararContexto()           As Logical
+    Private Method CarregarHistorico()          As Logical
+    Private Method BuscarHistorico( cTipo, cChave, lSoIntegrado ) As Array
+
+    // --------------------------------------------------------
+    // Public — configuração
+    // --------------------------------------------------------
+    Public Method CarregarConfig()             As Logical
+    Public Method ConfigValida()               As Logical
+
+    // --------------------------------------------------------
+    // Privado — validações globais
+    // --------------------------------------------------------
+    Public Method EhVeiculoScania()            As Logical
+    Public Method ObterTipoContrato()          As Character
+    Public Method ContratoEhElegivel( cTipo )  As Logical
+    Private Method HistoricoTemEvento( cEvt, cTipo, lSoInt ) As Logical
+    Private Method VK5Existe( cChave, cEvt, aStatus ) As Logical
+    Private Method GetChaveEvento()             As Character
+    Private Method GetTipoChaveEvento()         As Character
+    Private Method EventoEhDuplicado()          As Logical
+    Private Method UltimoStatusEhProprio()     As Logical
+    Private Method TemPendenciaTecnica()        As Logical
+
+    // --------------------------------------------------------
+    // Privado — regras por evento
+    // --------------------------------------------------------
+    Private Method EVT28Rules()                 As Character
+    Private Method EVT29Rules()                 As Character
+    Private Method EVT30Rules()                 As Character
+    Private Method EVT32Rules()                 As Character
+    Private Method EVT33Rules()                 As Character
+    Private Method EVT34Rules()                 As Character
+    Private Method EVT35Rules()                 As Character
+    Private Method EVT36Rules()                 As Character
+    Private Method EVT37Rules()                 As Character
+    Private Method EVT38Rules()                 As Character
+    Private Method EVT39Rules()                 As Character
+    Private Method EVT40Rules()                 As Character
+    Private Method EVT41Rules()                 As Character
+
+    // --------------------------------------------------------
+    // Privado — auxiliares de regra
+    // --------------------------------------------------------
+    Private Method GarantirEventoPrecursor( cEvtPrecursor, cTipoChave, lAceitarIgnorado ) As Logical
+    Private Method ClassificarAgendadoOuPassante() As Logical
+    Private Method BuscarUltimaDataHoraAgendada() As Character
+    Private Method ObterDataExportacaoOrcamento()   As Character
+    Private Method AnalisarStatusServicos()         As Character
+    Private Method ObterPrimeiroApontamento()       As Character
+    Private Method ObterUltimoApontamento()         As Character
+    Private Method ObterApontamentoInterrompido()   As Character
+    Private Method CalcularTempoPadraoApontamentos() As Numeric
+    Private Method ObterMotivoPausa()               As Array
+    Private Method MontarFiltroChecklist()          As Character
+    Private Method ObterMaiorDataFechamento()      As Character
+	Private Method ObterMaiorDataDisponivel()	 As Character
+    
+    // --------------------------------------------------------
+    // Privado — data/hora
+    // --------------------------------------------------------
+    Private Method DataHoraDeVSO( cCampoDt, cCampoHr, lIgnorarStatus ) As Character
+    Private Method DataHoraDeVO1( cCampoDt, cCampoHr ) As Character
+    Private Method DataHoraDeVEX( cEvtRef, cCampoDt, cCampoHr ) As Character
+    Private Method DataHoraDeVN8( cCampoDt, cCampoHr  ) As Character
+
+    // --------------------------------------------------------
+    // Privado — integração
+    // --------------------------------------------------------
+    Private Method IntegrarControlTower()       As Logical
+    Private Method ObterToken()                 As Logical
+    Private Method MontarPayload()              As Object
+    Private Method ResolverContentType( cTipo ) As Character
+
+    // --------------------------------------------------------
+    // Privado — persistência
+    // --------------------------------------------------------
+    Private Method GravarVK5( cStatus )         As Logical
+    Private Method GetVEWHistoricoPassagem( cEvt, lExisteVEW ) As Logical
+    Private Method GravarHistoricoPassagem( cEvt ) As Logical
+    Private Method AddHistoricoCache( cEvt )
+    Private Method MontarTextoVK5( cStatus )    As Character
+
+    // --------------------------------------------------------
+    // Privado — apoio
+    // --------------------------------------------------------
+    Private Method ObterSISID()                         As Character
+    Private Method CalcularTempoPadraoOS()              As Numeric
+    Private Method DateToJulian( dData As Date )        As Numeric
+
+    // --------------------------------------------------------
+    // Público — utilitários chamados por fontes externos
+    // --------------------------------------------------------
+    Public Method NormalizarHora( xHora )               As Character
+    Public Method SeparaDataHora( cDataHora )           As Character
+
+EndClass
+
+/*/{Protheus.doc} New
+    Construtor da classe. Inicializa todas as propriedades com valores padrao.
+    Deve ser chamado antes de qualquer operacao com a instancia.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Object  Instancia inicializada da classe OFSEventoControlTower
+/*/
+Method New() Class OFSEventoControlTower
+
+    ::cEvento               := ""
+    ::cDescricaoEvento      := ""
+    ::cChassi               := ""
+    ::cNumeroOS             := ""
+    ::cNumeroOrcamento      := ""
+    ::cNumAge               := ""
+    ::cPlacaVeiculo         := ""
+    ::cMarcaVeiculo         := ""
+    ::cChassiInterno        := ""
+    ::cChassiReduzido       := ""
+    ::cCodigoCliente        := ""
+    ::cLojaCliente          := ""
+    ::cNomeCliente          := ""
+    ::cTipoContrato         := ""
+    ::cObservacao           := ""
+    ::cHistoricoVK5Observacao := ""
+    ::cObservacaoOverride   := ""
+    ::cDataHoraOcorrOverride := ""
+    ::cStatusPassagem       := "0"
+    ::lIntegrou             := .F.
+    ::cCodigoVK5            := ""
+    ::cDataHoraEvento       := ""
+    ::cDataHoraOcorrencia   := ""
+    ::cDataHoraAnterior     := ""
+    ::cDataHoraAgendamento  := ""
+    ::cIdMotivo             := ""
+    ::cDescMotivo           := ""
+    ::cPayloadJson          := ""
+    ::oRest                 := Nil
+    ::aHeader               := {}
+    ::aHistChassiAll        := {}
+    ::aHistChassiInt        := {}
+    ::aHistNumAgeAll        := {}
+    ::aHistNumAgeInt        := {}
+    ::aHistNumOsAll         := {}
+    ::aHistNumOsInt         := {}
+    ::oConfig               := Nil
+    ::cToken                := ""
+    ::oDMSRequest           := Nil
+
+Return Self
+
+/*/{Protheus.doc} SetDataHoraAnterior
+    Informa ao EVT29 a data/hora do agendamento anterior a alteracao.
+    Deve ser chamado pelo ponto de disparo antes de ExecutarEvento(EVT29).
+    Sem essa informacao, o reagendamento nao consegue compor o payload corretamente.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cDataHora  Character  Data/hora no formato "DD/MM/YYYY HH:MM"
+    @return  Logical    Sempre .T.
+/*/
+Method SetDataHoraAnterior( cDataHora ) Class OFSEventoControlTower
+
+    Default cDataHora := ""
+    cDataHora := AllTrim(cDataHora)
+
+    ::cDataHoraAnterior := cDataHora
+
+Return .T.
+
+/*/{Protheus.doc} SetObservacao
+    Injeta uma observacao personalizada que sera utilizada no lugar da
+    observacao padrao definida pelo EVTxxRules.
+    Criado para a H#20 (retrocesso de status), onde o OFIOM150 precisa
+    gravar textos especificos como "Fechamento da OS cancelada" ou
+    "Liberacao cancelada - O veiculo retornou para a concessionaria".
+
+    Deve ser chamado ANTES de ExecutarEvento(). O override so se aplica
+    quando o EVTxxRules retorna RETORNO_SUCESSO.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   28/05/2026
+    @param   cObs  Character  Texto da observacao a gravar
+    @return  Logical  Sempre .T.
+/*/
+Method SetObservacao( cObs ) Class OFSEventoControlTower
+
+    Default cObs := ""
+    ::cObservacaoOverride := AllTrim(cObs)
+
+Return .T.
+
+/*/{Protheus.doc} SetDataHoraOcorrencia
+    Injeta externamente a data/hora de ocorrencia do evento.
+    Criado para a H#20 (retrocesso de status): no cenario de cancelamento
+    do fechamento (F->D), o OFIOM150 limpa VO1_DATSAI/VO1_HORSAI antes
+    de chamar o Control Tower, entao a data de liberacao precisa ser
+    capturada antes da gravacao e injetada via este metodo.
+
+    Deve ser chamado ANTES de ExecutarEvento(). O override so se aplica
+    quando o EVTxxRules tenta resolver a data/hora de ocorrencia.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   28/05/2026
+    @param   cDataHora  Character  Data/hora no formato "DD/MM/YYYY HH:MM"
+    @return  Logical  Sempre .T.
+/*/
+Method SetDataHoraOcorrencia( cDataHora ) Class OFSEventoControlTower
+
+    Default cDataHora := ""
+    ::cDataHoraOcorrOverride := AllTrim(cDataHora)
+
+Return .T.
+
+/*/{Protheus.doc} AvaliarEventoServico
+    Avalia o status consolidado dos servicos/apontamentos da OS e retorna
+    o codigo do evento Control Tower correspondente.
+    Utilizado pelos dispatch points (OFIOM030, OFIXA120, OFIOM070) para
+    determinar qual evento dinamico (EVT36-39) disparar apos a gravacao
+    de apontamentos, sem que o chamador precise conhecer a logica interna.
+
+    Mapeamento:
+      STATUS_SERV_EM_ANDAMENTO -> EVT_SERVICO_EM_ANDAMENTO ("36")
+      STATUS_SERV_INTERROMPIDO -> "37" (futuro EVT37)
+      STATUS_SERV_PENDENTE     -> "38" (futuro EVT38)
+      STATUS_SERV_FINALIZADO   -> "39" (futuro EVT39)
+      STATUS_SERV_INDEFINIDO   -> "" (nao dispara)
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   23/04/2026
+    @param   cNumeroOS  Character  Numero da OS a avaliar
+    @return  Character  Codigo do evento ("36".."39") ou "" se nenhum evento aplicavel
+/*/
+Method AvaliarEventoServico( cNumeroOS ) Class OFSEventoControlTower
+
+    Local cStatus := ""
+
+    Default cNumeroOS := ""
+
+    If Empty(cNumeroOS)
+        Return ""
+    EndIf
+
+    ::cNumeroOS := AllTrim(cNumeroOS)
+
+    cStatus := ::AnalisarStatusServicos()
+
+    Do Case
+        Case cStatus == STATUS_SERV_EM_ANDAMENTO    ;  Return EVT_SERVICO_EM_ANDAMENTO
+        Case cStatus == STATUS_SERV_INTERROMPIDO    ;  Return EVT_SERVICO_INTERROMPIDO
+        Case cStatus == STATUS_SERV_PENDENTE        ;  Return EVT_SERVICO_PENDENTE
+        Case cStatus == STATUS_SERV_FINALIZADO      ;  Return EVT_SERVICO_FINALIZADO
+    EndCase
+
+Return ""
+
+/*/{Protheus.doc} ExecutarEvento
+    Orquestrador principal. Executa o fluxo completo de validacao, regras de negocio,
+    integracao HTTP e persistencia para um evento do Control Tower.
+
+    Ordem de execucao:
+      1. PrepararContexto    - carrega VV1/SA1/VO1 e historico em cache
+      2. CarregarConfig      - le VRN OFIA541 conforme ambiente
+      3. EventoEhDuplicado   - bloqueio silencioso, sem persistencia
+      4. TemPendenciaTecnica - suspende se VK5 pendente do mesmo evento
+      5. EVTxxRules          - regras do evento + GarantirEventoPrecursor
+                               (marca e contrato sao validados APOS as rules para
+                               permitir que GarantirEventoPrecursor execute mesmo
+                               para veiculos nao Scania ou sem contrato elegivel)
+      6. EhVeiculoScania     - grava so historico local se nao for Scania
+      7. ObterTipoContrato / ContratoEhElegivel
+                             - grava so historico local se sem contrato / fora escopo
+      8. IntegrarControlTower - token + payload + POST
+      9. GravarVK5 + GravarHistoricoPassagem
+
+    Retornos dos Rules:
+      RETORNO_SUCESSO   - prossegue para integracao
+      RETORNO_PENDENTE  - precursor nao resolvido: grava VK5(0) + historico
+      RETORNO_IGNORADO  - regra de negocio: historico
+      RETORNO_ERRO      - falha tecnica: grava VK5(3) + historico
+      RETORNO_DUPLICADO - bloqueio silencioso, sem persistencia
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   27/03/2026
+    @version 1.2 - 27/03/2026 - Reordenacao: EVTxxRules antes de EhVeiculoScania/Contrato
+    @param   cCodEvento          Character  Codigo do evento (28/29/30/32/33)
+    @param   cChassi             Character  Chassi externo do veiculo
+    @param   cNumeroOS           Character  Numero da OS (opcional)
+    @param   cNumeroOrcamento    Character  Numero do orcamento (opcional)
+    @param   cNumeroAgendamento  Character  Numero do agendamento VSO (opcional)
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_IGNORADO | RETORNO_ERRO | RETORNO_DUPLICADO
+/*/
+Method ExecutarEvento( cCodEvento, cChassi, cNumeroOS, cNumeroOrcamento, cNumeroAgendamento ) Class OFSEventoControlTower
+
+    Local aArea      := GetArea()
+    Local cRetorno   := RETORNO_ERRO
+    Local cRetRegras := ""
+
+    // --- Inicializa contexto do evento ---
+    ::cEvento               := AllTrim(cCodEvento)
+    ::cDescricaoEvento      := AllTrim(OFIOA560DS("083", ::cEvento))
+    ::cChassi               := AllTrim(cChassi)
+    ::cChassiReduzido       := Right(::cChassi, 7)
+    ::cNumeroOS             := AllTrim(cNumeroOS)
+    ::cNumeroOrcamento      := AllTrim(cNumeroOrcamento)
+    ::cNumAge               := AllTrim(cNumeroAgendamento)
+    ::cObservacao           := ""
+    ::cHistoricoVK5Observacao := ""
+    ::cCodigoVK5            := ""
+    ::cIdMotivo             := ""
+    ::cDescMotivo           := ""
+    ::cStatusPassagem       := "0"
+    ::lIntegrou             := .F.
+    ::oRest                 := Nil
+
+    Begin Sequence
+
+    // --- PASSO 1: Contexto (VV1/SA1/VO1) + histórico em cache ---
+    If !::PrepararContexto()
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    // --- PASSO 2: Configuração VRN OFIA541 ---
+    If !::CarregarConfig() .Or. !::ConfigValida()
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    // --- PASSO 3: Duplicidade (bloqueio silencioso, SEM persistência) ---
+    If ::EventoEhDuplicado()
+        cRetorno := RETORNO_DUPLICADO
+        Break
+    EndIf
+
+    // --- PASSO 4: Regras específicas do evento ---
+    // Cada Rules é responsável por seus próprios pré-requisitos via GarantirEventoPrecursor.
+    Do Case
+        Case ::cEvento == EVT_AGENDAMENTO                   ;  cRetRegras := ::EVT28Rules()
+        Case ::cEvento == EVT_REAGENDAMENTO                 ;  cRetRegras := ::EVT29Rules()
+        Case ::cEvento == EVT_CANCELAMENTO_AGENDAMENTO      ;  cRetRegras := ::EVT30Rules()
+        Case ::cEvento == EVT_OS_ABERTA_SEM_ORCAMENTO       ;  cRetRegras := ::EVT32Rules()
+        Case ::cEvento == EVT_OS_ABERTA_AGUARD_CREDITO      ;  cRetRegras := ::EVT33Rules()
+        Case ::cEvento == EVT_OS_ABERTA_AGUARD_APROV_ORC    ;  cRetRegras := ::EVT34Rules()
+        Case ::cEvento == EVT_ORC_APROVADO_AGUARD_SERVICO   ;  cRetRegras := ::EVT35Rules()
+        Case ::cEvento == EVT_SERVICO_EM_ANDAMENTO          ;  cRetRegras := ::EVT36Rules()
+        Case ::cEvento == EVT_SERVICO_INTERROMPIDO          ;  cRetRegras := ::EVT37Rules()
+        Case ::cEvento == EVT_SERVICO_PENDENTE              ;  cRetRegras := ::EVT38Rules()
+        Case ::cEvento == EVT_SERVICO_FINALIZADO            ;  cRetRegras := ::EVT39Rules()
+        Case ::cEvento == EVT_VEICULO_LIBERADO              ;  cRetRegras := ::EVT40Rules()
+        Case ::cEvento == EVT_OS_FECHADA_PROC_FINALIZADO    ;  cRetRegras := ::EVT41Rules()
+    EndCase
+
+    // --- PASSO 5: Pendência técnica na VK5 ---
+    // Evento com pendência anterior é enfileirado como VK5(0) para reprocessamento sequencial.
+    If ::TemPendenciaTecnica()
+        Do Case
+            Case ::cEvento == EVT_REAGENDAMENTO
+                ::cHistoricoVK5Observacao := STR0005 // "Reagendamento aguardando processamento do reagendamento anterior"
+            Case ::cEvento == EVT_CANCELAMENTO_AGENDAMENTO
+                ::cHistoricoVK5Observacao := STR0006 // "Cancelamento aguardando processamento do evento anterior"
+            Otherwise
+                ::cHistoricoVK5Observacao := STR0007 // "Evento aguardando processamento do evento anterior"
+        EndCase
+        ::GravarVK5(VK5STATUS_PENDENTE)
+        ::GravarHistoricoPassagem(::cEvento)
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    Do Case
+        Case cRetRegras == RETORNO_DUPLICADO .or. cRetRegras == RETORNO_SEM_ACAO
+            // Bloqueio silencioso — sem persistência
+            cRetorno := RETORNO_DUPLICADO
+            Break
+
+        Case cRetRegras == RETORNO_IGNORADO
+            // Regra de negócio — Grava histórico local, sem VK5, sem integração
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_SUCESSO
+            Break
+
+        Case cRetRegras == RETORNO_PENDENTE
+            // Precursor não resolvido — suspende como pendente para reprocessamento
+            ::GravarVK5(VK5STATUS_PENDENTE)
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_ERRO
+            Break
+
+        Case cRetRegras == RETORNO_ERRO
+            // Falha técnica — registra VK5(3) + histórico
+            ::GravarVK5(VK5STATUS_ERRO)
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_ERRO
+            Break
+    EndCase
+
+    // --- PASSO 6: Validação de marca ---
+    // Veículo não Scania: registra só histórico local, sem integrar.
+    If !::EhVeiculoScania()
+        ::cHistoricoVK5Observacao := STR0001 // "Veiculo de outra marca - evento nao enviado ao Control Tower"
+        ::GravarHistoricoPassagem(::cEvento)
+        cRetorno := RETORNO_SUCESSO
+        Break
+    EndIf
+
+    // --- PASSO 7: Validação de contrato ---
+    ::cTipoContrato := ::ObterTipoContrato()
+
+    Do Case
+        Case Empty(::cTipoContrato) .Or. Upper(::cTipoContrato) == "NO_CONTRACT"
+            ::cHistoricoVK5Observacao := STR0002 // "Veiculo sem contrato - evento nao enviado ao Control Tower"
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_SUCESSO
+            Break
+
+        Case Upper(::cTipoContrato) == "UNABLE_TO_DETERMINE_CONTRACT"
+            ::cHistoricoVK5Observacao := STR0003 // "Nao foi possivel determinar o tipo de contrato"
+            ::GravarVK5(VK5STATUS_ERRO)
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_ERRO
+            Break
+
+        Case !::ContratoEhElegivel(::cTipoContrato)
+            ::cHistoricoVK5Observacao := STR0004 // "Contrato fora do escopo Control Tower"
+            ::GravarHistoricoPassagem(::cEvento)
+            cRetorno := RETORNO_SUCESSO
+            Break
+    EndCase
+
+    // --- PASSO 8: Integração ---
+    If !::IntegrarControlTower()
+        ::lIntegrou := .F.
+        ::GravarVK5(VK5STATUS_ERRO)
+        ::GravarHistoricoPassagem(::cEvento)
+        cRetorno := RETORNO_ERRO
+        Break
+    EndIf
+
+    ::lIntegrou := .T.
+    ::GravarVK5(VK5STATUS_SUCESSO)                                 
+    ::GravarHistoricoPassagem(::cEvento)
+    cRetorno := RETORNO_SUCESSO
+
+    End Sequence
+
+RestArea(aArea)
+
+Return cRetorno
+
+/*/{Protheus.doc} PrepararContexto
+    Carrega dados de veiculo (VV1), cliente (SA1) e agendamento (VO1) para o contexto
+    da instancia. Tambem dispara o carregamento do cache de historico (VEX/VEW).
+    Retorna .F. se veiculo ou cliente nao forem localizados.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = contexto carregado | .F. = falha critica
+/*/
+Method PrepararContexto() Class OFSEventoControlTower
+    Local cChaInt := ""
+
+    If FWIsInCallStack("OFIA617")
+        cChaInt := ::cChassi
+        VV1->(DbSetOrder(1))    // VV1_FILIAL + VV1_CHAINT
+        If !VV1->(DbSeek(xFilial("VV1") + cChaInt))
+            Return .F.
+        EndIf
+    Else
+        DbSelectArea("VV1")
+        VV1->(DbSetOrder(2))    // VV1_FILIAL + VV1_CHASSI
+        If !VV1->(DbSeek(xFilial("VV1") + ::cChassi))
+            Return .F.
+        EndIf
+    EndIf
+    ::cPlacaVeiculo  := AllTrim(VV1->VV1_PLAVEI)
+    ::cMarcaVeiculo  := AllTrim(VV1->VV1_CODMAR)
+    ::cChassiInterno := AllTrim(VV1->VV1_CHAINT)
+    ::cChassiReduzido:= Right(AllTrim(VV1->VV1_CHASSI), 7)  // para comparação com histórico legado (VEW_CHASSI)
+
+    // Cliente (SA1)
+    DbSelectArea("SA1")
+    SA1->(DbSetOrder(1))    // SA1_FILIAL + SA1_COD + SA1_LOJA
+    If !SA1->(DbSeek(xFilial("SA1") + VV1->VV1_PROATU + VV1->VV1_LJPATU))
+        Return .F.
+    EndIf
+    ::cCodigoCliente := AllTrim(SA1->A1_COD)
+    ::cLojaCliente   := AllTrim(SA1->A1_LOJA)
+    ::cNomeCliente   := AllTrim(SA1->A1_NOME)
+
+    // Agendamento via VO1 (quando não informado pelo chamador)
+    If Empty(::cNumAge) .And. !Empty(::cNumeroOS)
+        DbSelectArea("VO1")
+        VO1->(DbSetOrder(1))    // VO1_FILIAL + VO1_NUMOSV
+        If VO1->(DbSeek(xFilial("VO1") + ::cNumeroOS))
+            ::cNumAge := AllTrim(VO1->VO1_NUMAGE)
+        EndIf
+    EndIf
+
+    If !Empty(::cNumAge)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    ::CarregarHistorico()
+
+Return .T.
+
+/*/{Protheus.doc} CarregarHistorico
+    Popula os arrays de cache de historico (aHistChassiAll/Int, aHistNumAgeAll/Int,
+    aHistNumOsAll/Int) chamando BuscarHistorico para cada chave disponivel.
+    Executado uma vez por execucao de ExecutarEvento.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  Sempre .T.
+/*/
+Method CarregarHistorico() Class OFSEventoControlTower
+
+    ::aHistChassiAll := {}  ;  ::aHistChassiInt := {}
+    ::aHistNumAgeAll := {}  ;  ::aHistNumAgeInt := {}
+    ::aHistNumOsAll  := {}  ;  ::aHistNumOsInt  := {}
+
+    If !Empty(::cChassi)
+        ::aHistChassiAll := ::BuscarHistorico("CHASSI", ::cChassi, .F.)
+        ::aHistChassiInt := ::BuscarHistorico("CHASSI", ::cChassi, .T.)
+    EndIf
+    If !Empty(::cNumAge)
+        ::aHistNumAgeAll := ::BuscarHistorico("NUMAGE", ::cNumAge, .F.)
+        ::aHistNumAgeInt := ::BuscarHistorico("NUMAGE", ::cNumAge, .T.)
+    EndIf
+    If !Empty(::cNumeroOS)
+        ::aHistNumOsAll := ::BuscarHistorico("NUMOS", ::cNumeroOS, .F.)
+        ::aHistNumOsInt := ::BuscarHistorico("NUMOS", ::cNumeroOS, .T.)
+    EndIf
+
+Return .T.
+
+/*/{Protheus.doc} BuscarHistorico
+    Consulta VEX/VEW e retorna array com codigos de eventos registrados
+    para a chave informada. Suporta filtro por CHASSI, NUMAGE ou NUMOS.
+    Quando lSoIntegrado = .T., considera apenas registros com VEX_INTCON = '1'.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cTipo        Character  Tipo de chave: "CHASSI" | "NUMAGE" | "NUMOS"
+    @param   cChave       Character  Valor da chave a pesquisar
+    @param   lSoIntegrado Logical    .T. = somente integrados | .F. = todos
+    @return  Array  Array de Character com codigos de evento (VEX_CODEVE)
+/*/
+Method BuscarHistorico( cTipo, cChave, lSoIntegrado ) Class OFSEventoControlTower
+
+    Local aArea    := GetArea()
+    Local aEventos := {}
+    Local cAlias   := GetNextAlias()
+    Local oStmt    := FWPreparedStatement():New()
+    Local cQuery   := ""
+    Local cFiltro  := ""
+
+    If Empty(cChave)
+        Return {}
+    EndIf
+
+    Do Case
+        Case Upper(cTipo) == "CHASSI"  ;  cFiltro := " AND VEW.VEW_CHASSI = ? "
+        Case Upper(cTipo) == "NUMAGE"  ;  cFiltro := " AND VEW.VEW_NUMAGE = ? "
+        Case Upper(cTipo) == "NUMOS"   ;  cFiltro := " AND VEW.VEW_NUMEOS = ? "
+        Otherwise                      ;  Return {}
+    EndCase
+
+    cQuery  = " SELECT VEX.VEX_CODEVE"
+    cQuery += " FROM " + RetSQLName("VEX") + " VEX"
+    cQuery += " JOIN " + RetSQLName("VEW") + " VEW ON VEW.VEW_FILIAL = VEX.VEX_FILIAL AND VEW.VEW_CODIGO = VEX.VEX_CODVEW "
+    cQuery += " WHERE VEX.VEX_FILIAL = ? AND VEX.D_E_L_E_T_ = ' ' AND VEW.D_E_L_E_T_ = ' '"
+    cQuery += cFiltro
+    If lSoIntegrado
+        cQuery += " AND VEX.VEX_INTCON = '1'"
+    EndIf
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VEX"))
+    oStmt:SetString(2, cChave)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    While !(cAlias)->(EoF())
+        AAdd(aEventos, AllTrim((cAlias)->VEX_CODEVE))
+        (cAlias)->(DbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())
+
+RestArea(aArea)
+
+Return aEventos
+
+/*/{Protheus.doc} CarregarConfig
+    Le o JSON de configuracao do VRN (chave OFIA541) e carrega o no
+    CONTROLTOWER[PRODUCAO|HOMOLOGACAO] em ::oConfig conforme o ambiente atual.
+    Retorna .F. se o VRN nao existir ou se a estrutura JSON for invalida.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = config carregada | .F. = falha
+/*/
+Method CarregarConfig() Class OFSEventoControlTower
+
+    Local aArea    := GetArea()
+    Local oJson    := JsonObject():New()
+    Local cAmb     := ""
+
+    ::oConfig := Nil
+
+    DbSelectArea("VRN")
+    VRN->(DbSetOrder(1))
+    If !VRN->(MsSeek(xFilial("VRN") + "OFIA541"))
+        Return .F.
+    EndIf
+
+    oJson:FromJson(VRN->VRN_CONFIG)
+    If ValType(oJson) != "J" .Or. !oJson:HasProperty("CONTROLTOWER")
+        Return .F.
+    EndIf
+
+    If totvs.framework.environment.type.envAppGet(.T.) $ "2|3"
+        cAmb := "HOMOLOGACAO"
+    Else
+        cAmb := "PRODUCAO"
+    EndIf
+
+    If !oJson["CONTROLTOWER"]:HasProperty(cAmb)
+        Return .F.
+    EndIf
+
+    ::oConfig := oJson["CONTROLTOWER"][cAmb]
+
+    RestArea(aArea)
+
+Return .T.
+
+/*/{Protheus.doc} ConfigValida
+    Verifica se ::oConfig possui todas as propriedades obrigatorias:
+    COTO_URLBASE, COTO_ENDPOINT, COTO_CONTENTTYPE, COTO_MARCAVEIINT, COTO_QTDHEVENTO.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = config valida | .F. = propriedade ausente
+/*/
+Method ConfigValida() Class OFSEventoControlTower
+
+    Local aObrig := {"COTO_URLBASE","COTO_ENDPOINT","COTO_CONTENTTYPE","COTO_MARCAVEIINT","COTO_QTDHEVENTO","COTO_INTEGRACAO_ATIVA"}
+    Local nX     := 0
+
+    If ValType(::oConfig) != "J"
+        Return .F.
+    EndIf
+
+    For nX := 1 To Len(aObrig)
+        If !::oConfig:HasProperty(aObrig[nX])
+            Return .F.
+        EndIf
+    Next
+
+	If AllTrim( ::oConfig["COTO_INTEGRACAO_ATIVA"] ) <> "1" 
+		Return .F. 
+	EndIf 
+
+Return .T.
+
+/*/{Protheus.doc} EhVeiculoScania
+    Verifica se a marca do veiculo (VV1_CODMAR) corresponde ao codigo interno
+    de Scania configurado em COTO_MARCAVEIINT.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = veiculo Scania | .F. = outra marca ou falha
+/*/
+Method EhVeiculoScania() Class OFSEventoControlTower
+
+Local lRet := .F.
+
+    If ValType(::oConfig) == "J" .And. ::oConfig:HasProperty("COTO_MARCAVEIINT")
+        
+        lRet := ::cMarcaVeiculo == AllTrim(::oConfig["COTO_MARCAVEIINT"])
+
+    EndIf
+
+Return lRet
+
+/*/{Protheus.doc} ObterTipoContrato
+    Consulta o tipo de contrato do veiculo via funcao OA547070N_ConsultaTipoContrato,
+    passando o chassi reduzido (7 digitos) e o endpoint configurado em COTO_OBTERTPCONT.
+    Retorna "" se a configuracao nao estiver disponivel.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  Tipo do contrato | "" sem config | "NO_CONTRACT" | "UNABLE_TO_DETERMINE_CONTRACT"
+/*/
+Method ObterTipoContrato() Class OFSEventoControlTower
+
+    If ValType(::oConfig) != "J" .Or. !::oConfig:HasProperty("COTO_OBTERTPCONT")
+        Return ""
+    EndIf
+
+Return OA547070N_ConsultaTipoContrato(::cChassiReduzido, AllTrim(::oConfig["COTO_OBTERTPCONT"]))
+
+/*/{Protheus.doc} ContratoEhElegivel
+    Verifica se o tipo de contrato recebido esta na lista de contratos elegiveis
+    definida em COTO_GTPCONTRATOS na configuracao.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cTipo  Character  Tipo de contrato a verificar
+    @return  Logical  .T. = elegivel | .F. = fora do escopo ou lista vazia
+/*/
+Method ContratoEhElegivel( cTipo ) Class OFSEventoControlTower
+
+    Local aLista := {}
+
+    If Empty(cTipo) .Or. ValType(::oConfig) != "J" .Or. !::oConfig:HasProperty("COTO_GTPCONTRATOS")
+        Return .F.
+    EndIf
+
+    aLista := ::oConfig["COTO_GTPCONTRATOS"]
+
+Return aScan(aLista, {|o| AllTrim(o["COTO_GTPCONT_TPCONTRATO"]) == AllTrim(cTipo)}) > 0
+
+/*/{Protheus.doc} HistoricoTemEvento
+    Consulta o cache de historico (arrays carregados em CarregarHistorico) para
+    verificar se um determinado evento ja foi registrado para a chave informada.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cEvt    Character  Codigo do evento a verificar (ex: "28")
+    @param   cTipo   Character  Tipo de chave: "CHASSI" | "NUMAGE" | "NUMOS"
+    @param   lSoInt  Logical    .T. = somente integrados | .F. = qualquer registro
+    @return  Logical  .T. = evento encontrado | .F. = nao encontrado
+/*/
+Method HistoricoTemEvento( cEvt, cTipo, lSoInt ) Class OFSEventoControlTower
+
+    Local aBase := {}
+
+    Do Case
+        Case Upper(cTipo) == "NUMAGE"
+            If lSoInt
+                aBase := ::aHistNumAgeInt
+            Else
+                aBase := ::aHistNumAgeAll
+            EndIf
+        Case Upper(cTipo) == "NUMOS"
+            If lSoInt
+                aBase := ::aHistNumOsInt
+            Else
+                aBase := ::aHistNumOsAll
+            EndIf
+        Otherwise
+            If lSoInt
+                aBase := ::aHistChassiInt
+            Else
+                aBase := ::aHistChassiAll
+            EndIf
+    EndCase
+
+    If ValType(aBase) != "A" .Or. Len(aBase) == 0
+        Return .F.
+    EndIf
+
+Return aScan(aBase, {|x| AllTrim(x) == AllTrim(cEvt)}) > 0
+
+/*/{Protheus.doc} VK5Existe
+    Consulta a tabela VK5 e retorna .T. se existir registro para a chave,
+    evento e lista de status informados.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cChave   Character  Chave de origem (VK5_ORIKEY)
+    @param   cEvt     Character  Codigo do evento (VK5_MESSAG) — opcional
+    @param   aStatus  Array      Lista de status a filtrar (VK5_STATUS) — opcional
+    @return  Logical  .T. = registro encontrado | .F. = nao encontrado
+/*/
+Method VK5Existe( cChave, cEvt, aStatus ) Class OFSEventoControlTower
+
+    Local aArea  := GetArea()
+    Local oStmt  := FWPreparedStatement():New()
+    Local cAlias := GetNextAlias()
+    Local cQuery := ""
+    Local lRet   := .F.
+    Local nX     := 0
+
+    Default aStatus := {}
+
+    If Empty(cChave)
+        Return .F.
+    EndIf
+
+    cQuery  = " SELECT 1 FROM " + RetSQLName("VK5")
+    cQuery += " WHERE VK5_FILIAL = ? AND VK5_ORIKEY = ? AND D_E_L_E_T_ = ' '"
+
+    If !Empty(cEvt)
+        cQuery += " AND VK5_MESSAG = ?"
+    EndIf
+
+    If ValType(aStatus) == "A" .And. Len(aStatus) > 0
+        cQuery += " AND VK5_STATUS IN ("
+        For nX := 1 To Len(aStatus)
+            cQuery += "'" + aStatus[nX] + "'"
+            If nX < Len(aStatus)
+                cQuery += ","
+            EndIf
+        Next
+        cQuery += ")"
+    EndIf
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VK5"))
+    oStmt:SetString(2, cChave)
+    If !Empty(cEvt)
+        oStmt:SetString(3, cEvt)
+    EndIf
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    lRet := !(cAlias)->(EoF())
+    (cAlias)->(DbCloseArea())
+
+RestArea(aArea)
+
+Return lRet
+
+/*/{Protheus.doc} GetChaveEvento
+    Retorna a chave primaria para VK5_ORIKEY conforme o evento corrente:
+      EVT28/29/30 : NUMAGE quando disponivel, senao CHASSI
+      EVT32/33    : NUMOS quando disponivel, senao CHASSI
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  Valor da chave primaria do evento
+/*/
+Method GetChaveEvento() Class OFSEventoControlTower
+
+    If !Empty(::cNumAge) .And. ::cEvento $ 	(	EVT_AGENDAMENTO 	+ "|" + ;
+												EVT_REAGENDAMENTO 	+ "|" + ;
+												EVT_CANCELAMENTO_AGENDAMENTO)
+        Return ::cNumAge
+    EndIf
+
+    If !Empty(::cNumeroOS) .And. ::cEvento $ (	EVT_OS_ABERTA_SEM_ORCAMENTO		+ "|" + ;
+												EVT_OS_ABERTA_AGUARD_CREDITO	+ "|" + ;
+												EVT_OS_ABERTA_AGUARD_APROV_ORC 	+ "|" + ;
+												EVT_ORC_APROVADO_AGUARD_SERVICO + "|" + ;
+												EVT_SERVICO_EM_ANDAMENTO 		+ "|" + ;
+												EVT_SERVICO_INTERROMPIDO 		+ "|" + ;
+												EVT_SERVICO_PENDENTE			+ "|" + ;
+												EVT_SERVICO_FINALIZADO			+ "|" + ;
+												EVT_VEICULO_LIBERADO			+ "|" + ;
+												EVT_OS_FECHADA_PROC_FINALIZADO)
+        Return ::cNumeroOS
+    EndIf
+Return ::cChassi
+
+/*/{Protheus.doc} GetTipoChaveEvento
+    Retorna o tipo de chave ("NUMAGE", "NUMOS" ou "CHASSI") conforme o evento corrente.
+    Utilizado como parametro de cTipo em HistoricoTemEvento e GarantirEventoPrecursor.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  "NUMAGE" | "NUMOS" | "CHASSI"
+/*/
+Method GetTipoChaveEvento() Class OFSEventoControlTower
+
+    If !Empty(::cNumAge) .And. ::cEvento $ (	EVT_AGENDAMENTO 	+ "|" + ;
+												EVT_REAGENDAMENTO + "|" + ;
+												EVT_CANCELAMENTO_AGENDAMENTO)
+        Return "NUMAGE"
+    EndIf
+
+    If !Empty(::cNumeroOS) .And. ::cEvento $ (	EVT_OS_ABERTA_SEM_ORCAMENTO		+ "|" + ;
+												EVT_OS_ABERTA_AGUARD_CREDITO	+ "|" + ;
+												EVT_OS_ABERTA_AGUARD_APROV_ORC 	+ "|" + ;
+												EVT_ORC_APROVADO_AGUARD_SERVICO + "|" + ;
+												EVT_SERVICO_EM_ANDAMENTO 		+ "|" + ;
+												EVT_SERVICO_INTERROMPIDO 		+ "|" + ;
+												EVT_SERVICO_PENDENTE			+ "|" + ;
+												EVT_SERVICO_FINALIZADO			+ "|" + ;
+												EVT_VEICULO_LIBERADO			+ "|" + ;
+												EVT_OS_FECHADA_PROC_FINALIZADO)
+        Return "NUMOS"
+    EndIf
+
+Return "CHASSI"
+
+/*/{Protheus.doc} EventoEhDuplicado
+    Verifica duplicidade silenciosa antes de qualquer processamento.
+    EVT29 nunca e bloqueado aqui (multiplos reagendamentos sao permitidos).
+    Eventos dinamicos (EVT36+): duplicidade = ultimo status da passagem e o proprio evento.
+    Demais eventos: retorna .T. se o evento ja constar no historico VEX (qualquer status).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @version 1.1 - 15/04/2026 - Suporte a eventos dinamicos (EVT36+)
+    @return  Logical  .T. = duplicado (bloqueio silencioso) | .F. = pode prosseguir
+/*/
+Method EventoEhDuplicado() Class OFSEventoControlTower
+
+    Local cTipoChave := ::GetTipoChaveEvento()
+
+    // EVT29 é repetível por natureza (N reagendamentos permitidos).
+    // Controle de sequência é feito pelo PASSO 4 (TemPendenciaTecnica).
+    If ::cEvento == EVT_REAGENDAMENTO
+        Return .F.
+    EndIf
+
+    // Eventos dinâmicos (EVT36+): podem se repetir ao longo do ciclo de serviços.
+    // Duplicidade = último status da passagem (VEW_CODUST) é o próprio evento
+    // OU último evento na VK5 para o chassi é o próprio evento.
+    // OBS: EVT41 incluído como dinâmico conforme premissa Scania ("status 14 será reenviado") e H#20 (rollback).
+    //           Se PO preferir estática (por mera existência), remover EVT_OS_FECHADA_PROC_FINALIZADO desta lista.
+    If	::cEvento == EVT_SERVICO_EM_ANDAMENTO 	.Or. ;
+		::cEvento == EVT_SERVICO_INTERROMPIDO	.Or. ;
+		::cEvento == EVT_SERVICO_PENDENTE 		.Or. ;
+		::cEvento == EVT_SERVICO_FINALIZADO 	.Or. ;
+		::cEvento == EVT_VEICULO_LIBERADO 		.Or. ;
+		::cEvento == EVT_OS_FECHADA_PROC_FINALIZADO
+        Return ::UltimoStatusEhProprio()
+    EndIf
+
+    // Demais eventos (estáticos): duplicidade verificada exclusivamente pelo histórico de passagem (VEX).
+    If ::HistoricoTemEvento(::cEvento, cTipoChave, .F.)
+        Return .T.
+    EndIf
+
+Return .F.
+
+/*/{Protheus.doc} UltimoStatusEhProprio
+    Verifica se o ultimo status da passagem (VEW_CODUST) para a OS corrente
+    e o proprio evento. Utilizado por eventos dinamicos (EVT36+) onde a
+    duplicidade nao e por mera existencia, mas sim pelo ultimo status vigente.
+
+    Criterio 1: VEW_CODUST da passagem vinculada a OS = ::cEvento
+    Criterio 2: ultimo registro VK5 para o chassi = ::cEvento (qualquer status)
+
+    Se qualquer criterio for verdadeiro, o evento e considerado duplicado.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   15/04/2026
+    @return  Logical  .T. = ultimo status e o proprio evento | .F. = status diferente
+/*/
+Method UltimoStatusEhProprio() Class OFSEventoControlTower
+
+    Local aArea      := GetArea()
+    Local lDuplicado := .F.
+    Local cAlias     := GetNextAlias()
+    Local oStmt      := FWPreparedStatement():New()
+	Local oSql   := DMS_SqlHelper():New()
+    Local cQuery     := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return .F.
+    EndIf
+
+    // Criterio 1: Ultimo status da passagem (VEW) vinculada a OS
+    DbSelectArea("VEW")
+    VEW->(DbSetOrder(4))    // VEW_FILIAL + VEW_NUMEOS
+    If VEW->(DbSeek(xFilial("VEW") + ::cNumeroOS))
+        If AllTrim(VEW->VEW_CODUST) == ::cEvento
+            lDuplicado := .T.
+        EndIf
+    EndIf
+
+    // Criterio 2: Ultimo evento na VK5 para o chassi e o proprio evento
+    If !lDuplicado
+        cQuery  = " SELECT VK5_MESSAG"
+        cQuery += " FROM " + RetSQLName("VK5")
+        cQuery += " WHERE VK5_FILIAL = ? AND VK5_ORIKEY = ? AND D_E_L_E_T_ = ' '"
+        cQuery += " ORDER BY VK5_DATINC DESC"
+
+		cQuery := oSql:TOPFunc(cQuery, 1)
+
+        oStmt:SetQuery(cQuery)
+        oStmt:SetString(1, FWxFilial("VK5"))
+        oStmt:SetString(2, cFilAnt + ::cChassiInterno)
+
+        cQuery := oStmt:GetFixQuery()
+        cAlias := MPSysOpenQuery(cQuery)
+
+        If !(cAlias)->(EoF())
+            If AllTrim((cAlias)->VK5_MESSAG) == ::cEvento
+                lDuplicado := .T.
+            EndIf
+        EndIf
+
+        (cAlias)->(DbCloseArea())
+    EndIf
+
+    RestArea(aArea)
+
+Return lDuplicado
+
+/*/{Protheus.doc} TemPendenciaTecnica
+    Verifica se ha registro VK5 do mesmo evento nos status 0, 1 ou 3
+    (Pendente, Em Processamento ou Erro), indicando que o evento anterior
+    ainda nao foi resolvido. Status 4 (ciente) libera o fluxo.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = ha pendencia tecnica | .F. = livre para processar
+/*/
+Method TemPendenciaTecnica() Class OFSEventoControlTower
+
+    // Bloqueio por evento: pendência do mesmo evento bloqueia novo envio.
+    // Status 2 (sucesso) e 4 (ciente) liberam o fluxo.
+    // Filtro por ::cEvento evita dupla gravação — cada evento responde apenas pela própria pendência.
+    Local aStatusBloqueio := { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO }
+
+    If ::VK5Existe(cFilAnt + ::cChassiInterno, ::cEvento, aStatusBloqueio)
+        Return .T.
+    EndIf
+
+Return .F.
+
+/*/{Protheus.doc} EVT28Rules
+    Regras de negocio para EVT28 (H6 Agendamento).
+    Resolve data/hora do agendamento a partir da VSO.
+    Se cDataHoraAgendamento ja vier preenchida (injetada via SetDataHoraAnterior),
+    preserva o valor sem sobrescrever.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_IGNORADO
+/*/
+Method EVT28Rules() Class OFSEventoControlTower
+
+    // Se cDataHoraAnterior foi injetada (EVT28 criado como precursor do EVT29),
+    // usa esse valor como datahoraAgendamento — é a data original antes do reagendamento
+    If !Empty(::cDataHoraAnterior)
+        ::cDataHoraAgendamento := ::cDataHoraAnterior
+    ElseIf Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // Data/hora de ocorrência = momento do registro do agendamento na VSO
+    ::cDataHoraEvento := ::DataHoraDeVSO("VSO_DATREG", "VSO_HORREG")
+
+    ::cObservacao := STR0009 // "Inclusao de agendamento pelo Protheus"
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT29Rules
+    Regras de negocio para EVT29 (H7 Reagendamento).
+    1. Garante existencia do EVT28 via GarantirEventoPrecursor (chave NUMAGE)
+    2. Verifica se EVT28 ainda esta pendente na VK5 (status 0, 1 ou 3)
+    3. Resolve nova data/hora do agendamento a partir da VSO
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_IGNORADO
+/*/
+Method EVT29Rules() Class OFSEventoControlTower
+
+    // Nova data/hora do agendamento (após alteração pelo usuário)
+    ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+
+    // Data/hora de ocorrência = momento do registro do reagendamento na VSO
+    ::cDataHoraEvento := FGX_TimeUF()[3]
+
+    ::cObservacao := STR0013 // "Reagendamento pelo Protheus"
+    
+    // Pré-requisito: EVT28 deve existir para o NUMAGE
+    // GarantirEventoPrecursor cria via nova instância isolada — sem contaminação de contexto
+    If !::GarantirEventoPrecursor(EVT_AGENDAMENTO, "NUMAGE", .T.)
+        ::cHistoricoVK5Observacao := STR0010 // "Reagendamento aguardando integracao do evento precursor (EVT28 - Agendamento) original"
+        Return RETORNO_ERRO
+    EndIf
+
+    // EVT28 existe mas ainda não integrou com sucesso (VK5 status 0, 1 ou 3)?
+    // Aguarda resolução antes de prosseguir com o reagendamento
+    If !::HistoricoTemEvento(EVT_AGENDAMENTO, "NUMAGE", .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_AGENDAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0011 // "Reagendamento aguardando confirmação do agendamento original pela Scania"
+        Return RETORNO_ERRO
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT30Rules
+    Regras de negocio para EVT30 (H8 Cancelamento de Agendamento).
+    1. Valida que cNumAge foi informado
+    2. Garante existencia do EVT28 via GarantirEventoPrecursor (chave NUMAGE)
+    3. Verifica se EVT28 ainda esta pendente na VK5
+    4. Define status de passagem como fechada e data/hora de ocorrencia
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO
+/*/
+Method EVT30Rules() Class OFSEventoControlTower
+    
+    ::cStatusPassagem     := "1" // 0=Em andamento;1=Fechada
+
+    // Data/hora de ocorrência = momento do registro do cancelamento na VSO
+    ::cDataHoraEvento := FGX_TimeUF()[3]
+
+    ::cObservacao     := STR0017 // "Cancelamento de Agendamento pelo Protheus"
+
+    // Pré-requisito: EVT28 deve existir para o NUMAGE
+    // GarantirEventoPrecursor cria via nova instância isolada — sem contaminação de contexto
+    If !::GarantirEventoPrecursor(EVT_AGENDAMENTO, "NUMAGE", .T.)
+        ::cHistoricoVK5Observacao := STR0010 // "Reagendamento aguardando integracao do evento precursor (EVT28 - Agendamento) original"
+        Return RETORNO_ERRO
+    EndIf
+
+    // EVT28 existe mas ainda não integrou com sucesso (VK5 status 0, 1 ou 3)?
+    // Aguarda resolução antes de prosseguir com o reagendamento
+    If !::HistoricoTemEvento(EVT_AGENDAMENTO, "NUMAGE", .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_AGENDAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0011 // "Reagendamento aguardando confirmação do agendamento original pela Scania"
+        Return RETORNO_ERRO
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT32Rules
+    Regras de negocio para EVT32 (H9 OS Aberta sem Orcamento).
+    1. Classifica atendimento como agendado ou passante (ClassificarAgendadoOuPassante)
+    2. Se agendado: garante existencia do EVT28 via GarantirEventoPrecursor
+    3. Verifica se EVT28 ainda esta pendente na VK5
+    4. Resolve data/hora de abertura da OS a partir da VO1
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_IGNORADO
+/*/
+Method EVT32Rules() Class OFSEventoControlTower
+
+    // Data/hora de abertura da OS
+    ::cDataHoraEvento := ::DataHoraDeVO1("VO1_DATABE", "VO1_HORABE")
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0020 // "OS Aberta/sem orçamento ignorada: data/hora invalida na VO1"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    ::cObservacao := STR0021 // "Abertura de OS pelo Protheus"
+
+    // Classifica: agendado (cNumAge preenchido) ou passante (cNumAge = "")
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda não foi resolvida (cNumAge preenchido pela classificação,
+    // não pelo PrepararContexto), busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // Se agendado, EVT28 deve existir antes do EVT32
+    If !Empty(::cNumAge)
+        If !::GarantirEventoPrecursor(EVT_AGENDAMENTO, "NUMAGE", .T.)
+            ::cHistoricoVK5Observacao := STR0018 // "OS Aberta/sem orçamento bloqueada: falha ao garantir evento precursor (EVT28 - agendamento)"
+            Return RETORNO_PENDENTE
+        EndIf
+
+        // EVT28 existe mas ainda não integrou com sucesso (VK5 status 0, 1 ou 3)?
+        // Aguarda resolução antes de prosseguir com a abertura da OS
+        If !::HistoricoTemEvento(EVT_AGENDAMENTO, "NUMAGE", .T.) .And. ;
+            ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_AGENDAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+            ::cHistoricoVK5Observacao := STR0019 // "OS Aberta/sem orçamento aguardando confirmacao do agendamento pela Scania"
+            Return RETORNO_PENDENTE
+        EndIf
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT33Rules
+    Regras de negocio para EVT33 (H10 OS Aberta / Aguardando Liberacao de Credito).
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT32 via GarantirEventoPrecursor (chave NUMOS ou CHASSI)
+    3. Verifica se EVT32 ainda esta pendente na VK5 (status 0, 1 ou 3)
+    4. Resolve data/hora da ocorrencia a partir do EVT32 integrado (VEX)
+       Se vazia, EVT32 existe mas ainda nao integrou — retorna RETORNO_PENDENTE
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @version 1.1 - 25/03/2026 - Gaps G e H corrigidos
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO
+/*/
+Method EVT33Rules() Class OFSEventoControlTower
+
+    If Empty(::cNumeroOS)
+        Return RETORNO_SEM_ACAO
+    EndIf
+
+    // Data/hora = data/hora de ocorrência do EVT32 integrado
+    // Se vazia, EVT32 existe mas ainda não foi integrado — suspende aguardando resolução
+    ::cDataHoraEvento := ::DataHoraDeVN8("VN8_DATSTA", "VN8_HORSTA")
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0025 // "OS Aberta/aguardando credito suspensa: aguardando integracao da OS sem orcamento"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    ::cObservacao := STR0026 // "Solicitacao de credito Protheus"
+
+    // Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda não foi resolvida (cNumAge preenchido pela classificação,
+    // não pelo PrepararContexto), busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // EVT32 deve existir antes do EVT33
+    // Chave por NUMOS quando OS disponível (mais preciso) — fallback CHASSI
+    If !::GarantirEventoPrecursor(EVT_OS_ABERTA_SEM_ORCAMENTO, If(!Empty(::cNumeroOS), "NUMOS", "CHASSI"), .F.)
+        ::cHistoricoVK5Observacao := STR0022 // "OS Aberta/aguardando credito aguardando integracao da OS sem orcamento"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // EVT32 existe mas ainda não integrou com sucesso (VK5 status 0, 1 ou 3)?
+    // Aguarda resolução antes de prosseguir com aguardando crédito
+    If !::HistoricoTemEvento(EVT_OS_ABERTA_SEM_ORCAMENTO, If(!Empty(::cNumeroOS), "NUMOS", "CHASSI"), .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_OS_ABERTA_SEM_ORCAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0023 // "OS Aberta/aguardando credito aguardando confirmacao da OS sem orcamento pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+
+/*/{Protheus.doc} EVT34Rules
+    Regras de negocio para EVT34 (H11 OS Aberta / Aguardando aprovacao de orcamento).
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT32 (OS Aberta/sem orcamento) via GarantirEventoPrecursor
+       (EVT32 internamente ja garante EVT28 quando agendado)
+    3. Verifica se EVT32 ainda esta pendente na VK5
+    4. Resolve data/hora de abertura da OS (VO1_DATABE/VO1_HORABE)
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   29/03/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO | RETORNO_IGNORADO
+/*/
+Method EVT34Rules() Class OFSEventoControlTower
+    
+    Local cPrecursor := ""
+
+    If Empty(::cNumeroOS)
+        Return RETORNO_SEM_ACAO
+    EndIf
+
+    ::cObservacao := STR0057 // "Aguardando aprovação do orçamento"
+
+    // Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    If Empty(::cNumeroOrcamento)
+        ::cNumeroOrcamento := OA548025K_RetornaNroPrimeiroOrcamento(::cNumeroOS)
+    Endif
+
+    If !Empty(::cNumeroOrcamento)
+        If OA548018F_HouveCredito(::cNumeroOrcamento)
+            cPrecursor := EVT_OS_ABERTA_AGUARD_CREDITO
+            VSW->(DBSetOrder(3))
+            VSW->(DBSeek(xFilial("VS1") + ::cNumeroOrcamento))
+            ::cDataHoraEvento := StrTran(VSW->VSW_DTHLIB, "-", " ")
+        Else
+            cPrecursor := EVT_OS_ABERTA_SEM_ORCAMENTO
+            ::cDataHoraEvento := FGX_TimeUF()[3]
+        Endif
+    Endif
+
+    // EVT32 deve existir antes do EVT34
+    // (EVT32 internamente ja garante EVT28 quando atendimento for agendado)
+    If !::GarantirEventoPrecursor(cPrecursor, If(!Empty(::cNumeroOS), "NUMOS", "CHASSI"), .F.)
+        ::cHistoricoVK5Observacao := STR0053 //"Aguardando aprovação orçamento bloqueada: falha ao garantir evento precursor (EVT32 - OS sem orçamento)" 
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // EVT32 existe mas ainda nao integrou com sucesso?
+    If !::HistoricoTemEvento(EVT_OS_ABERTA_SEM_ORCAMENTO, If(!Empty(::cNumeroOS), "NUMOS", "CHASSI"), .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_OS_ABERTA_SEM_ORCAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0054 // "Aguardando aprovação orçamento aguardando confirmação da OS sem orçamento pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT35Rules
+    Regras de negocio para EVT35 (H12 Orcamento aprovado / Aguardando inicio do servico).
+    1. Classifica atendimento como agendado ou passante
+    2. Determina precursor com base na existencia de analise de credito:
+       - Se EVT34 ou EVT33 existem no historico -> precursor = EVT34
+       - Caso contrario -> precursor = EVT32
+       (cascata de precursores garante toda a cadeia anterior)
+    3. Verifica se precursor ainda esta pendente na VK5
+    4. Resolve data/hora da exportacao do primeiro orcamento nao checklist (ObterDataExportacaoOrcamento)
+
+    Regra especial: este evento dispara apenas no primeiro orcamento exportado
+    (diferente de checklist). A duplicidade estatica impede reenvio por orcamentos complementares.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   30/03/2026
+    @version 1.1 - 09/04/2026 - Precursor condicional (EVT34 ou EVT32) conforme analise de credito
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO | RETORNO_IGNORADO
+/*/
+Method EVT35Rules() Class OFSEventoControlTower
+
+    Local cPrecursor          := ""
+    Local cTipoChavePrecursor := If(!Empty(::cNumeroOS), "NUMOS", "CHASSI")
+
+    If Empty(::cNumeroOS)
+        Return RETORNO_SEM_ACAO
+    EndIf
+
+    // Data/hora de ocorrencia = data/hora da exportacao do 1o orcamento nao checklist
+    ::cDataHoraEvento := ::ObterDataExportacaoOrcamento()
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0061 //"Orçamento aprovado pendente: data/hora de exportação não encontrada"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    ::cObservacao := STR0062 // "Orçamento exportado para a OS"
+    
+    // Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    If !::GarantirEventoPrecursor(EVT_OS_ABERTA_AGUARD_APROV_ORC, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao :=  STR0058 +"("+ cPrecursor + ")" // "Orçamento aprovado bloqueado: falha ao garantir precursor "
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // Precursor existe mas ainda nao integrou com sucesso?
+    If !::HistoricoTemEvento(cPrecursor, cTipoChavePrecursor, .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, cPrecursor, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0059 //"Orçamento aprovado aguardando confirmação do precursor pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT36Rules
+    Regras de negocio para EVT36 (H13 Servico em andamento).
+    Evento DINAMICO: pode se repetir ao longo do ciclo de servicos na OS.
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT35 (Orcamento aprovado) via GarantirEventoPrecursor
+       (EVT35 internamente garante EVT34 ou EVT32 conforme analise de credito)
+    3. Verifica se precursor ainda esta pendente na VK5
+    4. Valida condicao de disparo: ao menos 1 apontamento iniciado (AnalisarStatusServicos() != INDEFINIDO)
+    5. Obtem data/hora do primeiro apontamento iniciado (VO4_DATINI ASC)
+
+    Disparo: apos inclusao/alteracao/exclusao de apontamento em OFIOM030, OFIXA120 ou OFIOM070.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   15/04/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO | RETORNO_IGNORADO
+/*/
+Method EVT36Rules() Class OFSEventoControlTower
+
+    Local cTipoChavePrecursor := If(!Empty(::cNumeroOS), "NUMOS", "CHASSI")
+    Local cStatusServico      := ""
+
+    // 1. Observacao padrao
+    ::cObservacao := STR0067 //"Serviço em andamento"
+
+    // 2. Condicao de disparo: ao menos 1 apontamento deve ter sido iniciado (VO4_DATINI preenchido).
+    //    A regra nao exige que o servico esteja *atualmente* em andamento — basta ter sido
+    //    iniciado em algum momento (finalizado, interrompido ou pendente tambem satisfazem).
+    //    STATUS_SERV_INDEFINIDO = nenhum apontamento elegivel encontrado na OS.
+    //    Ref: PO 13/05/2026 — EVT36 eh pre-requisito para todos os eventos de apontamento
+    //    (EVT37/38/39), e datahorastatusServ depende de VO4_DATINI existir.
+    cStatusServico := ::AnalisarStatusServicos()
+    If cStatusServico == STATUS_SERV_INDEFINIDO
+        ::cHistoricoVK5Observacao := STR0065 + cStatusServico // "Serviço em andamento ignorado: status atual dos serviços = "
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 3. Data/hora de ocorrencia = primeiro apontamento iniciado (qualquer status)
+    ::cDataHoraEvento := ::ObterPrimeiroApontamento()
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0066 // "Serviço em andamento ignorado: data/hora do primeiro apontamento não encontrada"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 4. Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // 5. EVT35 (Orcamento aprovado) deve existir antes do EVT36
+    //    EVT35 internamente garante toda a cadeia anterior (EVT34/EVT32/EVT28)
+    If !::GarantirEventoPrecursor(EVT_ORC_APROVADO_AGUARD_SERVICO, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao := STR0063 //"Serviço em andamento bloqueado: falha ao garantir evento precursor (EVT35 – Orçamento aprovado / Aguardando início do serviço)"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 6. Precursor existe mas ainda nao integrou com sucesso?
+    If !::HistoricoTemEvento(EVT_ORC_APROVADO_AGUARD_SERVICO, cTipoChavePrecursor, .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_ORC_APROVADO_AGUARD_SERVICO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0064 //"Serviço em andamento aguardando confirmacao do orçamento aprovado pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT37Rules
+    Regras de negocio para EVT37 (H15 Servico interrompido).
+    Evento DINAMICO: pode se repetir ao longo do ciclo de servicos na OS.
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT36 (Servico em andamento) via GarantirEventoPrecursor
+       (EVT36 internamente garante EVT35 -> EVT34/EVT32 -> EVT28 em cascata)
+    3. Verifica se precursor ainda esta pendente na VK5
+    4. Valida condicao de disparo via AnalisarStatusServicos() == INTERROMPIDO
+    5. Obtem data/hora do primeiro apontamento iniciado (VO4_DATINI ASC)
+    6. Obtem motivo de pausa via DE->PARA (COTO_GDEPARA -> VX5)
+
+    Disparo: apos inclusao/alteracao/exclusao de apontamento em OFIOM030, OFIXA120 ou OFIOM070.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   05/05/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO | RETORNO_IGNORADO
+/*/
+Method EVT37Rules() Class OFSEventoControlTower
+
+    Local cTipoChavePrecursor := If(!Empty(::cNumeroOS), "NUMOS", "CHASSI")
+    Local cStatusServico      := ""
+    Local aMotivo             := {}
+
+    // 1. Observacao padrao
+    ::cObservacao := STR0072 // "Pausa na execucao do serviço"
+
+    // 2. Condicao de disparo: status consolidado dos servicos deve ser INTERROMPIDO
+    cStatusServico := ::AnalisarStatusServicos()
+    If cStatusServico != STATUS_SERV_INTERROMPIDO
+        ::cHistoricoVK5Observacao := STR0070 + cStatusServico // "Serviço interrompido ignorado: status atual dos serviços = "
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 3. Data/hora de ocorrencia = primeiro apontamento iniciado (qualquer status)
+    ::cDataHoraEvento := ::ObterApontamentoInterrompido()//  Ultima pausa de enviar 
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0071 // "Serviço interrompido ignorado: data/hora do primeiro apontamento não encontrada"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 4. Motivo de pausa (DE->PARA config -> VX5)
+    aMotivo := ::ObterMotivoPausa()
+    ::cIdMotivo   := aMotivo[1]
+    ::cDescMotivo := aMotivo[2]
+
+    // 5. Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // 6 EVT36 (Servico em andamento) deve existir antes do EVT37
+    //    EVT36 internamente garante toda a cadeia anterior (EVT35/EVT34/EVT32/EVT28)
+    If !::GarantirEventoPrecursor(EVT_SERVICO_EM_ANDAMENTO, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao := STR0068 // "Serviço interrompido bloqueado: falha ao garantir serviço em andamento (EVT36)"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 7. Precursor existe mas ainda nao integrou com sucesso?
+    //    Padrao: HistoricoTemEvento(.T.) verifica cache + VK5Existe confirma no banco
+    If !::HistoricoTemEvento(EVT_SERVICO_EM_ANDAMENTO, cTipoChavePrecursor, .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_SERVICO_EM_ANDAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0069 // "Serviço interrompido aguardando confirmacao do serviço em andamento pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT38Rules
+    Regras de negocio para EVT38 (H16 Servico pendente).
+    Evento DINAMICO: pode se repetir ao longo do ciclo de servicos na OS.
+    Disparado quando ao menos 1 servico esta pendente (nao iniciado) e os
+    demais estao finalizados ou tambem nao iniciados (nenhum em andamento
+    ou interrompido).
+
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT36 (Servico em andamento) via GarantirEventoPrecursor
+    3. Verifica se precursor ainda esta pendente na VK5
+    4. Valida condicao de disparo via AnalisarStatusServicos() == PENDENTE
+    5. Obtem data/hora do primeiro apontamento iniciado (VO4_DATINI ASC)
+
+    Disparo: apos inclusao/alteracao/exclusao de apontamento em OFIOM030,
+    OFIXA120, OFIOM070, ou ao exportar orcamento complementar via OFIXA011
+    para OS que ja teve apontamento (ultimo status >= 8).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/05/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO | RETORNO_IGNORADO
+/*/
+Method EVT38Rules() Class OFSEventoControlTower
+
+    Local cTipoChavePrecursor := If(!Empty(::cNumeroOS), "NUMOS", "CHASSI")
+    Local cStatusServico      := ""
+
+    // 1. Observacao padrao — sem motivo de pausa (diferente do EVT37)
+    ::cIdMotivo   := ""
+    ::cDescMotivo := ""
+    ::cObservacao := STR0077 // "Serviços pendentes de inicio"
+
+    // 2. Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // 3. Data/hora de ocorrencia = primeiro apontamento iniciado (qualquer status)
+    ::cDataHoraEvento := ::ObterUltimoApontamento()
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0076 // "Serviço pendente ignorado: data/hora do primeiro apontamento não encontrada"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 23. EVT36 (Servico em andamento) deve existir antes do EVT38
+    //    EVT36 internamente garante toda a cadeia anterior (EVT35/EVT34/EVT32/EVT28)
+    If !::GarantirEventoPrecursor(EVT_SERVICO_EM_ANDAMENTO, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao := STR0073 // "Serviço pendente bloqueado: falha ao garantir serviço em andamento (EVT36)"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 4. Precursor existe mas ainda nao integrou com sucesso?
+    //    Padrao: HistoricoTemEvento(.T.) verifica cache + VK5Existe confirma no banco
+    If !::HistoricoTemEvento(EVT_SERVICO_EM_ANDAMENTO, cTipoChavePrecursor, .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_SERVICO_EM_ANDAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+         ::cHistoricoVK5Observacao := STR0074 // "Serviço pendente aguardando confirmação do serviço em andamento pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 5. Condicao de disparo: status consolidado dos servicos deve ser PENDENTE
+    cStatusServico := ::AnalisarStatusServicos()
+    If cStatusServico != STATUS_SERV_PENDENTE
+        ::cHistoricoVK5Observacao := STR0075 + cStatusServico // "Serviço pendente ignorado: status atual dos serviços = " 
+        Return RETORNO_IGNORADO
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT39Rules
+	Regras de negocio para EVT39 (H17 Servico finalizado).
+    Disparado quando TODOS os servicos da OS estao finalizados (nenhum em
+    andamento, interrompido ou pendente).
+
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT36 (Servico em andamento) via GarantirEventoPrecursor
+    3. Verifica se precursor ainda esta pendente na VK5
+    4. Valida condicao de disparo via AnalisarStatusServicos() == FINALIZADO
+    5. Obtem data/hora do primeiro apontamento iniciado (VO4_DATINI ASC)
+
+    Disparo: apos inclusao/alteracao/exclusao de apontamento em OFIOM030
+    @type    Method
+    @author  Lucas Brustolin
+    @since   14/05/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_ERRO | RETORNO_IGNORADO
+/*/
+Method EVT39Rules() Class OFSEventoControlTower
+
+    Local cTipoChavePrecursor := If(!Empty(::cNumeroOS), "NUMOS", "CHASSI")
+    Local cStatusServico      := ""
+
+    // 1. Classifica: agendado (cNumAge preenchido) ou passante
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // 2. Observacao padrao — sem motivo de pausa
+    //    quando cObservacaoOverride preenchido (retrocesso D->A), usa texto injetado
+    ::cIdMotivo   := ""
+    ::cDescMotivo := ""
+    If !Empty(::cObservacaoOverride)
+        ::cObservacao := ::cObservacaoOverride
+    Else
+        ::cObservacao := STR0082 // "Todos os serviços finalizados"
+    EndIf
+
+     // 3. Data/hora de ocorrencia = primeiro apontamento iniciado (qualquer status)
+    ::cDataHoraEvento := ::ObterUltimoApontamento()
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0081 // "Serviço finalizado ignorado: data/hora do primeiro apontamento não encontrada"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 4. EVT36 (Servico em andamento) deve existir antes do EVT39
+    //    EVT36 internamente garante toda a cadeia anterior (EVT35/EVT34/EVT32/EVT28)
+    If !::GarantirEventoPrecursor(EVT_SERVICO_EM_ANDAMENTO, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao := STR0078 // "Serviço finalizado bloqueado: falha ao garantir serviço em andamento (EVT36)"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 5. Precursor existe mas ainda nao integrou com sucesso?
+    //    Padrao: HistoricoTemEvento(.T.) verifica cache + VK5Existe confirma no banco
+    If !::HistoricoTemEvento(EVT_SERVICO_EM_ANDAMENTO, cTipoChavePrecursor, .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_SERVICO_EM_ANDAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0079 // "Serviço finalizado aguardando confirmação do serviço em andamento pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 6. Condicao de disparo: TODOS os servicos devem estar finalizados
+    cStatusServico := ::AnalisarStatusServicos()
+    If cStatusServico != STATUS_SERV_FINALIZADO
+        ::cHistoricoVK5Observacao := STR0080 // "Serviço finalizado ignorado: status atual dos serviços = " + cStatusServico
+        Return RETORNO_IGNORADO
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT40Rules
+    Regras de negocio para EVT40 (H18 Veiculo liberado / Aguardando fechamento da OS).
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT39 (Servico finalizado) via GarantirEventoPrecursor
+    3. Verifica se EVT39 ainda esta pendente na VK5
+    4. Resolve data/hora de liberacao do veiculo a partir da VO1 (VO1_DATSAI/VO1_HORSAI)
+    5. Define observacao padrao
+
+    Evento dinamico: duplicidade controlada por UltimoStatusEhProprio().
+    Pode ser reenviado apos cancelamento da liberacao (H#20).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   22/05/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_IGNORADO
+/*/
+Method EVT40Rules() Class OFSEventoControlTower
+
+    Local cTipoChavePrecursor := ""
+
+     // 1. Observacao padrao — sem motivo de pausa
+    //    quando cObservacaoOverride preenchido (retrocesso), usa texto injetado
+    ::cIdMotivo   := ""
+    ::cDescMotivo := ""
+    If !Empty(::cObservacaoOverride)
+        ::cObservacao := ::cObservacaoOverride
+    Else
+        ::cObservacao := STR0086 // "Veículo liberado pelo Protheus"
+    EndIf
+
+    // 2. Classifica: agendado (cNumAge preenchido) ou passante (cNumAge = "")
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // 3. Data/hora de ocorrencia = data/hora da liberacao do veiculo (VO1_DATSAI/VO1_HORSAI)
+    //    H#20: no retrocesso F->D o OFIOM150 limpa VO1_DATSAI/HORSAI antes de chamar,
+    //    portanto usa o override injetado via SetDataHoraOcorrencia quando disponivel.
+    ::cDataHoraEvento := ::ObterMaiorDataDisponivel()
+    If Empty(::cDataHoraEvento) .And. !Empty(::cDataHoraOcorrOverride)
+        ::cDataHoraEvento := ::cDataHoraOcorrOverride
+    EndIf
+    If Empty(::cDataHoraEvento)
+        ::cHistoricoVK5Observacao := STR0085 // "Veículo liberado ignorado: data/hora de saída do veículo não encontrada (VO1_DATSAI/VO1_HORSAI)"
+        Return RETORNO_IGNORADO
+    EndIf
+
+    // 4. Garantir precursor EVT39 (Servico finalizado)
+    //    EVT39 internamente garante EVT36, que garante EVT35 -> cadeia completa
+    cTipoChavePrecursor := "NUMOS"
+    If !::GarantirEventoPrecursor(EVT_SERVICO_FINALIZADO, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao :=  STR0083 // "Veículo liberado suspenso: falha ao garantir evento precursor (EVT39 - Serviço finalizado)"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 5. EVT39 existe mas ainda nao integrou com sucesso (VK5 status 0, 1 ou 3)?
+    If !::HistoricoTemEvento(EVT_SERVICO_FINALIZADO, "NUMOS", .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_SERVICO_FINALIZADO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0084 // "Veículo liberado aguardando confirmação do serviço finalizado pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+/*/{Protheus.doc} EVT41Rules
+    Regras de negocio para EVT41 (H19 OS fechada / Processo finalizado).
+    1. Classifica atendimento como agendado ou passante
+    2. Garante existencia do EVT32 (OS Aberta/sem orcamento) via GarantirEventoPrecursor
+    3. Verifica se EVT32 ainda esta pendente na VK5
+    4. Resolve data/hora de ocorrencia via ObterMaiorDataFechamento (VO4/VO3)
+    5. Define observacao condicional (fechada vs cancelada) conforme VO1_STATUS
+    6. Marca passagem como fechada (cStatusPassagem = "1")
+
+    Evento dinamico (QUEST_PO): duplicidade controlada por UltimoStatusEhProprio().
+    Precursor: EVT32 (OS Aberta/sem orcamento) — pula toda a cadeia de apontamentos.
+    Pode ser reenviado apos cancelamento do fechamento (H#20).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   22/05/2026
+    @return  Character  RETORNO_SUCESSO | RETORNO_PENDENTE | RETORNO_IGNORADO
+/*/
+Method EVT41Rules() Class OFSEventoControlTower
+
+    Local cTipoChavePrecursor := ""
+    Local cStatusOS           := ""
+    Local cEventoPrecursor    := ""
+
+    // 1. Classifica: agendado (cNumAge preenchido) ou passante (cNumAge = "")
+    If !::ClassificarAgendadoOuPassante()
+        ::cNumAge := ""
+    EndIf
+
+    // Se agendado e data/hora ainda nao foi resolvida, busca agora via VSO
+    If !Empty(::cNumAge) .And. Empty(::cDataHoraAgendamento)
+        ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+    EndIf
+
+    // 2. Data/hora de ocorrencia = maior data/hora de fechamento entre VO4 e VO3
+    //    Duvida: para data/hora corrente quando VO4_DATFEC e VO3_DATFEC estiverem vazios (ex: cancelamento sem apontamentos)
+    ::cDataHoraEvento := ::ObterMaiorDataFechamento()
+    If Empty(::cDataHoraEvento)
+        ::cDataHoraEvento := DtoC(dDataBase) + " " + Left(Time(), 5)
+    EndIf
+
+    // 3. Observacao condicional conforme VO1_STATUS
+    DbSelectArea("VO1")
+    VO1->(DbSetOrder(1))
+    If VO1->(MsSeek(xFilial("VO1") + ::cNumeroOS))
+        cStatusOS := AllTrim(VO1->VO1_STATUS)
+    EndIf
+
+    If cStatusOS == "C"
+        ::cObservacao := STR0089 // "OS cancelada pelo Protheus"
+        cEventoPrecursor := EVT_OS_ABERTA_SEM_ORCAMENTO
+    Else
+        ::cObservacao := STR0090 // "OS fechada pelo Protheus"
+        cEventoPrecursor := EVT_VEICULO_LIBERADO
+    EndIf
+
+    // 4. Marcar passagem como fechada + sem motivo de pausa
+    ::cStatusPassagem := "1" // 0=Em andamento;1=Fechada
+    ::cIdMotivo   := ""
+    ::cDescMotivo := ""
+
+    // 5. Garantir precursor EVT32 (OS Aberta/sem orcamento)
+    //    Cadeia minima: EVT28 (se agendado) -> EVT32 -> EVT41
+    //    Pula toda a cadeia de apontamentos (EVT35-39) e liberacao (EVT40)
+    cTipoChavePrecursor := "NUMOS"
+    If !::GarantirEventoPrecursor(cEventoPrecursor, cTipoChavePrecursor, .F.)
+        ::cHistoricoVK5Observacao := STR0087 // "OS fechada suspensa: falha ao garantir evento precursor (EVT32 - OS Aberta/sem orçamento)"
+        Return RETORNO_PENDENTE
+    EndIf
+
+    // 6. EVT32 existe mas ainda nao integrou com sucesso (VK5 status 0, 1 ou 3)?
+    If !::HistoricoTemEvento(EVT_OS_ABERTA_SEM_ORCAMENTO, "NUMOS", .T.) .And. ;
+        ::VK5Existe(cFilAnt + ::cChassiInterno, EVT_OS_ABERTA_SEM_ORCAMENTO, { VK5STATUS_PENDENTE, VK5STATUS_EM_PROCESSAMENTO, VK5STATUS_ERRO })
+        ::cHistoricoVK5Observacao := STR0088 // "OS fechada aguardando confirmação da OS aberta/sem orçamento pela Scania"
+        Return RETORNO_PENDENTE
+    EndIf
+
+Return RETORNO_SUCESSO
+
+// ------------------------------------------------------------
+// AUXILIARES DE REGRA
+// ------------------------------------------------------------
+
+/*/{Protheus.doc} GarantirEventoPrecursor
+    Garante que um evento pre-requisito exista no historico antes de prosseguir.
+    Se nao existir, cria automaticamente via nova instancia isolada da classe,
+    evitando recursividade e contaminacao do contexto do evento chamador.
+    Apos criacao bem-sucedida, atualiza o cache local via AddHistoricoCache.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cEvtPrecursor    Character  Codigo do evento pre-requisito
+    @param   cTipoChave       Character  Tipo de chave para verificacao no historico
+    @param   lAceitarIgnorado Logical    .T. = RETORNO_IGNORADO aceito como sucesso (ex: EVT28 nao Scania)
+    @return  Logical  .T. = precursor existe ou foi criado | .F. = falha na criacao
+/*/
+Method GarantirEventoPrecursor( cEvtPrecursor, cTipoChave, lAceitarIgnorado ) Class OFSEventoControlTower
+
+    Local aArea         := Nil
+    Local oInstDep      := Nil
+    Local cRet          := ""
+    Local lBkpIntegrou  := .F.
+
+    Default lAceitarIgnorado := .F.
+
+    // Precursor já existe no histórico — nada a fazer
+    If ::HistoricoTemEvento(cEvtPrecursor, cTipoChave, .F.)
+        Return .T.
+    EndIf
+
+    // Preserva contexto de áreas da rotina chamadora antes de criar instância filha
+    aArea    := GetArea()
+
+    // Cria precursor via nova instância isolada — contexto completamente separado,
+    // sem risco de contaminação das propriedades do evento chamador
+    oInstDep := OFSEventoControlTower():New()
+
+    // EVT28 depende da data/hora do agendamento original — transfere via SetDataHoraAnterior
+    If cEvtPrecursor == EVT_AGENDAMENTO
+        oInstDep:SetDataHoraAnterior(::cDataHoraAnterior)
+    EndIf
+
+    cRet := oInstDep:ExecutarEvento(cEvtPrecursor, ::cChassi, ::cNumeroOS, ::cNumeroOrcamento, ::cNumAge)
+
+
+	FreeObj(oInstDep)
+    RestArea(aArea)
+
+	If cRet == RETORNO_SUCESSO .Or. cRet == RETORNO_DUPLICADO .Or. (lAceitarIgnorado .And. cRet == RETORNO_IGNORADO)
+        // Atualiza cache local para que verificações subsequentes reflitam a criação.
+        // Quando cRet == RETORNO_SUCESSO o precursor foi integrado com VK5 status 2,
+        // portanto deve constar tambem no cache de integrados (Int). Seta ::lIntegrou
+        // temporariamente para que AddHistoricoCache adicione nos arrays Int.
+        lBkpIntegrou := ::lIntegrou
+        If cRet == RETORNO_SUCESSO
+            ::lIntegrou := .T.
+        EndIf
+        ::AddHistoricoCache(cEvtPrecursor)
+        ::lIntegrou := lBkpIntegrou
+        Return .T.
+    EndIf
+
+Return .F.
+
+/*/{Protheus.doc} ClassificarAgendadoOuPassante
+    Classifica o atendimento como AGENDADO ou PASSANTE para EVT32/EVT33.
+    1. Se cNumAge ja preenchido: AGENDADO imediatamente
+    2. Busca VSO em aberto para o chassi e calcula diferenca entre data/hora
+       de registro (VSO_DATREG/HORREG) e data/hora do agendamento (VSO_DATAGE/HORAGE)
+    3. Se diferenca >= COTO_QTDHEVENTO horas: AGENDADO (preenche ::cNumAge)
+    4. Caso contrario: PASSANTE
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = agendado | .F. = passante
+/*/
+Method ClassificarAgendadoOuPassante() Class OFSEventoControlTower
+
+    Local nHorasMin  := 0
+    Local cAlias     := GetNextAlias()
+    Local oStmt      := FWPreparedStatement():New()
+    Local cQuery     := ""
+    Local nMinReg    := 0
+    Local nMinAge    := 0
+
+    // Já classificado como agendado
+    If !Empty(::cNumAge)
+        Return .T.
+    EndIf
+
+    // Parâmetro mínimo de horas para ser considerado agendado
+    If ValType(::oConfig) == "J" .And. ::oConfig:HasProperty("COTO_QTDHEVENTO")
+        nHorasMin := ::oConfig["COTO_QTDHEVENTO"]
+    EndIf
+
+    If nHorasMin <= 0
+        Return .F.
+    EndIf
+
+    cQuery  = " SELECT VSO_NUMIDE, VSO_DATREG, VSO_HORREG, VSO_DATAGE, VSO_HORAGE"
+    cQuery += " FROM " + RetSQLName("VSO")
+    cQuery += " WHERE VSO_FILIAL = ? AND VSO_NUMIDE = ? AND VSO_GETKEY = ? AND VSO_STATUS NOT IN (3,4) AND D_E_L_E_T_ = ' '"
+    cQuery += " ORDER BY VSO_DATAGE DESC, VSO_HORAGE DESC"
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VSO"))
+    oStmt:SetString(2, ::cNumAge)
+    oStmt:SetString(3, ::cChassi)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If (cAlias)->(EoF())
+        (cAlias)->(DbCloseArea())
+        Return .F.
+    EndIf
+
+    nMinReg := (::DateToJulian(STOD((cAlias)->VSO_DATREG)) * 1440) + (Val(Left(::NormalizarHora((cAlias)->VSO_HORREG),2)) * 60) + Val(SubStr(::NormalizarHora((cAlias)->VSO_HORREG),4,2))
+    nMinAge := (::DateToJulian(STOD((cAlias)->VSO_DATAGE)) * 1440) + (Val(Left(::NormalizarHora((cAlias)->VSO_HORAGE),2)) * 60) + Val(SubStr(::NormalizarHora((cAlias)->VSO_HORAGE),4,2))
+
+    If ((nMinAge - nMinReg) / 60) >= nHorasMin
+        ::cNumAge := AllTrim((cAlias)->VSO_NUMIDE)
+        (cAlias)->(DbCloseArea())
+        Return .T.
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+Return .F.
+
+/*/{Protheus.doc} BuscarUltimaDataHoraAgendada
+    Busca no historico VEX/VEW a data/hora de ocorrencia do ultimo evento
+    de agendamento (EVT28) ou reagendamento (EVT29) integrado com sucesso.
+    Utilizado pelo EVT30 para compor o campo datahoraAgendamento do payload.
+    Prioriza busca por NUMAGE; fallback para CHASSI.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou "" se nao encontrado
+/*/
+Method BuscarUltimaDataHoraAgendada() Class OFSEventoControlTower
+
+    Local cAlias := GetNextAlias()
+    Local oStmt  := FWPreparedStatement():New()
+    Local oSql   := DMS_SqlHelper():New()
+    Local cQuery := ""
+    Local cRet   := ""
+
+    cQuery := " SELECT VEX.VEX_DTOCEV, VEX.VEX_HMOCEV "
+    cQuery += " FROM " + RetSQLName("VEX") + " VEX "
+    cQuery += " JOIN " + RetSQLName("VEW") + " VEW ON VEW.VEW_FILIAL = VEX.VEX_FILIAL AND VEW.VEW_CODIGO = VEX.VEX_CODVEW "
+    cQuery += " WHERE VEX.VEX_FILIAL = ? "
+    cQuery += "   AND VEX.VEX_CODEVE IN (?, ?) "
+    cQuery += "   AND VEX.VEX_INTCON = '1' "
+    cQuery += "   AND VEX.D_E_L_E_T_ = ' ' "
+    cQuery += "   AND VEW.D_E_L_E_T_ = ' ' "
+
+    // Filtra por NUMAGE quando disponível (mais preciso), senão por CHASSI
+    If !Empty(::cNumAge)
+        cQuery += " AND VEW.VEW_NUMAGE = ?"
+    Else
+        cQuery += " AND VEW.VEW_CHASSI = ?"
+    EndIf
+
+    cQuery += " ORDER BY VEX.VEX_DTOCEV DESC, VEX.VEX_HMOCEV DESC "
+
+    // Usa TOPFunc para compatibilidade multi-SGBD (substitui OFFSET/FETCH)
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VEX"))
+    oStmt:SetString(2, EVT_AGENDAMENTO)
+    oStmt:SetString(3, EVT_REAGENDAMENTO)
+    oStmt:SetString(4, If(!Empty(::cNumAge), ::cNumAge, ::cChassi))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        cRet := DtoC(STOD((cAlias)->VEX_DTOCEV)) + " " + ::NormalizarHora((cAlias)->VEX_HMOCEV)
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+Return cRet
+
+/*/{Protheus.doc} DataHoraDeVSO
+    Busca data e hora de um campo da VSO para o agendamento corrente.
+    Prioriza busca por VSO_NUMIDE (cNumAge); fallback para VSO_GETKEY (cChassi).
+    Por padrao exclui VSO com status 3 e 4 (cancelado/expirado).
+    Parametro lIgnorarStatus = .T. desativa esse filtro (usado pelo GarantirEventoPrecursor
+    ao injetar a data/hora no EVT28 a partir de um reagendamento).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cCampoDt       Character  Nome do campo de data na VSO (ex: "VSO_DATAGE")
+    @param   cCampoHr       Character  Nome do campo de hora na VSO (ex: "VSO_HORAGE")
+    @param   lIgnorarStatus Logical    .T. = ignora filtro de status | .F. = padrao
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou ""
+/*/
+Method DataHoraDeVSO( cCampoDt, cCampoHr, lIgnorarStatus  ) Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+
+    Default lIgnorarStatus := .T.
+
+    If Empty(::cChassi) .And. Empty(::cNumAge)
+        Return ""
+    EndIf
+
+    cQuery := " SELECT VSO." + cCampoDt + " AS DT, " 
+    cQuery += "        VSO." + cCampoHr + " AS HR  " 
+    cQuery += " FROM " + RetSQLName("VSO") + " VSO "
+    cQuery += " WHERE VSO.VSO_FILIAL = ? "
+
+    If !( lIgnorarStatus )
+        cQuery += "   AND VSO.VSO_STATUS NOT IN (3,4)"
+    EndIf 
+
+    cQuery += "   AND VSO.D_E_L_E_T_ = ' '"
+
+    If !Empty(::cNumAge)
+        cQuery += " AND VSO.VSO_NUMIDE = ?"
+    Else
+        cQuery += " AND VSO.VSO_GETKEY = ?"
+    EndIf
+
+    cQuery += " ORDER BY VSO.VSO_DATAGE DESC, VSO.VSO_HORAGE DESC"
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VSO"))
+    oStmt:SetString(2, If(!Empty(::cNumAge), ::cNumAge, ::cChassi))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->DT)
+        cHora := ::NormalizarHora((cAlias)->HR)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+RestArea(aArea)
+Return cDataHora
+
+/*/{Protheus.doc} DataHoraDeVO1
+    Busca data e hora de um campo da VO1 para a OS corrente (::cNumeroOS).
+    Retorna "" se cNumeroOS estiver vazio ou se o registro nao for localizado.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cCampoDt  Character  Nome do campo de data na VO1 (ex: "VO1_DATABE")
+    @param   cCampoHr  Character  Nome do campo de hora na VO1 (ex: "VO1_HORABE")
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou ""
+/*/
+Method DataHoraDeVO1( cCampoDt, cCampoHr ) Class OFSEventoControlTower
+
+    Local dData     := Ctod("")
+    Local cHora     := ""
+
+    If Empty(::cNumeroOS)
+        Return ""
+    EndIf
+
+    DbSelectArea("VO1")
+    VO1->(DbSetOrder(1))
+    If !VO1->(MsSeek(xFilial("VO1") + ::cNumeroOS))
+        Return ""
+    EndIf
+
+    dData := &("VO1->" + cCampoDt)
+    cHora := ::NormalizarHora(&("VO1->" + cCampoHr))
+
+    If Empty(dData) .Or. Empty(cHora)
+        Return ""
+    EndIf
+
+Return DtoC(dData) + " " + cHora
+
+/*/{Protheus.doc} DataHoraDeVEX
+    Busca data e hora de ocorrencia de um evento integrado na VEX/VEW,
+    filtrando por chassi e codigo de evento. Retorna o registro mais recente.
+    Utilizado pelo EVT33 para obter a data/hora de ocorrencia do EVT32.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cEvtRef   Character  Codigo do evento de referencia (ex: EVT_OS_ABERTA_SEM_ORCAMENTO)
+    @param   cCampoDt  Character  Nome do campo de data na VEX (ex: "VEX_DTOCEV")
+    @param   cCampoHr  Character  Nome do campo de hora na VEX (ex: "VEX_HMOCEV")
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou ""
+/*/
+Method DataHoraDeVEX( cEvtRef, cCampoDt, cCampoHr ) Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+
+    cQuery := " SELECT VEX." + cCampoDt + " AS DT, VEX." + cCampoHr + " AS HR "
+    cQuery += " FROM " + RetSQLName("VEX") + " VEX "
+    cQuery += " JOIN " + RetSQLName("VEW") + " VEW "
+    cQuery += "   ON VEW.VEW_FILIAL = VEX.VEX_FILIAL AND VEW.VEW_CODIGO = VEX.VEX_CODVEW "
+    cQuery += " WHERE VEX.VEX_FILIAL = ? "
+    cQuery += "   AND VEX.VEX_CODEVE = ? "
+    cQuery += "   AND VEX.VEX_INTCON = '1' "
+    cQuery += "   AND VEW.VEW_CHASSI = ? "
+    cQuery += "   AND VEX.D_E_L_E_T_ = ' ' "
+    cQuery += "   AND VEW.D_E_L_E_T_ = ' ' "
+    cQuery += " ORDER BY VEX.VEX_DTGEEV DESC, VEX.VEX_HMGEEV DESC "
+
+    // Usa TOPFunc para compatibilidade multi-SGBD
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VEX"))
+    oStmt:SetString(2, cEvtRef)
+    oStmt:SetString(3, ::cChassi)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->DT)
+        cHora := ::NormalizarHora((cAlias)->HR)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+RestArea(aArea)
+
+Return cDataHora
+
+/*/{Protheus.doc} DataHoraDeVN8
+    Busca data e hora de um campo da VSO para o agendamento corrente.
+    Prioriza busca por VSO_NUMIDE (cNumAge); fallback para VSO_GETKEY (cChassi).
+    Por padrao exclui VSO com status 3 e 4 (cancelado/expirado).
+    Parametro lIgnorarStatus = .T. desativa esse filtro (usado pelo GarantirEventoPrecursor
+    ao injetar a data/hora no EVT28 a partir de um reagendamento).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cCampoDt       Character  Nome do campo de data na VSO (ex: "VSO_DATAGE")
+    @param   cCampoHr       Character  Nome do campo de hora na VSO (ex: "VSO_HORAGE")
+    @param   lIgnorarStatus Logical    .T. = ignora filtro de status | .F. = padrao
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou ""
+/*/
+Method DataHoraDeVN8( cCampoDt, cCampoHr  ) Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+
+    cQuery := " SELECT VN8." + cCampoDt + " AS DT, " 
+    cQuery += "        VN8." + cCampoHr + " AS HR  " 
+    cQuery += " FROM " + RetSQLName("VN8") + " VN8 "
+    cQuery += " WHERE VN8.VN8_FILIAL = ? "
+    cQuery += "     AND VN8.VN8_NUMORC = ? "
+    cQuery += "     AND VN8.VN8_STATUS = '3' "
+    cQuery += "     AND VN8.D_E_L_E_T_ = ' '"
+    cQuery += " ORDER BY VN8.VN8_CODIGO DESC"
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VN8"))
+    oStmt:SetString(2, ::cNumeroOrcamento)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->DT)
+        cHora := ::NormalizarHora((cAlias)->HR)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+RestArea(aArea)
+Return cDataHora
+
+/*/{Protheus.doc} ObterDataExportacaoOrcamento
+    Busca a data/hora de exportacao do primeiro orcamento exportado para a OS corrente.
+    Considera apenas orcamentos que nao sejam do tipo checklist (VS1_TIPORC <> '2').
+    Ordena por VS1_DEXPOS ASC para obter o primeiro exportado.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   30/03/2026
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou "" se nao encontrado
+/*/
+Method ObterDataExportacaoOrcamento() Class OFSEventoControlTower
+
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+    Local aArea     := GetArea()
+
+    If Empty(::cNumeroOS)
+        Return ""
+    EndIf
+
+    cQuery := " SELECT VS1.VS1_DEXPOS, VS1.VS1_HEXPOS"
+				// --------------------------------
+				// [VS1] Orçamento
+				// --------------------------------
+    cQuery += " FROM " + RetSQLName("VS1") + " VS1" 
+    cQuery += " WHERE VS1.VS1_FILIAL = ?"
+    cQuery += "   AND VS1.VS1_NUMOSV = ?"
+    cQuery += "   AND VS1.VS1_TIPORC = '2'"
+    cQuery += "   AND VS1.VS1_DEXPOS <> ' '"
+    cQuery += "   AND VS1.D_E_L_E_T_ = ' '"
+    cQuery += " ORDER BY VS1.VS1_DEXPOS ASC, VS1.VS1_HEXPOS ASC"
+
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VS1"))
+    oStmt:SetString(2, ::cNumeroOS)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->VS1_DEXPOS)
+        cHora := ::NormalizarHora((cAlias)->VS1_HEXPOS)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return cDataHora
+
+/*/{Protheus.doc} AnalisarStatusServicos
+    Analisa todos os apontamentos elegiveis da OS corrente e retorna o status
+    consolidado dos servicos conforme a matriz de prioridade Scania.
+
+    Classifica cada apontamento em um dos 4 estados:
+      - Em Andamento:  VO4_DATINI preenchido E VO4_DATFIN vazio E VO4_MPAUSA vazio
+      - Interrompido:  VO4_DATINI preenchido E VO4_DATFIN vazio E VO4_MPAUSA preenchido
+      - Finalizado:    VO4_DATINI preenchido E VO4_DATFIN preenchido
+      - Pendente:      VO4_DATINI vazio E VO4_DATFIN vazio (nao iniciado)
+
+    Matriz de prioridade (ordem de avaliacao):
+      1. nAndamento > 0                          -> STATUS_SERV_EM_ANDAMENTO  (EVT36 / idstatus 9)
+      2. nInterrompido > 0 E nAndamento == 0     -> STATUS_SERV_INTERROMPIDO  (EVT37 / idstatus 10)
+      3. nPendente > 0 E nAndamento == 0
+         E nInterrompido == 0                    -> STATUS_SERV_PENDENTE      (EVT38 / idstatus 11)
+      4. Todos finalizados                       -> STATUS_SERV_FINALIZADO    (EVT39 / idstatus 12)
+      5. Nenhum apontamento                      -> STATUS_SERV_INDEFINIDO
+
+    Filtros aplicados na query:
+      - VOK_INCMOB NOT IN ('3','5') (exclui terceiros e kilometragem)
+      - Filtro de checklist: pendente de definicao pelo PO (sera adicionado futuramente)
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   15/04/2026
+    @return  Character  STATUS_SERV_EM_ANDAMENTO | STATUS_SERV_INTERROMPIDO |
+                        STATUS_SERV_PENDENTE | STATUS_SERV_FINALIZADO | STATUS_SERV_INDEFINIDO
+/*/
+Method AnalisarStatusServicos() Class OFSEventoControlTower
+
+    Local aArea          := GetArea()
+    Local cAlias         := GetNextAlias()
+    Local oStmt          := FWPreparedStatement():New()
+    Local cQuery         := ""
+    Local cRetStatus     := STATUS_SERV_INDEFINIDO
+    Local nAndamento     := 0
+    Local nInterrompido  := 0
+    Local nPendente      := 0
+    Local nFinalizado    := 0
+    Local cDatIni        := ""
+    Local cDatFin        := ""
+    Local cMPausa        := ""
+    Local cFiltroCheck   := ""
+    Local lSrvFin        := .F.
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return STATUS_SERV_INDEFINIDO
+    EndIf
+
+    // Query unica: traz todos os apontamentos elegiveis da OS
+    // Filtro: VOK_INCMOB NOT IN ('3','5') — exclui terceiros e kilometragem
+    // Filtro: COTO_SRVCHECK — exclui servicos de checklist configurados
+    cFiltroCheck := ::MontarFiltroChecklist()
+
+    cQuery  = " SELECT VO4.VO4_DATINI, VO4.VO4_DATFIN, VO4.VO4_MPAUSA, VO4.VO4_SRVFIN"
+				// --------------------------------
+				// [VO4] Requisição de Serviços        
+				// --------------------------------
+    cQuery += " FROM " + RetSQLName("VO4") + " VO4"
+				// --------------------------------
+				// [VOK] Tipo de Serviço                        
+				// --------------------------------
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VO4.VO4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+
+    cQuery += " WHERE VO4.VO4_FILIAL = ?"
+    cQuery += "   AND VO4.VO4_NUMOSV = ?"
+    cQuery += "   AND VO4.D_E_L_E_T_ = ' '"
+    cQuery += cFiltroCheck
+
+    cQuery += "   AND EXISTS ( "
+    cQuery += "       SELECT 1 "
+    cQuery += "       FROM " + RetSQLName("VO4") + " VO4X "
+    cQuery += "       WHERE VO4X.VO4_FILIAL = VO4.VO4_FILIAL "
+    cQuery += "         AND VO4X.VO4_NUMOSV = VO4.VO4_NUMOSV "
+    cQuery += "         AND VO4X.D_E_L_E_T_ = ' ' "
+    cQuery += "         AND VO4X.VO4_DATINI <> ' ' "
+    cQuery += "   )"
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VO4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOS))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    // Classifica cada apontamento
+    While !(cAlias)->(EoF())
+        cDatIni := AllTrim((cAlias)->VO4_DATINI)
+        cDatFin := AllTrim((cAlias)->VO4_DATFIN)
+        cMPausa := AllTrim((cAlias)->VO4_MPAUSA)
+        lSrvFin := AllTrim((cAlias)->VO4_SRVFIN) == "1"
+
+        If !Empty(cDatIni) .And. Empty(cDatFin)
+            // Em andamento
+            nAndamento++
+        ElseIf !Empty(cDatIni) .And. !Empty(cDatFin)
+            // Finalizado
+            nFinalizado++
+            
+            If !Empty(cMPausa) .and. !lSrvFin
+                nInterrompido++
+            EndIf
+        ElseIf Empty(cDatIni) .And. Empty(cDatFin)
+            // Nao iniciado (pendente)
+            nPendente++
+        EndIf
+
+        (cAlias)->(DbSkip())
+    EndDo
+
+    (cAlias)->(DbCloseArea())
+
+    // Matriz de prioridade
+    If nAndamento == 0 .And. nInterrompido == 0 .And. nPendente == 0 .And. nFinalizado == 0
+        cRetStatus := STATUS_SERV_INDEFINIDO
+    ElseIf nAndamento > 0
+        cRetStatus := STATUS_SERV_EM_ANDAMENTO
+    ElseIf nInterrompido > 0
+        cRetStatus := STATUS_SERV_INTERROMPIDO
+    ElseIf nPendente > 0
+        cRetStatus := STATUS_SERV_PENDENTE
+    Else
+        cRetStatus := STATUS_SERV_FINALIZADO
+    EndIf
+
+    RestArea(aArea)
+
+Return cRetStatus
+
+/*/{Protheus.doc} ObterPrimeiroApontamento
+    Busca a data/hora do primeiro apontamento iniciado na OS corrente.
+    Considera qualquer apontamento com VO4_DATINI preenchido (pausado, em andamento
+    ou finalizado), excluindo tipos com VOK_INCMOB IN ('3','5').
+    Ordena por VO4_DATINI + VO4_HORINI ASC para obter o mais antigo.
+
+    Filtro de checklist: COTO_SRVCHECK via MontarFiltroChecklist()
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   15/04/2026
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou "" se nao encontrado
+/*/
+Method ObterPrimeiroApontamento() Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+    Local cFiltroCheck := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return ""
+    EndIf
+
+    cFiltroCheck := ::MontarFiltroChecklist()
+
+    cQuery  = " SELECT VO4.VO4_DATINI, VO4.VO4_HORINI"
+    cQuery += " FROM " + RetSQLName("VO4") + " VO4"
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VO4.VO4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE VO4.VO4_FILIAL = ?"
+    cQuery += "   AND VO4.VO4_NUMOSV = ?"
+    cQuery += "   AND VO4.VO4_DATINI <> ' '"
+    cQuery += "   AND VO4.VO4_HORINI <> ' '"
+    cQuery += "   AND VO4.D_E_L_E_T_ = ' '"
+    cQuery += cFiltroCheck
+    cQuery += " ORDER BY VO4.VO4_DATINI ASC, VO4.VO4_HORINI ASC"
+
+    // TOP 1 compatível multi-SGBD
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VO4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOS))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->VO4_DATINI)
+        cHora := ::NormalizarHora((cAlias)->VO4_HORINI)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return cDataHora
+
+/*/{Protheus.doc} ObterUltimoApontamento
+    Busca a data/hora do ultimo apontamento iniciado na OS corrente.
+    Mesma logica do ObterPrimeiroApontamento, porem ordenado DESC
+    para obter o mais recente.
+
+    Considera qualquer apontamento com VO4_DATINI preenchido (pausado,
+    em andamento ou finalizado), excluindo tipos com VOK_INCMOB IN ('3','5').
+
+    Filtro de checklist: COTO_SRVCHECK via MontarFiltroChecklist()
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   30/05/2026
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou "" se nao encontrado
+/*/
+Method ObterUltimoApontamento() Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+    Local cFiltroCheck := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return ""
+    EndIf
+
+    cFiltroCheck := ::MontarFiltroChecklist()
+
+    cQuery  = " SELECT VO4.VO4_DATFIN, VO4.VO4_HORFIN"
+    cQuery += " FROM " + RetSQLName("VO4") + " VO4"
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VO4.VO4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE VO4.VO4_FILIAL = ?"
+    cQuery += "   AND VO4.VO4_NUMOSV = ?"
+    cQuery += "   AND VO4.VO4_DATFIN <> ' '"
+    cQuery += "   AND VO4.VO4_HORFIN <> ' '"
+    cQuery += "   AND VO4.D_E_L_E_T_ = ' '"
+    cQuery += cFiltroCheck
+    cQuery += " ORDER BY VO4.VO4_DATFIN DESC, VO4.VO4_HORFIN DESC"
+
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VO4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOS))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->VO4_DATFIN)
+        cHora := ::NormalizarHora((cAlias)->VO4_HORFIN)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return cDataHora
+
+/*/{Protheus.doc} ObterApontamentoInterrompido
+    Busca a data/hora do ultimo apontamento INTERROMPIDO (com pausa) na OS corrente.
+    Um apontamento interrompido e aquele que:
+      - VO4_DATINI preenchido  (foi iniciado)
+      - VO4_DATFIN vazio       (nao foi finalizado)
+      - VO4_MPAUSA preenchido  (esta em pausa)
+
+    Retorna VO4_DATINI/VO4_HORINI do ultimo apontamento interrompido (DESC).
+    Exclui tipos com VOK_INCMOB IN ('3','5').
+
+    Filtro de checklist: COTO_SRVCHECK via MontarFiltroChecklist()
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   30/05/2026
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou "" se nao encontrado
+/*/
+Method ObterApontamentoInterrompido() Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+    Local cFiltroCheck := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return ""
+    EndIf
+
+    cFiltroCheck := ::MontarFiltroChecklist()
+
+    cQuery := " SELECT MAX(VO4.VO4_DATFIN) as VO4_DATFIN, MAX(VO4.VO4_HORFIN) as VO4_HORFIN "
+    cQuery += " FROM " + RetSQLName("VO4") + " VO4"
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VO4.VO4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE VO4.VO4_FILIAL = ?"
+    cQuery += "   AND VO4.VO4_NUMOSV = ?"
+    cQuery += "   AND VO4.VO4_DATFIN <> ' '"
+    cQuery += "   AND VO4.VO4_HORFIN <> ' '"
+    cQuery += "   AND VO4.D_E_L_E_T_ = ' '"
+    cQuery += cFiltroCheck
+
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VO4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOS))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->VO4_DATFIN)
+        cHora := ::NormalizarHora((cAlias)->VO4_HORFIN)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return cDataHora
+
+/*/{Protheus.doc} CalcularTempoPadraoApontamentos
+    Calcula o tempo padrao total em segundos somando VO4_TEMPAD de todos os
+    apontamentos da OS corrente, excluindo tipos com VOK_INCMOB IN ('3','5').
+    Converte o valor de centesimos de hora (centesimal) para segundos inteiros.
+
+    Diferente de CalcularTempoPadraoOS() que usa VS4_TEMPAD (orcamento).
+    Este metodo usa VO4_TEMPAD (apontamentos) conforme documentacao da H#13.
+
+    Filtro de checklist: COTO_SRVCHECK via MontarFiltroChecklist()
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   15/04/2026
+    @return  Numeric  Tempo total em segundos ou 0 se nao calculado
+/*/
+Method CalcularTempoPadraoApontamentos() Class OFSEventoControlTower
+
+    Local aArea   := GetArea()
+    Local cQuery  := ""
+    Local nTempo  := 0
+    Local cAlias  := GetNextAlias()
+    Local oStmt   := FWPreparedStatement():New()
+    Local cFiltroCheck := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return 0
+    EndIf
+
+    cFiltroCheck := ::MontarFiltroChecklist()
+
+    cQuery  = " SELECT SUM(VO4.VO4_TEMPAD) AS TEMPTOTAL"
+    cQuery += " FROM " + RetSQLName("VO4") + " VO4"
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VO4.VO4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE VO4.VO4_FILIAL = ?"
+    cQuery += "   AND VO4.VO4_NUMOSV = ?"
+    cQuery += "   AND VO4.VO4_TEMPAD > 0"
+    cQuery += "   AND VO4.D_E_L_E_T_ = ' '"
+    cQuery += cFiltroCheck
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VO4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOS))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF()) .And. !Empty((cAlias)->TEMPTOTAL)
+        // Centesimal para segundos: (centesimal / 100) * 3600
+        nTempo := Int((Val(Str((cAlias)->TEMPTOTAL)) / 100) * 3600)
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return nTempo
+
+/*/{Protheus.doc} ObterMotivoPausa
+    Busca o motivo de pausa do primeiro servico interrompido da OS corrente
+    e realiza o DE->PARA via configuracao COTO_GDEPARA para obter o codigo
+    e descricao de interrupcao Scania (tabela VX5, chave "106").
+
+    Fluxo:
+      1. Query VO4+VOK: primeiro apontamento com VO4_MPAUSA preenchido,
+         VO4_DATINI preenchido e VO4_DATFIN vazio (interrompido)
+      2. Localiza VO4_MPAUSA no array COTO_GDEPARA da config
+      3. Obtem COTO_CODINTERRUPCAO correspondente (idMotivo)
+      4. Busca descricao na VX5 (chave "106" + COTO_CODINTERRUPCAO)
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   05/05/2026
+    @return  Array  {cIdMotivo, cDescMotivo} ou {"", ""} se nao encontrado
+/*/
+Method ObterMotivoPausa() Class OFSEventoControlTower
+
+    Local aArea        := GetArea()
+    Local cAlias       := GetNextAlias()
+    Local oStmt        := FWPreparedStatement():New()
+    Local oSql         := DMS_SqlHelper():New()
+    Local cQuery       := ""
+    Local cMPausa      := ""
+    Local cCodInter    := ""
+    Local cDescInter   := ""
+    Local aGDePara     := {}
+    Local nX           := 0
+    Local cFiltroCheck := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return {"", ""}
+    EndIf
+
+    cFiltroCheck := ::MontarFiltroChecklist()
+
+    // 1. Busca VO4_MPAUSA do primeiro servico interrompido da OS
+    cQuery  = " SELECT VO4.VO4_MPAUSA"
+    cQuery += " FROM " + RetSQLName("VO4") + " VO4"
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VO4.VO4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE VO4.VO4_FILIAL = ?"
+    cQuery += "   AND VO4.VO4_NUMOSV = ?"
+    cQuery += "   AND VO4.VO4_DATINI <> ' '"
+    cQuery += "   AND VO4.VO4_MPAUSA <> ' '"
+    cQuery += "   AND VO4.D_E_L_E_T_ = ' '"
+    cQuery += cFiltroCheck
+    cQuery += " ORDER BY VO4.VO4_DATFIN ASC, VO4.VO4_HORFIN DESC"
+
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VO4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOS))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        cMPausa := AllTrim((cAlias)->VO4_MPAUSA)
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+    // 2. DE->PARA: COTO_GDEPARA (config) — mapeia COTO_CODPAUSA -> COTO_CODINTERRUPCAO
+    If !Empty(cMPausa) .And. ValType(::oConfig) == "J" .And. ::oConfig:HasProperty("COTO_GDEPARA")
+        aGDePara := ::oConfig["COTO_GDEPARA"]
+        If ValType(aGDePara) == "A"
+            For nX := 1 To Len(aGDePara)
+                If AllTrim(aGDePara[nX]["COTO_CODPAUSA"]) == cMPausa
+                    cCodInter := AllTrim(aGDePara[nX]["COTO_CODINTERRUPCAO"])
+                    Exit
+                EndIf
+            Next
+        EndIf
+    EndIf
+
+    // 3. Busca descricao na VX5 (chave "106" + codigo interrupcao)
+    If !Empty(cCodInter)
+        DbSelectArea("VX5")
+        VX5->(DbSetOrder(1))
+        If VX5->(DbSeek(xFilial("VX5") + "106" + cCodInter))
+            cDescInter := AllTrim(VX5->VX5_DESCRI)
+        EndIf
+    EndIf
+
+    RestArea(aArea)
+
+Return {cCodInter, cDescInter}
+
+/*/{Protheus.doc} MontarFiltroChecklist
+    Monta a clausula SQL de exclusao dos servicos de checklist a partir
+    da configuracao COTO_SRVCHECK (codigos separados por /).
+    Retorna string no formato " AND VO4.VO4_CODSER NOT IN ('00005095','00005096')"
+    ou "" se a configuracao estiver vazia.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   05/05/2026
+    @return  Character  Clausula SQL NOT IN ou "" se nao configurado
+/*/
+Method MontarFiltroChecklist() Class OFSEventoControlTower
+
+    Local cSrvCheck := ""
+    Local aCodigos  := {}
+    Local cFiltro   := ""
+    Local nX        := 0
+
+    If ValType(::oConfig) != "J" .Or. !::oConfig:HasProperty("COTO_SRVCHECK")
+        Return ""
+    EndIf
+
+    cSrvCheck := AllTrim(::oConfig["COTO_SRVCHECK"])
+    If Empty(cSrvCheck)
+        Return ""
+    EndIf
+
+    aCodigos := StrTokArr(cSrvCheck, "/")
+    If Len(aCodigos) == 0
+        Return ""
+    EndIf
+
+    cFiltro := " AND VO4.VO4_CODSER NOT IN ("
+    For nX := 1 To Len(aCodigos)
+        cFiltro += "'" + AllTrim(aCodigos[nX]) + "'"
+        If nX < Len(aCodigos)
+            cFiltro += ","
+        EndIf
+    Next
+    cFiltro += ")"
+
+Return cFiltro
+
+
+/*/{Protheus.doc} ObterMaiorDataFechamento
+    Busca a maior data/hora real de fechamento entre apontamentos de servico (VO4)
+    e apontamentos de pecas (VO3) para a OS corrente.
+
+    Utilizado pelo EVT41 (OS fechada) conforme premissa:
+    "Considerar maior Data/Hora de Fechamento
+    (VO4_DATFEC/VO4_HORFEC e VO3_DATFEC/VO3_HORFEC)".
+
+    A consulta une os registros reais de fechamento das duas origens, ordena por
+    data/hora decrescente e limita o retorno com DMS_SqlHelper():TOPFunc(), evitando
+    combinar MAX(data) e MAX(hora) de registros diferentes.
+
+    Retorna "" se nenhum fechamento for encontrado (ex: OS cancelada sem apontamentos).
+    Nesse caso o chamador deve usar fallback para data/hora corrente.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   22/05/2026
+    @return  Character  Data/hora no formato "DD/MM/YYYY HH:MM" ou ""
+/*/
+Method ObterMaiorDataFechamento() Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return ""
+    EndIf
+
+    cQuery := " SELECT DT_FEC, HR_FEC FROM ("
+    cQuery += "   SELECT VO4_DATFEC AS DT_FEC, VO4_HORFEC AS HR_FEC"
+    cQuery += "   FROM " + RetSQLName("VO4")
+    cQuery += "   WHERE VO4_FILIAL = ? AND VO4_NUMOSV = ?"
+    cQuery += "     AND VO4_DATFEC <> ' '"
+    cQuery += "     AND VO4_HORFEC <> ' '"
+    cQuery += "     AND D_E_L_E_T_ = ' '"
+    cQuery += "   UNION ALL"
+    cQuery += "   SELECT VO3_DATFEC AS DT_FEC, VO3_HORFEC AS HR_FEC"
+    cQuery += "   FROM " + RetSQLName("VO3")
+    cQuery += "   WHERE VO3_FILIAL = ? AND VO3_NUMOSV = ?"
+    cQuery += "     AND VO3_DATFEC <> ' '"
+    cQuery += "     AND VO3_HORFEC <> ' '"
+    cQuery += "     AND D_E_L_E_T_ = ' '"
+    cQuery += " ) TMP"
+    cQuery += " ORDER BY DT_FEC DESC, HR_FEC DESC"
+
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VO4"))
+    oStmt:SetString(2, ::cNumeroOS)
+    oStmt:SetString(3, FWxFilial("VO3"))
+    oStmt:SetString(4, ::cNumeroOS)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->DT_FEC)
+        cHora := ::NormalizarHora((cAlias)->HR_FEC)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return cDataHora
+
+Method ObterMaiorDataDisponivel() Class OFSEventoControlTower
+
+    Local aArea     := GetArea()
+    Local cAlias    := GetNextAlias()
+    Local oStmt     := FWPreparedStatement():New()
+    Local oSql      := DMS_SqlHelper():New()
+    Local cQuery    := ""
+    Local cDataHora := ""
+    Local dData     := Ctod("")
+    Local cHora     := ""
+
+    If Empty(::cNumeroOS)
+        RestArea(aArea)
+        Return ""
+    EndIf
+
+    cQuery := " SELECT DT_DIS, HR_DIS FROM ("
+    cQuery += "   SELECT VO4_DATDIS AS DT_DIS, VO4_HORDIS AS HR_DIS"
+    cQuery += "   FROM " + RetSQLName("VO4")
+    cQuery += "   WHERE VO4_FILIAL = ? AND VO4_NUMOSV = ?"
+    cQuery += "     AND VO4_DATDIS <> ' '"
+    cQuery += "     AND VO4_HORDIS <> ' '"
+    cQuery += "     AND D_E_L_E_T_ = ' '"
+    cQuery += "   UNION ALL"
+    cQuery += "   SELECT VO3_DATDIS AS DT_DIS, VO3_HORDIS AS HR_DIS"
+    cQuery += "   FROM " + RetSQLName("VO3")
+    cQuery += "   WHERE VO3_FILIAL = ? AND VO3_NUMOSV = ?"
+    cQuery += "     AND VO3_DATDIS <> ' '"
+    cQuery += "     AND VO3_HORDIS <> ' '"
+    cQuery += "     AND D_E_L_E_T_ = ' '"
+    cQuery += " ) TMP"
+    cQuery += " ORDER BY DT_DIS DESC, HR_DIS DESC"
+
+    cQuery := oSql:TOPFunc(cQuery, 1)
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VO4"))
+    oStmt:SetString(2, ::cNumeroOS)
+    oStmt:SetString(3, FWxFilial("VO3"))
+    oStmt:SetString(4, ::cNumeroOS)
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF())
+        dData := STOD((cAlias)->DT_DIS)
+        cHora := ::NormalizarHora((cAlias)->HR_DIS)
+        If !Empty(dData) .And. !Empty(cHora)
+            cDataHora := DtoC(dData) + " " + cHora
+        EndIf
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+    RestArea(aArea)
+
+Return cDataHora
+
+
+// ------------------------------------------------------------
+// INTEGRAÇÃO
+// ------------------------------------------------------------
+
+/*/{Protheus.doc} IntegrarControlTower
+    Executa a integracao HTTP com o Control Tower Scania.
+    1. Valida URL e endpoint da configuracao
+    2. Obtem token OAuth2 se ainda nao disponivel
+    3. Monta payload JSON via MontarPayload
+    4. Executa POST via FWRest com headers de autenticacao e content-type
+    5. Retorna .T. apenas para HTTP 2xx
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = HTTP 2xx confirmado | .F. = falha de comunicacao
+/*/
+Method IntegrarControlTower() Class OFSEventoControlTower
+
+    Local oPayload  := Nil
+    Local cUrlBase  := AllTrim(::oConfig["COTO_URLBASE"])
+    Local cEndpoint := AllTrim(::oConfig["COTO_ENDPOINT"])
+    Local nHttp     := 0
+
+    If Empty(cUrlBase) .Or. Empty(cEndpoint)
+        Return .F.
+    EndIf
+
+    If Empty(::cToken)
+        If !::ObterToken()
+            Return .F.
+        EndIf
+    EndIf
+
+    oPayload := ::MontarPayload()
+    If ValType(oPayload) != "J"
+        Return .F.
+    EndIf
+
+    ::cPayloadJson := oPayload:ToJson()
+
+    ::aHeader := {}
+    AAdd(::aHeader, "Content-Type:" + ::ResolverContentType(AllTrim(::oConfig["COTO_CONTENTTYPE"])))
+    AAdd(::aHeader, "Authorization: Bearer " + ::cToken)
+
+    ::oRest := FWRest():New(cUrlBase)
+    ::oRest:SetPath(cEndpoint)
+    ::oRest:SetPostParams(::cPayloadJson)
+
+    If !::oRest:Post(::aHeader)
+        Return .F.
+    EndIf
+
+    nHttp := Val(::oRest:GetHttpCode())
+
+Return nHttp >= 200 .And. nHttp <= 299
+
+/*/{Protheus.doc} ObterToken
+    Realiza autenticacao OAuth2 (client_credentials) com o servidor de token
+    configurado em COTO_URL. Suporta Basic Auth via COTO_TPAUT2 = "1".
+    Armazena o access_token em ::cToken para reuso durante a execucao.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Logical  .T. = token obtido e armazenado | .F. = falha de autenticacao
+/*/
+Method ObterToken() Class OFSEventoControlTower
+
+    Local cFullUrl  := AllTrim(::oConfig["COTO_URL"])
+    Local aParts    := StrTokArr(cFullUrl, "/")
+    Local cBaseUrl  := ""
+    Local cPath     := ""
+    Local cBody     := ""
+    Local jResp     := Nil
+    Local nHttp     := 0
+
+    If Empty(cFullUrl)
+        Return .F.
+    EndIf
+
+    If Len(aParts) >= 2
+        cBaseUrl := aParts[1] + "//" + aParts[2]
+    EndIf
+    cPath := SubStr(cFullUrl, Len(cBaseUrl) + 1)
+
+    ::aHeader := { "Content-Type:application/x-www-form-urlencoded" }
+
+    If ::oConfig["COTO_TPAUT2"] == "1"
+        AAdd(::aHeader, "Authorization: Basic " + Encode64( ;
+                AllTrim(::oConfig["COTO_CLIENTEID"]) + ":" + ;
+                AllTrim(::oConfig["COTO_CLIENTESECRET"])))
+    EndIf
+
+    cBody := "username=" + Lower(AllTrim(::oConfig["COTO_USERNAME"]))
+    cBody += "&password=" + Lower(AllTrim(::oConfig["COTO_PASSWORD"]))
+    cBody += "&grant_type=" + Lower(AllTrim(::oConfig["COTO_GRANTTYPE"]))
+
+    ::oRest := FWRest():New(cBaseUrl)
+    ::oRest:SetPath(cPath)
+    ::oRest:SetPostParams(cBody)
+
+    If !::oRest:Post(::aHeader)
+        Return .F.
+    EndIf
+
+    nHttp := Val(::oRest:GetHttpCode())
+    If nHttp < 200 .Or. nHttp > 299
+        Return .F.
+    EndIf
+
+    jResp := JsonObject():New()
+    If ValType(jResp:FromJson(::oRest:GetResult())) != "U" .Or. !jResp:HasProperty("access_token")
+        Return .F.
+    EndIf
+
+    ::cToken := jResp["access_token"]
+
+Return .T.
+
+/*/{Protheus.doc} MontarPayload
+    Monta o objeto JSON de payload conforme o evento corrente.
+    Campos comuns: chassiVeiculo, placa, idConcessionaria, idOS, nomeCliente.
+    Campos especificos por evento: idstatusServ, descstatusServ, datahorastatusServ,
+    datahoraAgendamento, tempoPadrao, idMotivo, descricaoMotivo.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Object  JsonObject com o payload completo | Nil em caso de evento nao mapeado
+/*/
+Method MontarPayload() Class OFSEventoControlTower
+
+    Local oJson         := JsonObject():New()
+    Local cUltDataHora  := ""
+    Local nTempo        := 0
+
+    // Campos comuns
+    oJson["chassiVeiculo"]    := ::cChassi
+    oJson["placa"]            := ::cPlacaVeiculo
+    oJson["idConcessionaria"] := ::ObterSISID()
+
+    Do Case
+        // EVT28 – Agendamento
+        Case ::cEvento == EVT_AGENDAMENTO
+            oJson["idstatusServ"]        := "1"
+            oJson["descstatusServ"]      := ::cDescricaoEvento
+            oJson["datahorastatusServ"]  := ::cDataHoraEvento
+            oJson["idOS"]                := ""
+            oJson["tempoPadrao"]         := ""
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT29 – Reagendamento
+        Case ::cEvento == EVT_REAGENDAMENTO
+            oJson["idstatusServ"]        := "2"
+            oJson["descstatusServ"]      := ::cDescricaoEvento
+            oJson["datahorastatusServ"]  := ::cDataHoraEvento
+            oJson["idOS"]                := ""
+            oJson["tempoPadrao"]         := ""
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT30 – Cancelamento: envia a última data/hora de agendamento integrada
+        Case ::cEvento == EVT_CANCELAMENTO_AGENDAMENTO
+            cUltDataHora := ::BuscarUltimaDataHoraAgendada()
+            oJson["idstatusServ"]        := "3"
+            oJson["descstatusServ"]      := ::cDescricaoEvento
+            oJson["datahorastatusServ"]  := ::cDataHoraEvento
+            oJson["idOS"]                := ""
+            oJson["tempoPadrao"]         := ""
+            oJson["datahoraAgendamento"] := cUltDataHora
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT32 – OS Aberta / Sem Orçamento
+        Case ::cEvento == EVT_OS_ABERTA_SEM_ORCAMENTO
+            oJson["idstatusServ"]        := "5"
+            oJson["descstatusServ"]      := ::cDescricaoEvento
+            oJson["datahorastatusServ"]  := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+            oJson["tempoPadrao"]         := ""
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT33 – OS Aberta / Aguardando crédito
+        Case ::cEvento == EVT_OS_ABERTA_AGUARD_CREDITO
+            nTempo := ::CalcularTempoPadraoOS()
+            oJson["idstatusServ"]       := "6"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+
+            oJson["idMotivo"]       := ""
+            oJson["descricaoMotivo"] := ""
+
+        // EVT34 – OS Aberta / Aguardando aprovação de orçamento
+        Case ::cEvento == EVT_OS_ABERTA_AGUARD_APROV_ORC
+            nTempo := ::CalcularTempoPadraoOS()
+            oJson["idstatusServ"]       := "7"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+        // EVT35 – Orçamento aprovado / Aguardando início do serviço
+        Case ::cEvento == EVT_ORC_APROVADO_AGUARD_SERVICO
+            nTempo := ::CalcularTempoPadraoOS()
+            oJson["idstatusServ"]       := "8"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT36 – Serviço em andamento (evento dinâmico)
+        Case ::cEvento == EVT_SERVICO_EM_ANDAMENTO
+            nTempo := ::CalcularTempoPadraoApontamentos()
+            oJson["idstatusServ"]       := "9"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT37 – Serviço interrompido (evento dinâmico)
+        Case ::cEvento == EVT_SERVICO_INTERROMPIDO
+            nTempo := ::CalcularTempoPadraoApontamentos()
+            oJson["idstatusServ"]       := "10"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ::cIdMotivo
+            oJson["descricaoMotivo"]     := ::cDescMotivo
+
+        // EVT38 – Serviço pendente (evento dinâmico)
+        Case ::cEvento == EVT_SERVICO_PENDENTE
+            nTempo := ::CalcularTempoPadraoApontamentos()
+            oJson["idstatusServ"]       := "11"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT39 – Serviço finalizado (evento dinâmico)
+        Case ::cEvento == EVT_SERVICO_FINALIZADO
+            nTempo := ::CalcularTempoPadraoApontamentos()
+            oJson["idstatusServ"]       := "12"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+
+            If nTempo > 0
+                oJson["tempoPadrao"] := nTempo
+            Else
+                oJson["tempoPadrao"] := ""
+            EndIf
+
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT40 – Veículo liberado / Aguardando fechamento da OS
+        Case ::cEvento == EVT_VEICULO_LIBERADO
+            oJson["idstatusServ"]       := "13"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+            oJson["tempoPadrao"]        := ""
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+
+        // EVT41 – OS fechada / Processo finalizado
+        Case ::cEvento == EVT_OS_FECHADA_PROC_FINALIZADO
+            oJson["idstatusServ"]       := "14"
+            oJson["descstatusServ"]     := ::cDescricaoEvento
+            oJson["datahorastatusServ"] := ::cDataHoraEvento
+            oJson["idOS"]                := ::cNumeroOS
+            oJson["tempoPadrao"]        := ""
+            oJson["datahoraAgendamento"] := ::cDataHoraAgendamento
+            oJson["nomeCliente"]         := ::cNomeCliente
+            oJson["idMotivo"]            := ""
+            oJson["descricaoMotivo"]     := ""
+    EndCase
+
+Return oJson
+
+/*/{Protheus.doc} ResolverContentType
+    Resolve o valor do header Content-Type a partir do codigo configurado.
+    Codigo "2" = "application/x-www-form-urlencoded".
+    Demais = "application/json" (padrao).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cTipo  Character  Codigo do tipo ("1" = JSON | "2" = form-urlencoded)
+    @return  Character  Valor do Content-Type
+/*/
+Method ResolverContentType( cTipo ) Class OFSEventoControlTower
+
+    If cTipo == "2"
+        Return "application/x-www-form-urlencoded"
+    EndIf
+
+Return "application/json"
+
+// ------------------------------------------------------------
+// PERSISTÊNCIA
+// ------------------------------------------------------------
+
+/*/{Protheus.doc} GravarVK5
+    Persiste o registro de auditoria tecnica na VK5 via OFDMSRequest.
+    Popula campos de status, historico, URL, metodo HTTP, payload e resposta.
+    Quando nao houve tentativa de integracao (oRest = Nil), monta payload
+    de fallback via MontarPayload para garantir rastreabilidade.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cStatus  Character  Status VK5: VK5STATUS_PENDENTE | VK5STATUS_SUCESSO | VK5STATUS_ERRO | VK5STATUS_CIENTE_ERRO
+    @return  Logical  .T. = gravado | .F. = falha na persistencia
+/*/
+Method GravarVK5( cStatus ) Class OFSEventoControlTower
+
+    Local lSaved    := .F.
+    Local oHeader   := JsonObject():New()
+    Local nHttp     := 0
+    Local lErroHttp := .F.
+    Local oJsonFallback := NIl
+
+    If ValType(::oDMSRequest) != "O"
+        ::oDMSRequest := OFDMSRequest():New()
+    EndIf
+
+    ::oDMSRequest:setTypeControlTower()
+    ::oDMSRequest:setOriginScaniaControlTower()
+    ::oDMSRequest:Set("VK5_MESSAG", ::cEvento)
+    ::oDMSRequest:Set("VK5_ORIKEY", cFilAnt  + ::cChassiInterno)
+    ::oDMSRequest:Set("VK5_STATUS", cStatus)
+    ::oDMSRequest:Set("VK5_HISTOR", ::MontarTextoVK5(cStatus))
+    ::oDMSRequest:Set("VK5_DATINC", DTOS( FGX_TimeUF()[1] ) + " " + FGX_TimeUF()[2]) // Array[3]  [1] = Data (Date), [2] = Hora (Character "HH:MM"), [3] = "DD/MM/YYYY HH:MM"
+
+
+// Dados HTTP (quando houve tentativa de integração)
+    If ValType(::oRest) == "O"
+        nHttp     := Val(::oRest:GetHttpCode())
+        lErroHttp := nHttp < 200 .Or. nHttp > 299
+        If ValType(::aHeader) == "A" .And. Len(::aHeader) > 0
+            oHeader:Set(::aHeader)
+            ::oDMSRequest:Set("VK5_REQHEA", oHeader:ToJson())
+        EndIf
+        ::oDMSRequest:Set("VK5_URLREQ", ::oRest:cHost + ::oRest:cPath)
+        ::oDMSRequest:Set("VK5_METODO", "2")
+        ::oDMSRequest:Set("VK5_REQBOD", ::oRest:CPOSTPARAMS)
+        ::oDMSRequest:Set("VK5_RESCOD", nHttp)
+        If lErroHttp
+            ::oDMSRequest:Set("VK5_RESBOD", ::oRest:GetLastError())
+        Else
+            ::oDMSRequest:Set("VK5_RESBOD", ::oRest:GetResult())
+        EndIf
+    Else
+   
+        // EVT29: EVT29Rules não chegou a executar — busca nova data/hora da VSO
+        // para que datahoraAgendamento no payload reflita o reagendamento, não o original.
+        If ::cEvento == EVT_REAGENDAMENTO .And. Empty(::cDataHoraAgendamento)
+            ::cDataHoraAgendamento := ::DataHoraDeVSO("VSO_DATAGE", "VSO_HORAGE")
+        EndIf
+   
+        // Sem tentativa de integração (bloqueio anterior ao IntegrarControlTower).
+        // Popula os campos disponíveis para rastreabilidade e reprocessamento.
+        oJsonFallback := ::MontarPayload()
+        If ValType(oJsonFallback) == "J"
+            ::oDMSRequest:Set("VK5_REQBOD", oJsonFallback:ToJson())
+        EndIf
+        If ValType(::oConfig) == "J"
+            ::oDMSRequest:Set("VK5_URLREQ", AllTrim(::oConfig["COTO_URLBASE"]) + AllTrim(::oConfig["COTO_ENDPOINT"]))
+        EndIf
+        ::oDMSRequest:Set("VK5_METODO", "2")   // POST
+    EndIf
+
+    lSaved := ::oDMSRequest:Save()
+    If lSaved
+        ::cCodigoVK5 := ::oDMSRequest:GetId()
+    EndIf
+
+Return lSaved
+
+/*/{Protheus.doc} GravarHistoricoPassagem
+    Persiste o historico funcional da passagem na VEW (mestre) e VEX (detalhe).
+    Localiza ou cria o registro VEW pela chave mais especifica disponivel
+    (NUMAGE para EVT28/29/30 | NUMOS para EVT32/33).
+    Registra data/hora de ocorrencia, status de integracao e codigo VK5 associado.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cEvt  Character  Codigo do evento a registrar
+    @return  Logical  .T. = gravado | .F. = falha na persistencia
+/*/
+Method GravarHistoricoPassagem( cEvt ) Class OFSEventoControlTower
+
+    Local aArea      := GetArea()
+    Local cCodigoVEW := ""
+    Local lExisteVEW := .F.
+    Local dDataOcorrencia := CToD("")
+    Local cHoraOcorrencia := ""
+    Local dDataEvento := CToD("")
+    Local cHoraEvento := ""
+    Local dDataAgend := CToD("")
+    Local cHoraAgend := ""
+    Local cIntegrou  := ""
+    Local aDataHoraOcorrencia   := {}
+    Local aDataHoraEvento       := {}
+    Local aDataHoraAgendamento  := {}
+
+    ::cDataHoraOcorrencia := FGX_TimeUF()[3]  //-- Retorna no formato "DD/MM/YYYY HH:MM".
+
+    aDataHoraOcorrencia   := ::SeparaDataHora(::cDataHoraOcorrencia)
+    aDataHoraEvento       := ::SeparaDataHora(::cDataHoraEvento)
+    aDataHoraAgendamento  := ::SeparaDataHora(::cDataHoraAgendamento)
+
+    dDataOcorrencia := aDataHoraOcorrencia[1]
+    cHoraOcorrencia := aDataHoraOcorrencia[2]
+
+    dDataEvento := aDataHoraEvento[1]
+    cHoraEvento := aDataHoraEvento[2]
+
+    dDataAgend := aDataHoraAgendamento[1]
+    cHoraAgend := aDataHoraAgendamento[2]
+
+    If ::lIntegrou
+        cIntegrou := "1"
+    Else
+        cIntegrou := "0"
+    EndIf
+
+    cCodigoVEW := ::GetVEWHistoricoPassagem( cEvt, @lExisteVEW)
+
+    If !lExisteVEW
+
+        If ::cTipoContrato == "NO_CONTRACT"
+            ::cTipoContrato := "SEM CONTRATO"
+        ElseIf ::cTipoContrato == "UNABLE_TO_DETERMINE_CONTRACT"
+            ::cTipoContrato := ""
+        EndIf 
+
+        // INSERT VEW
+        cCodigoVEW := GetSXEnum("VEW", "VEW_CODIGO")
+        ConfirmSX8()
+        RecLock("VEW", .T.)
+        VEW->VEW_FILIAL  := xFilial("VEW")
+        VEW->VEW_CODIGO  := cCodigoVEW
+        VEW->VEW_CHASSI  := ::cChassi
+        VEW->VEW_PLCVEI  := ::cPlacaVeiculo
+        VEW->VEW_CHAINT  := ::cChassiInterno
+        VEW->VEW_CODPVE  := ::cCodigoCliente
+        VEW->VEW_LOJPVE  := ::cLojaCliente
+        VEW->VEW_NOMPRO  := ::cNomeCliente
+        VEW->VEW_NUMAGE  := ::cNumAge
+        VEW->VEW_NUMORC  := ::cNumeroOrcamento
+        VEW->VEW_NUMEOS  := ::cNumeroOS
+        VEW->VEW_STAPAS  := ::cStatusPassagem
+        VEW->VEW_CODUST  := cEvt
+        VEW->VEW_DESUST  := OFIOA560DS("083", cEvt)
+        VEW->VEW_INTCRT  := cIntegrou
+        VEW->VEW_DTABPA  := dDataEvento
+        VEW->VEW_HMABPA  := cHoraEvento
+        VEW->VEW_DESCTC  := ::cTipoContrato
+        VEW->VEW_DATAGE  := dDataAgend
+        VEW->VEW_HORAGE  := cHoraAgend
+        If ::cStatusPassagem == "1"
+            VEW->VEW_DTFEPA := dDataEvento
+            VEW->VEW_HMFEPA := cHoraEvento
+        EndIf
+        MsUnlock()
+    Else
+        // UPDATE VEW
+        RecLock("VEW", .F.)
+        VEW->VEW_NUMAGE  := ::cNumAge
+        VEW->VEW_NUMORC  := ::cNumeroOrcamento
+        VEW->VEW_NUMEOS  := ::cNumeroOS
+        VEW->VEW_STAPAS  := ::cStatusPassagem
+        VEW->VEW_CODUST  := cEvt
+        VEW->VEW_DESUST  := OFIOA560DS("083", cEvt)
+        VEW->VEW_INTCRT  := cIntegrou
+        VEW->VEW_DATAGE  := dDataAgend
+        VEW->VEW_HORAGE  := cHoraAgend
+        If ::cStatusPassagem == "1"
+            VEW->VEW_DTFEPA := dDataEvento
+            VEW->VEW_HMFEPA := cHoraEvento
+        EndIf
+        MsUnlock()
+    EndIf
+
+    // --- VEX: registro do evento ---
+    DbSelectArea("VEX")
+    RecLock("VEX", .T.)
+    VEX->VEX_FILIAL  := xFilial("VEX")
+    VEX->VEX_CODIGO  := GetSXEnum("VEX", "VEX_CODIGO")
+    VEX->VEX_CODVEW  := cCodigoVEW
+    VEX->VEX_CODEVE  := cEvt
+    VEX->VEX_DESEVE  := OFIOA560DS("083", cEvt)
+    VEX->VEX_DTGEEV  := dDataOcorrencia
+    VEX->VEX_HMGEEV  := cHoraOcorrencia
+    VEX->VEX_DTOCEV  := dDataEvento
+    VEX->VEX_HMOCEV  := cHoraEvento
+    VEX->VEX_OBSVEV  := ::cObservacao
+    VEX->VEX_MOTPSV  := If(!Empty(::cIdMotivo), ::cIdMotivo + " - " + ::cDescMotivo, "")
+    VEX->VEX_INTCON  := cIntegrou
+    VEX->VEX_CODVK5  := ::cCodigoVK5
+    VEX->VEX_CODUEV  := __cUserID
+    VEX->VEX_NOMUEV  := FWGetUserName(__cUserID)
+    ConfirmSX8()
+    MsUnlock()
+
+    ::AddHistoricoCache(cEvt)
+
+    RestArea(aArea)
+Return .T.
+
+/*/{Protheus.doc} AddHistoricoCache
+    Atualiza os arrays de cache de historico em memoria apos criacao de um
+    precursor via GarantirEventoPrecursor, sem necessidade de nova consulta ao banco.
+    Garante que verificacoes subsequentes na mesma execucao reflitam o novo registro.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cEvt  Character  Codigo do evento a adicionar ao cache
+    @return  Nil
+/*/
+Method AddHistoricoCache( cEvt ) Class OFSEventoControlTower
+
+    cEvt := AllTrim(cEvt)
+    If Empty(cEvt)
+        Return Nil
+    EndIf
+
+    // CHASSI (sempre)
+    If aScan(::aHistChassiAll, {|x| x == cEvt}) == 0  
+          AAdd(::aHistChassiAll, cEvt)  
+    EndIf
+    
+    If ::lIntegrou .And. aScan(::aHistChassiInt, {|x| x == cEvt}) == 0  
+        AAdd(::aHistChassiInt, cEvt)  
+    EndIf
+
+    // NUMAGE (quando disponível)
+    If !Empty(::cNumAge)
+        If aScan(::aHistNumAgeAll, {|x| x == cEvt}) == 0  
+            AAdd(::aHistNumAgeAll, cEvt)  
+        EndIf
+        If ::lIntegrou .And. aScan(::aHistNumAgeInt, {|x| x == cEvt}) == 0  
+            AAdd(::aHistNumAgeInt, cEvt)  
+        EndIf
+    EndIf
+
+    // NUMOS (quando disponível)
+    If !Empty(::cNumeroOS)
+        If aScan(::aHistNumOsAll, {|x| x == cEvt}) == 0  
+            AAdd(::aHistNumOsAll, cEvt)  
+        EndIf
+        If ::lIntegrou .And. aScan(::aHistNumOsInt, {|x| x == cEvt}) == 0  
+            AAdd(::aHistNumOsInt, cEvt)  
+        EndIf
+    EndIf
+
+Return Nil
+
+/*/{Protheus.doc} MontarTextoVK5
+    Monta o texto de log detalhado para o campo VK5_HISTOR.
+    Contem: status, evento, filial, chassi, OS, agendamento, orcamento,
+    data/hora de ocorrencia, contrato e resultado da integracao.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   cStatus  Character  Status VK5 para compor o texto de resultado
+    @return  Character  Texto formatado de log
+/*/
+Method MontarTextoVK5( cStatus ) Class OFSEventoControlTower
+
+    Local cLog  := ""
+    Local cDtHr := "[" + DtoC(FGX_TimeUF()[1] ) + " " + FGX_TimeUF()[2] + "] "
+    Local cSep  := "----------------------------------------" + CRLF
+
+    // --- Cabeçalho ---
+    cLog += cSep
+    cLog += cDtHr + STR0027 + cStatus + STR0028 // "STATUS VK5   : " + cStatus + " - "
+    Do Case
+        Case cStatus == VK5STATUS_PENDENTE         ;  cLog += STR0029 // "Pendente"
+        Case cStatus == VK5STATUS_EM_PROCESSAMENTO ;  cLog += STR0030 // "Em Processamento"
+        Case cStatus == VK5STATUS_SUCESSO          ;  cLog += STR0031 // "Sucesso"
+        Case cStatus == VK5STATUS_ERRO             ;  cLog += STR0032 // "Erro"
+        Case cStatus == VK5STATUS_CIENTE_ERRO      ;  cLog += STR0033 // "Ciente do Erro (descartado)"
+    EndCase
+    cLog += CRLF
+    cLog += cDtHr + STR0034 + ::cEvento + STR0028 + ::cDescricaoEvento + CRLF // "EVENTO       : " + ::cEvento + " - " + ::cDescricaoEvento
+    cLog += cDtHr + STR0035 + cFilAnt + CRLF // "FILIAL       : "
+
+    // --- Contexto do veículo/transação ---
+    cLog += cSep
+    cLog += cDtHr + STR0036 + ::cChassi + CRLF // "CHASSI EXT.  : "
+    cLog += cDtHr + STR0037 + ::cChassiInterno + CRLF // "CHASSI INT.  : "
+
+    If !Empty(::cNumAge)
+        cLog += cDtHr + STR0038 + ::cNumAge + CRLF // "AGENDAMENTO  : "
+    EndIf
+
+    If !Empty(::cNumeroOS)
+        cLog += cDtHr + STR0039 + ::cNumeroOS + CRLF // "OS           : "
+    EndIf
+
+    If !Empty(::cNumeroOrcamento)
+        cLog += cDtHr + STR0040 + ::cNumeroOrcamento + CRLF // "ORCAMENTO    : "
+    EndIf
+
+    If !Empty(::cDataHoraOcorrencia)
+        cLog += cDtHr + STR0041 + ::cDataHoraOcorrencia + CRLF // "DT/HR OCORR. : "
+    EndIf
+
+    If !Empty(::cTipoContrato) .And. !(Upper(::cTipoContrato) $ "NO_CONTRACT|UNABLE_TO_DETERMINE_CONTRACT")
+        cLog += cDtHr + STR0042 + ::cTipoContrato + CRLF // "CONTRATO     : "
+    EndIf
+
+    // --- Resultado ---
+    cLog += cSep
+    Do Case
+        Case cStatus == VK5STATUS_SUCESSO
+            cLog += cDtHr + STR0043 + STR0044 + CRLF // "RESULTADO    : Integracao concluida com sucesso"
+            If ValType(::oRest) == "O"
+                cLog += cDtHr + STR0045 + ::oRest:cHost + ::oRest:cPath + CRLF // "URL          : "
+                cLog += cDtHr + STR0046 + ::oRest:GetHttpCode() + CRLF // "HTTP STATUS  : "
+            EndIf
+
+        Case cStatus == VK5STATUS_ERRO
+            cLog += cDtHr + STR0043 + STR0047 + CRLF // "RESULTADO    : Falha na integracao"
+            cLog += cDtHr + STR0048 + ::cHistoricoVK5Observacao + CRLF // "MOTIVO       : "
+            If ValType(::oRest) == "O"
+                cLog += cDtHr + STR0045 + ::oRest:cHost + ::oRest:cPath + CRLF // "URL          : "
+                cLog += cDtHr + STR0046 + ::oRest:GetHttpCode() + CRLF // "HTTP STATUS  : "
+                cLog += cDtHr + STR0049 + ::oRest:GetLastError() + CRLF // "RESP. BODY   : "
+            EndIf
+
+        Case cStatus == VK5STATUS_PENDENTE
+            cLog += cDtHr + STR0043 + STR0050 + CRLF // "RESULTADO    : Evento suspenso - aguardando reprocessamento"
+            cLog += cDtHr + STR0048 + ::cHistoricoVK5Observacao + CRLF // "MOTIVO       : "
+
+        Case cStatus == VK5STATUS_CIENTE_ERRO
+            cLog += cDtHr + STR0043 + STR0051 + CRLF // "RESULTADO    : Evento descartado por regra de negocio"
+            cLog += cDtHr + STR0048 + ::cHistoricoVK5Observacao + CRLF // "MOTIVO       : "
+
+        Otherwise
+            cLog += cDtHr + STR0052 + ::cHistoricoVK5Observacao + CRLF // "OBSERVACAO   : "
+    EndCase
+
+    cLog += cSep
+
+Return cLog
+
+// ------------------------------------------------------------
+// APOIO
+// ------------------------------------------------------------
+
+/*/{Protheus.doc} ObterSISID
+    Busca o identificador da concessionaria (SISID) na lista COTO_GCONC
+    da configuracao, filtrando pelo codigo de filial atual (cFilAnt).
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Character  Identificador da concessionaria ou "" se nao encontrado
+/*/
+Method ObterSISID() Class OFSEventoControlTower
+
+    Local aConc := {}
+    Local nX    := 0
+
+    If ValType(::oConfig) != "J" .Or. !::oConfig:HasProperty("COTO_GCONC")
+        Return ""
+    EndIf
+
+    aConc := ::oConfig["COTO_GCONC"]
+
+    For nX := 1 To Len(aConc)
+        If aConc[nX]["COTO_GCONC_FILIAL"] == cFilAnt
+            Return aConc[nX]["COTO_GCONC_ID"]
+        EndIf
+    Next
+
+Return ""
+
+/*/{Protheus.doc} CalcularTempoPadraoOS
+    Calcula o tempo padrao da OS em segundos somando VS4_TEMPAD das operacoes
+    vinculadas ao orcamento (::cNumeroOrcamento), excluindo tipos de servico
+    com VOK_INCMOB em ('3','5').
+    Converte o valor de centesimos de hora para segundos inteiros.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @return  Numeric  Tempo total em segundos ou 0 se nao calculado
+/*/
+Method CalcularTempoPadraoOS() Class OFSEventoControlTower
+    
+    Local aArea   := GetArea()
+    Local cQuery  := ""
+    Local nTempo  := 0
+    Local cAlias  := GetNextAlias()
+    Local oStmt   := FWPreparedStatement():New()
+    
+
+    If Empty(::cNumeroOS) .Or. Empty(::cNumeroOrcamento)
+        RestArea(aArea)
+        Return 0
+    EndIf
+
+    cQuery  = " SELECT SUM(VS4.VS4_TEMPAD) AS TEMPTOTAL"
+    cQuery += " FROM " + RetSQLName("VS4") + " VS4"
+    cQuery += " JOIN " + RetSQLName("VOK") + " VOK"
+    cQuery += "   ON VOK.VOK_FILIAL = ? AND VOK.VOK_TIPSER = VS4.VS4_TIPSER"
+    cQuery += "  AND VOK.VOK_INCMOB NOT IN ('3','5') AND VOK.D_E_L_E_T_ = ' '"
+    cQuery += " WHERE VS4.VS4_FILIAL = ?"
+    cQuery += "   AND VS4.VS4_NUMORC = ?"
+    cQuery += "   AND VS4.VS4_TEMPAD > 0 AND VS4.D_E_L_E_T_ = ' '"
+
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, FWxFilial("VOK"))
+    oStmt:SetString(2, FWxFilial("VS4"))
+    oStmt:SetString(3, AllTrim(::cNumeroOrcamento))
+
+    cQuery := oStmt:GetFixQuery()
+    cAlias := MPSysOpenQuery(cQuery)
+
+    If !(cAlias)->(EoF()) .And. !Empty((cAlias)->TEMPTOTAL)
+        nTempo := Int((Val(Str((cAlias)->TEMPTOTAL)) / 100) * 3600)
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+    RestArea(aArea)
+
+Return nTempo
+
+/*/{Protheus.doc} NormalizarHora
+    Normaliza hora para o formato "HH:MM" aceitando entrada Numeric (HHMM)
+    ou Character ("HHMM" ou "HH:MM"). Retorna "" se invalida (HH > 23 ou MM > 59).
+    Metodo publico — tambem chamado por OFIOM350 e similares.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   xHora  Character|Numeric  Hora a normalizar
+    @return  Character  Hora no formato "HH:MM" ou ""
+/*/
+Method NormalizarHora( xHora ) Class OFSEventoControlTower
+
+    Local cHora := ""
+
+    If ValType(xHora) == "N"
+        cHora := StrZero(Int(xHora), 4)
+    Else
+        cHora := AllTrim(xHora)
+    EndIf
+
+    If Empty(cHora)
+        Return ""
+    EndIf
+
+    // Já no formato HH:MM
+    If Len(cHora) == 5 .And. SubStr(cHora, 3, 1) == ":"
+        Return cHora
+    EndIf
+
+    // Formato HH:MM:SS — descarta os segundos, reusa validação abaixo
+    If Len(cHora) == 8 .And. SubStr(cHora, 3, 1) == ":" .And. SubStr(cHora, 6, 1) == ":"
+        cHora := Left(cHora, 5)
+        Return cHora
+    EndIf
+
+    cHora := StrZero(Val(StrTran(cHora, ":", "")), 4)
+
+    If Val(Left(cHora, 2)) > 23 .Or. Val(SubStr(cHora, 3, 2)) > 59
+        Return ""
+    EndIf
+
+Return Left(cHora, 2) + ":" + SubStr(cHora, 3, 2)
+
+/*/{Protheus.doc} DateToJulian
+    Converte um valor Date para numero juliano.
+    Utilizado por ClassificarAgendadoOuPassante para calcular diferenca
+    de tempo em minutos entre duas datas com hora.
+
+    @type    Method
+    @author  Lucas Brustolin
+    @since   07/02/2026
+    @param   dData  Date  Data a converter
+    @return  Numeric  Numero juliano correspondente
+/*/
+Method DateToJulian( dData ) Class OFSEventoControlTower
+
+    Local nY := Year(dData)
+    Local nM := Month(dData)
+    Local nD := Day(dData)
+    Local nA := Int((14 - nM) / 12)
+
+    nY := nY + 4800 - nA
+    nM := nM + (12 * nA) - 3
+
+Return nD + Int((153 * nM + 2) / 5) + (365 * nY) + Int(nY / 4) - Int(nY / 100) + Int(nY / 400) - 32045
+
+/*/{Protheus.doc} GetVEWHistoricoPassagem
+    Retorna o código correto da VEW do processo em aberto
+    @author Lucas Oliveira
+    @since 08/06/2026
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method GetVEWHistoricoPassagem( cEvt, lExisteVEW ) Class OFSEventoControlTower
+
+    Local cCodigoVEW    := ""
+    Default lExisteVEW  := .F.
+
+    // --- VEW: localiza ou cria registro mestre ---
+    DbSelectArea("VEW")
+    Do Case
+        Case (	cEvt == EVT_AGENDAMENTO		.Or. ;
+				cEvt == EVT_REAGENDAMENTO 	.Or. ;
+				cEvt == EVT_CANCELAMENTO_AGENDAMENTO) .And. !Empty(::cNumAge)
+
+            VEW->(DbSetOrder(2))    // VEW_FILIAL + VEW_NUMAGE
+            lExisteVEW := VEW->(DbSeek(xFilial("VEW") + ::cNumAge))
+        
+		Case (	cEvt == EVT_OS_ABERTA_SEM_ORCAMENTO		.Or. ;
+				cEvt == EVT_OS_ABERTA_AGUARD_CREDITO 	.Or. ;
+				cEvt == EVT_OS_ABERTA_AGUARD_APROV_ORC 	.Or. ;
+				cEvt == EVT_ORC_APROVADO_AGUARD_SERVICO .Or. ;
+				cEvt == EVT_SERVICO_EM_ANDAMENTO 		.Or. ;
+				cEvt == EVT_SERVICO_INTERROMPIDO 		.Or. ;
+				cEvt == EVT_SERVICO_PENDENTE 			.Or. ;
+				cEvt == EVT_SERVICO_FINALIZADO			.Or. ;
+				cEvt == EVT_VEICULO_LIBERADO			.Or. ;
+				cEvt == EVT_OS_FECHADA_PROC_FINALIZADO) .And. !Empty(::cNumeroOS)
+
+                If !Empty(::cNumAge)
+                    VEW->(DbSetOrder(2))    // VEW_FILIAL + VEW_NUMAGE
+                    lExisteVEW := VEW->(DbSeek(xFilial("VEW") + ::cNumAge))
+                Else
+                    VEW->(DbSetOrder(4))    // VEW_FILIAL + VEW_NUMEOS
+            	    lExisteVEW := VEW->(DbSeek(xFilial("VEW") + ::cNumeroOS))
+
+                Endif
+    EndCase
+
+    If lExisteVEW
+        cCodigoVEW := VEW->VEW_CODIGO
+    Endif
+
+Return cCodigoVEW
+
+/*/{Protheus.doc} SeparaDataHora
+    (long_description)
+    @author user
+    @since 09/06/2026
+    @version version
+    @param param_name, param_type, param_descr
+    @return return_var, return_type, return_description
+    /*/
+Method SeparaDataHora( cDataHora ) Class OFSEventoControlTower
+
+    Local dData    := Ctod("")
+    Local cHora    := ""
+    Local cDtStr   := ""
+    Local cHrStr   := ""
+
+    Default cDataHora := ""
+
+    If !Empty(cDataHora)
+
+        cDtStr := Left(AllTrim(cDataHora), 10)
+        cHrStr := SubStr(AllTrim(cDataHora), 12, 5)
+
+        If Len(cDtStr) == 10
+            dData := Ctod(cDtStr)
+        EndIf
+
+        If Len(cHrStr) == 5
+            cHora := StrTran(cHrStr, ":", "")
+        EndIf
+
+    EndIf
+
+Return { dData, cHora }

@@ -1,0 +1,548 @@
+#INCLUDE "TLPP-CORE.TH"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "TAFXFIN.CH"
+#INCLUDE "FWMVCDEF.CH"
+
+namespace totvs.protheus.fiscal.taf.financialintegration
+
+Static __oTemp			:= Nil 	as object
+Static __oUpdateLEM		:= Nil 	as object
+Static __oUpdateStatusLEM:= Nil as object
+Static __oInsertLEM		:= Nil 	as object
+Static __oInsertV3U		:= Nil 	as object
+Static __oUpdateV3U		:= Nil 	as object
+Static __oUpdateStatusV3U:= Nil as object
+Static __oQueryCR9		:= Nil as object
+Static __oQueryC1E		:= Nil as object
+Static __oV3U			:= Nil 	as object
+Static __cAliasTemp		:= "" 	as character
+
+
+/*/{Protheus.doc} TAFstartsintegrationfinance
+@type			Function
+@description	Inicia o processo de integração FINANCEIRO X TAF, para gravação dos registros REINF/MIT
+via Smart Schedule
+@param cChaveMov - chave do movimento - chave do título ou chave da baixa
+@param cMovimento - Identificação do movimento (1-Inclusão/2-Alteração/3-Deleção/4-Baixa/5-Cancelamento de baixa)
+@param cMovFin - Tipo de registro gravado - (1 - MIT/2-REINF)
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Function TAFstartsintegrationfinance(cChaveMov as character, cMovimento as character, cMovFin as character)
+
+	Local cFilBkp := cFilAnt as character
+	Local lNewthread := .F. as logical
+	Local aAreaAtv  :=  GetArea()
+	Local lIntTAF		:= FindFunction('TafUsaISCH') .And. TafUsaISCH()	    as logical
+
+	Default cChaveMov 	:= ""
+	Default cMovimento 	:= ""
+	Default cMovFin 	:= ""
+
+	If cMovFin == "2"
+		cFilAnt := Buscafilialcentralizadora()
+	EndIf
+	lNewthread := cMovimento=="3" .Or. cMovimento =="5" .Or. cMovFin == "1"
+	If lIntTAF .and. LockByName( cChaveMov, .T., .T. )
+		If cMovimento <= "3"
+			LEM->(DbSetOrder(8))
+			If !LEM->(DbSeek(xFilial("LEM")+cChaveMov))
+				RecLock("LEM", .T.)
+					LEM->LEM_FILIAL := xFilial("LEM")
+					LEM->LEM_ID		:= TAFGeraID()	
+					LEM->LEM_INTEGR := "1"
+					LEM->LEM_IDDOC	:= cChaveMov
+					LEM->LEM_MOVFIN	:= cMovFin
+					LEM->LEM_FILORI := cFilBkp
+				LEM->(MsUnLock())
+			Else
+				If cMovFin == "1"
+					RecLock("LEM", .F.)
+						LEM->LEM_INTEGR := cMovimento
+					LEM->(MsUnLock())
+				Else
+					TAFStatusLEM(cChaveMov, cMovimento)	
+				EndIf
+			EndIf
+		Else
+			V3U->(DbSetOrder(4))
+			If !V3U->(DbSeek(xFilial("V3U")+cChaveMov))
+				RecLock("V3U", .T.)
+					V3U->V3U_FILIAL := xFilial("V3U")
+					V3U->V3U_ID		:= TAFGeraID()	
+					V3U->V3U_INTEGR := "1"
+					V3U->V3U_IDBAIX:= cChaveMov
+					V3U->V3U_MOVFIN	:= cMovFin
+					V3U->V3U_FILORI	:= cFilBkp
+				V3U->(MsUnLock())
+			Else
+				TAFStatusV3U(cChaveMov, "2")
+			EndIf
+		EndIf
+		//Inicia o processo de agendamento Smart Schedule
+		TAFSchedulerFinancial(lNewthread)
+		UnLockByName(cChaveMov,.T.,.T.)
+		cFilAnt := cFilBkp
+	Endif
+	RestArea(aAreaAtv)
+
+Return .T.
+
+/*/{Protheus.doc} TAFSchedulerFinancial 
+Inicia uma task para integração dos movimentos financeiro via schedule
+@param lNewthread indica se cada task será uma nova thread 
+@type static function
+@author Pâmela Bernardo
+@since 06/03/2025
+@version 1.0
+@return Nil
+/*/
+Static Function TAFSchedulerFinancial(lNewthread)
+	Local cAmbiente:= "" as character
+
+	TAFConout(STR0001,,, STR0002) // "O processo de integração via Smart Schedule está habilitado." / "INTEGRAÇÃO FINANCEIRO X TAF"
+	cAmbiente:= TafContScd()
+	//As validações referente ao Smart Schedule devem ser retiradas assim que estiver confirmado que todas as suas funcionalidades estarão disponível
+	//no rpo do ARTE para teste. Nesse momento esta em uso somente para controle interno.
+	If !Empty(cAmbiente)
+		If totvs.framework.schedule.utils.createTask(cAmbiente, /*cEmpAnt*/, /*cFilAnt*/, 'TAFA621FIN', 84, __cUserID, '', {}, lNewthread) == Nil
+			TAFConout(STR0003, 3,, STR0002)
+		Else
+			TAFConout(STR0004,,, STR0002) // "Processo de integração enviado para a fila de processamento do Smart Schedule." / "INTEGRAÇÃO FINANCEIRO X TAF"
+		EndIf
+	Else
+		TAFConout(STR0010)	//SmartSchedule não esta ativo ou habilitado, favor contate o administrador!
+	EndIf
+	
+Return
+
+/*/{Protheus.doc} TAFfinancialintegration
+@type			Function
+@description	Função responsável pela integração FINANCEIRO X TAF
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Function TAFfinancialintegration()
+	Local oRetornoFin	as object
+	Local jDadosFinanceiro	:= JSONObject():new() as json
+	Local aStruct		:= {} as array
+	Local cChave		:= "" as character
+	Local cChaveTitulo	:= "" as character
+	Local cChaveBackup	:= "" as character
+	Local aDadosLog		:= {} as array
+	Local cKeyErp		:= "" as character
+	Local cIdDoc		:= "" as character
+	Local lRetorno		:= .F. as logical
+	Local cFilBkp		:= cFilAnt as character
+	Local cFilOrigem	:= cFilAnt as character
+	Local cMovimento	:= "" as character
+
+	Private oStPesquisaLog as object
+
+	AADD(aStruct,{"TMP_FILIAL","C",TamSX3("LEM_FILIAL")[1],0})
+	AADD(aStruct,{"TMP_ID","C",TamSX3("LEM_ID")[1],0})
+	AADD(aStruct,{"TMP_IDMOV" ,"C",TamSX3("LEM_IDDOC")[1],0})
+	AADD(aStruct,{"TMP_MOVFIN","C",TamSX3("LEM_MOVFIN")[1],0})
+	AADD(aStruct,{"TMP_INTEGR","C",TamSX3("LEM_INTEGR")[1],0})
+	AADD(aStruct,{"TMP_MOVORI","C",3,0})
+	AADD(aStruct,{"TMP_FILORI","C",TamSX3("V3U_FILORI")[1],0})
+	
+	TAFConout(STR0005,,, STR0002) // "Processo de integração via Smart Schedule iniciado." / "INTEGRAÇÃO LIVROS FISCAIS X TAF"
+	If Empty(__cAliasTemp)
+		__cAliasTemp 	:= GetNextAlias()
+	EndIf
+
+	If __oTemp == Nil
+		__oTemp := FwTemporaryTable():New(__cAliasTemp,aStruct)
+		__oTemp:AddIndex("1",{"TMP_FILIAL","TMP_IDMOV"})
+		__oTemp:Create()
+	EndIf
+	Begin Transaction
+		TAFfetchesdataLEM()
+		TAFfetchesdataV3U()
+
+		(__cAliasTemp)->(DbGoTop())
+		
+		While(__cAliasTemp)->(!Eof())
+			//Chamada da função financeiro
+			cChave := (__cAliasTemp)->TMP_ID
+			cChaveTitulo := (__cAliasTemp)->TMP_IDMOV
+			If (__cAliasTemp)->TMP_MOVORI == "LEM"
+				cMovimento := (__cAliasTemp)->TMP_INTEGR
+			Else
+				If (__cAliasTemp)->TMP_INTEGR == "1"
+					cMovimento := "4"
+				Else
+					cMovimento := "5"
+				EndIf
+			EndIf
+			If cChaveTitulo <> cChaveBackup .Or. cMovimento == "3"
+				cChaveBackup := cChaveTitulo
+				TAFConout(STR0007+cChave,,, STR0002) //"Processando regitro - "
+				If !Empty((__cAliasTemp)->TMP_FILORI)
+					cFilOrigem := (__cAliasTemp)->TMP_FILORI
+				EndIf
+				cFilAnt := cFilOrigem
+				oRetornoFin:= totvs.protheus.backoffice.fin.taf.smartschedule.DataBlocksResponse():new(cChaveTitulo,(__cAliasTemp)->TMP_MOVFIN,cMovimento)
+				jDadosFinanceiro:= oRetornoFin:getJsonBlocks()
+				cFilAnt := cFilBkp
+				lRetorno := financialrecording(jDadosFinanceiro, @aDadosLog)
+
+				If !lRetorno
+					TAFConout(STR0008+cChave+"-"+(__cAliasTemp)->TMP_MOVORI,,, STR0002) //"Falha no processamento do registro "
+					If Len(aDadosLog) = 0
+						aDadosLog := {(__cAliasTemp)->TMP_MOVORI, cChave, '', '', .T., ''}
+					Endif
+							
+					If (__cAliasTemp)->TMP_MOVORI == "LEM" 
+						LEM->(DbSetOrder(1))
+						If LEM->(msSeek((__cAliasTemp)->TMP_FILIAL+(__cAliasTemp)->TMP_ID))
+							RecLock("LEM",.F.)
+								LEM->LEM_INTEGR := (__cAliasTemp)->TMP_INTEGR
+							LEM->(MsUnLock())
+						EndIf
+						cIdDoc := (__cAliasTemp)->TMP_IDMOV
+					Else
+						V3U->(DbSetOrder(1))
+						If V3U->(msSeek((__cAliasTemp)->TMP_FILIAL+(__cAliasTemp)->TMP_ID))
+							RecLock("V3U",.F.)
+								V3U->V3U_INTEGR := (__cAliasTemp)->TMP_INTEGR
+							V3U->(MsUnLock())
+						EndIf
+						cIdDoc := Posicione("FK2",1,xFilial("FK2",cFilOrigem)+(__cAliasTemp)->TMP_IDMOV ,"FK2_IDDOC")
+					EndIf
+					FK7->(DbSetOrder(1))
+					If FK7->(MsSeek(xFilial("FK7",cFilOrigem)+cIdDoc))
+						cKeyErp	:= ( iif(FK7->FK7_ALIAS == 'SE2','0','1' ) +'|'+;
+						Dtos(dDataBase) +'|'+;
+						FK7->FK7_PREFIX   +'|'+; 
+						FK7->FK7_NUM +'|'+;
+						FK7->FK7_CLIFOR +'|'+;
+						FK7->FK7_LOJA)
+					EndIf	
+					LogIntegra( aDadosLog, cKeyErp )
+				EndIf
+				cFilAnt := cFilOrigem
+				oRetornoFin:handleIntegrationResult(lRetorno)
+				cFilAnt := cFilBkp
+			EndIf
+			(__cAliasTemp)->(DBSkip())
+		EndDo
+	End transaction
+	//---------------------------------
+	//Exclui a tabela
+	//---------------------------------
+	__oTemp:Delete()
+	__oTemp := Nil
+
+	TAFConout(STR0006,,, STR0002) //"Final processo da integração via Smart Schedule "
+
+Return .T.
+
+/*/{Protheus.doc} TAFfetchesdataLEM
+@type			Function
+@description	Função para busca de registros na LEM pendentes de integração
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Static Function TAFfetchesdataLEM()
+	Local cInsert 		:= "" as character
+	Local cUpdate 		:= "" as character
+	Local cError		:= "" as character
+	Local cSetStatus 	:= "4" as character
+
+	If __oTemp <> Nil
+		If __oInsertLEM == Nil
+			cInsert := " INSERT INTO ? (TMP_FILIAL, TMP_ID, TMP_IDMOV, TMP_MOVFIN, TMP_INTEGR, TMP_MOVORI, TMP_FILORI) "
+			cInsert += " SELECT LEM.LEM_FILIAL, LEM.LEM_ID, LEM.LEM_IDDOC, LEM.LEM_MOVFIN, LEM.LEM_INTEGR, 'LEM' MOVIORI, LEM.LEM_FILORI "
+			cInsert += " FROM "+RetSQLName("LEM")+" LEM "
+			cInsert += " WHERE LEM.LEM_FILIAL = ? AND "
+			cInsert += " LEM.LEM_IDDOC != ? AND "
+			cInsert += " LEM.LEM_INTEGR <= ? AND "
+			cInsert += " LEM.D_E_L_E_T_ = ? "
+			__oInsertLEM := FwExecStatement():New(cInsert)
+
+		EndIf
+		If __oInsertLEM <> Nil
+			__oInsertLEM:SetUnsafe(1, __oTemp:GetRealName())
+			__oInsertLEM:SetString(2, xFilial("LEM"))
+			__oInsertLEM:SetString(3, ' ')
+			__oInsertLEM:SetString(4, '3')
+			__oInsertLEM:SetString(5, ' ')
+				
+			cInsert := __oInsertLEM:GetFixQuery()
+			If !TAFExecQuery(cInsert, .T., @cError)
+				TAFConOut(cError, 3,, STR0002)
+			EndIf
+		EndIf
+
+		If __oUpdateLEM == Nil
+			cUpdate:="UPDATE "+RetSQLName("LEM")+" SET LEM_INTEGR = ? "
+			cUpdate+= "WHERE LEM_IDDOC IN( "
+				cUpdate+= "SELECT TMP.TMP_IDMOV FROM ? TMP WHERE TMP.D_E_L_E_T_ = ? AND TMP.TMP_MOVORI = ?"
+			cUpdate+= ") AND D_E_L_E_T_ = ? "
+
+			__oUpdateLEM := FwExecStatement():New(cUpdate)
+		EndIf
+		If __oUpdateLEM <> Nil
+			__oUpdateLEM:SetString(1, cSetStatus)
+			__oUpdateLEM:SetUnsafe(2, __oTemp:GetRealName())
+			__oUpdateLEM:SetString(3, ' ')
+			__oUpdateLEM:SetString(4, 'LEM')
+			__oUpdateLEM:SetString(5, ' ')
+				
+			cUpdate := __oUpdateLEM:GetFixQuery()
+			If !TAFExecQuery(cUpdate, .T., @cError)
+				TAFConOut(cError, 3,, STR0002)
+			EndIf
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} TAFfetchesdataV3U
+@type			Function
+@description	Função para busca de registros na V3U pendentes de integração
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Static Function TAFfetchesdataV3U()
+	Local cInsert 		:= "" as character
+	Local cUpdate 		:= "" as character
+	Local cError		:= "" as character
+	Local cSetStatus 	:= "3" as character
+
+	If __oTemp <> Nil
+		If __oInsertV3U == Nil
+			cInsert := " INSERT INTO ? (TMP_FILIAL, TMP_ID, TMP_IDMOV, TMP_MOVFIN, TMP_INTEGR, TMP_MOVORI, TMP_FILORI) "
+			cInsert += " SELECT V3U.V3U_FILIAL, V3U.V3U_ID, V3U.V3U_IDBAIX, V3U.V3U_MOVFIN, V3U.V3U_INTEGR, 'V3U' MOVIORI, V3U.V3U_FILORI "
+			cInsert += " FROM "+RetSQLName("V3U")+" V3U "
+			cInsert += " WHERE V3U.V3U_FILIAL = ? AND "
+			cInsert += " V3U.V3U_IDBAIX != ? AND "
+			cInsert += " V3U.V3U_INTEGR <= ? AND "
+			cInsert += " V3U.D_E_L_E_T_ = ? "
+			__oInsertV3U := FwExecStatement():New(cInsert)
+
+		EndIf
+		If __oInsertV3U <> Nil
+			__oInsertV3U:SetUnsafe(1, __oTemp:GetRealName())
+			__oInsertV3U:SetString(2, xFilial("V3U"))
+			__oInsertV3U:SetString(3, ' ')
+			__oInsertV3U:SetString(4, '2')
+			__oInsertV3U:SetString(5, ' ')
+				
+			cInsert := __oInsertV3U:GetFixQuery()
+			If !TAFExecQuery(cInsert, .T., @cError)
+				TAFConOut(cError, 3,, STR0002)
+			EndIf
+		EndIf
+		
+		If __oUpdateV3U == Nil
+			cUpdate:="UPDATE "+RetSQLName("V3U")+" SET V3U_INTEGR = ? "
+			cUpdate+= "WHERE V3U_IDBAIX IN( "
+				cUpdate+= "SELECT TMP.TMP_IDMOV FROM ? TMP WHERE TMP.D_E_L_E_T_ = ? AND TMP.TMP_MOVORI = ?"
+			cUpdate+= ") AND D_E_L_E_T_ = ? "
+
+			__oUpdateV3U := FwExecStatement():New(cUpdate)
+		EndIf
+		If __oUpdateV3U <> Nil
+			__oUpdateV3U:SetString(1, cSetStatus)
+			__oUpdateV3U:SetUnsafe(2, __oTemp:GetRealName())
+			__oUpdateV3U:SetString(3, ' ')
+			__oUpdateV3U:SetString(4, 'V3U')
+			__oUpdateV3U:SetString(5, ' ')
+				
+			cUpdate := __oUpdateV3U:GetFixQuery()
+			If !TAFExecQuery(cUpdate, .T., @cError)
+				TAFConOut(cError, 3,, STR0002)
+			EndIf
+		EndIf
+	EndIf
+
+Return
+
+
+/*/{Protheus.doc} financialrecording
+@type			Function
+@description	Função de gravação do retorno financeiro nas tabelas do TAF
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Static Function financialrecording(jRetornoFin as json, aDadosLog as array) as logical
+	Local lGravadados := .F. as Logical
+	Local cRegistro	  := "" as character
+	Local nTotalJson  := 0 as Numeric
+	Local nX  		  := 0 as Numeric
+		
+	nTotalJson := Len(jRetornoFin:GetNames())
+	lGravadados := nTotalJson>0
+	For nX:=1 to nTotalJson
+		cRegistro := jRetornoFin:GetNames()[nX]
+		Do Case
+			Case cRegistro == "T001AB" .And. lGravadados //Processos referenciados;
+				lGravadados := GravaT001AB(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "T003" .And. lGravadados //Participante
+				lGravadados := GravaT003(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "T154" .And. lGravadados //inclusão de título REINF
+				lGravadados := GravaT154(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "T157" .And. lGravadados //Cadastro de mão de obra
+				lGravadados := GravaT157(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "T158" .And. lGravadados //Baixa de título REINF
+				lGravadados := GravaT158(jRetornoFin[cRegistro],@aDadosLog,__cAliasTemp)
+			Case cRegistro == "T159" .And. lGravadados //cadastro de SCP/FCI
+				lGravadados := GravaT159(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "T162" .And. lGravadados //inclusão de título a receber REINF
+				lGravadados := GravaT162(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "MIT" .And. lGravadados //inclusão de título 
+				lGravadados := GravaMIT(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+			Case cRegistro == "T999" .And. lGravadados //Deleção
+				lGravadados := GravaT999(jRetornoFin[cRegistro], @aDadosLog,__cAliasTemp)
+		EndCase
+	
+	Next nX
+
+Return lGravadados
+
+/*/{Protheus.doc} TAFStatusLEM
+@type			Function
+@description	Função para busca de registros na LEM pendentes de integração
+@param cChaveMov - chave do movimento - chave do título ou chave da baixa
+@param cMovimento - Identificação do movimento (1-Inclusão/2-Alteração/3-Deleção/4-Baixa/5-Cancelamento de baixa)
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Static Function TAFStatusLEM(cChaveMov, cMovimento)
+	Local cUpdate 		:= "" as character
+	Local cError		:= "" as character
+
+	If __oUpdateStatusLEM == Nil
+		cUpdate:="UPDATE "+RetSQLName("LEM")+" SET LEM_INTEGR = ? "
+		cUpdate+= "WHERE LEM_IDDOC = ? "
+		cUpdate+= " AND D_E_L_E_T_ = ? "
+
+		__oUpdateStatusLEM := FwExecStatement():New(cUpdate)
+	EndIf
+	If __oUpdateStatusLEM <> Nil
+		__oUpdateStatusLEM:SetString(1, cMovimento)
+		__oUpdateStatusLEM:SetString(2, cChaveMov)
+		__oUpdateStatusLEM:SetString(3, ' ')
+
+		cUpdate := __oUpdateStatusLEM:GetFixQuery()
+		If !TAFExecQuery(cUpdate, .T., @cError)
+			TAFConOut(cError, 3,, STR0002)
+		EndIf
+	EndIf
+	
+Return .T.
+
+/*/{Protheus.doc} TAFStatusV3U
+@type			Function
+@description	Função para busca de registros na V3U pendentes de integração
+@param cChaveMov - chave do movimento - chave do título ou chave da baixa
+@param cMovimento - Identificação do movimento (1-Inclusão/2-Alteração/3-Deleção/4-Baixa/5-Cancelamento de baixa)
+@author			Pâmela Bernardo
+@since			06/03/2025
+@version		1.0
+/*/
+Static Function TAFStatusV3U(cChaveMov, cMovimento)
+	Local cUpdate 		:= "" as character
+	Local cError		:= "" as character
+
+	If __oUpdateStatusV3U == Nil
+		cUpdate:="UPDATE "+RetSQLName("V3U")+" SET V3U_INTEGR = ? "
+		cUpdate+= "WHERE V3U_IDBAIX = ? "
+		cUpdate+= " AND D_E_L_E_T_ = ? "
+
+		__oUpdateStatusV3U := FwExecStatement():New(cUpdate)
+	EndIf
+	If __oUpdateStatusV3U <> Nil
+		__oUpdateStatusV3U:SetString(1, cMovimento)
+		__oUpdateStatusV3U:SetString(2, cChaveMov)
+		__oUpdateStatusV3U:SetString(3, ' ')
+
+		cUpdate := __oUpdateStatusV3U:GetFixQuery()
+		If !TAFExecQuery(cUpdate, .T., @cError)
+			TAFConOut(cError, 3,, STR0002)
+		EndIf
+	EndIf
+Return .T.
+
+/*/{Protheus.doc} Buscafilialcentralizadora
+@type			Function
+@description	Função para buscar a filial centralizada onde ocorrerá a integração
+@author			Pâmela Bernardo
+@since			02/07/2025
+@version		1.0
+/*/
+Static Function Buscafilialcentralizadora()
+
+	Local cFilRet := "" as character
+	Local cQuery  := "" as character
+	Local lCentraliza  := SuperGetMV("MV_TAFCSCP", .F., "2")=="1" as logical
+
+	If lCentraliza
+	
+		If __oQueryC1E == Nil
+			cQuery := " SELECT C1E_FILTAF FILIAL "
+			cQuery += " FROM "+RetSQLName("C1E")+" C1E "
+			cQuery += " WHERE "
+			cQuery += " C1E_FILIAL = ? AND "
+			cQuery += " C1E_CODFIL = ? AND "
+			cQuery += " C1E_ATIVO = ? AND "
+			cQuery += " C1E.D_E_L_E_T_ = ? "
+			cQuery := ChangeQuery(cQuery)
+			__oQueryC1E := FwExecStatement():New(cQuery)
+		EndIf
+
+		If __oQueryC1E!=Nil
+			__oQueryC1E:setString(1, xFilial("C1E") )
+			__oQueryC1E:setString(2, cEmpAnt+cFilAnt )
+			__oQueryC1E:setString(3, "1" )
+			__oQueryC1E:setString(4, ' ' )
+			cQuery := __oQueryC1E:GetFixQuery()
+			cFilRet := MPSysExecScalar(cQuery, 'FILIAL')
+
+		EndIf
+
+		If Empty(cFilRet)
+			If __oQueryCR9 == Nil
+				cQuery := " SELECT C1E_FILTAF FILIAL "
+				cQuery += " FROM "+RetSQLName("C1E")+" C1E "
+				cQuery += " INNER JOIN "+RetSQLName("CR9")+" CR9 ON "
+				cQuery += " CR9.CR9_FILIAL = C1E.C1E_FILIAL AND "
+				cQuery += " CR9.CR9_ID = C1E.C1E_ID AND "
+				cQuery += " CR9_CODFIL = ? AND "
+				cQuery += " CR9_ATIVO = ? AND "
+				cQuery += " CR9.D_E_L_E_T_ = ? "
+				cQuery += " WHERE "
+				cQuery += " C1E_FILIAL = ? AND "
+				cQuery += " C1E_ATIVO = ? AND "
+				cQuery += " C1E.D_E_L_E_T_ = ? "
+				cQuery := ChangeQuery(cQuery)
+				__oQueryCR9 := FwExecStatement():New(cQuery)
+			EndIf
+
+			If __oQueryCR9 != Nil
+				__oQueryCR9:setString(1, cEmpAnt+cFilAnt )
+				__oQueryCR9:setString(2, "1" )
+				__oQueryCR9:setString(3, ' ' )
+				__oQueryCR9:setString(4, xFilial("C1E") )
+				__oQueryCR9:setString(5, "1" )
+				__oQueryCR9:setString(6, ' ' )
+				cQuery := __oQueryCR9:GetFixQuery()
+				cFilRet := MPSysExecScalar(cQuery, 'FILIAL')
+				If Empty(cFilRet)
+					cFilRet:= cFilant
+				EndIf
+			EndIf
+		EndIf
+	Else
+		cFilRet:= cFilant
+	EndIf
+Return cFilRet

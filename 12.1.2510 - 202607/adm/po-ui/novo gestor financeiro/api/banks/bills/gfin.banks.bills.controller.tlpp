@@ -1,0 +1,374 @@
+#include "tlpp-core.th"
+#include 'GFIN.BANKS.BILLS.CONTROLLER.CH'
+#Include 'TOTVS.CH'
+
+namespace gfin.api.banks.bills
+using namespace gfin.util
+
+/*/{Protheus.doc} BillsEmail
+Envio de Boleto por E-mail
+
+@author alison.kaique
+@since 23/05/2021
+/*/
+@POST('/api/gfin/v1/Banks/Bills/Email')
+Function BillsEmail()
+	Local oResponse     As Json
+	Local oService      := BanksBillsService():New() As Object
+	Local oBody         As Json
+	Local cBodyContent  As Character
+
+	oBody        := JsonObject():new()
+	cBodyContent := oBody:fromJson(oRest:GetBodyRequest())
+	If !(Empty(cBodyContent))
+		oResponse := answerErrorFormat(403, 'body', STR0001 + cBodyContent) // #"Objeto JSON inválido: "
+	ElseIf oBody:hasProperty('sendAll') .and. oBody['sendAll']
+		oResponse := oService:sendAllEmail()
+	ElseIf oBody:hasProperty('markToSend') .and. oBody['markToSend']
+		oResponse := oService:sendMarkEmail(oBody)
+	ElseIf !(validBody(oBody))
+		oResponse := answerErrorFormat(412, 'body', STR0002) // #"Não foram recebidos dados obrigatórios para localização do Título Financeiro."
+	Else
+		oResponse := oService:sendEmail(oBody)
+	EndIf
+
+	AnswerRest(oResponse)
+	FreeObj(oService)
+	FreeObj(oResponse)
+Return
+
+/*/
+{Protheus.doc} validBody
+Validação do body recebido
+
+@param oBody, object, body recebido
+
+@return lRet, logical, .T. para body válido
+
+@author alison.kaique
+@since 23/05/2021
+/*/
+Static Function validBody(oBody As Json) As Logical
+	Local lRet    As Logical
+	Local aNames  As Array
+	Local aFields As Array
+	Local nIndex  As numeric
+
+	lRet := .T.
+
+	// recupera as propriedades do body
+	aNames := oBody:getNames()
+
+	// define os campos obrigatórios
+	aFields := {}
+	AAdd(aFields, 'ea_prefixo') // prefixo do título
+	AAdd(aFields, 'ea_num') // número do título
+	AAdd(aFields, 'ea_parcela') // parcela do título
+	AAdd(aFields, 'ea_tipo') // tipo do título
+
+	// valida se o body está em branco ou não possui todas as propriedades
+	If (Len(aNames) == 0)
+		lRet := .F.
+	Else
+		For nIndex := 01 To Len(aFields)
+			If (AScan(aNames, {|x| AllTrim(x) == AllTrim(aFields[nIndex])}) == 0)
+				lRet := .F.
+				Exit
+			EndIf
+		Next nIndex
+
+		// verifica se recebeu ea_filial ou e1_filorig
+		If (AScan(aNames, {|x| AllTrim(x) $ 'ea_filial|e1_filorig|ea_filorig'}) == 0)
+			lRet := .F.
+		EndIf
+	EndIf
+Return lRet
+
+/*/{Protheus.doc} getDownloadsPdf
+Baixa de boleto em PDF
+
+@author francisco.carmo
+@since 30/08/2021
+/*/
+@POST('/api/gfin/v1/Banks/Bills/Downloads')
+Function getDownloadsPdf()
+
+	Local oService      As Object
+	Local cFileErase    As Character
+
+	oService := BanksBillsService():New()
+	oService:downloadPdf(oRest:getBodyRequest())
+
+	If oService:lOk
+		oRest:SetKeyHeaderResponse("Content-Disposition", "attachment; filename=" + oService:cPathPDF + "")
+		oRest:SetKeyHeaderResponse("Content-Type", "application/pdf" )
+		oRest:SetResponse(oService:cFilePDF)
+	Else
+		AnswerRest(oService:jMsgErro)
+	Endif
+
+	cFileErase := oService:cPathPDF
+	FreeObj(oService)
+	FERASE(cFileErase)
+
+Return
+
+/*/{Protheus.doc} getPortalPdf
+Baixa de boleto em PDF para Portal do Cliente
+
+@author luiz.nai
+@since 15/09/2021
+/*/
+@POST('/api/gfin/v1/pc/Banks/Bills/Downloads')
+Function getPortalPdf()
+
+	Local oService      As Object
+	Local cFileErase    As Character
+	Local jResponse     As Json
+
+	jResponse := JsonObject():new()
+
+	oService := BanksBillsService():New()
+	oService:downloadPdf(oRest:getBodyRequest(), .T.)
+
+	If oService:lOk
+		oRest:SetKeyHeaderResponse("Content-Disposition", "attachment; filename=" + oService:cPathPDF + "")
+		oRest:SetKeyHeaderResponse("content-type", "application/octet-stream")
+		jResponse['file'] := oService:cFilePDF
+		jResponse['fileName'] := oService:cPathPDF
+		oRest:SetResponse(jResponse)
+	Else
+		AnswerRest(oService:jMsgErro)
+	Endif
+
+	cFileErase := oService:cPathPDF
+	FreeObj(jResponse)
+	FreeObj(oService)
+	FERASE(cFileErase)
+
+Return
+
+/*/{Protheus.doc} getCertificates
+Valida se existe certificado digital no caminho especificado
+
+@author francisco.carmo
+@since 24/09/2021
+/*/
+@GET('/api/gfin/v1/Banks/Bills/Certificates')
+Function getCertificates()
+
+	Local oService As Object
+
+	oService := BanksBillsService():New()
+	oService:certificates(oRest:getHeaderRequest())
+
+	If oService:lOk
+		oRest:SetKeyHeaderResponse("Content-Type", "application/json" )
+		oRest:SetResponse('true')
+	Else
+		AnswerRest(oService:jMsgErro)
+	Endif
+
+Return
+
+/*/{Protheus.doc} setBillResolved
+Marcar um título como resolvido para o browser de log de erro de baixa
+
+@author daniel.muniz
+@since 29/03/2022
+/*/
+@PUT('/api/gfin/v1/Banks/Bills/Resolved/:BillId')
+Function setBillResolved()
+	Local cBillId As Character
+	Local jParams As Json
+	Local jQueryParams As Json
+	Local cWallet As Character
+
+	// Obtem a chave da url
+	jParams := oRest:getPathParamsRequest()
+	jQueryParams := oRest:getQueryRequest()
+	cBillId := jParams['BillId']
+	cWallet := "R"
+
+	If jQueryParams:hasProperty("wallet")
+		cWallet := jQueryParams["wallet"]
+	Endif
+
+	// Verifica a chave e marca caso seja um chave válida
+	If Empty(cBillId)
+		AnswerRest(answerErrorFormat(412, 'PreconditionFailed', STR0002)) // #"Não foram recebidos dados obrigatórios para localização do Título Financeiro."
+	ElseIf totvs.protheus.backoffice.ngf.bills.functions.MarcaTitRsvd(cBillId, cWallet)
+		oRest:SetKeyHeaderResponse("Content-Type", "application/json" )
+		oRest:SetResponse('true')
+	Else
+		AnswerRest(answerErrorFormat(500, 'Error', STR0003)) // #"Não foi possível marcar o título como resolvido. Contate o administrador do sistema"
+	EndIf
+
+Return
+
+/*/{Protheus.doc} postCancelPayment
+  Realiza o cancelamento do pagamento registrado no banco
+  @type  Function
+  @author Vitor Duca
+  @since 08/03/2023
+  @version 1.0
+/*/
+@POST('/api/gfin/v1/banks/bills/payments/cancel/:id')
+Function postCancelPayment()
+	Local oService      As Object
+	Local jResponse     As Json
+	Local cId := ""     As Character
+
+	jResponse := JsonObject():new()
+	cId := oRest:getPathParamsRequest()['id']
+
+	If !Empty( cId )
+		oService := BanksBillsService():New()
+		jResponse := oService:postCancel(cId)
+	Endif
+
+	totvs.protheus.backoffice.fin.apiutil.answerRest(jResponse)
+Return
+
+/*/{Protheus.doc} postReceiveTicket
+  Realiza o a baixa do titulo a receber caso o boleto se encontre liquidado pelo banco
+  @type  Function
+  @author Vitor Duca
+  @since 12/04/2023
+  @version 1.0
+/*/
+@POST('/api/gfin/v1/banks/bills/tickets/writeoff')
+Function postReceiveTicket()
+	Local oService      As Object
+	Local jResponse     As Json
+
+	jResponse := JsonObject():new()
+
+	//If VerSenha(199)
+	oService := BanksBillsService():New()
+	jResponse := oService:postReceive()
+  /*Else
+    jResponse := totvs.protheus.backoffice.fin.apiutil.answerFormat(.T., 403, "Usúario sem acesso para processar baixas", "Solicite ao administrador do sistema a liberação do acesso para processar baixas")
+  Endif */
+
+  answerRest(jResponse)
+Return
+
+/*/{Protheus.doc} postTrasmitPayment
+  Realiza a transmissão do pagamento referente ao titulo a pagar
+  @type  Function
+  @author Vitor Duca
+  @since 12/04/2023
+  @version 1.0
+/*/
+@POST('/api/gfin/v1/banks/bills/payments/transmit')
+Function postTrasmitPayment()
+  Local oService                            	As Object
+  Local jResponse := JsonObject():new()     	As Json
+  Local jQueryParams := oRest:getQueryRequest()	As Json
+
+  oService := BanksBillsService():New()
+  jResponse := oService:postPayment(,,,jQueryParams)
+
+  answerRest(jResponse)
+Return
+
+/*/{Protheus.doc} getPaymentsVoucher
+  Download dos comprovantes de pagamentos
+
+  @author Vitor Duca
+  @since 23/06/2023
+/*/
+@POST('/api/gfin/v1/banks/bills/payments/voucher')
+Function getPaymentsVoucher()
+  Local oService      As Object
+  Local jResponse := JsonObject():new() As Json
+  Local jBody     := JsonObject():new() As Json
+
+  Set(_SET_DATEFORMAT, 'dd/mm/yyyy')
+  
+  jBody:FromJson(oRest:GetBodyRequest())
+  oService := BanksBillsService():New()
+  oService:downloadVoucher(jBody)
+
+  If oService:lOk
+    oRest:SetKeyHeaderResponse("Content-Disposition", "attachment; filename=" + oService:cPathPDF + "")
+    oRest:SetKeyHeaderResponse("Content-Type", "application/pdf" )
+
+    jResponse['file']           := oService:cFilePDF
+    jResponse['fileName']       := oService:cPathPDF
+    jResponse['codeAuthorized'] := oService:lCodeAuthorized
+	
+    oRest:SetResponse(jResponse)
+  Else
+    AnswerRest(oService:jMsgErro)
+  EndIf
+
+  FERASE(oService:cPathPDF)
+Return
+
+/*/{Protheus.doc} postTrasmitReceivable
+  Realiza a transmissão do boleto referente ao titulo a receber
+  @type  Function
+  @author Vitor Duca
+  @since 22/03/2024
+  @version 1.0
+/*/
+@POST('/api/gfin/v1/banks/bills/receivable/transmit')
+Function postTrasmitReceivable()
+  Local oService                            As Object
+  Local jResponse := JsonObject():new()     As Json
+  Local jBody := JsonObject():new()			As Json
+  
+  jBody:FromJson(oRest:GetBodyRequest())
+
+  oService := BanksBillsService():New()
+  jResponse := oService:postReceive(.F., jBody)
+
+  answerRest(jResponse)
+Return
+
+/*/{Protheus.doc} 
+  Deleta instruções de cobranças
+  @type  Function
+  @author Sidney Santos
+  @since 21/06/2024
+  @version 1.0
+/*/
+@DELETE('/api/gfin/v1/banks/bills/deletePendencies/:InternalID')
+Function deletePendencies()
+  Local oService    := BanksBillsService():New() 		As Object
+  Local jResponse 	:= JsonObject():new()     			As Json
+  Local cInternalID := "" 								As Character
+
+  cInternalID := oRest:getPathParamsRequest()['InternalID']
+
+  oService := BanksBillsService():New()
+  jResponse := oService:deletePendencies(cInternalID)
+
+  answerRest(jResponse)
+
+Return
+
+/*/{Protheus.doc} 
+  Deleta de forma massiva as ocorrencias (Instruções de cobrança)
+  @type  Function
+  @author Vitor Duca
+  @since 29/03/2025
+  @version 1.0
+/*/
+@DELETE('/api/gfin/v1/banks/bills/ocurrencies/delete')
+Function deleteOcurrencies()
+	Local oService := BanksBillsService():New() As Object
+	Local jResponse := JsonObject():new()		As Json
+	Local jBody	:= JsonObject():new()			As Json
+
+	jBody:fromJson(oRest:GetBodyRequest())
+
+	oService := BanksBillsService():New()
+	jResponse := oService:deletePendencies("", .F., jBody)
+
+	answerRest(jResponse)
+
+Return
+

@@ -1,0 +1,786 @@
+#include "totvs.ch"
+#include "msobject.ch"
+#include "tlpp-core.th"
+#include "backoffice.contracts.adjustment.orchestrator.ch"
+
+namespace totvs.protheus.backoffice.contracts.adjustment
+using namespace totvs.protheus.backoffice.contracts.general
+
+static _existBlockCN310VAL := NIL
+static _lApproveAfterAdjustment := NIL
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ContractAdjustmentOrchestrator
+	@description Orquestra o fluxo legado da rotina CNTA311 desde a carga de trabalho ate o disparo do reajuste por contrato.
+	@type class
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+*/
+//-------------------------------------------------------------------
+class ContractAdjustmentOrchestrator
+	private data lNotifyNoWorkload as logical
+	private data nRequestedThreadCount as numeric
+	private data nEffectiveThreadCount as numeric
+	private data lWaitCompleted as logical
+	private data oThreadData as object
+
+	public method new(lNotifyNoWorkload as logical) as object
+	public method promptAndExecute() as logical
+	public method execute(cContract as character, cContractType as character, cWorksheetType as character, cCustomer as character, cCustomerStore as character, cSupplier as character, cSupplierStore as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as logical
+	public method resolveThreadsAndExecute(cAdjustmentNumber as character) as logical
+	public method executeAdjustmentByContract(cContract as character, cRevision as character, cAdjustmentNumber as character)
+	public method processThreadBatch(nId as numeric, cAdjustmentNumber as character, cFromContract as character, cToContract as character) as logical
+	public method finishExecutionResult(cAdjustmentNumber as character, oResult as object) as logical
+
+
+	private method validatePrompt(dReferenceDate as date, cRevisionType as character) as logical
+	private method configureWorkloadAlias(cWorkloadAlias as character) as object
+	private method resolveRequestedNumberOfThreads() as numeric
+	private method loadContext(cAdjustmentNumber as character, cContract as character, cRevision as character) as object
+	private method getContractData(cBranch as character, cContract as character, cRevision as character) as json
+	private method executeAdjustment(oContext as object, cExecutionUid as character)
+	private method buildUnexpectedErrorResult(oContext as object, cErrorCode as character, cErrorMessage as character) as object
+	private method startSingleThread(cAdjustmentNumber as character) as logical
+	private method startMultiThread(cAdjustmentNumber as character, nNumberOfThreads as numeric) as logical
+	private method getThreadRanges(cAdjustmentNumber as character, nNumberOfThreads as numeric) as json
+	private method getRevisionParameters(cContractNumber as character) as json
+	private method getContractsList(cContractNumber as character, cFromContract as character, cToContract as character) as array
+	private method getCountDistinctContracts(cAdjustmentNumber as character) as numeric
+	private method customShouldContinue(cWorkloadAlias as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as logical
+	private method buildCustomParameters(cWorkloadAlias as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as json
+	private method customValidadeAndContinue(cContract as character, cRevision as character, cAdjustmentNumber as character) as logical
+	private method existBlockCN310VAL() as logical
+	private method aproveAfterAdjustment() as logical
+endClass
+
+/*/{Protheus.doc} new
+	@description Inicializa o orquestrador legado da CNTA311 com a politica de notificacao para carga vazia.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method new(lNotifyNoWorkload as logical) as object class ContractAdjustmentOrchestrator
+	default lNotifyNoWorkload := .T.
+	self:lNotifyNoWorkload := lNotifyNoWorkload
+return self
+
+/*/{Protheus.doc} promptAndExecute
+	@description Executa o fluxo de perguntes da CNTA311 e delega o processamento validado para o orquestrador.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method promptAndExecute() as logical class ContractAdjustmentOrchestrator
+	local dReferenceDate := dDataBase as date
+	local dAdjustmentDate := dReferenceDate as date
+	local cContract := "" as character
+	local cContractType := "" as character
+	local cWorksheetType := "" as character
+	local cCustomer := "" as character
+	local cCustomerStore := "" as character
+	local cSupplier := "" as character
+	local cSupplierStore := "" as character
+	local cRevisionType := "" as character
+	local lExecuted := .F. as logical
+
+	if IsBlind() .or. Pergunte("CN310", .T.) //todo: A parte de interface deveria estar no CNTA311
+		MakeSQLEXPR("CN310")
+
+		cContract := mv_par01
+		cContractType := mv_par02
+		cWorksheetType := mv_par03
+		cCustomer := mv_par04
+		cCustomerStore := mv_par05
+		cSupplier := mv_par06
+		cSupplierStore := mv_par07
+		
+		if empty(mv_par08)
+			dReferenceDate := dDataBase
+		else
+			dReferenceDate := mv_par08
+		endIf
+		
+		if empty(mv_par09)
+			dAdjustmentDate := dDataBase
+		else
+			dAdjustmentDate := mv_par09
+		endIf
+
+		cRevisionType := mv_par10
+
+		if self:validatePrompt(dReferenceDate, cRevisionType)
+			if !IsBlind()
+				MsgRun(STR0002, STR0001, {|| self:execute(cContract, cContractType, cWorksheetType, cCustomer, cCustomerStore, cSupplier, cSupplierStore, dReferenceDate, dAdjustmentDate, cRevisionType) }) //STR0002 = Por favor, aguarde. Reajustando contratos... | STR0001 = Reajuste Automático
+			else
+				self:execute(cContract, cContractType, cWorksheetType, cCustomer, cCustomerStore, cSupplier, cSupplierStore, dReferenceDate, dAdjustmentDate, cRevisionType)
+			endIf
+
+			lExecuted := .T.
+		endIf
+	endIf
+return lExecuted
+
+/*/{Protheus.doc} execute
+	@description Executa o fluxo da CNTA311 usando a classe de workload, o logger inicial e a rotina de reajuste por contrato.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method execute(cContract as character, cContractType as character, cWorksheetType as character, cCustomer as character, cCustomerStore as character, cSupplier as character, cSupplierStore as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as logical class ContractAdjustmentOrchestrator
+	local oWorkload := NIL as object
+	local oExecStatement := NIL as object
+	local oLogger := NIL as object
+	local jLogStart := JsonObject():New() as json
+	local cQuery := "" as character
+	local cWorkloadAlias := GetNextAlias() as character
+	local cAdjustmentNumber := "" as character
+	local nContractCount := 0 as numeric
+	local nItemFieldSize := TamSX3("CXL_ITEM")[1] as numeric
+	local nItemCount := 0 as numeric
+	local nMaxItems := Val(Replicate("9", nItemFieldSize)) as numeric
+	local lContinued := .T. as logical
+	local lHasWorkload := .F. as logical
+	local lRet := .F. as logical
+
+	oWorkload := ContractAdjustmentWorkload():New(cContract, cContractType, cWorksheetType, cCustomer, cCustomerStore, cSupplier, cSupplierStore, dReferenceDate, dAdjustmentDate)
+	cQuery := oWorkload:buildQuery() //todo: Implementar bind parameters
+
+	oExecStatement := FWExecStatement():New(cQuery)
+	cWorkloadAlias := oExecStatement:OpenAlias()
+	self:configureWorkloadAlias(cWorkloadAlias)
+
+	if !(cWorkloadAlias)->(Eof())
+		lHasWorkload := .T.
+		oLogger := ContractAdjustmentLogger():New()
+		jLogStart := oLogger:startFromAlias(cWorkloadAlias, dReferenceDate, dAdjustmentDate, cRevisionType)
+		cAdjustmentNumber := jLogStart["adjustmentNumber"]
+		nContractCount := jLogStart["contractCount"]
+		nItemCount := jLogStart["itemCount"]
+
+		if nItemCount > nMaxItems
+			if !IsBlind()
+				Aviso("CNTA311", STR0005 + CRLF + STR0006, {"OK"}, 2) //"A quantidade de itens retornada pela consulta excede a capacidade do campo CXL_ITEM." "Para continuar, divida a operação em dois processos ou restrinja mais os filtros informados."
+			endIf
+			lContinued := .F.
+		endIf
+
+		if lContinued
+			lContinued := self:customShouldContinue(cWorkloadAlias, dReferenceDate, dAdjustmentDate, cRevisionType)
+		endIf
+		
+		if lContinued .and. !IsBlind()
+			lContinued := MsgYesNo(i18n(STR0003, {Str(nContractCount)})) //Serão processados #1 contratos. Deseja continuar?
+		endIf
+
+		if lContinued
+			lContinued := oLogger:commit()
+			if lContinued
+				lContinued := self:resolveThreadsAndExecute(cAdjustmentNumber)
+			endIf
+		endIf
+	else
+		if self:lNotifyNoWorkload
+			Help(,,"CNTA311CTR",, STR0004, 1, 0) //"Não existem índices cadastrados ou contratos para serem reajustados com os parâmetros selecionados."
+		endIf
+	endIf
+
+	(cWorkloadAlias)->(DbCloseArea())
+	FwFreeObj(oExecStatement)
+	FwFreeObj(oWorkload)
+	FwFreeObj(oLogger)
+
+	lRet := lContinued
+
+return lRet
+
+/*/{Protheus.doc} configureWorkloadAlias
+	@description Configura os campos de data do alias de carga retornado pela query da CNTA311.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method configureWorkloadAlias(cWorkloadAlias as character) as object class ContractAdjustmentOrchestrator
+	TcSetField(cWorkloadAlias, "DTREAJ", TamSX3("CNB_DTREAJ")[3], TamSX3("CNB_DTREAJ")[1], TamSX3("CNB_DTREAJ")[2])
+	TcSetField(cWorkloadAlias, "PROXRJ", TamSX3("CNB_PROXRJ")[3], TamSX3("CNB_PROXRJ")[1], TamSX3("CNB_PROXRJ")[2])
+	//   self:oStatement:setFields(self:aStruct)
+	//   self:aStruct, FWSX3Util():GetFieldStruct( allTrim(aFields[nX]) )
+return self
+
+/*/{Protheus.doc} resolveThreadsAndExecute
+
+	@description Carrega os contratos do reajuste e coordena o processamento por contrato ou multi-thread com persistencia do log final.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method resolveThreadsAndExecute(cAdjustmentNumber as character) as logical class ContractAdjustmentOrchestrator
+	local nContractCount := self:getCountDistinctContracts(cAdjustmentNumber)
+	local nRequestedNumberOfThreads := self:resolveRequestedNumberOfThreads()
+
+	local nStart := seconds() as numeric	
+	local cMessage := "" as character
+	local nThreads := 1 as numeric
+
+	if ( nRequestedNumberOfThreads > 1 ) .and. ( nContractCount > (nRequestedNumberOfThreads * 2) )
+		self:startMultiThread(cAdjustmentNumber, nRequestedNumberOfThreads)
+		nThreads := nRequestedNumberOfThreads
+	else
+		self:startSingleThread(cAdjustmentNumber)
+	endIf
+
+	cMessage := CRLF + "[CNTA311 - ANALISE DE DESEMPENHO]" + CRLF
+	cMessage += "NUMERO DE THREADS: " + cValToChar(nThreads) + CRLF
+	cMessage += "TOTAL DE CONTRATOS PROCESSADOS: " + cValToChar(nContractCount) + CRLF
+	cMessage += "TEMPO TOTAL: " + cValToChar((seconds() - nStart) / 60) + " minutos" + CRLF
+	cMessage += "MEDIA POR CONTRATO: " + cValToChar((seconds() - nStart) / nContractCount) + " segundos" + CRLF
+
+	conout(cMessage) //TODO Trocar por FwLogMsg
+return .T.
+
+/*/{Protheus.doc} startSingleThread
+	@description Executa o reajuste de contratos em thread unica, iterando sobre a lista de contratos carregados.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method startSingleThread(cAdjustmentNumber as character) as logical class ContractAdjustmentOrchestrator
+	local aContracts := self:getContractsList(cAdjustmentNumber) as array
+	local cContract as character
+	local cRevision as character
+	local nIndex as numeric
+	
+	for nIndex := 1 to Len(aContracts)
+		cContract := aContracts[nIndex]["contract"]
+		cRevision := aContracts[nIndex]["revision"]
+		self:executeAdjustmentByContract(cContract, cRevision, cAdjustmentNumber)
+	next
+return .T.
+
+/*/{Protheus.doc} startMultiThread
+	@description Coordena a execucao do reajuste de contratos em multiplas threads mediante faixas de processamento.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method startMultiThread(cAdjustmentNumber as character, nNumberOfThreads as numeric) as logical class ContractAdjustmentOrchestrator
+	local nIndex := 1 as numeric
+	local jRanges := self:getThreadRanges(cAdjustmentNumber, nNumberOfThreads) as json
+	local oThreadManager := ThreadManager():New() as object
+	
+	for nIndex := 1 to Len(jRanges["ranges"])
+		oThreadManager:startThread(cAdjustmentNumber, jRanges["ranges"][nIndex]["from"], jRanges["ranges"][nIndex]["to"])
+	next
+
+	oThreadManager:waitAll()
+
+	jRanges:fromJson("{}")
+	jRanges := NIL
+	FwFreeObj(oThreadManager)
+return .T.
+
+/*/{Protheus.doc} executeAdjustmentByContract
+	@description Processa um contrato do reajuste via worker e delega ao logger a gravacao do resultado final em CXK e CXL.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method executeAdjustmentByContract(cContract as character, cRevision as character, cAdjustmentNumber as character) class ContractAdjustmentOrchestrator
+	local oContext := NIL as object
+	local lContinue := .F. as logical
+
+	if cContract != NIL .and. cRevision != NIL
+		
+		lContinue := self:customValidadeAndContinue(cContract, cRevision, cAdjustmentNumber)
+	
+		if lContinue
+			oContext := self:loadContext(cAdjustmentNumber, cContract, cRevision)
+			self:executeAdjustment(oContext, "")
+			FwFreeObj(oContext)
+		endIf
+	endIf
+return
+
+/*/{Protheus.doc} processThreadBatch
+	@description Processa um lote de contratos dentro de uma faixa definida durante execucao multi-thread.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method processThreadBatch(nId as numeric, cAdjustmentNumber as character, cFromContract as character, cToContract as character) as logical class ContractAdjustmentOrchestrator
+	local oCache as object
+	local aContracts := self:getContractsList(cAdjustmentNumber, cFromContract, cToContract) as array
+	local cContract as character
+	local cRevision as character
+	local nIndex as numeric
+
+	self:oThreadData := ThreadData():New(nId, cAdjustmentNumber, cFromContract, cToContract)
+
+	self:oThreadData:setTotalContracts(Len(aContracts))
+	
+	for nIndex := 1 to Len(aContracts)
+		cContract := aContracts[nIndex]["contract"]
+		cRevision := aContracts[nIndex]["revision"]
+		self:executeAdjustmentByContract(cContract, cRevision, cAdjustmentNumber)
+		
+		self:oThreadData:incrementCurrentContractDone()
+	next
+
+	self:oThreadData:setFinished()
+
+	oCache := totvs.protheus.backoffice.contracts.general.BillNumberCache():New()
+	oCache:clearCache()
+	FWFreeObj(oCache)
+
+	FWFreeObj(self:oThreadData)
+
+	aSize(aContracts,0)
+	aContracts := NIL
+return .T.
+
+/*/{Protheus.doc} buildUnexpectedErrorResult
+	@description Monta um resultado padrao para erros inesperados do orquestrador durante a execucao por contrato.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method buildUnexpectedErrorResult(oContext as object, cErrorCode as character, cErrorMessage as character) as object class ContractAdjustmentOrchestrator
+	local oResult := ContractAdjustmentResult():New() as object
+
+	oResult:copyTraceFromContext(oContext)
+	oResult:markError(cErrorCode, cErrorMessage)
+return oResult
+
+/*/{Protheus.doc} validatePrompt
+	@description Valida os campos obrigatorios dos perguntes da CNTA311 antes do inicio do processamento.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method validatePrompt(dReferenceDate as date, cRevisionType as character) as logical class ContractAdjustmentOrchestrator
+	local lRet := .T. as logical
+
+	if Empty(dReferenceDate)
+		Help(,,"CNTA311DRE",, STR0007, 1, 0) //"Preencha a data de referência."
+		lRet := .F.
+	elseif Empty(cRevisionType)
+		Help(,,"CNTA311RJ",, STR0008, 1, 0) //"Preencha o tipo de revisão de reajuste."
+		lRet := .F.
+	endIf
+return lRet
+
+/*/{Protheus.doc} resolveRequestedNumberOfThreads
+	@description Resolve a quantidade solicitada de threads a partir do parametro MV_CT260TH.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method resolveRequestedNumberOfThreads() as numeric class ContractAdjustmentOrchestrator
+	local nRequestedThreadCount := SuperGetMv("MV_CT260TH", .F., 1) as numeric
+
+	if nRequestedThreadCount < 1
+		nRequestedThreadCount := 1
+	endIf
+return Min(nRequestedThreadCount, 40)
+
+/*/{Protheus.doc} loadContext
+	@description Carrega o contexto de um contrato do reajuste a partir da revisao na CN9.
+	@author guilherme.sordi@totvs.com.br
+	@since 21/05/2026
+	@version 12.1.2510
+/*/
+method loadContext(cAdjustmentNumber as character, cContract as character, cRevision as character) as object class ContractAdjustmentOrchestrator
+	local oContext := ContractAdjustmentContext():New() as object
+	local cBranch := FWxFilial("CN9") as character
+	local jContractData := self:getContractData(cBranch, cContract, cRevision) as json
+	local jAdjustmentParameters := self:getRevisionParameters(cAdjustmentNumber) as json
+
+	if jContractData != NIL .and. jContractData:hasProperty("filial")
+		oContext:cBranch := jContractData["filial"]
+		oContext:cContract := jContractData["numero"]
+		oContext:cRevision := jContractData["revisa"]
+		oContext:cContractSpecies := jContractData["espctr"]
+		oContext:cContractType := jContractData["tpcto"]
+	endIf
+
+	if jAdjustmentParameters != NIL .and. jAdjustmentParameters:hasProperty("referenceDate")
+		oContext:dReferenceDate := jAdjustmentParameters["referenceDate"]
+		oContext:dAdjustmentDate := jAdjustmentParameters["adjustmentDate"]
+		oContext:cAdjustmentRevisionTypeCode := jAdjustmentParameters["revisionType"]
+	endIf
+
+	oContext:lRunRetroactive := .T.
+	oContext:lApproveAfterAdjustment := self:aproveAfterAdjustment()
+	oContext:cExecutionId := cAdjustmentNumber
+	oContext:cWorkerId := cContract + cRevision
+	oContext:cAdjustmentNumber := cAdjustmentNumber
+	oContext:cJustification := STR0009 //"Revisão de reajuste por índice econômico"
+return oContext
+
+/*/{Protheus.doc} getContractData
+	@description Carrega os dados principais da CN9 referentes ao contrato e revisao.
+	@author guilherme.sordi@totvs.com.br
+	@since 21/05/2026
+	@version 12.1.2510
+/*/
+method getContractData(cBranch as character, cContract as character, cRevision as character) as json class ContractAdjustmentOrchestrator
+	local oExec as object
+	local cQuery := "" as character
+	local cAlias as character
+	local jContractData := JsonObject():New() as json
+
+	cQuery := ' SELECT CN9_FILIAL, CN9_NUMERO, CN9_REVISA, CN9_ESPCTR, CN9_TPCTO, CN9_TIPREV '
+	cQuery += ' FROM '+retSqlName("CN9")+' '
+	cQuery += ' WHERE CN9_FILIAL = ? '
+	cQuery += ' AND CN9_NUMERO = ? '
+	cQuery += ' AND CN9_REVISA = ? '
+	cQuery += ' AND D_E_L_E_T_ = ? '
+
+	oExec := FwExecStatement():new(cQuery)
+	oExec:setString(1, cBranch)
+	oExec:setString(2, cContract)
+	oExec:setString(3, cRevision)
+	oExec:setString(4, space(1))
+
+	cAlias := oExec:openAlias()
+	if !(cAlias)->(Eof())
+		jContractData["filial"] := (cAlias)->CN9_FILIAL
+		jContractData["numero"] := (cAlias)->CN9_NUMERO
+		jContractData["revisa"] := (cAlias)->CN9_REVISA
+		jContractData["espctr"] := (cAlias)->CN9_ESPCTR
+		jContractData["tpcto"] := (cAlias)->CN9_TPCTO
+		jContractData["tiprev"] := (cAlias)->CN9_TIPREV
+	endIf
+
+	(cAlias)->(dbCloseArea())
+	freeObj(oExec)
+return jContractData
+
+/*/{Protheus.doc} executeAdjustment
+	@description Executa um contexto isolado de reajuste e delega a persistencia final ao logger.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method executeAdjustment(oContext as object, cExecutionUid as character) class ContractAdjustmentOrchestrator
+	local aArea := {} as array
+	local cAdjustmentNumber := "" as character
+	local cErrorMessage := "Unknown error" as character
+	local oResult := NIL as object
+	local oWorker := NIL as object
+
+	if oContext == NIL
+		return
+	endIf
+
+	cAdjustmentNumber := oContext:cExecutionId
+	aArea := FWGetArea()
+	oWorker := ContractAdjustmentWorker():New()
+
+	BEGIN TRANSACTION
+
+	try
+		oResult := oWorker:execute(oContext)
+	catch oError
+		if oError != NIL .and. oError:description != NIL
+			cErrorMessage := cValToChar(oError:description)
+		endIf
+		oResult := self:buildUnexpectedErrorResult(oContext, "ORC001", "Unexpected error while executing contract adjustment: " + cErrorMessage)
+		ConsoleLog():error(oError)
+	endTry
+
+	if oResult == NIL
+		oResult := self:buildUnexpectedErrorResult(oContext, "ORC002", "Contract adjustment worker returned no result")
+	endIf
+
+	if oResult != NIL
+		if oResult:lSuccess
+			self:finishExecutionResult(cAdjustmentNumber, oResult)
+		else			
+			DisarmTransaction()
+			BREAK
+		endIf
+	endIf
+
+	END TRANSACTION
+
+	if (!oResult:lSuccess)
+		self:finishExecutionResult(cAdjustmentNumber, oResult)
+	endIf
+
+	FWRestArea(aArea)
+	FwFreeObj(oResult)
+	FwFreeObj(oWorker)
+return
+
+/*/{Protheus.doc} finishExecutionResult
+	@description Persiste o resultado do contrato protegendo a regiao critica do logger quando necessario.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method finishExecutionResult(cAdjustmentNumber as character, oResult as object) as logical class ContractAdjustmentOrchestrator
+	local oLogger := ContractAdjustmentLogger():New() as object
+
+	oLogger:finishContractResult(cAdjustmentNumber, oResult)
+
+	FwFreeObj(oLogger)
+return .T.
+
+/*/{Protheus.doc} getThreadRanges
+	@description Consulta no banco de dados as faixas de contratos para processamento multi-thread.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method getThreadRanges(cAdjustmentNumber as character, nNumberOfThreads as numeric) as json class ContractAdjustmentOrchestrator
+	local oExec as object
+	local aRanges := {} as array
+	local cQuery as character
+	local nParam := 1 as numeric
+	local cAlias as character
+	
+	cQuery += " WITH PROCESS_GROUPS AS ( "
+	cQuery += " 	SELECT CXL_CONTRA, NTILE("+cValToChar(nNumberOfThreads)+") OVER (ORDER BY CXL_CONTRA) AS GROUP_ID "
+	cQuery += " 	FROM (SELECT DISTINCT CXL_CONTRA "
+	cQuery += " 		FROM "+retSqlName("CXL")+" CXL "
+	cQuery += " 		WHERE CXL_FILIAL = ? "
+	cQuery += " 		AND CXL_NUMRJ = ? "
+	cQuery += " 		AND D_E_L_E_T_ = ? "
+	cQuery += " 	) CXL_DISTINCT "
+	cQuery += " )  "
+	cQuery += " SELECT GROUP_ID, MIN(CXL_CONTRA) FROM_CONTRACT, MAX(CXL_CONTRA) TO_CONTRACT "
+	cQuery += " FROM PROCESS_GROUPS "
+	cQuery += " GROUP BY GROUP_ID "
+	cQuery += " ORDER BY GROUP_ID "
+
+    oExec := FwExecStatement():new(cQuery)
+    oExec:setString(nParam++, fwXFilial("CXL"))
+    oExec:setString(nParam++, cAdjustmentNumber)
+    oExec:setString(nParam++, space(1))
+
+    cAlias := oExec:openAlias()
+    while !(cAlias)->(Eof())
+        aAdd(aRanges, { "from": (cAlias)->FROM_CONTRACT, "to": (cAlias)->TO_CONTRACT })
+        (cAlias)->(dbSkip())
+    endDo
+
+    (cAlias)->(dbCloseArea())
+    freeObj(oExec)
+return { "ranges": aRanges }
+
+/*/{Protheus.doc} getRevisionParameters
+	@description Carrega os parametros de referencia, data de aplicacao e tipo de revisao para um reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method getRevisionParameters(cContractNumber as character) as json class ContractAdjustmentOrchestrator
+	local oExec as object
+	local cQuery := "" as character
+	local cAlias as character
+	local jRevisionParameters := JsonObject():New() as json
+
+	cQuery := ' SELECT CXK_DTREF, CXK_DTAPL, CXK_TPREV '
+	cQuery += ' FROM '+retSqlName("CXK")+' '
+	cQuery += ' WHERE CXK_FILIAL = ? '
+	cQuery += ' AND CXK_NUMERO = ? '
+	cQuery += ' AND D_E_L_E_T_ = ? '
+
+	oExec := FwExecStatement():new(cQuery)
+	oExec:setString(1, fwXFilial("CXK"))
+	oExec:setString(2, cContractNumber)
+	oExec:setString(3, space(1))
+
+	cAlias := oExec:openAlias()
+	if !(cAlias)->(Eof())
+		jRevisionParameters := { "referenceDate": sToD((cAlias)->CXK_DTREF), "adjustmentDate": sToD((cAlias)->CXK_DTAPL), "revisionType": (cAlias)->CXK_TPREV }
+	endIf
+
+	(cAlias)->(dbCloseArea())
+	freeObj(oExec)
+
+return jRevisionParameters
+
+/*/{Protheus.doc} getContractsList
+	@description Carrega a lista de contratos de um reajuste opcionalmente filtrada por faixa de contrato.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method getContractsList(cContractNumber as character, cFromContract as character, cToContract as character) as array class ContractAdjustmentOrchestrator
+	local oExec as object
+	local cQuery := "" as character
+	local cAlias as character
+	local aContracts := {} as array
+
+	default cFromContract := replicate(" ", tamSx3("CXL_CONTRA")[1])
+	default cToContract := replicate("Z", tamSx3("CXL_CONTRA")[1])
+
+	cQuery := ' SELECT DISTINCT CXL_CONTRA, CXL_REVISA '
+	cQuery += ' FROM '+retSqlName("CXL")+' CXL '
+	cQuery += ' WHERE CXL_FILIAL = ? '
+	cQuery += ' AND CXL_NUMRJ = ? '
+	cQuery += ' AND CXL_CONTRA >= ? '
+	cQuery += ' AND CXL_CONTRA <= ? '
+	cQuery += ' AND CXL_SITUAC = ? '
+	cQuery += ' AND D_E_L_E_T_ = ? '
+
+	oExec := FwExecStatement():new(cQuery)
+	oExec:setString(1, fwXFilial("CXL"))
+	oExec:setString(2, cContractNumber)
+	oExec:setString(3, cFromContract)
+	oExec:setString(4, cToContract)
+	oExec:setString(5, "P") //Pendente
+	oExec:setString(6, space(1))
+
+	cAlias := oExec:openAlias()
+	while !(cAlias)->(Eof())
+		aAdd(aContracts, { "contract": (cAlias)->CXL_CONTRA, "revision": (cAlias)->CXL_REVISA })
+		(cAlias)->(dbSkip())
+	endDo
+
+	(cAlias)->(dbCloseArea())
+	freeObj(oExec)
+return aContracts
+
+/*/{Protheus.doc} getCountDistinctContracts
+	@description Retorna a quantidade de contratos distintos em um reajuste para decisao de paralelizacao.
+	@author guilherme.sordi@totvs.com.br
+	@since 20/05/2026
+	@version 12.1.2510
+/*/
+method getCountDistinctContracts(cAdjustmentNumber as character) as numeric class ContractAdjustmentOrchestrator
+	local cQuery := "" as character
+	local oExec := NIL as object
+	local nCount := 0 as numeric
+
+	cQuery := " SELECT COUNT(DISTINCT CXL_CONTRA) AS CONTRACT_COUNT "
+	cQuery += " FROM " + RetSqlName("CXL") + " CXL "
+	cQuery += " WHERE CXL.CXL_FILIAL = ? "
+	cQuery += "   AND CXL.CXL_NUMRJ = ? "
+	cQuery += "   AND CXL.CXL_SITUAC = ? "
+	cQuery += "   AND CXL.D_E_L_E_T_ = ? "
+	cQuery := ChangeQuery(cQuery)
+
+	oExec := FWExecStatement():New(cQuery)
+	oExec:setString(1, fwXFilial("CXL"))
+	oExec:setString(2, cAdjustmentNumber)
+	oExec:setString(3, "P") //Pendente
+	oExec:setString(4, space(1))
+	nCount := oExec:ExecScalar("CONTRACT_COUNT")
+
+	fwFreeObj(oExec)
+return nCount
+
+/*/{Protheus.doc} customShouldContinue
+    @description Avalia se o processamento deve continuar com base no ponto de entrada CN310PRE.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/06/2026
+    @version 12.1.2510
+/*/
+
+method customShouldContinue(cWorkloadAlias as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as logical class ContractAdjustmentOrchestrator
+	local lContinue := .T. as logical
+	local lCustomContinue := .T. as logical
+	local jParameters := self:buildCustomParameters(cWorkloadAlias, dReferenceDate, dAdjustmentDate, cRevisionType) as json
+
+	if ExistBlock("CN310PRE")
+		lCustomContinue := ExecBlock("CN310PRE", .F., .F., { jParameters:toJson() })
+
+		if ValType(lCustomContinue) == "L"
+			lContinue := lCustomContinue
+		endIf
+	endIf
+return lContinue
+
+/*/{Protheus.doc} buildCustomParameters
+    @description Monta os parâmetros de entrada para o ponto de entrada CN310PRE.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/06/2026
+    @version 12.1.2510
+/*/
+
+method buildCustomParameters(cWorkloadAlias as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as json class ContractAdjustmentOrchestrator
+	local jCustomParameters := JsonObject():New() as json
+	local aContracts := {} as array
+
+	jCustomParameters["referenceDate"] := dReferenceDate
+	jCustomParameters["adjustmentDate"] := dAdjustmentDate
+	jCustomParameters["revisionType"] := cRevisionType
+
+	(cWorkloadAlias)->(dbGoTop())
+	while !(cWorkloadAlias)->(Eof())
+		aAdd(aContracts, { "contract": (cWorkloadAlias)->CN9_NUMERO, "revision": (cWorkloadAlias)->CN9_REVISA })
+		(cWorkloadAlias)->(dbSkip())
+	endDo
+
+	jCustomParameters["contracts"] := aContracts
+return jCustomParameters
+
+/*/{Protheus.doc} customValidadeAndContinue
+	@description Invoca o bloco customizado CN310VAL para validacao de contrato durante o reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 24/05/2026
+	@version 12.1.2510
+/*/
+method customValidadeAndContinue(cContract as character, cRevision as character, cAdjustmentNumber as character) as logical class ContractAdjustmentOrchestrator
+	local lContinue := .T. as logical
+	local jParameters := { "contract": cContract, "revision": cRevision, "adjustmentNumber": cAdjustmentNumber } as json
+	local jReturn := JsonObject():New()
+	local cMessage as character
+	local cReturn as character
+	local oContext as object
+	local oResult as object
+	local oLogger as object
+
+	if self:existBlockCN310VAL()
+		cReturn := ExecBlock("CN310VAL", .F., .F., { jParameters:toJson() })
+
+		if ValType(cReturn) == "C" .and. !Empty(cReturn) .and. empty(jReturn:fromJson(cReturn))
+			if jReturn:hasProperty("continue")
+				lContinue := jReturn["continue"]
+			endIf
+			if jReturn:hasProperty("message") .and. !Empty(jReturn["message"])
+				cMessage := jReturn["message"]
+			endIf
+		endIf
+		if !lContinue .and. !Empty(cMessage)
+			oContext := self:loadContext(cAdjustmentNumber, cContract, cRevision)
+			oResult := self:buildUnexpectedErrorResult(oContext, "CN310VAL", cMessage)
+			oLogger := ContractAdjustmentLogger():New()
+
+			oLogger:setFail(cAdjustmentNumber, oResult)
+
+			FwFreeObj(oLogger)
+			FwFreeObj(oContext)
+			FwFreeObj(oResult)
+		endIf
+	endIf
+return lContinue
+
+/*/{Protheus.doc} existBlockCN310VAL
+    @description Verifica e cacheia a existência do ponto de entrada CN310VAL.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/06/2026
+    @version 12.1.2510
+/*/
+
+method existBlockCN310VAL() as logical class ContractAdjustmentOrchestrator
+	if _existBlockCN310VAL == NIL
+		_existBlockCN310VAL := ExistBlock("CN310VAL")
+	endIf
+return _existBlockCN310VAL
+
+/*/{Protheus.doc} aproveAfterAdjustment
+    @description Resolve se a revisão deve ser aprovada automaticamente após o reajuste.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/06/2026
+    @version 12.1.2510
+/*/
+
+method aproveAfterAdjustment() as logical class ContractAdjustmentOrchestrator
+	if _lApproveAfterAdjustment == NIL
+		_lApproveAfterAdjustment := SuperGetMv("MV_CNRJREV", .F., .F.)
+	endIf
+return _lApproveAfterAdjustment

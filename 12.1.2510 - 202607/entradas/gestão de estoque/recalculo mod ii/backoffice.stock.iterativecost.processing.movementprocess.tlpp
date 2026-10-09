@@ -1,0 +1,832 @@
+#Include 'Totvs.ch'
+#include 'tlpp-core.th'
+
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.manager
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.analyticalmovementtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.aglutinattedmovementtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.processingtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.view.transferinvoice
+using namespace totvs.protheus.backoffice.stock.iterativecost.processing.parts.movementprocess
+
+namespace totvs.protheus.backoffice.stock.iterativecost.processing.movementprocess
+
+/*/{Protheus.doc} movementValuation
+    Classe responsavel por calcular e valorizar os movimentos
+    @author Squad Entradas
+    @since 06/11/2024
+/*/
+Class movementProcess from TableManager
+
+    public data cAnalyTable  as character
+    public data cAgglutTable as character
+    public data cProcTable   as character
+    public data aStatement   as array
+    Public data cFProc            as Character
+    Public data cCusFil           as Character
+    Public data cViewTransfer  as Character
+    Public data cLocCQ            as character
+    Public data oQueryRequisition as Object
+    Public data oQueryTransfil    as Object
+    Public data oMovProcessCP  as Object
+    Public data lM330TRF       as Logical
+    Public data lProcCP        as Logical
+    Public data oRequestCost   as object
+
+    public method new()
+    public method procMovement()
+    public method valueMovement()
+    public method updateProcTable()
+    public method buildQryStatement()
+    public method movementInSamePeriod()
+
+End Class
+
+/*/{Protheus.doc} new
+    Instacia a classe
+    @author Squad.Entradas
+    @since 06/11/2024
+    @version 1.0
+    @return self, object, self
+    /*/
+Method new(aFil, cFProc, jParams, oRequestCost) class movementProcess
+    _Super:New(aFil)
+
+    ::cFProc            := cFProc
+    ::cAnalyTable       := AnalyticalMovementTable():TableName()
+    ::cAgglutTable      := AgglutinatedMovementTable():TableName()
+    ::cProcTable        := ProcessingTable():TableName()
+    ::aStatement        := {}
+    ::cCusFil           := SuperGetMv("MV_CUSFIL", .F., "A")
+    ::cViewTransfer     := "VW_" + ViewTransferInvoice():GetViewID() + "_" + cEmpAnt
+    ::oQueryRequisition := Nil
+    ::oQueryTransfil    := Nil
+    ::lM330TRF          := SuperGetMv("MV_M330TRF",.F.,.F.)
+    ::cLocCQ            := GetMvNNR('MV_CQ','98')
+    ::oRequestCost      := oRequestCost
+    
+    If jParams["calccp"] == 1
+        ::oMovProcessCP := movementProcessParts():New(::cFProc, ::cCusFil)
+        ::lProcCP := .T.
+    EndIf
+
+Return self
+
+/*/{Protheus.doc} procMovement
+    Processa o movimento de acordo com seu tipo
+    @author Squad.Entradas
+    @since 06/11/2024
+    @version 1.0
+    @param  oMovements, object, objeto com dados do movimento
+            cFilAtu, character, filial corrente
+            dDtIni, data, inicio periodo
+            dDtFim, data, fim periodo
+    /*/
+Method procMovement(oMovements, oTabSldOP, aMoedas, cFilAtu, dDtIni, dDtFim, nExec, nIter) class movementProcess
+    Local nX := 0
+
+    For nX := 1 To Len(oMovements["movement"])
+
+        // Valoriza o movimento na tabela aglutinada
+        ::valueMovement(oMovements["movement"][nX], oTabSldOP, aMoedas, cFilAtu, dDtIni, dDtFim, nExec, nIter)
+
+        // Atualiza tabela de processamento
+        ::updateProcTable(oMovements["movement"][nX], oTabSldOP, aMoedas)
+
+        If ::lProcCP
+            // Valoriza o movimento na tabela aglutinada do custo em partes (TRLCP)
+            ::oMovProcessCP:valueMovementParts(oTabSldOP,oMovements["movement"][nX], cFilAtu, aMoedas, dDtIni, dDtFim)
+            
+            // Atualiza tabela de processamento do custo em partes (TRHCP)
+            ::oMovProcessCP:updateProcTableParts(oMovements["movement"][nX], cFilAtu, nIter)
+
+            // Atualiza tabela de ordem de produção do custo em partes (TRMCP)
+            If oMovements["movement"][nX]["cf"] $ "PR0|PR1"
+                ::oMovProcessCP:balanceUpdaterByEntryCP(cFilAtu,(::cAgglutTable)->(OP),oMovements["movement"][nX]["r_e_c_n_o_"])
+            EndIf
+
+            // Recalcula o custo medio do produto em todas as partes
+            ::oMovProcessCP:updateAverageCostInAllParts(cFilAtu,(::cAgglutTable)->(COD),(::cAgglutTable)->(LOCARM))
+        EndIf
+
+    Next nX
+
+Return
+
+/*/{Protheus.doc} valueMovement
+    Valoriza o movimento de acordo com seu tipo
+    @author Squad.Entradas
+    @since 11/11/2024
+    @version 1.0
+    @param  oMovement, object, objeto com dados do movimento
+            oTabSldOP, object, objeto com dados da tabela de saldo por OP
+            cFilAtu, character, filial corrente
+            dDtIni, data, inicio periodo
+            dDtFim, data, fim periodo
+            nIter, integer, número da iteração
+    /*/
+Method valueMovement(oMovement, oTabSldOP, aMoedas, cFilAtu, dDtIni, dDtFim, nExec, nIter) class movementProcess
+    Local cQryStatement := ""
+    Local cCteStatement := ""
+    Local cMoeda        := ""
+    Local cFieldsUpd    := ""
+    Local cMatchFilter  := ""
+    Local nMoeda        := 0
+
+    cQryStatement := ::buildQryStatement(oMovement, oTabSldOP, aMoedas, "AGL", cFilAtu, dDtIni, dDtFim, nExec, nIter)
+
+    For nMoeda := 1 To Len(aMoedas)
+        cMoeda := aMoedas[nMoeda]
+        cFieldsUpd += "CUSTO" + cMoeda + " = TEMPTABLE.CSTCALC" + cMoeda
+        If oMovement["alias"] == "SD1" .And. (::cAgglutTable)->(FILTRF) == "1"
+            cFieldsUpd += " + TEMPTABLE.ICMSRET" + cMoeda
+        EndIf
+        If nMoeda != Len(aMoedas)
+            cFieldsUpd += ", "
+        EndIf
+    Next nMoeda
+    cMatchFilter := ::cAgglutTable + ".R_E_C_N_O_ = TEMPTABLE.AGLRECNUMBER"
+    cCteStatement := ::buildCteStatement(::cAgglutTable, cFieldsUpd, cMatchFilter, cQryStatement)
+
+    ::RunQuery(cCteStatement)
+
+Return
+
+/*/{Protheus.doc} updateProcTable
+    Atualiza a tabela de processamento
+    @author Squad.Entradas
+    @since 11/11/2024
+    @version 1.0
+    @param  oMovement, object, objeto com dados do movimento
+            cFilAtu, character, filial corrente
+            dDtIni, data, inicio periodo
+            dDtFim, data, fim periodo
+    /*/
+Method updateProcTable(oMovement, oTabSldOP, aMoedas) class movementProcess
+    Local cQryStatement := ""
+    Local cCteStatement := ""
+    Local cMoeda        := ""
+    Local cFieldsUpd    := ""
+    Local cMatchFilter  := ""
+    Local nMoeda        := 0
+
+    cQryStatement := ::buildQryStatement(oMovement, oTabSldOP, aMoedas, "PRO")
+
+    For nMoeda := 1 To Len(aMoedas)
+        cMoeda := aMoedas[nMoeda]
+        cFieldsUpd += "CSTPROC"+cMoeda+" = "
+        cFieldsUpd += " Case "
+        cFieldsUpd += "     When (("+::cProcTable + ".CSTPROC"+cMoeda+" + TEMPTABLE.CSTPROC"+cMoeda+") < 0) "
+        cFieldsUpd += "     Then 0 "
+        cFieldsUpd += "     Else ("+::cProcTable + ".CSTPROC"+cMoeda+" + TEMPTABLE.CSTPROC"+cMoeda+") "
+        cFieldsUpd += " End "
+        cFieldsUpd += ", "
+        cFieldsUpd += "CMPROC"  + cMoeda + " = "
+        cFieldsUpd += "CASE"
+        cFieldsUpd += "     WHEN ("+::cProcTable+".QTDPROC + TEMPTABLE.QTDPROC) > 0"
+        cFieldsUpd += "         THEN "
+        cFieldsUpd += "         Case "
+        cFieldsUpd += "         When "
+        cFieldsUpd += "             (("+::cProcTable+".CSTPROC"+cMoeda+" + TEMPTABLE.CSTPROC"+cMoeda+ ")"
+        cFieldsUpd += "              / "
+        cFieldsUpd += "              ("+::cProcTable + ".QTDPROC + TEMPTABLE.QTDPROC)) "
+        cFieldsUpd += "         < 0 Then 0 Else "
+        cFieldsUpd += "             (("+::cProcTable+".CSTPROC"+cMoeda+" + TEMPTABLE.CSTPROC"+cMoeda+ ")"
+        cFieldsUpd += "              / "
+        cFieldsUpd += "              ("+::cProcTable + ".QTDPROC + TEMPTABLE.QTDPROC)) "
+        cFieldsUpd += "         End "
+        cFieldsUpd += "      ELSE " + ::cProcTable + ".CMPROC" + cMoeda + " "
+        cFieldsUpd += "END, "
+    Next nMoeda
+    cFieldsUpd += " QTDPROC = " 
+    cFieldsUpd += " Case "
+    cFieldsUpd += "     When "  + ::cProcTable + ".QTDPROC + TEMPTABLE.QTDPROC < 0 "
+    cFieldsUpd += "     Then 0 "
+    cFieldsUpd += "     Else "  + ::cProcTable + ".QTDPROC + TEMPTABLE.QTDPROC "
+    cFieldsUpd += " End "
+    cMatchFilter := ::cProcTable + ".R_E_C_N_O_ = TEMPTABLE.PRORECNUMBER"
+    cCteStatement := ::buildCteStatement(::cProcTable, cFieldsUpd, cMatchFilter, cQryStatement)
+
+    ::RunQuery(cCteStatement)
+
+Return
+
+/*/{Protheus.doc} buildQryStatement
+    Monta query para selecao do movimento de acordo com seu tipo
+    e calcula o custo
+    @author Squad.Entradas
+    @since 11/11/2024
+    @version 1.0
+    @param  oMovement, object, objeto com dados do movimento
+            oTabSldOP, obect, objeto com dados da tabela de OP
+            aMoedas, array, array com as moedas a serem processadas
+            cIdTableUpd, character, Id tabela a atualizar
+            cFilAtu, character, filial corrente
+            dDtIni, data, inicio periodo
+            dDtFim, data, fim periodo
+            cIdTableUpd, character, Id tabela a atualizar
+            nIter, integer, número da iteração
+    @return cQryStatement, character, Query
+    /*/
+Method buildQryStatement(oMovement, oTabSldOP, aMoedas, cIdTableUpd, cFilAtu, dDtIni, dDtFim, nExec, nIter) class movementProcess
+    Local nMoeda        := 0
+    Local nCusto        := 0
+    Local nX            := 0
+    Local nPosStatement := 0
+    Local cMoeda        := ""
+    Local cMoedaD1      := ""
+    Local cCusto        := ""
+    Local cQuery        := ""
+    Local cMD5          := ""
+    Local cQryStatement := ""
+    Local cNull         := MatIsNull()
+    Local aBind         := {}
+    Local aCusto        := {}
+
+    cQuery := "SELECT "
+
+    // Movimentos valorizados a custo medio
+    If oMovement["customedio"] == "S"
+        For nMoeda := 1 To Len(aMoedas)
+            cMoeda := aMoedas[nMoeda]
+            If cIdTableUpd == "AGL"
+                cQuery += "(PRO.CMPROC" + cMoeda + " * AGL.QUANT) CSTCALC" + cMoeda + ", "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            EndIf
+        Next nMoeda
+        If cIdTableUpd == "AGL"
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM " + ::cAgglutTable + " AGL "
+        cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+        cQuery +=     "ON  PRO.FILPROC = AGL.FILPROC "
+        cQuery +=     "AND PRO.FILIAL  = AGL.FILIAL "
+        cQuery +=     "AND PRO.COD     = AGL.COD "
+        cQuery +=     "AND PRO.ARMAZEM = AGL.LOCARM "
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+
+    // Transferencias
+    ElseIf oMovement["cf"] == "DE4"
+        For nMoeda := 1 To Len(aMoedas)
+            cMoeda := aMoedas[nMoeda]
+            If cIdTableUpd == "AGL"
+                cQuery += "(PRO.CMPROC" + cMoeda + " * AGL.QUANT) CSTCALC" + cMoeda + ", "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            EndIf
+        Next nMoeda
+        If cIdTableUpd == "AGL"
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM " + ::cAgglutTable + " AGL "
+        If cIdTableUpd == "AGL"
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery += "    ON  PRO.FILPROC = AGL.FILPROC "
+            If ::cCusFil != 'E'
+                cQuery += "    AND PRO.FILIAL  = AGL.FILIAL "
+            EndIf
+            cQuery += "    AND PRO.COD     = AGL.CODORI "
+            If ::cCusFil == 'A'
+                cQuery += " AND PRO.ARMAZEM = AGL.LOCORI "
+            EndIf
+        Else
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery += "    ON  PRO.FILPROC = AGL.FILPROC "
+            cQuery += "    AND PRO.FILIAL  = AGL.FILIAL "
+            cQuery += "    AND PRO.COD     = AGL.COD "
+            cQuery += "    AND PRO.ARMAZEM = AGL.LOCARM "
+        EndIf
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+
+        If cIdTableUpd == "AGL"
+            ::oRequestCost:InternalTransferRequestCost(oMovement["r_e_c_n_o_"])
+        EndIf
+
+    // Producao
+    ElseIf oMovement["cf"] $ "PR0|PR1"
+        If cIdTableUpd == "AGL"
+            aCusto := oTabSldOP:productionProportionalizer(cFilAtu, dDtFim, ::cAgglutTable)
+            For nCusto := 1 To Len(aCusto)
+                cCusto := cValToChar(nCusto)
+                cQuery += cValToChar(aCusto[nCusto]) + " CSTCALC" + cCusto + ", "
+            Next nCusto
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            For nMoeda := 1 To Len(aMoedas)
+                cMoeda := aMoedas[nMoeda]
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            Next nMoeda
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM " + ::cAgglutTable + " AGL "
+        If cIdTableUpd == "PRO"
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery +=     "ON  PRO.FILPROC = AGL.FILPROC "
+            cQuery +=     "AND PRO.FILIAL  = AGL.FILIAL "
+            cQuery +=     "AND PRO.COD     = AGL.COD "
+            cQuery +=     "AND PRO.ARMAZEM = AGL.LOCARM "
+        EndIf
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+
+    // Desmontagem  
+    ElseIf oMovement["cf"] == "DE7"
+        For nMoeda := 1 To Len(aMoedas)
+            cMoeda := aMoedas[nMoeda]
+            If cIdTableUpd == "AGL"
+                cQuery += "REQ.CSTRE" + cMoeda + " * AGL.RATEIO / 100 CSTCALC" + cMoeda + ", "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            EndIf
+        Next nMoeda
+        If cIdTableUpd == "AGL"
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM " + ::cAgglutTable + " AGL "
+        If cIdTableUpd == "AGL"
+            cQuery += "INNER JOIN " + ::cAnalyTable + " DEV "
+            cQuery += "    ON  DEV.FILPROC = AGL.FILPROC "
+            cQuery += "    AND DEV.SEQ     = AGL.SEQ "
+            cQuery += "    AND DEV.CHVAGL  = AGL.CHVAGL "
+            cQuery += "INNER JOIN " + ::cAnalyTable + " REQ "
+            cQuery += "    ON  REQ.FILPROC = DEV.FILPROC "
+            cQuery += "    AND REQ.FILIAL  = DEV.FILIAL "
+            cQuery += "    AND REQ.CF      = ? "
+            aAdd(aBind, {"RE7", "C"})
+            cQuery += "    AND REQ.SEQ     = DEV.SEQ "
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery += "    ON  PRO.FILPROC = REQ.FILPROC "
+            cQuery += "    AND PRO.FILIAL  = REQ.FILIAL "
+            cQuery += "    AND PRO.COD     = REQ.COD "
+            cQuery += "    AND PRO.ARMAZEM = REQ.LOCARM "
+        Else
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery += "    ON  PRO.FILPROC = AGL.FILPROC "
+            cQuery += "    AND PRO.FILIAL  = AGL.FILIAL "
+            cQuery += "    AND PRO.COD     = AGL.COD "
+            cQuery += "    AND PRO.ARMAZEM = AGL.LOCARM "
+        EndIf
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+
+    // Dev/Req Valorizada
+    ElseIf oMovement["cf"] $ "DE6|RE6"
+        If Empty((::cAgglutTable)->(NUMCQ))
+            For nMoeda := 1 To Len(aMoedas)
+                cMoeda := aMoedas[nMoeda]
+            If cIdTableUpd == "AGL"
+                cQuery += "AGL.CUSTO" + cMoeda + " CSTCALC" + cMoeda + ", "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            EndIf
+        Next nMoeda
+        If cIdTableUpd == "AGL"
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM " + ::cAgglutTable + " AGL "
+        If cIdTableUpd == "PRO"
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery +=     "ON  PRO.FILPROC = AGL.FILPROC "
+            cQuery +=     "AND PRO.FILIAL  = AGL.FILIAL "
+            cQuery +=     "AND PRO.COD     = AGL.COD "
+            cQuery +=     "AND PRO.ARMAZEM = AGL.LOCARM "
+        EndIf
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+        Else
+            // Movimento de liberacao de CQ
+            If cIdTableUpd == "AGL" .And. (::cAgglutTable)->(ORIGLAN) != "CP"
+                ::movementInSamePeriod(oMovement, cFilAtu, dDtIni, dDtFim)
+            EndIf
+            For nMoeda := 1 To Len(aMoedas)
+                cMoeda := aMoedas[nMoeda]
+                If nMoeda == 1
+                    cMoedaD1 := ""
+                Else
+                    cMoedaD1 := cMoeda
+                EndIf
+                If cIdTableUpd == "AGL"
+                    If (::cAgglutTable)->(ORIGLAN) == "CP"
+                        cQuery += "CASE "
+                        cQuery += "    WHEN AGL.QUANT > 0 "
+                        cQuery += "        THEN ((SD1.D1_CUSTO" + cMoedaD1 + " / SD1.D1_QUANT) * AGL.QUANT) "
+                        cQuery += "    ELSE "
+                        cQuery += "        CASE "
+                        cQuery += "            WHEN SD1ORI.D1_CUSTO" + cMoedaD1 + " > 0 "
+                        cQuery += "                THEN ((SD1.D1_CUSTO" + cMoedaD1 + " / SD1ORI.D1_QUANT) * SD3.D3_QUANT) "
+                        cQuery += "            ELSE 0 "
+                        cQuery += "        END "
+                        cQuery += "END CSTCALC" + cMoeda + ", "
+                    Else
+                        cQuery += "CASE "
+                        cQuery += "    WHEN AGL.QUANT > 0 "
+                        cQuery += "        THEN "
+                        cQuery += "            CASE "
+                        cQuery += "                WHEN SD3.D3_QUANT > 0 "
+                        If oMovement["samePeriod"]
+                            If (::cAgglutTable)->(ORIGLAN) == "PR"
+                                cQuery += "            THEN ((AGLORI.CUSTO" + cMoeda + " / SD3.D3_QUANT) * AGL.QUANT) "
+                            Else
+                                cQuery += "            THEN "
+                                cQuery += "                CASE "
+                                cQuery += "                    WHEN AGLORI.CF = 'DE4' "
+                                cQuery += "                        THEN (PRO.CMPROC" + cMoeda + " * AGL.QUANT) "
+                                cQuery += "                    WHEN AGLORI.CF = 'DE7' "
+                                cQuery += "                        THEN (PRO.CMPROC" + cMoeda + " * AGL.QUANT) * AGLORI.RATEIO / 100 "
+                                cQuery += "                    ELSE 0 "
+                                cQuery += "                END "
+                            EndIf
+                        Else
+                            cQuery += "                THEN ((SD3.D3_CUSTO" + cMoeda + " / SD3.D3_QUANT) * AGL.QUANT) "
+                        EndIf
+                        cQuery += "            ELSE 0 "
+                        cQuery += "        END "
+                        cQuery += "    ELSE AGL.CUSTO" + cMoeda + " "
+                        cQuery += "END CSTCALC" + cMoeda + ", "
+                    EndIf
+                Else
+                    cQuery += "CASE	WHEN AGL.TM > '500'	"
+                    cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                    cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                    cQuery += "END CSTPROC" + cMoeda + ", "
+                EndIf
+            Next nMoeda
+            If cIdTableUpd == "AGL"
+                cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.QUANT * -1 "
+                cQuery +=     "ELSE AGL.QUANT "
+                cQuery += "END QTDPROC, "
+                cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+            EndIf
+            cQuery += "FROM " + ::cAgglutTable + " AGL "
+            If cIdTableUpd == "AGL"
+                If (::cAgglutTable)->(ORIGLAN) == "CP"
+                    cQuery += "INNER JOIN " + RetSqlName("SD1") + " SD1 "
+                    cQuery +=     "ON  SD1.D1_FILIAL = ? "
+                    aAdd(aBind, {FWxFilial("SD1",cFilAtu), "C"})
+                    cQuery +=     "AND SD1.D1_COD = AGL.COD "
+                    cQuery +=     "AND SD1.D1_LOCAL = ? "
+                    aAdd(aBind, {::cLocCQ, "C"})
+                    cQuery +=     "AND SD1.D1_NUMSEQ = AGL.IDENT "
+                    cQuery +=     "AND SD1.D_E_L_E_T_ = ? "
+                    aAdd(aBind, {" ", "C"})
+                    cQuery += "LEFT JOIN " + RetSqlName("SD1") + " SD1ORI "
+                    cQuery +=     "ON  SD1.D1_FILIAL = ? "
+                    aAdd(aBind, {FWxFilial("SD1",cFilAtu), "C"})
+                    cQuery +=     "AND SD1ORI.D1_DOC = SD1.D1_NFORI "
+                    cQuery +=     "AND SD1ORI.D1_SERIE = SD1.D1_SERIORI "
+                    cQuery +=     "AND SD1ORI.D1_FORNECE = SD1.D1_FORNECE "
+                    cQuery +=     "AND SD1ORI.D1_LOJA = SD1.D1_LOJA "
+                    cQuery +=     "AND SD1ORI.D1_ITEM = SD1.D1_ITEMORI "
+                    cQuery +=     "AND SD1ORI.D_E_L_E_T_ = ? "
+                    aAdd(aBind, {" ", "C"})
+                        cQuery += "LEFT JOIN " + RetSqlName("SD3") + " SD3 "
+                        cQuery +=     "ON  SD3.D3_FILIAL = ? "
+                        aAdd(aBind, {FWxFilial("SD3",cFilAtu), "C"})
+                        cQuery +=     "AND SD3.D3_COD = AGL.COD "
+                        cQuery +=     "AND SD3.D3_LOCAL = AGL.LOCDEST "
+                        cQuery +=     "AND SD3.D3_NUMSEQ = AGL.SEQ "
+                        cQuery +=     "AND SD3.D3_IDENT = SD1ORI.D1_NUMSEQ "
+                        cQuery +=     "AND SD3.D3_CF = 'DE6' "
+                        cQuery +=     "AND SD3.D3_ESTORNO = ' ' "
+                        cQuery +=     "AND SD3.D_E_L_E_T_ = ? "
+                        aAdd(aBind, {" ", "C"})
+                Else
+                    // Tratamento para recuperar custo da origem para producao e transferencias
+                    cQuery += "INNER JOIN " + RetSqlName("SD3") + " SD3 "
+                    cQuery +=     "ON  SD3.D3_FILIAL = ? "
+                    aAdd(aBind, {FWxFilial("SD3",cFilAtu), "C"})
+                    cQuery +=     "AND SD3.D3_COD = AGL.COD "
+                    cQuery +=     "AND SD3.D3_LOCAL = ? "
+                    aAdd(aBind, {::cLocCQ, "C"})
+                    cQuery +=     "AND SD3.D3_NUMSEQ = AGL.IDENT "
+                    cQuery +=     "AND SD3.D3_ESTORNO = ' ' "
+                    cQuery +=     "AND SD3.D_E_L_E_T_ = ? "
+                    aAdd(aBind, {" ", "C"})
+                    If oMovement["samePeriod"]
+                    cQuery += "INNER JOIN " + ::cAgglutTable + " AGLORI "
+                    cQuery +=     "ON  AGLORI.FILPROC = AGL.FILPROC "
+                    cQuery +=     "AND AGLORI.ALIAS = 'SD3' "
+                    cQuery +=     "AND AGLORI.RECNO = SD3.R_E_C_N_O_ "
+                    cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+                    cQuery +=     "ON  PRO.FILPROC = AGLORI.FILPROC "
+                    If ::cCusFil != "E"
+                        cQuery += "AND PRO.FILIAL  = AGLORI.FILIAL "
+                    EndIf
+                    cQuery +=     "AND PRO.COD     = AGLORI.COD "
+                    If ::cCusFil == "A"
+                        cQuery += "AND PRO.ARMAZEM = AGLORI.LOCARM "
+                    EndIf
+                EndIf
+                EndIf
+            Else
+                cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+                cQuery +=     "ON  PRO.FILPROC = AGL.FILPROC "
+                cQuery +=     "AND PRO.FILIAL  = AGL.FILIAL "
+                cQuery +=     "AND PRO.COD     = AGL.COD "
+                cQuery +=     "AND PRO.ARMAZEM = AGL.LOCARM "
+            EndIf
+            cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+            aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+        EndIf
+
+    // Transferencia entre filiais
+    ElseIf oMovement["alias"] == "SD1" .And. (::cAgglutTable)->(FILTRF) == "1"
+
+        If cIdTableUpd == "AGL"
+            ::movementInSamePeriod(oMovement, cFilAtu, dDtIni, dDtFim)
+        EndIf
+
+        For nMoeda := 1 To Len(aMoedas)
+            cMoeda := aMoedas[nMoeda]
+            If cIdTableUpd == "AGL"
+                If oMovement["samePeriod"]
+                    cQuery += " CASE "
+                    cQuery += " WHEN ORIG.CUSTOMEDIO = 'S' "
+                    cQuery += "     THEN ORIG.QUANT * PROORIG.CMPROC" + cMoeda + " "
+                    cQuery += " ELSE ORIG.CUSTO" + cMoeda + " "
+                    cQuery += " END CSTCALC" + cMoeda + ", "
+                Else
+                    If ::lM330TRF
+                        cQuery += " TRF.D2_CUSTO" + cMoeda
+                    Else
+                        If nMoeda == 1
+                            cQuery += " TRF.D1_CUSTO"
+                        Else
+                            cQuery += " TRF.D1_CUSTO" + cMoeda
+                        EndIf
+                    EndIf
+                    cQuery += " CSTCALC" + cMoeda + ", "
+                EndIf
+                // Acrescenta ICMS ST ao custo
+                cQuery += "( SELECT "
+                cQuery += "     CASE "
+                cQuery += "         WHEN TRF.TRFICST = '1' "
+                If nMoeda == 1
+                    cQuery += "         THEN TRF.D1_ICMSRET "
+                Else
+                    cQuery += "     AND " + cNull + "(SM2.M2_MOEDA" + cMoeda + ", 0) > 0 "
+                    cQuery += "         THEN (TRF.D1_ICMSRET / SM2.M2_MOEDA" + cMoeda + ") "
+                EndIf
+                cQuery += "             ELSE 0 "
+                cQuery += "     END "
+                cQuery += "FROM " + RetSqlName("SM2") + " SM2 "
+                cQuery += "WHERE SM2.M2_DATA = (SELECT MAX(M2_DATA) "
+			    cQuery += "                     FROM " + RetSqlName("SM2") + " SM2A "
+			    cQuery += "                     WHERE SM2A.M2_DATA <= TRF.D1_DTDIGIT "
+                cQuery += "                       AND SM2A.M2_DATA <> ? "
+                aAdd(aBind, {" ", "C"})
+			    cQuery += "                       AND  SM2A.D_E_L_E_T_ = ?) "
+                aAdd(aBind, {" ", "C"})
+	            cQuery += "AND SM2.D_E_L_E_T_ = ? "
+                aAdd(aBind, {" ", "C"})
+                cQuery += ") ICMSRET" + cMoeda + ", "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            EndIf
+        Next nMoeda
+        If cIdTableUpd == "AGL"
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM "
+        If cIdTableUpd == "AGL"
+            If oMovement["samePeriod"]
+                cQuery += ::cAgglutTable + " AGL "
+                cQuery += "INNER JOIN " + ::cAnalyTable + " DEST "
+                cQuery += "    ON  DEST.FILPROC = AGL.FILPROC "
+                cQuery += "    AND DEST.FILIAL  = AGL.FILIAL "
+                cQuery += "    AND DEST.COD     = AGL.COD "
+                cQuery += "    AND DEST.LOCARM  = AGL.LOCARM "
+                cQuery += "    AND DEST.CHVAGL  = AGL.CHVAGL "
+                cQuery += "INNER JOIN " + ::cViewTransfer + " TRF "
+                cQuery += "    ON  TRF.RECDES = DEST.RECNO "
+                cQuery += "    AND TRF.D2_EMISSAO >= ? "
+                aAdd(aBind, {dToS(dDtIni), "C"})
+                cQuery += "    AND TRF.D2_EMISSAO <= ? "
+                aAdd(aBind, {dToS(dDtFim), "C"})
+                cQuery += "INNER JOIN " + ::cAnalyTable + " ORIG "
+                cQuery += "    ON  ORIG.FILPROC = DEST.FILPROC "
+                cQuery += "    AND ORIG.FILIAL  = TRF.FILORI "
+                cQuery += "    AND ORIG.ALIAS   = ? "
+                aAdd(aBind, {"SD2", "C"})
+                cQuery += "    AND ORIG.FILTRF  = ? "
+                aAdd(aBind, {"1", "C"})
+                cQuery += "    AND ORIG.RECNO = TRF.RECORI "
+                cQuery += "INNER JOIN "+::cProcTable+" PROORIG "
+                cQuery += "    ON PROORIG.FILPROC = ORIG.FILPROC "
+                cQuery += "   AND PROORIG.FILIAL  = ORIG.FILIAL "
+                cQuery += "   AND PROORIG.COD     = ORIG.COD "
+                cQuery += "   AND PROORIG.ARMAZEM = ORIG.LOCARM "
+            Else
+                cQuery += ::cAgglutTable + " AGL "
+                cQuery += "INNER JOIN " + ::cAnalyTable + " DEST "
+                cQuery += "    ON  DEST.FILPROC = AGL.FILPROC "
+                cQuery += "    AND DEST.FILIAL  = AGL.FILIAL "
+                cQuery += "    AND DEST.COD     = AGL.COD "
+                cQuery += "    AND DEST.LOCARM  = AGL.LOCARM "
+                cQuery += "    AND DEST.CHVAGL  = AGL.CHVAGL "
+                cQuery += "INNER JOIN " + ::cViewTransfer + " TRF "
+                cQuery += "    ON  TRF.RECDES = DEST.RECNO "
+                cQuery += "    AND TRF.D1_DTDIGIT >= ? "
+                aAdd(aBind, {dToS(dDtIni), "C"})
+                cQuery += "    AND TRF.D1_DTDIGIT <= ? "
+                aAdd(aBind, {dToS(dDtFim), "C"})
+            EndIf
+        Else
+            cQuery += ::cAgglutTable + " AGL "
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery += "    ON  PRO.FILPROC = AGL.FILPROC "
+            cQuery += "    AND PRO.FILIAL  = AGL.FILIAL "
+            cQuery += "    AND PRO.COD     = AGL.COD "
+            cQuery += "    AND PRO.ARMAZEM = AGL.LOCARM "
+        EndIf
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+
+        If cIdTableUpd == "AGL" .And. nIter == 1 .And. oMovement["samePeriod"]
+            ::oRequestCost:BranchTransferRequestCost(cFilAtu, oMovement["r_e_c_n_o_"], dDtIni, dDtFim)
+        EndIf
+
+    Else
+        //Outros movimentos
+        For nMoeda := 1 To Len(aMoedas)
+            cMoeda := aMoedas[nMoeda]
+            If cIdTableUpd == "AGL"
+                cQuery += "AGL.CUSTO" + cMoeda + " CSTCALC" + cMoeda + ", "
+            Else
+                cQuery += "CASE	WHEN AGL.TM > '500'	"
+                cQuery +=     "THEN AGL.CUSTO" + cMoeda + " * -1 "
+                cQuery +=     "ELSE AGL.CUSTO" + cMoeda + " "
+                cQuery += "END CSTPROC" + cMoeda + ", "
+            EndIf
+        Next nMoeda
+        If cIdTableUpd == "AGL"
+            cQuery += "AGL.R_E_C_N_O_ AGLRECNUMBER "
+        Else
+            cQuery += "CASE	WHEN AGL.TM > '500'	"
+            cQuery +=     "THEN AGL.QUANT * -1 "
+            cQuery +=     "ELSE AGL.QUANT "
+            cQuery += "END QTDPROC, "
+            cQuery += "PRO.R_E_C_N_O_ PRORECNUMBER "
+        EndIf
+        cQuery += "FROM " + ::cAgglutTable + " AGL "
+        If cIdTableUpd == "PRO"
+            cQuery += "INNER JOIN " + ::cProcTable + " PRO "
+            cQuery +=     "ON  PRO.FILPROC = AGL.FILPROC "
+            cQuery +=     "AND PRO.FILIAL  = AGL.FILIAL "
+            cQuery +=     "AND PRO.COD     = AGL.COD "
+            cQuery +=     "AND PRO.ARMAZEM = AGL.LOCARM "
+        EndIf
+        cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+        aAdd(aBind, {oMovement["r_e_c_n_o_"], "N"})
+    EndIf
+
+    // Define um identificador para a query
+    cMD5 := MD5(cQuery)
+
+    // Verifica se query ja foi tratada antes, nao sendo necessario refazer
+    If (nPosStatement := aScan(::aStatement, {|x| x[2] == cMD5})) == 0
+        aAdd(::aStatement, {FwExecStatement():New(ChangeQuery(cQuery)), cMD5})
+        nPosStatement := Len(::aStatement)
+    EndIf
+
+    // Seta as variaveis na query
+    For nX := 1 To Len(aBind)
+        If aBind[nX][2] == "C"
+            ::aStatement[nPosStatement][1]:SetString(nX, aBind[nX][1])
+        ElseIf aBind[nX][2] == "N"
+            ::aStatement[nPosStatement][1]:SetNumeric(nX, aBind[nX][1])
+        EndIf
+    Next nX
+
+    cQryStatement := ::aStatement[nPosStatement][1]:GetFixQuery()
+
+    aBind := {}
+    FWFreeArray(aBind)
+
+Return cQryStatement
+
+/*/{Protheus.doc} movementInSamePeriod
+    Verifica se a movimentacao ocorreu no mesmo periodo ou fora do periodo
+    @author Squad.Entradas
+    @since 06/02/2025
+    @version version
+    @param  oMovements, object, objeto com dados do movimento
+            cFilAtu, character, filial corrente
+            dDtIni, data, inicio periodo
+            dDtFim, data, fim periodo
+    @return no return
+    /*/
+Method movementInSamePeriod(oMovement, cFilAtu, dDtIni, dDtFim) class movementProcess
+    Local cQuery      := ""
+
+    If oMovement["cf"] $ "RE6|DE6"
+        If ::oQueryRequisition == Nil
+            cQuery := "SELECT CASE "
+            cQuery += "           WHEN AGLORI.R_E_C_N_O_ IS NOT NULL "
+            cQuery += "               THEN 'S' "
+            cQuery += "           ELSE 'N' "
+            cQuery += "       END SAMEPERIOD "
+            cQuery += "FROM " + ::cAgglutTable + " AGL "
+            cQuery += "INNER JOIN " + RetSqlName("SD3") + " SD3 "
+            cQuery += "    ON  SD3.D3_FILIAL = ? "
+            cQuery += "    AND SD3.D3_COD = AGL.COD "
+            cQuery += "    AND SD3.D3_LOCAL = ? "
+            cQuery += "    AND SD3.D3_NUMSEQ = AGL.IDENT "
+            cQuery += "    AND SD3.D3_ESTORNO = ? "
+            cQuery += "    AND SD3.D_E_L_E_T_ = ? "
+            cQuery += "LEFT JOIN "+::cAgglutTable+" AGLORI "
+            cQuery += "    ON  AGLORI.RECNO = SD3.R_E_C_N_O_ "
+            cQuery += "    AND AGLORI.FILPROC = AGL.FILPROC "
+            cQuery += "    AND AGLORI.ALIAS = 'SD3' "
+            cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+
+            ::oQueryRequisition := FWExecStatement():New(cQuery)
+        EndIf 
+
+        ::oQueryRequisition:SetString(1, FWxFilial("SD3",cFilAtu))
+        ::oQueryRequisition:SetString(2, ::cLocCQ)
+        ::oQueryRequisition:SetString(3, " ")
+        ::oQueryRequisition:SetString(4, " ")
+        ::oQueryRequisition:SetNumeric(5, oMovement["r_e_c_n_o_"])
+
+        oMovement["samePeriod"] := ::oQueryRequisition:ExecScalar("SAMEPERIOD") == "S"
+
+    ElseIf oMovement["alias"] == "SD1" .And. (::cAgglutTable)->(FILTRF) == "1"
+        If ::oQueryTransfil == Nil
+            cQuery := "SELECT TRF.RECORI RECORI "
+            cQuery += "FROM " + ::cAgglutTable + " AGL "
+            cQuery += "INNER JOIN " + ::cViewTransfer + " TRF "
+            cQuery += " ON  TRF.RECDES = AGL.RECNO "
+            cQuery += " AND TRF.D2_EMISSAO >= ? "
+            cQuery += " AND TRF.D2_EMISSAO <= ? "
+            cQuery += "WHERE AGL.R_E_C_N_O_ = ? "
+
+            ::oQueryTransfil := FWExecStatement():New(cQuery)
+        EndIf 
+
+        ::oQueryTransfil:SetString(1, dToS(dDtIni))
+        ::oQueryTransfil:SetString(2, dToS(dDtFim))
+        ::oQueryTransfil:SetNumeric(3, oMovement["r_e_c_n_o_"])
+
+        oMovement["samePeriod"] := ::oQueryTransfil:ExecScalar("RECORI") > 0
+        oMovement["mv_m330trf"] := ::lM330TRF
+    EndIf
+
+Return

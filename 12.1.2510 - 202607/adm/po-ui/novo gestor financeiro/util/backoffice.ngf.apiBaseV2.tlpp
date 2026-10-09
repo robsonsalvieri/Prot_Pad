@@ -1,0 +1,794 @@
+#include 'tlpp-core.th'
+#include 'backoffice.ngf.apiBaseV2.ch'
+
+#DEFINE X9_DOM 1
+#DEFINE X9_CDOM 3
+#DEFINE X9_EXPDOM 2
+#DEFINE X9_EXPCDOM 4
+#DEFINE X9_USEFIL 5
+
+NAMESPACE totvs.protheus.backoffice.ngf.util.api
+USING NAMESPACE gfin.api.tables
+USING NAMESPACE gfin.util
+
+/*/{Protheus.doc} ApiBaseV2
+  classe para padronizar as API do NGF que utilizam FWAdapterBaseV2
+  @type class
+  @author renato.ito
+  @since 25/11/2021
+/*/
+Class ApiBaseV2 FROM FWAdapterBaseV2
+  Private Data aStruct  as Array     // struct dos campos
+  Private Data aFormat  as Array     // campos que serão formatados
+  Private Data aFolders as Array     // folders
+  Private Data lFolder  as Logical
+  Public  Data oHashFields as Object  // campos que serão retornados e utilizados na query
+  Private Data aTableRelation As Array
+  Private Data cSx9Join As Character
+  Private Data cTableOwner As Character
+  Private Data cPrimaryKey As Character
+  Public  Data aParamsFields As Array
+
+  Public Method new()
+  Public Method destroy()
+  Public Method setParams()          // recebe os paramestros da requisição e configura a classe
+  Public Method getResponse()        // resposta para a API com todos os tratamentos
+  Public Method setApiFields()       // configura os campos que serão considerados
+  Public Method setRelation()
+  Public Method prepareRelation()
+  Private Method ExecuteRelation()
+  Private Method getRelationQuery()
+  Public Method addStruct()
+  Public Method getStruct()
+  Public Method addFormat()
+  Public Method getFormat()
+  Public Method tableStruct()
+
+EndClass
+
+/*/{Protheus.doc} ApiBaseV2::new
+  contrutor da classe
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+/*/
+Method new() Class ApiBaseV2
+  ::aStruct   := {}
+  ::aFormat   := {}
+  ::aFolders  := {}
+  ::aTableRelation := {}
+  ::cSx9Join := ""
+  ::cTableOwner := ""
+  ::cPrimaryKey := ""
+  ::lFolder   := .F.
+  ::aParamsFields := {}
+  ::oHashFields := FwHashMap():New()
+  _Super:new('GET')
+  If MethIsMemberOf( self, "setUseSpaces", .T. )
+    ::setUseSpaces(.T.)
+  Endif
+Return Self
+
+/*/{Protheus.doc} ApiBaseV2::destroy
+  limpa a memoria
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+/*/
+Method destroy() Class ApiBaseV2
+  FreeObj(::oHashFields)
+  ::DeActivate()
+return
+
+/*/{Protheus.doc} SetRelation
+  Alimenta a matriz de relacionamentos da tabela
+  @author Vitor Duca
+  @since 09/03/2022
+  @version 1.0
+  @param param_name, param_type, param_descr
+  @return return_var, return_type, return_description
+  /*/
+Method SetRelation(cRelation As Character) Class ApiBaseV2
+
+  ::aTableRelation := STRTOKARR( StrTran(cRelation ,'',""), "," )
+
+Return
+
+
+/*/{Protheus.doc} ApiBaseV2::setParams
+    trata os params e os headers da requisição
+    @type method
+    @author renato.ito
+    @since 25/11/2021
+    @param cTable, character, tabela
+    @param jParams, json, queryParams
+    @param jHeaders, json, headers
+/*/
+Method setParams(cTable as character, jParams As Json, jHeaders As Json) Class ApiBaseV2
+  Local lFilterFilial := .F. as logical
+  Local aBranches     := {}  as array
+  Local aTableField   := {}  as array
+  Local lBrowser      := .F. as logical
+  Local lFilial       := .F. as logical
+  Local nPos          := 0   as numeric
+  Local cQueryWhere   := ''  as character
+
+  ::cTableOwner  := UPPER(cTable)
+  lFilial := FWModeAccess(::cTableOwner, 1) <> 'C'
+  ::cPrimaryKey := normalizeIndex((::cTableOwner)->(IndexKey(1)))
+
+  // indica qual página devemos retornar
+  if jParams:hasProperty('page')
+    ::setPage(Val(jParams['page']))
+  endif
+
+  // indica o tamanho da página
+  if jParams:hasProperty('pagesize')
+    ::setPageSize(Val(jParams['pagesize']))
+  elseif jParams:hasProperty('pageSize')
+    ::setPageSize(Val(jParams['pageSize']))
+  endif
+
+  // indica o filtro querystring recebido (pode se utilizar um filtro oData)
+  if jParams:hasProperty('filter')
+    ::SetUrlFilter({{"FILTER", jParams['filter']}})
+    lFilterFilial := "_FILIAL" $ UPPER(jParams['filter'])
+  endif
+
+  // order da query
+  if jParams:hasProperty('order')
+    ::SetOrder(UPPER(jParams['order']))
+  else
+    ::SetOrder(::cPrimaryKey)
+  endif
+  // adiciona os campos de browser
+  if jParams:hasProperty('browser') .and. UPPER(jParams['browser']) == 'S'
+    lBrowser := .T.
+    ::setApiFields(::cTableOwner, {|X| GetSX3Cache(X, 'X3_BROWSE') == 'S'} , .F., lFilial)
+  endif
+  // adiciona os campos usados
+  if jParams:hasProperty('usado') .and. UPPER(jParams['usado']) == 'S'
+    ::setApiFields(::cTableOwner, {|| .T.}, .T., lFilial)
+  endif
+  // adiciona os fields
+  if jParams:hasProperty('fields')
+    ::aParamsFields := STRtokARR(UPPER(jParams['fields']), ',')
+    ::setApiFields(::cTableOwner, {|X| AScan(::aParamsFields, AllTrim(X)) > 0 }, .F., lFilial)
+  endif
+  // retorna infroamção de folder
+  if jParams:hasProperty('folder') .and. UPPER(jParams['folder']) == 'S'
+    ::lFolder := .T.
+  endif
+  if len(::oHashFields:keys()) < 1
+    ::setApiFields(::cTableOwner, {|| .T.}, .T., lFilial)
+  endif
+
+  // trata as filiais encaminhadas no header para o filtro
+  If jHeaders:hasProperty('branches') .and. ::cTableOwner <> "F79"
+    aBranches := STRtokARR(UPPER(jHeaders['branches']), ',')
+
+    //Verifica se o filtro de filiais deve ser feito em outro campo, FILORI por exemplo
+    If jParams:hasProperty('fieldBranch') .and. !Empty(jParams['fieldBranch']) .and. (::cTableOwner)->(FieldPos(jParams['fieldBranch'])) > 0
+      //Foi criado uma proteção para os casos onde o campo não possui conteudo, pois o FILORI
+      //foi criado posterior a criação da tabela, podendo existir registros sem conteudo
+      cQueryWhere := " AND " + ::cTableOwner + "."+ jParams['fieldBranch'] + " IN (' ', " + gfin.util.branchesFormatToIn(aBranches, ::cTableOwner, .F.) + ")"
+      
+    Elseif lFilial .and. !lFilterFilial
+      aTableField := ::oHashFields:keys()
+      nPos := Ascan(aTableField, {|x| "_FILIAL" $ UPPER(x)})
+      if nPos > 0 .and. Len(aBranches) > 0
+        cQueryWhere := " AND " + ::cTableOwner + "."+ aTableField[nPos] + " IN (" + gfin.util.branchesFormatToIn(aBranches, ::cTableOwner) + ")"
+      endif
+    endif
+
+    If !Empty(cQueryWhere)
+      ::SetWhere(cQueryWhere)
+    Endif  
+  Endif  
+
+  mapFields(Self, ::lFolder, lBrowser)
+
+return
+
+/*/{Protheus.doc} ApiBaseV2::addStruct
+  adiciona item ao array de struct
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+  @param jStruct, json, struct
+/*/
+Method addStruct(jStruct as json) Class ApiBaseV2
+  Aadd(::aStruct, jStruct)
+return
+
+/*/{Protheus.doc} ApiBaseV2::getStruct
+  retorna o array de struct
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+  @return array, array de struct
+/*/
+Method getStruct() Class ApiBaseV2
+return AClone(::aStruct)
+
+/*/{Protheus.doc} ApiBaseV2::addFormat
+  adiciona item ao array de itens a serem formatados
+  [1] - no do campo em caixa baixa (lower)
+  [2] - tipo de formatação (x3cbox, format, moeda)
+  [3] - picture do campo
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+  @param aFormat, array, tipo de formatação
+/*/
+Method addFormat(aFormat as array) Class ApiBaseV2
+  Aadd(::aFormat, aFormat)
+return
+
+/*/{Protheus.doc} ApiBaseV2::getFormat
+  retorna o array de itens a serem formatados
+  [1] - no do campo em caixa baixa (lower)
+  [2] - tipo de formatação (x3cbox, format, moeda)
+  [3] - picture do campo
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+  @return array, array com os campos a serem formatados
+/*/
+Method getFormat() Class ApiBaseV2
+return ::aFormat
+
+/*/{Protheus.doc} ApiBaseV2::getResponse
+  gera o response para a API
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+  @return json, response para a api
+/*/
+Method getResponse() Class ApiBaseV2
+	Local jResponse  := JsonObject():new() as json
+	Local aMapFields := {}    as Array
+	Local nField     := 1     as Numeric
+
+	//Executa a consulta, se retornar .T. tudo ocorreu conforme esperado
+	if ::Execute()
+		aMapFields := SELF:oJsonObj:aMapFields
+		For nField := 1 to Len(aMapFields)
+			If aMapFields[nField][5][2] == "N"
+				TCSetField(SELF:oJsonObj:cAlias, aMapFields[nField][5][1], aMapFields[nField][5][2], aMapFields[nField][5][3], aMapFields[nField][5][4])
+			EndIf
+		Next nField
+		// Gera o arquivo Json com o retorno da Query
+		::FillGetResponse()
+	endif
+
+	if ::lOk
+		jResponse["result"] := .T.
+		jResponse["response"] := JsonObject():New()
+		jResponse["response"]:FromJSON(::getJSONResponse())
+		prepareItems(@jResponse, self)
+		jResponse["response"]["struct"] := ::getStruct()
+		if ::lFolder
+			jResponse["response"]["folder"] := ::aFolders
+		endif
+	else
+		jResponse := gfin.util.answerErrorFormat(::GetCode(), ::GetMessage(), ::GetMessage())
+	endif
+
+return jResponse
+
+/*/{Protheus.doc} ApiBaseV2::setApiFields
+  prepara os campos que serão utilizados na query e para o retorno
+  @type method
+  @author renato.ito
+  @since 25/11/2021
+  @param cTable, character, tabela
+  @param bSx3, codeblock, bloco de códico para validar se o campo deve ser adicionado
+  @param lUsado, logical, indica se deve ser considerado campo usado
+/*/
+Method setApiFields(cTable as character, bSx3, lUsado as logical, lFilial as logical) Class ApiBaseV2
+  Local nField    := 1 as numeric
+  Local nfolder   := 1 as numeric
+  Local aFields   := {} as array
+  Local oStruct   as object
+
+  Default bSx3 := {|| .T.}
+
+  oStruct := FWFormStruct(2, cTable, bSx3, lUsado, .F., lFilial)
+  aFields := oStruct:getFields()
+  for nField := 1 to len(aFields)
+    if !::oHashFields:containsKey(aFields[nField][1])
+      ::oHashFields:put(aFields[nField][1], {;
+        'field'       : lower(aFields[nField][1]),;
+        'title'       : aFields[nField][3],;
+        'description' : aFields[nField][4],;
+        'order'       : aFields[nField][2],;
+        'folder'      : aFields[nField][11],;
+        'options'     : aFields[nField][13],;
+        'size'        : GetSx3Cache(aFields[nField][1], "X3_TAMANHO");
+      })
+    endif
+  next nField
+
+  if Empty(::aFolders)
+    for nFolder := 1 to len(oStruct:aFolders)
+      Aadd(::aFolders, {;
+        'order' : oStruct:aFolders[nFolder]['CID'],;
+        'label' : oStruct:aFolders[nFolder]['CTITULO'];
+      })
+    next nFolder
+    if Empty(::aFolders) // Se não existe folder adiciona Detalhes como default
+      Aadd(::aFolders, {;
+          'order' : ' ',;
+          'label' : STR0001; // Detalhes
+      })
+    else
+      Aadd(::aFolders, {;
+        'order' : ' ',;
+        'label' : STR0002; // Outros
+      })
+    endif
+  endif
+return
+
+/*/{Protheus.doc} tableStruct
+  Retorna a estrutura da tabela passada por parametro
+  @author Vitor Duca
+  @since 09/12/2021
+  @version 1.0
+  @param cTable, Character, Prefixo da tabela
+  @param jParams, Json, Query params
+  @return aFieldStruct, Array, Array contendo a estrutura da tabela
+/*/
+Method tableStruct(cTable As Character, jParams As Json) CLASS ApiBaseV2
+  Local cX3Title := "" As Character
+  Local cX3Descri := "" As Character
+  Local cX3Picture := "" As Character
+  Local cX3F3 := "" As Character
+  Local cX3Required := "" As Character
+  Local cX3Relation := "" As Character
+  Local cX3When := "" As Character
+  Local cX3Browse := "" As Character
+  Local cX3Usado := "" As Character
+  Local cField := "" As Character
+  Local aX3Cbox := {} As Array
+  Local nItem := 0 As Numeric
+  Local aStruct := {} As Array
+  Local aFieldStruct := {} As Array
+  Local lBrowser := .F. As Logical
+  Local lUsado := .F. As Logical
+  local lAllFields := .F. As Logical
+  Local lExistsBranch := Len(AllTrim(xFilial(cTable))) > 0 As Logical
+
+  if jParams:hasProperty('browser') .and. UPPER(jParams['browser']) == 'S'
+    lBrowser := .T.
+  Endif
+
+  if jParams:hasProperty('usado') .and. UPPER(jParams['usado']) == 'S'
+    lUsado := .T.
+  Endif
+
+  if jParams:hasProperty('allFields') .and. UPPER(jParams['allFields']) == 'S'
+    lAllFields := .T.
+  Endif
+
+  aStruct := FwVetByDic(FWSX3Util():GetListFieldsStruct(cTable , .F.), cTable)
+
+  For nItem := 1 To Len(aStruct)
+    cField := aStruct[nItem][1]
+
+    If !lExistsBranch .and. "_FILIAL" $ cField
+      Loop
+    Endif
+
+    If !"_FILIAL" $ cField .and. !lAllFields
+      If (lBrowser .and. GetSx3Cache(cField, "X3_BROWSE") <> "S") .OR.;
+        (lUsado .AND. !X3Usado(cField) )
+        Loop
+      Endif
+    Endif
+
+    cX3Title := AllTrim(FwX3Titulo(cField))
+    cX3Descri := AllTrim(FWSX3Util():GetDescription(cField))
+    cX3Picture := AllTrim(X3Picture(cField))
+    aX3Cbox := gfin.api.tables.getOptionsX3CBox(cField)
+    cX3F3 := AllTrim(GetSX3Cache(cField, 'X3_F3'))
+    cX3Required := Iif(X3Obrigat(cField),'s','n')
+    cX3Relation := GetSx3Cache(cField, "X3_RELACAO")
+    cX3When := GetSx3Cache(cField, "X3_WHEN")
+    cX3Browse := GetSx3Cache(cField, "X3_BROWSE")
+    cX3Usado := Iif(X3Usado(cField), 'S', 'N')
+
+    aStruct[nItem][2] := Iif(!Empty(aX3Cbox), "COMBO", aStruct[nItem][2] )
+    aStruct[nItem][2] := Iif(!Empty(cX3F3), "LOOKUP", aStruct[nItem][2] )
+
+    // Validando compartilhamento de tabela
+    Self:AddMapFields(cField,;
+    cField,;
+    .T.,;
+    .F.,;
+    {cField, aStruct[nItem][2], aStruct[nItem][3], aStruct[nItem][4]})
+
+    aAdd(aFieldStruct, {;
+    {'field', lower(cField)},;
+    {'type', aStruct[nItem][2]},;
+    {'title', cX3Title},;
+    {'description', cX3Descri},;
+    {'picture', cX3Picture},;
+    {'size', aStruct[nItem][3]},;
+    {'decimals', aStruct[nItem][4]},;
+    {'options', aX3Cbox},;
+    {'standardQuery', cX3F3},;
+    {'required', cX3Required},;
+    {'relation', cX3Relation},;
+    {'when', cX3When},;
+    {'browse', cX3Browse},;
+    {'usado', cX3Usado}})
+
+  Next nItem
+
+Return aFieldStruct
+
+/*/{Protheus.doc} prepareRelation
+  Prepara as relações entre as tabelas
+  @author Vitor
+  @since 09/03/2022
+  @version 1.0
+  @param jResponse, Json, Json da requisição
+/*/
+Method prepareRelation(jResponse As Json) CLASS ApiBaseV2
+  Local nTables := 0 As numeric
+  Local aStruct := {} As Array
+  Local cTable := "" As Character
+  Local oStatementQuery As Object
+  Local cSelect := "" As Character
+  Local bFields := {|| .T.} As codeblock
+
+  If !Empty(::aTableRelation)
+    For nTables := 1 to Len(::aTableRelation)
+      aStruct := {}
+      cTable := ::aTableRelation[nTables]
+      ::cSx9Join := GetJoinKey(::cTableOwner, ::aTableRelation[nTables])
+
+      //Limpeza das propriedades referentes ao campos da tabela
+      FreeObj(::oHashFields)
+      ::oHashFields := FwHashMap():New()
+      FwFreeArray(::aStruct)
+      ::aStruct := {}
+
+      If !Empty(::aParamsFields)
+        bFields := {|X| AScan(::aParamsFields, AllTrim(X)) > 0 }
+      Endif
+
+      ::setApiFields(cTable, bFields, .F., FWModeAccess(cTable, 1) <> 'C')
+      mapFields(Self, .F., .F.)
+      cSelect := ArrTokStr(::oHashFields:keys(),",")
+
+      ::ExecuteRelation(jResponse, cSelect, cTable, @oStatementQuery)
+
+      If oStatementQuery <> Nil
+        oStatementQuery := Nil
+      EndIf
+
+      jResponse["response"]["struct-"+cTable] := ::getStruct()
+
+    Next nTables
+  Endif
+Return
+
+/*/{Protheus.doc} ExecuteRelation
+  Osquestra a montagem do Json com o relation para cada item
+  @author Vitor
+  @since 09/03/2022
+  @version version
+  @param jResponse, Json, Json da requisição
+  @param cSelect, Character, Campos que serão retornado no select
+  @param cTable, Character, Campos que serão retornado no select
+  @param oStatementQuery, Object, Statement da query para tornar o processo performatico
+  @return return_var, return_type, return_description
+/*/
+Method ExecuteRelation(jResponse As Json, cSelect As Character, cTable As Character, oStatementQuery As Object) CLASS ApiBaseV2
+  Local jRelation as Json
+  Local nItems := 0 as Numeric
+  Local aPrimaryKey := {} As Array
+  Local nResponseItems := 0 As Numeric
+
+  aPrimaryKey := STRTOKARR( ::cPrimaryKey, ",")
+  nResponseItems := Iif(!Empty(jResponse["response"]["items"]), Len(jResponse["response"]["items"]), 0)
+
+  For nItems := 1 to nResponseItems
+    jRelation := JsonObject():new()
+
+    If jResponse["response"]["items"][nItems]['relation'] == NIL
+      jResponse["response"]["items"][nItems]['relation'] := jRelation
+    Endif
+
+    jResponse["response"]["items"][nItems]['relation'][cTable] := ::getRelationQuery(jResponse["response"]["items"][nItems], @oStatementQuery, cSelect, cTable, aPrimaryKey)
+
+    jRelation := Nil
+
+  Next nItems
+
+Return
+
+/*/{Protheus.doc} getRelationQuery
+  Retorna os registros que se encaixam no relacionamento
+  entre as tabelas
+
+  @param  jItem, Json, Json dos itens que serão considerados no join
+  @param  oStatementQuery, Object, Statement da query para tornar o processo performatico
+  @param  cSelect, Character, Campos que serão retornado no select
+  @param  cTable, Character, Tabela filha no relacionamento
+  @param  aPrimaryKey, Array, Chave primaria da tabela filha
+
+  @return aMoviments As Json, Json do item com o seu relation
+  @author Vitor Duca
+  @since 14/03/2022
+/*/
+Method getRelationQuery(jItem as Json, oStatementQuery As Object, cSelect As Character, cTable As Character, aPrimaryKey As Array) CLASS ApiBaseV2
+	Local cQry := "" As Character
+  Local aMoviments := {} As Array
+  Local aMoviment := {} As Array
+  Local nX := 0 As Numeric
+  Local nLenWhile := 0 As Numeric
+  Local jAux As Json
+
+  aMoviments  := {}
+  aMoviment   := {}
+  cQry	      := ""
+  jAux := JsonObject():new()
+
+	If oStatementQuery == Nil
+		cQry := "SELECT " + cSelect + " FROM " + RetSqlName(::cTableOwner) + " " + ::cTableOwner + " "
+		cQry += "INNER JOIN " + RetSqlName(cTable) + " " + cTable + " "
+		cQry += "ON " + ::cSx9Join + " "
+    cQry +=    " AND " + cTable + ".D_E_L_E_T_ = '' "
+		cQry += "WHERE "
+
+    For nX := 1 to len(aPrimaryKey)
+      If nX > 1
+        cQry += " AND "
+      Endif
+      cQry += ::cTableOwner + "." + aPrimaryKey[nX] + " = ? "
+    Next nX
+    cQry +=    " AND " + ::cTableOwner + ".D_E_L_E_T_ = ' ' "
+		cQry := ChangeQuery(cQry)
+		oStatementQuery := FWPreparedStatement():New(cQry)
+	EndIf
+
+  For nX := 1 to len(aPrimaryKey)
+    // Se o tipo do campo da chave primária for Data temos que formatar o valor para o formato aceito no banco de dados
+    If FWSX3Util():GetFieldType( aPrimaryKey[nX] ) == "D" .And. !Empty(jItem[Lower(aPrimaryKey[nX])])
+      oStatementQuery:SetString(nX, jsonStringToIso(jItem[Lower(aPrimaryKey[nX])]))
+    Else
+      oStatementQuery:SetString(nX, jItem[Lower(aPrimaryKey[nX])])
+    EndIf
+  Next nX
+
+	cQry := oStatementQuery:GetFixQuery()
+
+  DBUseArea(.T., 'TOPCONN', TCGenQry(,,cQry), "TMP_TABLES", .F., .T.)
+	nLenWhile := TMP_TABLES->(FCount())
+
+	While TMP_TABLES->(!Eof())
+    For nX := 1 to nLenWhile
+      jAux[Lower(FieldName(nX))] := FieldGet(nX)
+    Next nX
+    Aadd(aMoviments, jAux)
+    // Força limpeza da variável jAux da memória
+    jAux := JsonObject():new()
+    TMP_TABLES->(DBSkip())
+	EndDo
+
+	TMP_TABLES->(DbCloseArea())
+
+Return aClone(aMoviments)
+
+/*/{Protheus.doc} mapFields
+  preapara o mapField para a classe FWAdapterBaseV2
+  trata LGPD
+  prepara o struct de retorno
+  prepara os campos que devem ser formatados
+  @type function
+  @author renato.ito
+  @since 25/11/2021
+  @param oSelf, object, oSelf com FWAdapterBaseV2
+  @param lFolder, logical, indica se deve retornar informações de folder
+  @param lBrowser, logical, indica se deve retornar se o campo é browser
+/*/
+Function mapFields(oSelf as Object, lFolder as Logical, lBrowser as Logical)
+	Local cX3Picture  := ''  as Character
+	Local cField      := ''  as Character
+	Local cFieldLower := ''  as Character
+	Local lX3Cbox     := .F. as Logical
+	Local nStruct     := 1   as Numeric
+	Local aStruct     := {}  as Array
+	Local aFields     := {}  as Array
+	Local aFieldsLGPD := {}  as Array
+	Local lVerifyLGPD := .F. as Logical
+	Local lFieldLGPD  := .F. as Logical
+	Local jStruct            as Json
+
+	aFields := oSelf:oHashFields:keys()
+
+	aFieldsLGPD := FwProtectedDataUtil():UsrAccessPDField(__cUserID, aFields)
+	// verifica a necessidade de testar LGPD
+	lVerifyLGPD := Len(aFields) <> Len(aFieldsLGPD)
+
+	// adiciona os campos enviados
+	For nStruct := 1 To Len(aFields)
+		jStruct    := JsonObject():new()
+		cField     := aFields[nStruct]
+		cFieldLower:= LOWER(cField)
+		lFieldLGPD := lVerifyLGPD .and. aScan(aFieldsLGPD , cField) == 0
+		aStruct    := FWSX3Util():GetFieldStruct(cField)
+
+		oSelf:AddMapFields(;
+			cField,;
+			cField,;
+			.T.,;
+			.T.,;
+			{cField, aStruct[2], aStruct[3], aStruct[4]},;
+			if(lFieldLGPD, "'" + STR0003 + "'", NIL);  // Confidencial
+		)
+
+		cX3Picture := IIF(aStruct[2] == 'N' , AllTrim(GetSX3Cache(cField, 'X3_PICTURE' )), '' )
+		lX3Cbox    := IIF(Len(AllTrim(GetSX3Cache(cField, 'X3_CBOX' ))) > 0, .T., .F.)
+
+		// adiciona os struct para retorno
+		jStruct[ 'field' ]       := cFieldLower
+		jStruct[ 'type' ]        := aStruct[2]
+    jStruct[ 'size' ]        := aStruct[3]
+    jStruct[ 'decimal' ]     := aStruct[4]
+		jStruct[ 'title' ]       := oSelf:oHashFields:get(cField)['title']
+		jStruct[ 'description' ] := oSelf:oHashFields:get(cField)['description']
+		jStruct[ 'lgpd' ]        := lFieldLGPD
+		jStruct[ 'order' ]       := oSelf:oHashFields:get(cField)['order']
+		jStruct[ 'usado' ]       := X3Uso(GetSX3Cache(cField, 'X3_USADO'), 6)
+		If lFolder
+			jStruct[ 'folder' ]  := oSelf:oHashFields:get(cField)['folder']
+		EndIf
+		If lBrowser
+			jStruct[ 'browser' ] := GetSX3Cache(cField, 'X3_BROWSE' ) == 'S'
+		EndIf
+
+		// adiciona os campos que serão formatados para resposta
+		If lX3Cbox
+			oSelf:addFormat({cFieldLower, 'x3cbox', ''})
+			jStruct[ 'type' ]     := 'COMBO'
+			jStruct[ 'options' ]  := oSelf:oHashFields:get(cField)['options']
+		Else
+			jStruct[ 'options' ]  := {}
+		Endif
+
+		If cField $ 'E1_MOEDA|E2_MOEDA|F76_MOEDA|F75_MOEDA'
+			oSelf:addFormat({cFieldLower, 'moeda', ''})
+		ElseIf cField $ 'FK1_MOEDA|FK2_MOEDA
+			oSelf:addFormat({cFieldLower, 'moedac', ''})
+		ElseIf aStruct[2] == 'N'
+			oSelf:addFormat({cFieldLower, 'format', cX3Picture})
+		EndIf
+
+		oSelf:addStruct(jStruct)
+	Next
+Return
+
+/*/{Protheus.doc} prepareItems
+  formata os items
+  e retorna o struct padrão utilizado no retorno das api's do NGF
+  @type function
+  @author renato.ito
+  @since 25/11/2021
+  @param oSelf, object, oSelf com FWAdapterBaseV2
+  @return json, items formatados
+/*/
+Function prepareItems(jResponse as Json, oSelf As Object)
+  Local nItem   := 0  as numeric
+  Local nStruct := 0  as numeric
+  Local aFormat := {} as array
+  Local cField  := '' as character
+
+  aFormat := oSelf:getFormat()
+
+  if Len(aFormat) > 0
+    for nItem := 1 to Len(jResponse["response"]['items'])
+        // para cada item é aplicada as regras de campos
+        for nStruct := 1 to Len(aFormat)
+          cField := aFormat[nStruct][1]
+          if aFormat[nStruct][2] == 'format'
+            jResponse["response"]["items"][nItem][cField + '_value'] := jResponse["response"]["items"][nItem][cField]
+            jResponse["response"]["items"][nItem][cField] := AllTrim(Transform(jResponse["response"]["items"][nItem][cField], aFormat[nStruct][3]))
+          elseif aFormat[nStruct][2] == 'moeda'
+            jResponse["response"]["items"][nItem][cField]  := SUPERGETMV('MV_SIMB'+ cValToChar(jResponse["response"]["items"][nItem][cField]), .F., '')
+          elseif aFormat[nStruct][2] == 'moedac'
+            jResponse["response"]["items"][nItem][cField]  := SUPERGETMV('MV_SIMB'+ cValToChar(VAL(jResponse["response"]["items"][nItem][cField])), .F., '')
+          elseif aFormat[nStruct][2] == 'x3cbox'
+            jResponse["response"]["items"][nItem][cField] := AllTrim(X3COMBO(UPPER(cField), Alltrim(jResponse["response"]["items"][nItem][cField])))
+          endif
+        next nStruct
+    next nItem
+  endif
+return
+
+/*/{Protheus.doc} normalizeIndex
+  aujusta o index para utilizar na query order
+  @type function
+  @author renato.ito
+  @since 04/03/2022
+  @param cIndex, Character, index da tabela
+  @return character, indice para query
+/*/
+Function normalizeIndex(cIndex as Character) as Character
+	cIndex := StrTran(cIndex, 'DTOS', '')
+	cIndex := StrTran(cIndex, '(', '')
+	cIndex := StrTran(cIndex, ')', '')
+  cIndex := StrTran(cIndex, '+', ',')
+Return cIndex
+
+/*/{Protheus.doc} GetJoinKey
+  Verifica e retorna a relação entre duas tabelas
+  @type  Function
+  @author Vitor Duca
+  @since 14/03/2022
+  @version 1.0
+  @param cParentAlias, Character, Alias pai do relacionamento
+  @param cChildAlias, Character, Alias filho do relacionamento
+  @return cJoinKey, Character, Relacionamento entre as tabelas para ser utilizado em Join
+/*/
+Function GetJoinKey(cParentAlias As Character, cChildAlias As Character) As Character
+  Local aSX9Util := {} As Array
+  Local cJoinKey := "" As Character
+  Local nCount := 0 As Numeric
+  Local lBranch := .F. As Logical
+  Local nPosicionSX9 := 0 As Numeric
+
+  If FWSX9Util():SearchX9Paths( cParentAlias, cChildAlias, @aSX9Util)
+
+    /*
+      A Classe FwSx9Util, pode retornar os relacionamentos ate o terceiro nivel como informa a doc
+      https://tdn.totvs.com/display/framework/FWSX9Util, sendo assim devemos verificar em qual posicão
+      da matriz esta o relacionamento desejado atraves do cParentAlias
+    */
+    For nCount := 1 To len(aSX9Util)
+      If Alltrim(aSX9Util[nCount][X9_DOM]) == Alltrim(cParentAlias)
+        nPosicionSX9 := nCount
+        Exit
+      Endif
+    Next nCount
+
+    aParentAlias := STRTOKARR( aSX9Util[nCount][X9_EXPDOM], "+" )
+    aChildAlias := STRTOKARR( aSX9Util[nCount][X9_EXPCDOM], "+" )
+    lBranch := UPPER(aSX9Util[nPosicionSX9][X9_USEFIL]) == "S"
+
+    For nCount := 1 to Len(aParentAlias)
+
+      If nCount > 1
+        cJoinKey += " AND "
+      Else
+        /*
+          Tratamento para filial X9_USEFIL
+        */
+        If lBranch
+          nBranchParentAlias := aT("_", aParentAlias[1]) - 1
+          nBranchChildAlias := aT("_", aChildAlias[1]) - 1
+          cBranchParentAlias := Substr(aSX9Util[nPosicionSX9][X9_DOM], 2, nBranchParentAlias)
+          cBranchChildAlias := Substr(aSX9Util[nPosicionSX9][X9_CDOM], 2, nBranchChildAlias)
+
+          If nBranchParentAlias == 3
+            cBranchParentAlias := Substr(aSX9Util[nPosicionSX9][X9_DOM], 1, nBranchParentAlias)
+          Endif
+
+          If nBranchChildAlias == 3
+            cBranchChildAlias := Substr(aSX9Util[nPosicionSX9][X9_CDOM], 1, nBranchChildAlias)
+          Endif
+
+          cJoinKey += cBranchParentAlias + "_FILIAL" + " = " + cBranchChildAlias + "_FILIAL AND "
+        Endif
+
+      Endif
+      cJoinKey += aParentAlias[nCount] + " = " + aChildAlias[nCount]
+
+    Next nCount
+  Endif
+
+Return AllTrim(cJoinKey)

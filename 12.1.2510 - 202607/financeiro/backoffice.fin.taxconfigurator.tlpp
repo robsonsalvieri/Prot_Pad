@@ -1,0 +1,511 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} backoffice.fin.taxconfigurator
+Centraliza as funções utilitárias do Configurador de Tributos (Motor de
+Retenção - MR) utilizadas pelos processos do módulo SIGAFIN.
+
+Funções disponíveis:
+  - getFinancialRule: Localiza o código da Regra Financeira vinculada ao título/baixa
+  - getDeductionByFinancialRule : Retorna deduções de base por Regra Financeira (tabela FOV)
+  - getFixedDeductions: Retorna deduções fixas da Regra Financeira (tabela F7R)
+  - getTaxCodeOfFinancialRule: Retorna o código do tributo da Regra Financeira
+  - getValueDeductionRule: Retorna o valor da dedução determinado pelo cálculo de outro tributo
+  - getTribIdIncomingInvoice: Retorna array com IDs de tributo (D1_IDTRIB) dos itens do documento fiscal (SD1)
+
+@author fabio.casagrande
+@since  25/03/2026
+@version P12
+@type program
+/*/
+//-------------------------------------------------------------------
+
+namespace totvs.protheus.backoffice.fin.taxconfigurator
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getFinancialRule
+Localiza o código da Regra Financeira (Configurador de Tributos) que
+está vinculado ao título ou à baixa.
+
+@param cBranch, character, Código da filial para filtro da regra.
+@param cTypeWallet, character, Tipo da carteira para filtro da regra;
+	   "P" para carteira de pagamento (padrão), "R" para recebimento.
+@param cIdentification, character, ID do título (FK7_IDDOC) ou da baixa (FK2),
+       conforme o fato gerador do IR (emissão ou caixa).
+@param lWriteOff, logical, .T. indica que o fato gerador é a baixa (FK2);
+       .F. indica que é a emissão (SE2).
+@param lProgressiveTable, logical, .T. filtra somente regras vinculadas a uma
+       tabela progressiva (FK3_TABPRO = "1").
+@param oQryFinancialRule, object, Objeto de query para execução da busca da regra financeira;
+	   se informado, será reutilizado para evitar recompilação. Caso contrário,
+	   um novo objeto será criado internamente.
+
+@return cCodeRule, character, Código da regra financeira (FK3_CODFKM);
+       retorna vazio caso não seja encontrado.
+
+@author fabio.casagrande
+@since  25/03/2026
+@version P12
+@type function
+@table FK3
+/*/
+//-------------------------------------------------------------------
+function getFinancialRule(cBranch as character, cTypeWallet as character, cIdentification as character, lWriteOff as logical,;
+							lProgressiveTable as logical, oQryFinancialRule as object) as character
+
+	local cCodeRule as character
+	local cQuery as character
+	local cProgressiveTable as character
+	local cTabOri as character
+	local cTax as character
+	local nParam as numeric
+
+	default cBranch := cFilAnt
+	default cTypeWallet := "P"
+	default cIdentification := ""
+	default lWriteOff := .F.
+	default lProgressiveTable := .F.
+	default oQryFinancialRule := Nil
+
+	cCodeRule := ""
+	nParam := 0
+	cProgressiveTable := "2"
+	cTax := PadR("IRF", GetSx3Cache( "FK3_IMPOS", 'X3_TAMANHO' ))
+	
+	if lProgressiveTable
+		cProgressiveTable := "1"
+	endif
+
+	cTabOri := "SE1"
+	if cTypeWallet == "P"
+		cTabOri := "SE2"
+	endif
+
+	if lWriteOff
+		cTabOri := "FK1"
+		if cTypeWallet == "P"
+			cTabOri := "FK2"
+		endif
+	endif
+
+	if oQryFinancialRule == Nil
+		cQuery := "SELECT FK3.FK3_CODFKM FROM "
+		cQuery += RetSqlName("FK3") + " FK3 "
+		cQuery += "WHERE FK3.FK3_FILORI = ? "
+		cQuery += "AND FK3.FK3_TABORI = ? "
+		cQuery += "AND FK3.FK3_IDORIG = ? "
+		cQuery += "AND FK3.FK3_IMPOS = ? "
+		cQuery += "AND FK3.FK3_STATUS = ? "
+		cQuery += "AND FK3.FK3_RECPAG = ? "
+		cQuery += "AND FK3.FK3_TABPRO = ? "
+		cQuery += "AND FK3.D_E_L_E_T_ = ? "
+
+		cQuery    := ChangeQuery(cQuery)
+		oQryFinancialRule := FwExecStatement():New(cQuery)
+	endif
+
+	oQryFinancialRule:SetString(++nParam, cBranch)                      //FK3_FILORI
+	oQryFinancialRule:SetString(++nParam, cTabOri)                      //FK3_TABORI
+	oQryFinancialRule:SetString(++nParam, cIdentification)              //FK3_IDORIG
+	oQryFinancialRule:SetString(++nParam, cTax)                         //FK3_IMPOS
+	oQryFinancialRule:SetString(++nParam, "1")                          //FK3_STATUS
+	oQryFinancialRule:SetString(++nParam, cTypeWallet)                  //FK3_RECPAG
+	oQryFinancialRule:SetString(++nParam, cProgressiveTable)            //FK3_TABPRO
+	oQryFinancialRule:SetString(++nParam, " ")                          //FK3.D_E_L_E_T_
+
+	cCodeRule := oQryFinancialRule:ExecScalar("FK3_CODFKM")
+
+return cCodeRule
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDeductionByFinancialRule
+Com base na regra financeira passada por parâmetro, localiza as deduções
+de base de cálculo que estão vinculadas a ela.
+Serão consideradas apenas as deduções por "Regra Financeira" (tabela FOV).
+
+@param cCodeRule, character, Código da regra financeira (FKK_CODIGO)
+@param dDate    , date     , Data de referência para filtro de vigência
+                           (FKK_VIGINI / FKK_VIGFIM)
+@param oQryDeductionFinRule, object, Objeto de query para execução da busca das deduções por regra financeira;
+	   se informado, será reutilizado para evitar recompilação. Caso contrário,
+	   um novo objeto será criado internamente.
+
+@return aResult, array, Lista com os códigos de Regra Financeira de dedução
+                        (FOV_CODIGO). Retorna array vazio se não encontrado.
+
+@author fabio.casagrande
+@since  25/03/2026
+@version P12
+@type function
+@table FKK, FKN, FKV, FOV
+/*/
+//-------------------------------------------------------------------
+function getDeductionByFinancialRule(cCodeRule as character, dDate as date, oQryDeductionFinRule as object) as array
+
+	local cQuery    as character
+	local cAliasDed as character
+	local aResult   as array
+	local nParam    as numeric
+
+	default cCodeRule := ""
+	default dDate := dDataBase
+	default oQryDeductionFinRule := Nil
+
+	aResult := {}
+	nParam  := 0
+
+	if oQryDeductionFinRule == Nil
+		cQuery := "SELECT FOV.FOV_CODIGO FOV_CODIGO "
+		cQuery += "FROM " + RetSqlName("FKK") + " FKK "
+		cQuery += "INNER JOIN " + RetSqlName("FKN") + " FKN "
+		cQuery += "  ON FKN.FKN_FILIAL = ? AND FKN.FKN_IDRET = FKK.FKK_IDFKN AND FKN.D_E_L_E_T_ = ? "
+		cQuery += "INNER JOIN " + RetSqlName("FKV") + " FKV "
+		cQuery += "  ON FKV.FKV_FILIAL = ? AND FKV.FKV_IDRET = FKN.FKN_IDFKV AND FKV.D_E_L_E_T_ = ? "
+		cQuery += "INNER JOIN " + RetSqlName("FOV") + " FOV "
+		cQuery += "  ON FOV.FOV_FILIAL = ? AND FOV.FOV_IDRET = FKV.FKV_IDRET AND FOV.D_E_L_E_T_ = ? "
+		cQuery += "WHERE FKK.FKK_FILIAL = ? "
+		cQuery += "AND FKK.FKK_CODIGO = ? "
+		cQuery += "AND FKK.FKK_VIGINI <= ? "
+		cQuery += "AND FKK.FKK_VIGFIM >= ? "
+		cQuery += "AND FKK.FKK_ATIVO = ? "
+		cQuery += "AND FKK.D_E_L_E_T_ = ? "
+
+		cQuery := ChangeQuery(cQuery)
+		oQryDeductionFinRule := FwExecStatement():New(cQuery)
+	endif
+
+	oQryDeductionFinRule:SetString(++nParam, FWxFilial("FKN")) // FKN_FILIAL
+	oQryDeductionFinRule:SetString(++nParam, " ")              // FKN.D_E_L_E_T_
+	oQryDeductionFinRule:SetString(++nParam, FWxFilial("FKV")) // FKV_FILIAL
+	oQryDeductionFinRule:SetString(++nParam, " ")              // FKV.D_E_L_E_T_
+	oQryDeductionFinRule:SetString(++nParam, FWxFilial("FOV")) // FOV_FILIAL
+	oQryDeductionFinRule:SetString(++nParam, " ")              // FOV.D_E_L_E_T_
+	oQryDeductionFinRule:SetString(++nParam, FWxFilial("FKK")) // FKK_FILIAL
+	oQryDeductionFinRule:SetString(++nParam, cCodeRule)         // FKK_CODIGO
+	oQryDeductionFinRule:SetString(++nParam, DTOS(dDate))      // FKK_VIGINI
+	oQryDeductionFinRule:SetString(++nParam, DTOS(dDate))      // FKK_VIGFIM
+	oQryDeductionFinRule:SetString(++nParam, "1")              // FKK_ATIVO
+	oQryDeductionFinRule:SetString(++nParam, " ")              // FKK.D_E_L_E_T_
+
+	cAliasDed := oQryDeductionFinRule:OpenAlias()
+
+	while (cAliasDed)->(!Eof())
+		AAdd(aResult, Alltrim((cAliasDed)->FOV_CODIGO)) //Cod. Regra Financeira de dedução
+		(cAliasDed)->(DbSkip())
+	endDo
+
+	(cAliasDed)->(DbCloseArea())
+
+return aResult
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getFixedDeductions
+Com base na regra financeira passada por parâmetro, localiza as deduções
+fixas de base de cálculo que estão vinculadas a ela.
+Serão consideradas apenas as deduções "Fixas" (tabela F7R).
+
+@param cCodeRule, character, Código da regra financeira (FKK_CODIGO)
+@param dDate   , date    , Data de referência para filtro de vigência
+                           (FKK_VIGINI / FKK_VIGFIM)
+@param oQryFixedDeduc, object, Objeto de query para execução da busca das deduções fixas por regra financeira;
+	   se informado, será reutilizado para evitar recompilação. Caso contrário,
+	   um novo objeto será criado internamente.
+
+@return aResult, array, Array bidimensional com os dados retornados:
+                   [n][1] Tipo de dedução fixa (F7R_TIPDED)
+                            "1" = Dependente
+                            "2" = Pensão Alimentícia
+                            "3" = Outras deduções
+                   [n][2] Valor da dedução fixa (F7R_VALOR)
+                   Retorna array vazio caso não encontre registros.
+
+@author fabio.casagrande
+@since  25/03/2026
+@version P12
+@type function
+@table FKK, FKN, FKV, F7R
+/*/
+//-------------------------------------------------------------------
+function getFixedDeductions(cCodeRule as character, dDate as date, oQryFixedDeduc as object) as array
+
+	local cQuery    as character
+	local cAliasDed as character
+	local aResult   as array
+	local nParam    as numeric
+
+	default cCodeRule := ""
+	default dDate := dDataBase
+	default oQryFixedDeduc := Nil
+
+	aResult := {}
+	nParam  := 0
+
+	if AliasIndic("F7R")
+		if oQryFixedDeduc == Nil
+			cQuery := "SELECT F7R.F7R_TIPDED F7R_TIPDED, F7R.F7R_VALOR F7R_VALOR "
+			cQuery += "FROM " + RetSqlName("FKK") + " FKK "
+			cQuery += "INNER JOIN " + RetSqlName("FKN") + " FKN "
+			cQuery += "  ON FKN.FKN_FILIAL = ? AND FKN.FKN_IDRET = FKK.FKK_IDFKN AND FKN.D_E_L_E_T_ = ? "
+			cQuery += "INNER JOIN " + RetSqlName("FKV") + " FKV "
+			cQuery += "  ON FKV.FKV_FILIAL = ? AND FKV.FKV_IDRET = FKN.FKN_IDFKV AND FKV.D_E_L_E_T_ = ? "
+			cQuery += "INNER JOIN " + RetSqlName("F7R") + " F7R "
+			cQuery += "  ON F7R.F7R_FILIAL = ? AND F7R.F7R_IDRET = FKV.FKV_IDRET "
+			cQuery += "  AND F7R.F7R_APLIC = ? AND F7R.D_E_L_E_T_ = ? "
+			cQuery += "WHERE FKK.D_E_L_E_T_ = ? "
+			cQuery += "AND FKK.FKK_FILIAL = ? "
+			cQuery += "AND FKK.FKK_CODIGO = ? "
+			cQuery += "AND FKK.FKK_VIGINI <= ? "
+			cQuery += "AND FKK.FKK_VIGFIM >= ? "
+			cQuery += "AND FKK.FKK_ATIVO = ? "
+
+			cQuery := ChangeQuery(cQuery)
+			oQryFixedDeduc := FwExecStatement():New(cQuery)
+		endif
+
+		oQryFixedDeduc:SetString(++nParam, FWxFilial("FKN")) // FKN_FILIAL
+		oQryFixedDeduc:SetString(++nParam, " ")              // FKN.D_E_L_E_T_
+		oQryFixedDeduc:SetString(++nParam, FWxFilial("FKV")) // FKV_FILIAL
+		oQryFixedDeduc:SetString(++nParam, " ")              // FKV.D_E_L_E_T_
+		oQryFixedDeduc:SetString(++nParam, FWxFilial("F7R")) // F7R_FILIAL
+		oQryFixedDeduc:SetString(++nParam, "1")              // F7R_APLIC (1=Aplica na base)
+		oQryFixedDeduc:SetString(++nParam, " ")              // F7R.D_E_L_E_T_
+		oQryFixedDeduc:SetString(++nParam, " ")              // FKK.D_E_L_E_T_
+		oQryFixedDeduc:SetString(++nParam, FWxFilial("FKK")) // FKK_FILIAL
+		oQryFixedDeduc:SetString(++nParam, cCodeRule)        // FKK_CODIGO
+		oQryFixedDeduc:SetString(++nParam, DTOS(dDate))      // FKK_VIGINI
+		oQryFixedDeduc:SetString(++nParam, DTOS(dDate))      // FKK_VIGFIM
+		oQryFixedDeduc:SetString(++nParam, "1")              // FKK_ATIVO (1=Sim)
+
+		cAliasDed := oQryFixedDeduc:OpenAlias()
+
+		while (cAliasDed)->(!Eof())
+			AAdd(aResult, { ;
+				(cAliasDed)->F7R_TIPDED, ; // Tipo de dedução fixa
+				(cAliasDed)->F7R_VALOR  ;  // Valor da dedução fixa
+			})
+			(cAliasDed)->(DbSkip())
+		endDo
+
+		(cAliasDed)->(DbCloseArea())
+	endif
+
+return aResult
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getTaxCodeOfFinancialRule
+Retorna o código do tributo principal vinculado à Regra Financeira
+(Configurador de Tributos).
+
+@param cCodeRule, character, Código da regra financeira (FKK_CODIGO)
+@param dDate   , date    , Data de referência para filtro de vigência
+                           (FKK_VIGINI / FKK_VIGFIM)
+@param oQryTaxCode, object, Objeto de query para execução da busca do código de tributo da regra financeira;
+	   se informado, será reutilizado para evitar recompilação. Caso contrário, será criado um novo objeto de query.
+
+@return cCodTrib, character, Código do tributo (FOO_CODIGO);
+        retorna vazio caso não encontrado
+
+@author fabio.casagrande
+@since  25/03/2026
+@version P12
+@type function
+@table FKK, FOO
+/*/
+//-------------------------------------------------------------------
+function getTaxCodeOfFinancialRule(cCodeRule as character, dDate as date, oQryTaxCode as object) as character
+
+	local cQuery   as character
+	local cCodTrib as character
+	local nParam   as numeric
+
+	default cCodeRule := ""
+	default dDate := dDataBase
+	default oQryTaxCode := Nil
+
+	cCodTrib := ""
+	nParam   := 0
+
+	if oQryTaxCode == Nil
+		cQuery := "SELECT FOO.FOO_CODIGO "
+		cQuery += "FROM " + RetSqlName("FKK") + " FKK "
+		cQuery += "INNER JOIN " + RetSqlName("FOO") + " FOO "
+		cQuery += "  ON FOO.FOO_FILIAL = ? AND FOO.FOO_IDRET = FKK.FKK_IDRET "
+		cQuery += "  AND FOO_TIPIMP = ? AND FOO.D_E_L_E_T_ = ? "
+		cQuery += "WHERE FKK.FKK_FILIAL = ? "
+		cQuery += "AND FKK.FKK_CODIGO = ? "
+		cQuery += "AND FKK.FKK_VIGINI <= ? "
+		cQuery += "AND FKK.FKK_VIGFIM >= ? "
+		cQuery += "AND FKK.FKK_ATIVO = ? "
+		cQuery += "AND FKK.D_E_L_E_T_ = ? "
+
+		cQuery := ChangeQuery(cQuery)
+		oQryTaxCode := FwExecStatement():New(cQuery)
+	endif
+
+	oQryTaxCode:SetString(++nParam, FWxFilial("FOO")) // FOO_FILIAL
+	oQryTaxCode:SetString(++nParam, "1")              // FOO_TIPIMP
+	oQryTaxCode:SetString(++nParam, " ")              // FOO.D_E_L_E_T_
+	oQryTaxCode:SetString(++nParam, FWxFilial("FKK")) // FKK_FILIAL
+	oQryTaxCode:SetString(++nParam, cCodeRule)        // FKK_CODIGO
+	oQryTaxCode:SetString(++nParam, DTOS(dDate))      // FKK_VIGINI
+	oQryTaxCode:SetString(++nParam, DTOS(dDate))      // FKK_VIGFIM
+	oQryTaxCode:SetString(++nParam, "1")              // FKK_ATIVO
+	oQryTaxCode:SetString(++nParam, " ")              // FKK.D_E_L_E_T_
+
+	cCodTrib := oQryTaxCode:ExecScalar("FOO_CODIGO")
+
+return cCodTrib
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getValueDeductionRule
+Retorna o valor de uma dedução de base definida no Configurador de
+Tributos e que seja determinado pelo cálculo de outro tributo
+(outra Regra Financeira). Uso típico: dedução do INSS da base do IRRF.
+
+Internamente consulta a Regra Financeira do título/baixa, busca na
+tabela FOV a lista de RFs de dedução, identifica a que corresponde
+ao tributo informado e retorna o valor retido por FGetImpRet.
+
+@param cBranch, character, Filial do título/baixa
+@param cIdDoc, character, ID do título (FK7_IDDOC)
+@param cIdMov, character, ID da baixa (FK2);
+               informar vazio quando o fato gerador for a emissão
+@param dDate , date    , Data do fato gerador do tributo
+@param cTrib , character, Código do tributo de dedução (padrão: "INSS")
+@param oQryFinancialRule, object, Objeto de query da Regra Financeira (opcional);
+	   se informado, será reutilizado para evitar recompilação. Caso contrário,
+	   um novo objeto será criado internamente.
+@param oQryTaxCode, object, Objeto de query do código de tributo da Regra Financeira (opcional);
+	   se informado, será reutilizado para evitar recompilação. Caso contrário,
+	   um novo objeto será criado internamente.
+
+@return nVrDed, numeric, Valor da dedução encontrada;
+                         retorna 0 caso não encontrado
+
+@author fabio.casagrande
+@since  25/03/2026
+@version P12
+@type function
+@see getFinancialRule, getDeductionByFinancialRule, getTaxCodeOfFinancialRule
+@obs O volume esperado de deduções por Regra Financeira é pequeno (tipicamente 1-3).
+     Caso esse volume aumente expressivamente, considerar pré-carregar os códigos
+     de tributo em um único JOIN na query de getDeductionByFinancialRule.
+/*/
+//-------------------------------------------------------------------
+function getValueDeductionRule(cBranch as character, cIdDoc as character, cIdMov as character,; 
+								dDate as date, cTrib as character, oQryFinancialRule as object,;
+								oQryDeductionFinRule as object, oQryTaxCode as object) as numeric
+
+	local nVrDed as numeric
+	local cCodeRule as character
+	local cIdentification as character
+	local aDeduc as array
+	local nZ as numeric
+	local lWriteOff as logical
+
+	default cBranch := cFilAnt
+	default cIdDoc := ""
+	default cIdMov := ""
+	default dDate  := CTOD("  /  /    ")
+	default cTrib  := "INSS"
+	default oQryFinancialRule := Nil
+	default oQryDeductionFinRule := Nil
+	default oQryTaxCode := Nil
+
+	nVrDed := 0
+	lWriteOff := !Empty(cIdMov)
+	cIdentification := cIdDoc
+	if lWriteOff
+		cIdentification   := cIdMov
+	endif
+	cCodeRule := getFinancialRule(cBranch, "P", cIdentification, lWriteOff, .T., @oQryFinancialRule)
+
+	aDeduc := getDeductionByFinancialRule(cCodeRule, dDate, @oQryDeductionFinRule)
+
+	for nZ := 1 to Len(aDeduc)
+		if !Empty(aDeduc[nZ]) .and. Alltrim(getTaxCodeOfFinancialRule(aDeduc[nZ], dDate, @oQryTaxCode)) == cTrib
+			nVrDed += FGetImpRet(cIdDoc, "FK4_VALOR", {{"FK4_IMPOS", cTrib}})
+		endif
+	next
+
+	FwFreeArray(aDeduc)
+
+return nVrDed
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getTribIdIncomingInvoice
+Retorna um array com os IDs de tributo (D1_IDTRIB) dos itens do documento
+fiscal de entrada (SD1) a partir de um ID de documento (FK7_IDDOC).
+Obs: Essa informação é pré-requisito para o uso da classe TCIWritten (fiscal).
+
+O posicionamento é feito em duas etapas:
+  1. Busca na tabela FK7 (índice 5 — por IDDOC) para obter filial, prefixo,
+     número, fornecedor e loja do título.
+  2. Com esses dados, realiza seek na tabela SD1 (índice 1) e percorre todos
+     os itens do mesmo documento, coletando o conteúdo de D1_IDTRIB.
+
+@param cIdDoc, character, ID do documento (ref. FK7_IDDOC).
+
+@return aIdTrib, array, Lista de IDs de tributo (D1_IDTRIB) encontrados nos
+        itens do documento fiscal. Retorna array vazio se não encontrado.
+
+@author fabio.casagrande
+@since  26/03/2026
+@version P12
+@type function
+@table FK7, SD1
+/*/
+//-------------------------------------------------------------------
+function getTribIdIncomingInvoice(cIdDoc as character) as array
+
+	local aIdTrib as array
+	local cBillBranch as character
+	local cPrefix as character
+	local cBillNumber as character
+	local cSupplier as character
+	local cStore as character
+	local cKeySD1 as character
+	local aAreaFK7 as Array
+	local aAreaSD1 as Array
+	local cInvoiceSeries as character
+	local cBranchSD1 as character
+
+	default cIdDoc := ""
+
+	aIdTrib := {}
+	aAreaFK7 := FK7->(FwGetArea())
+
+	if !Empty(cIdDoc)
+		FK7->(DbSetOrder(5)) //FK7_IDDOC
+		if FK7->(MsSeek(cIdDoc))
+
+			cBillBranch := FK7->FK7_FILTIT
+			cPrefix := FK7->FK7_PREFIX
+			cBillNumber := FK7->FK7_NUM
+			cSupplier := FK7->FK7_CLIFOR
+			cStore := FK7->FK7_LOJA	
+			cInvoiceSeries := cPrefix
+			cBranchSD1 := FwxFilial("SD1")	
+			aAreaSD1 := SD1->(FwGetArea())
+
+			//Verifica se o prefixo do título é diferente da nota fiscal. Se sim, atualiza a 'cInvoiceSeries'
+			FTemSFT(1, cBillNumber, @cInvoiceSeries, cSupplier, cStore, GetSx3Cache( "FT_SERIE", 'X3_TAMANHO' ))
+
+			cKeySD1 := cBranchSD1+cBillNumber+cInvoiceSeries+cSupplier+cStore
+
+			SD1->(DbSetOrder(1)) //D1_FILIAL, D1_DOC, D1_SERIE, D1_FORNECE, D1_LOJA, D1_COD, D1_ITEM
+			if SD1->(MsSeek(cKeySD1))
+				while SD1->(!Eof()) .and. ;
+					SD1->(D1_FILIAL+D1_DOC+D1_SERIE+D1_FORNECE+D1_LOJA) == cBranchSD1+cBillNumber+cInvoiceSeries+cSupplier+cStore
+					AAdd(aIdTrib, Alltrim(SD1->D1_IDTRIB))
+					SD1->(DbSkip())
+				endDo
+			endif
+			FwRestArea(aAreaSD1)
+		endif
+	endif
+
+	FwRestArea(aAreaFK7)
+
+return aIdTrib

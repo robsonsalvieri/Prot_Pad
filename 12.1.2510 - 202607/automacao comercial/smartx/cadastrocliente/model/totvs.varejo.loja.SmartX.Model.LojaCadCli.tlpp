@@ -1,0 +1,948 @@
+#include 'fw-tlpp-core.th'
+#include "protheus.ch"
+#include "totvs.framework.structure.model.th"
+
+namespace totvs.varejo.loja.SmartX.Model
+
+Static nAutPCNPJ  := 2 //default desabilitado 
+Static nAutPCEP   := 2 //default desabilitado 
+
+@totvsFrameworkStructureModel(lookup=.F., country="ALL", description="Cadastro de cliente")
+
+Class LojaCadCli from totvs.framework.structure.model.data
+    public method new() as object
+    public method setModel()
+    private method buildMaskCGCEvent() as json
+    private method buildBuscaCNPJEvent() as json
+    private method buildSTICGCEvent() as json
+    private method buildBuscaCEPEvent() as json
+    private method buildMunicipioEvent() as json
+    private method buildEstadoEvent() as json
+    private method buildDomMailEvent() as json
+EndClass
+
+Method new() as object class LojaCadCli
+    _Super:new(,,.t.)
+Return self
+Method setModel() class LojaCadCli
+    Local oItens             As Object
+    Local oHeader            As Object
+    Local oEvents            As Object
+    Local oFieldMailDig      As Object
+    Local oFieldDomMail      As Object
+    Local aDominios          As Array
+    Local aCampos := {'A1_FILIAL','A1_TIPO','A1_PESSOA','A1_CGC','A1_RG','A1_COD','A1_LOJA','A1_NOME','A1_NREDUZ','A1_END','A1_EST','A1_BAIRRO','A1_CEP','A1_COD_MUN','A1_MUN','A1_PAIS','A1_COMPLEM','A1_DDD','A1_TEL','A1_INSCR','A1_CNAE','A1_DTNASC','A1_EMAIL','A1_PAISDES'}
+                     
+    oHeader := totvs.framework.structure.object.ObjectFromMetadata():new( "SA1",aCampos, {"A1_FILIAL", "A1_COD", "A1_LOJA"} )
+
+    // Campos virtuais: parte digitável do e-mail (A1_MAILDIG) e domínio (A1_DOMMAIL)
+    // Padrão idêntico ao oStruSA1:AddField(..., .T.) utilizado no LOJACADCLI.PRW
+    oFieldMailDig := totvs.framework.structure.object.BuildFieldProperties():new("A1_MAILDIG")
+    oFieldMailDig:setType(ValType(""))         // tipo Caractere
+    oFieldMailDig:setTitle("Nome do e-mail")   // STR0002 do LOJACADCLI
+    oFieldMailDig:setSize(TamSx3("A1_EMAIL")[1])
+    oFieldMailDig:setUpperCase(.F.)
+    oHeader:addField(oFieldMailDig:getFieldProperties())
+
+    aDominios := LjSmxOpDomMail()
+    oFieldDomMail := totvs.framework.structure.object.BuildFieldProperties():new("A1_DOMMAIL")
+    oFieldDomMail:setType(ValType(""))            // tipo Caractere
+    oFieldDomMail:setTitle("Domínio do e-mail")   // STR0001 do LOJACADCLI
+    oFieldDomMail:setSize(TamSx3("A1_EMAIL")[1])
+    oFieldDomMail:setUpperCase(.F.)
+    If !Empty(aDominios)
+        oFieldDomMail:setOptionsList(aDominios)
+    EndIf
+    oHeader:addField(oFieldDomMail:getFieldProperties())
+
+    self:setObject(oHeader:getObject(), "SA1" )
+
+    //inicio do evento de máscara dinâmica para CPF/CNPJ
+    self:setProperty("A1_CGC", "pattern", "([0-9]{11}|[0-9A-Z]{8}[0-9]{6})", 'SA1')
+    self:disableDefaultValidators()
+    oEvents := totvs.framework.structure.interface.BuildEvents():new()    
+
+    // evento de máscara dinâmica para CPF/CNPJ
+    oEvents:addOnChange({"dataNew", "dataEdit"}, {"A1_PESSOA"}, ::buildMaskCGCEvent())         
+
+    // evento de preenchimento automático via CNPJ
+    oEvents:addOnChange({"dataNew"}, {"A1_CGC"}, ::buildBuscaCNPJEvent(.F.))
+    //oEvents:addOnChange({"dataEdit"}, {"A1_CGC"}, ::buildBuscaCNPJEvent(.T.))
+
+    // evento de preenchimento automático via CEP (BuscaCEPTAS) — condicional nAutPCEP == 1
+    oEvents:addOnChange({"dataNew", "dataEdit"}, {"A1_CEP"}, ::buildBuscaCEPEvent())
+
+    // evento de concatenação: ao confirmar domínio em A1_DOMMAIL, monta A1_EMAIL = A1_MAILDIG + domínio
+    oEvents:addOnChange({"dataNew", "dataEdit"}, {"A1_DOMMAIL"}, ::buildDomMailEvent())
+    //oEvents:addOnChange({"dataNew", "dataEdit"}, {"A1_COD_MUN"}, ::buildMunicipioEvent())
+
+    // ao trocar A1_EST limpa A1_COD_MUN e A1_MUN (filtro SXB tipo 6: CC2_EST == A1_EST)
+    //oEvents:addOnChange({"dataNew", "dataEdit"}, {"A1_EST"}, ::buildEstadoEvent())
+
+    // filtro dinâmico no F3/lookup de A1_COD_MUN: ao abrir a lupa, exibe apenas municípios do estado informado em A1_EST
+    // o framework SmartX avalia {{$model.A1_EST}} em tempo de execução ao abrir o lookup
+    //self:setProperty("A1_COD_MUN", "filter", "CC2_EST eq '{{$model.A1_EST}}'", "SA1")
+
+    self:addTriggers(oEvents:getEvents())
+    
+    FwFreeObj( oHeader )
+    FwFreeObj( oItens )
+
+Return
+
+/*/{Protheus.doc} buildMaskCGCEvent
+Monta a ação (AdvplAction + SetFieldsAction) responsável pela troca dinâmica de máscara
+do campo A1_CGC conforme o tipo de pessoa (A1_PESSOA).
+Disparada no evento onChange de A1_PESSOA nos modos dataNew e dataEdit.
+@type  Method
+@author caio.okamoto
+@since 04/05/2026
+@version v1.0
+@return jAction, JSON, Ação a ser vinculada ao evento onChange de A1_PESSOA
+/*/
+Method buildMaskCGCEvent() as json class LojaCadCli
+    Local oFieldCGC        As Object
+    Local oSetFields       As Object
+    Local oAdvplActGetMask As Object
+
+    oFieldCGC := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFieldCGC:setIdentifier("A1_CGC")
+    oFieldCGC:setProperty("maskFormatModel", "{{$response.maskFormatModel}}")
+    oFieldCGC:setProperty("mask", "{{$response.mask}}")
+    oFieldCGC:setProperty("value", "")    // limpa valor ao trocar máscara
+
+    oSetFields := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFields:setLabel("updateMask")
+    oSetFields:setIdentifier("updateMask")
+    oSetFields:addTargetField(oFieldCGC:getStructure())
+
+    oAdvplActGetMask := totvs.framework.structure.interface.BuildAdvplAction():new()
+    oAdvplActGetMask:setLabel('maskcgc')
+    oAdvplActGetMask:setRoutine("totvs.varejo.loja.SmartX.Model.maskcgc")
+    oAdvplActGetMask:setParams({"{{$model.A1_PESSOA}}"})
+    oAdvplActGetMask:setHasResponse(.T.)
+    oAdvplActGetMask:setAction(oSetFields:getAction())
+
+Return oAdvplActGetMask:getAction()
+
+/*/{Protheus.doc} maskcgc
+Retorna as propriedades de máscara do campo A1_CGC de acordo com o tipo de pessoa informado.
+Utilizada como AdvplAction no evento onChange do campo A1_PESSOA, alterando dinamicamente
+a máscara do campo A1_CGC entre CPF (999.999.999-99) e CNPJ (99.999.999/9999-99).
+@type  Function
+@author caio.okamoto
+@since 29/04/2026
+@version v1.0
+@param cPessoa, Caractere, Tipo de pessoa: "F" para Física (CPF) ou "J" para Jurídica (CNPJ)
+@return cJson, Caractere, JSON com as propriedades mask, pattern e maskFormatModel para o campo A1_CGC
+/*/
+function maskcgc(cPessoa as character) as character 
+Local cJson := ''
+Local oJson := JsonObject():New()
+
+if cPessoa == "F"    
+    oJson["mask"]            := "999.999.999-99"  // CPF
+    oJson["pattern"]         := ""                // Limpa o X3_PICTURE do dicionário (evita validação CNPJ no CPF)
+    oJson["maskFormatModel"] := .F.               // Armazena COM máscara: "123.456.789-01" = 14 chars = X3_TAMANHO do A1_CGC
+else    
+    oJson["mask"]            := "SS.SSS.SSS/9999-99" // CNPJ: base (8) alfanum. | estabelecimento (4) + DV (2) numéricos
+    oJson["pattern"]         := ""                   // Limpa o X3_PICTURE
+    oJson["maskFormatModel"] := .F.                  // Armazena SEM máscara: 14 chars
+endif
+
+cJson := oJson:toJson()
+
+Return cJson 
+
+/*/{Protheus.doc} buildBuscaCEPEvent
+Monta a ação (AdvplAction + ConditionalAction + SetFieldsAction) responsável pelo
+preenchimento automático dos campos de endereço ao confirmar o CEP no campo A1_CEP.
+Chama a função LjSmxBuscaCEP que invoca a API BuscaCEPTAS().
+O preenchimento dos campos só ocorre quando a resposta indicar sucesso (ok == "1").
+Em caso de erro (ok == "0"), a mensagem já é exibida dentro da função AdvPL e
+os campos permanecem editáveis para preenchimento manual.
+@type  Method
+@author caio.okamoto
+@since 08/05/2026
+@version v1.0
+@return jAction, JSON, Ação a ser vinculada ao evento onChange de A1_CEP
+/*/
+Method buildBuscaCEPEvent() as json class LojaCadCli
+    Local oFldCep        As Object
+    Local oFldBairro     As Object
+    Local oFldEst        As Object
+    Local oFldPais       As Object
+    Local oFldDdd        As Object
+    Local oFldCodMun     As Object
+    Local oFldMun        As Object
+    Local oSetFieldsCEP  As Object
+    Local oAdvplBuscaCEP As Object
+    Local oExprOk        As Object
+    Local oConditional   As Object
+
+    oFldCep := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldCep:setIdentifier("A1_CEP")
+    oFldCep:setProperty("value", "{{$response.A1_CEP}}")
+
+    oFldBairro := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldBairro:setIdentifier("A1_BAIRRO")
+    oFldBairro:setProperty("value", "{{$response.A1_BAIRRO}}")
+
+    oFldEst := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldEst:setIdentifier("A1_EST")
+    oFldEst:setProperty("value", "{{$response.A1_EST}}")
+
+    oFldPais := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldPais:setIdentifier("A1_PAIS")
+    oFldPais:setProperty("value", "{{$response.A1_PAIS}}")
+
+    oFldDdd := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldDdd:setIdentifier("A1_DDD")
+    oFldDdd:setProperty("value", "{{$response.A1_DDD}}")
+
+    oFldCodMun := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldCodMun:setIdentifier("A1_COD_MUN")
+    oFldCodMun:setProperty("value", "{{$response.A1_COD_MUN}}")
+
+    oFldMun := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldMun:setIdentifier("A1_MUN")
+    oFldMun:setProperty("value", "{{$response.A1_MUN}}")
+
+    oSetFieldsCEP := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFieldsCEP:setLabel("fillByCEP")
+    oSetFieldsCEP:setIdentifier("fillByCEP")
+    oSetFieldsCEP:addTargetField(oFldCep:getStructure())
+    oSetFieldsCEP:addTargetField(oFldBairro:getStructure())
+    oSetFieldsCEP:addTargetField(oFldEst:getStructure())
+    oSetFieldsCEP:addTargetField(oFldPais:getStructure())
+    oSetFieldsCEP:addTargetField(oFldDdd:getStructure())
+    oSetFieldsCEP:addTargetField(oFldCodMun:getStructure())
+    oSetFieldsCEP:addTargetField(oFldMun:getStructure())
+
+    // Preenche somente se a API retornou sucesso (ok == "1")
+    // Em caso de erro (ok == "0"), a mensagem já foi exibida dentro de LjSmxBuscaCEP
+    oExprOk := totvs.framework.structure.interface.BuildExpression():new()
+    oExprOk:addValueFromResponse("ok")
+    oExprOk:addOperatorComparison(5)  // 5 = Igual
+    oExprOk:addValueFromLiteral("1")
+
+    oConditional := totvs.framework.structure.interface.BuildConditionalAction():new()
+    oConditional:setLabel("conditionalCEP")
+    oConditional:setIdentifier("conditionalCEP")
+    oConditional:setExpression(oExprOk:getExpression())
+    oConditional:setActionTrue(oSetFieldsCEP:getAction())
+
+    oAdvplBuscaCEP := totvs.framework.structure.interface.BuildAdvplAction():new()
+    oAdvplBuscaCEP:setLabel('buscaCEP')
+    oAdvplBuscaCEP:setRoutine("totvs.varejo.loja.SmartX.Model.LjSmxBuscaCEP")
+    oAdvplBuscaCEP:setParams({"{{$model.A1_CEP}}"})
+    oAdvplBuscaCEP:setHasResponse(.T.)
+    oAdvplBuscaCEP:setAction(oConditional:getAction())
+
+Return oAdvplBuscaCEP:getAction()
+
+
+/*/{Protheus.doc} LjSmxBuscaCEP
+Consulta os dados de endereço pelo CEP informado via API BuscaCEPTAS().
+Somente executa a consulta se nAutPCEP == 1.
+Em caso de sucesso, retorna JSON com os campos de endereço para preenchimento automático.
+Em caso de erro, exibe alerta ao operador e retorna ok="0" para que o preenchimento
+seja feito manualmente.
+@type     Function
+@author   caio.okamoto
+@since    08/05/2026
+@version  v1.0
+@param    cCEP, Caractere, CEP informado no campo A1_CEP
+@return   cJson, Caractere, JSON com {"ok":"1","A1_CEP":"...","A1_BAIRRO":"...",
+          "A1_EST":"...","A1_PAIS":"...","A1_DDD":"...","A1_COD_MUN":"...","A1_MUN":"..."}
+          ou {"ok":"0"} em caso de erro ou nAutPCEP <> 1
+/*/
+Function LjSmxBuscaCEP(cCEP as character) as character
+    Local cJson        as character
+    Local oJson        as object
+    Local oConsultaCEP as object
+    Local oResposta    as object
+    Local aArea        as array
+
+    cJson := ''
+    oJson := JsonObject():New()
+    
+
+    Default cCEP := ""
+
+    //chamar o perguntei para o cliente se deseja consultar o cep
+    Pergunte("LJCADCLIAP", .F.)
+    nAutPCEP  := MV_PAR02
+
+    If nAutPCEP <> 1 .OR. Empty(AllTrim(cCEP))
+        oJson["ok"] := "0"
+        cJson := oJson:toJson()
+    Else 
+        aArea := GetArea()
+        oConsultaCEP := LjCallApiAutoPreenchimento():New()
+        oConsultaCEP:BuscaCEPTAS(AllTrim(cCEP))
+        oResposta := oConsultaCEP:GetResposta()
+
+        If oResposta:hasproperty('Error') .AND. Len(oResposta['Error']) > 0
+            // Retorno negativo: exibe mensagem e permite preenchimento manual
+            LjGrvLog("LjSmxBuscaCEP", "Erro ao consultar CEP via TAS", oResposta['Error'][1]['Mensagem'])
+            FWAlertWarning(oResposta['Error'][1]['Mensagem'], "Auto Preenchimento CEP")
+            oJson["ok"] := "0"
+        Else
+            // Retorno positivo: mapeia campos de endereço
+            oJson["ok"]        := "1"
+            oJson["A1_CEP"]    := AllTrim( oResposta["Endereco"][1]["cep"]        )
+            oJson["A1_BAIRRO"] := AllTrim( oResposta["Endereco"][1]["bairro"]     )
+            oJson["A1_EST"]    := AllTrim( oResposta["Endereco"][1]["uf"]         )
+            oJson["A1_PAIS"]   := "105"  // TAS não retorna país; assume Brasil
+            oJson["A1_DDD"]    := AllTrim( oResposta["Endereco"][1]["ddd"]        )
+            // A1_COD_MUN: TAS não retorna IBGE — campo fica vazio para preenchimento pelo operador
+            oJson["A1_COD_MUN"] := AllTrim( oResposta["Endereco"][1]["ibge"]     )
+            oJson["A1_MUN"]    := AllTrim( oResposta["Endereco"][1]["cidade"]     )
+        EndIf
+
+        FreeObj(oResposta)
+        oResposta := Nil
+        FreeObj(oConsultaCEP)
+        oConsultaCEP := Nil
+
+        RestArea(aArea)
+        cJson := oJson:toJson()
+
+    End If
+
+Return cJson
+
+
+/*/{Protheus.doc} buildMunicipioEvent
+Monta a ação (AdvplAction + ConditionalAction + SetFieldsAction) responsável por
+preencher automaticamente o campo A1_MUN ao informar o código IBGE em A1_COD_MUN.
+Reproduz o comportamento da consulta padrão CC2SA1 (SXB), filtrando os municípios
+pelo estado já preenchido em A1_EST (filtro tipo 6: CC2->CC2_EST == M->A1_EST).
+@type  Method
+@author caio.okamoto
+@since 07/05/2026
+@version v1.0
+@return jAction, JSON, Ação a ser vinculada ao evento onChange de A1_COD_MUN
+/*/
+Method buildMunicipioEvent() as json class LojaCadCli
+    Local oFldMun        As Object
+    Local oSetFieldsMun  As Object
+    Local oAdvplMunicipio As Object
+    Local oExprOk        As Object
+    Local oConditional   As Object
+
+    oFldMun := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldMun:setIdentifier("A1_MUN")
+    oFldMun:setProperty("value", "{{$response.A1_MUN}}")
+
+    oSetFieldsMun := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFieldsMun:setLabel("fillMunicipio")
+    oSetFieldsMun:setIdentifier("fillMunicipio")
+    oSetFieldsMun:addTargetField(oFldMun:getStructure())
+
+    // Preenche somente se o município foi encontrado (ok == "1")
+    oExprOk := totvs.framework.structure.interface.BuildExpression():new()
+    oExprOk:addValueFromResponse("ok")
+    oExprOk:addOperatorComparison(5)  // 5 = Igual
+    oExprOk:addValueFromLiteral("1")
+
+    oConditional := totvs.framework.structure.interface.BuildConditionalAction():new()
+    oConditional:setLabel("conditionalMunicipio")
+    oConditional:setIdentifier("conditionalMunicipio")
+    oConditional:setExpression(oExprOk:getExpression())
+    oConditional:setActionTrue(oSetFieldsMun:getAction())
+
+    // AdvplAction: busca CC2 pelo código IBGE filtrado pelo estado (CC2SA1 tipo 6)
+    oAdvplMunicipio := totvs.framework.structure.interface.BuildAdvplAction():new()
+    oAdvplMunicipio:setLabel('getMunicipio')
+    oAdvplMunicipio:setRoutine("totvs.varejo.loja.SmartX.Model.LjSmxGetMunicipio")
+    oAdvplMunicipio:setParams({"{{$model.A1_COD_MUN}}", "{{$model.A1_EST}}"})
+    oAdvplMunicipio:setHasResponse(.T.)
+    oAdvplMunicipio:setAction(oConditional:getAction())
+
+Return oAdvplMunicipio:getAction()
+
+
+/*/{Protheus.doc} buildEstadoEvent
+Monta a ação (SetFieldsAction) responsável por limpar os campos A1_COD_MUN e A1_MUN
+quando o estado (A1_EST) é alterado, mantendo consistência com o filtro da consulta
+CC2SA1 (SXB tipo 6: CC2->CC2_EST == M->A1_EST).
+@type  Method
+@author caio.okamoto
+@since 07/05/2026
+@version v1.0
+@return jAction, JSON, Ação a ser vinculada ao evento onChange de A1_EST
+/*/
+Method buildEstadoEvent() as json class LojaCadCli
+    Local oFldCodMun    As Object
+    Local oFldMun       As Object
+    Local oSetFieldsEst As Object
+
+    // Limpa os valores de A1_COD_MUN e A1_MUN ao trocar o estado
+    oFldCodMun := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldCodMun:setIdentifier("A1_COD_MUN")
+    oFldCodMun:setProperty("value", "")
+
+    oFldMun := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldMun:setIdentifier("A1_MUN")
+    oFldMun:setProperty("value", "")
+
+    oSetFieldsEst := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFieldsEst:setLabel("clearMunicipio")
+    oSetFieldsEst:setIdentifier("clearMunicipio")
+    oSetFieldsEst:addTargetField(oFldCodMun:getStructure())
+    oSetFieldsEst:addTargetField(oFldMun:getStructure())
+
+Return oSetFieldsEst:getAction()
+
+
+/*/{Protheus.doc} LjSmxGetMunicipio
+Busca o município na tabela CC2 pelo código IBGE (CC2_CODMUN), filtrando pelo
+estado informado (CC2_EST), reproduzindo o comportamento da consulta CC2SA1 (SXB).
+Retorna JSON com {"ok":"1","A1_MUN":"..."} em caso de sucesso ou {"ok":"0"} se não encontrado.
+@type     Function
+@author   caio.okamoto
+@since    07/05/2026
+@version  v1.0
+@param    cCodMun, Caractere, Código IBGE do município (A1_COD_MUN)
+@param    cEst,    Caractere, Sigla do estado (A1_EST) — filtro CC2SA1 tipo 6
+@return   cJson,   Caractere, JSON com {"ok":"1","A1_MUN":"..."} ou {"ok":"0"}
+/*/
+Function LjSmxGetMunicipio(cCodMun as character, cEst as character) as character
+    Local cJson as character
+    Local oJson as object
+    Local aArea as array
+
+    cJson := ''
+    oJson := JsonObject():New()
+    aArea := GetArea()
+
+    Default cCodMun := ""
+    Default cEst    := ""
+
+    If !Empty(AllTrim(cCodMun)) .AND. !Empty(AllTrim(cEst))
+        DbSelectArea("CC2")
+        DbSetOrder(1)  // Ordem 1: CC2_FILIAL + CC2_EST + CC2_CODMUN (SIX)
+        If DbSeek(FWxFilial("CC2") + AllTrim(cEst) + AllTrim(cCodMun))
+            If CC2->CC2_EST == AllTrim(cEst) .AND. AllTrim(CC2->CC2_CODMUN) == AllTrim(cCodMun)
+                oJson["ok"]    := "1"
+                oJson["A1_MUN"] := AllTrim(CC2->CC2_MUN)
+            Else
+                oJson["ok"] := "0"
+            EndIf
+        Else
+            oJson["ok"] := "0"
+            LjGrvLog("LjSmxGetMunicipio", "Município não encontrado", cEst + "/" + cCodMun)
+        EndIf
+    Else
+        oJson["ok"] := "0"
+    EndIf
+
+    RestArea(aArea)
+    cJson := oJson:toJson()
+
+Return cJson
+
+
+/*/{Protheus.doc} buildBuscaCNPJEvent
+Monta a ação (AdvplAction + SetFieldsAction + ConditionalAction) responsável pelo
+preenchimento automático dos campos ao digitar o CNPJ no campo A1_CGC.
+O campo A1_EST é preenchido condicionalmente: somente quando a resposta da API
+retornar um valor não vazio para esse campo.
+@type  Method
+@author caio.okamoto
+@since 04/05/2026
+@version v1.0
+@return jAction, JSON, Ação a ser vinculada ao evento onChange de A1_CGC
+/*/
+Method buildBuscaCNPJEvent(lFillEst as logical) as json class LojaCadCli
+    Local oFldNome        As Object
+    Local oFldNreduz      As Object
+    Local oFldCnae        As Object
+    Local oFldCep         As Object
+    Local oFldEnd         As Object
+    Local oFldBairro      As Object
+    Local oFldMun         As Object
+    Local oFldEst         As Object
+    Local oFldPais        As Object
+    Local oFldTel         As Object
+    Local oFldDdd         As Object
+    Local oSetFieldsCNPJ  As Object
+    Local oAdvplBuscaCNPJ As Object
+    Local oSetFieldsEst   As Object
+    Local oExprEst        As Object
+    Local oConditionalEst As Object
+
+    oFldNome := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldNome:setIdentifier("A1_NOME")
+    oFldNome:setProperty("value", "{{$response.A1_NOME}}")
+
+    oFldNreduz := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldNreduz:setIdentifier("A1_NREDUZ")
+    oFldNreduz:setProperty("value", "{{$response.A1_NREDUZ}}")
+
+    oFldCnae := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldCnae:setIdentifier("A1_CNAE")
+    oFldCnae:setProperty("value", "{{$response.A1_CNAE}}")
+
+    oFldCep := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldCep:setIdentifier("A1_CEP")
+    oFldCep:setProperty("value", "{{$response.A1_CEP}}")
+
+    oFldEnd := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldEnd:setIdentifier("A1_END")
+    oFldEnd:setProperty("value", "{{$response.A1_END}}")
+
+    oFldBairro := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldBairro:setIdentifier("A1_BAIRRO")
+    oFldBairro:setProperty("value", "{{$response.A1_BAIRRO}}")
+
+    oFldMun := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldMun:setIdentifier("A1_MUN")
+    oFldMun:setProperty("value", "{{$response.A1_MUN}}")
+
+    oFldEst := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldEst:setIdentifier("A1_EST")
+    oFldEst:setProperty("value", "{{$response.A1_EST}}")
+
+    oFldPais := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldPais:setIdentifier("A1_PAIS")
+    oFldPais:setProperty("value", "{{$response.A1_PAIS}}")
+
+    oFldTel := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldTel:setIdentifier("A1_TEL")
+    oFldTel:setProperty("value", "{{$response.A1_TEL}}")
+
+    oFldDdd := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldDdd:setIdentifier("A1_DDD")
+    oFldDdd:setProperty("value", "{{$response.A1_DDD}}")
+
+    oSetFieldsCNPJ := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFieldsCNPJ:setLabel("fillByCNPJ")
+    oSetFieldsCNPJ:setIdentifier("fillByCNPJ")
+    oSetFieldsCNPJ:addTargetField(oFldNome:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldNreduz:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldCnae:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldCep:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldEnd:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldBairro:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldMun:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldPais:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldTel:getStructure())
+    oSetFieldsCNPJ:addTargetField(oFldDdd:getStructure())
+
+    // A1_EST: preenchimento condicional (somente se $response.A1_EST != "")
+    oSetFieldsEst := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFieldsEst:setLabel("fillEstByCNPJ")
+    oSetFieldsEst:setIdentifier("fillEstByCNPJ")
+    oSetFieldsEst:addTargetField(oFldEst:getStructure())
+
+    oExprEst := totvs.framework.structure.interface.BuildExpression():new()
+    oExprEst:addValueFromResponse("A1_EST")
+    oExprEst:addOperatorComparison(6)  // 6 = Diferente
+    oExprEst:addValueFromLiteral("")
+
+    oConditionalEst := totvs.framework.structure.interface.BuildConditionalAction():new()
+    oConditionalEst:setLabel("conditionalEst")
+    oConditionalEst:setIdentifier("conditionalEst")
+    oConditionalEst:setExpression(oExprEst:getExpression())
+    oConditionalEst:setActionTrue(oSetFieldsEst:getAction())
+    
+    If ! lFillEst .and. SuperGetMV("MV_LJCTPDV",,.F.,"2") == "1"
+        // Somente no dataNew: após preenchimento via CNPJ, dispara geração de A1_COD/A1_LOJA via STICGCVLD
+        oConditionalEst:setActionSuccess(::buildSTICGCEvent())
+    EndIf
+
+    oSetFieldsCNPJ:setActionSuccess(oConditionalEst:getAction())
+
+    oAdvplBuscaCNPJ := totvs.framework.structure.interface.BuildAdvplAction():new()
+    oAdvplBuscaCNPJ:setLabel('buscaCNPJ')
+    oAdvplBuscaCNPJ:setRoutine("totvs.varejo.loja.SmartX.Model.buscaCNPJ")
+    oAdvplBuscaCNPJ:setParams({"{{$model.A1_CGC}}", "{{$model.A1_PESSOA}}"})
+    oAdvplBuscaCNPJ:setHasResponse(.t.)
+    oAdvplBuscaCNPJ:setAction(oSetFieldsCNPJ:getAction())
+
+Return oAdvplBuscaCNPJ:getAction()
+
+
+/*/{Protheus.doc} buildSTICGCEvent
+Monta a ação (AdvplAction + ConditionalAction + SetFieldsAction) responsável por
+validar o CPF/CNPJ via STICGCVLD e preencher automaticamente os campos A1_COD e A1_LOJA.
+Disparada no evento onChange do campo A1_CGC apenas no modo de inclusão (dataNew),
+quando o parâmetro MV_LJCTPDV = 1.
+O preenchimento só ocorre quando o retorno indicar sucesso (ok = "1").
+@type  Method
+@author caio.okamoto
+@since 06/05/2026
+@version v1.0
+@return jAction, JSON, Ação a ser vinculada ao evento onChange de A1_CGC em dataNew
+/*/
+Method buildSTICGCEvent() as json class LojaCadCli
+    Local oFldCod          As Object
+    Local oFldLoja         As Object
+    Local oSetFieldsCodigo As Object
+    Local oAdvplStiCgc     As Object
+    Local oExprOk          As Object
+    Local oConditionalCod  As Object
+
+    // Campos de destino para preenchimento automático
+    oFldCod := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldCod:setIdentifier("A1_COD")
+    oFldCod:setProperty("value", "{{$response.A1_COD}}")
+
+    oFldLoja := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFldLoja:setIdentifier("A1_LOJA")
+    oFldLoja:setProperty("value", "{{$response.A1_LOJA}}")
+  
+    // Ação de preenchimento dos campos
+    oSetFieldsCodigo := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFieldsCodigo:setLabel("fillCodigoBySTI")
+    oSetFieldsCodigo:setIdentifier("fillCodigoBySTI")
+    oSetFieldsCodigo:addTargetField(oFldCod:getStructure())
+    oSetFieldsCodigo:addTargetField(oFldLoja:getStructure())
+
+    // Executa o preenchimento somente se a resposta indicar sucesso (ok == "1")
+    oExprOk := totvs.framework.structure.interface.BuildExpression():new()
+    oExprOk:addValueFromResponse("ok")
+    oExprOk:addOperatorComparison(5)  // 5 = Igual
+    oExprOk:addValueFromLiteral("1")
+
+    oConditionalCod := totvs.framework.structure.interface.BuildConditionalAction():new()
+    oConditionalCod:setLabel("conditionalSTICGC")
+    oConditionalCod:setIdentifier("conditionalSTICGC")
+    oConditionalCod:setExpression(oExprOk:getExpression())
+    oConditionalCod:setActionTrue(oSetFieldsCodigo:getAction())
+
+    // AdvplAction: chama LjSmxStiCgcVld que encapsula a STICGCVLD
+    oAdvplStiCgc := totvs.framework.structure.interface.BuildAdvplAction():new()
+    oAdvplStiCgc:setLabel('stiCgcVld')
+    oAdvplStiCgc:setRoutine("totvs.varejo.loja.SmartX.Model.LjSmxStiCgcVld")
+    oAdvplStiCgc:setParams({"{{$model.A1_CGC}}", "{{$model.A1_PESSOA}}"})
+    oAdvplStiCgc:setHasResponse(.t.)
+    oAdvplStiCgc:setAction(oConditionalCod:getAction())
+
+Return oAdvplStiCgc:getAction()
+
+
+/*/{Protheus.doc} buscaCNPJ
+Consulta dados da empresa pelo CNPJ informado e retorna JSON para preenchimento dos campos da tela via SmartX Model.
+@type  Function
+@author GitHub Copilot
+@since 29/04/2026
+@version v1.0
+@param cCGC,   Caractere, CNPJ informado no campo A1_CGC
+@param cPessoa, Caractere, Tipo de pessoa (J=Jurídica, F=Física)
+@return cJson, Caractere, JSON com os dados da empresa para preencher os campos
+/*/
+function buscaCNPJ(cCGC as character, cPessoa as character) as character
+Local cJson         := ''
+Local oJson         := JsonObject():New()
+Local oConsultaCNPJ := Nil
+Local oResposta     := Nil
+Local aRuaNumero    := {}
+
+Default cPessoa := "J"
+
+Pergunte("LJCADCLIAP", .F.)
+nAutPCNPJ := MV_PAR01
+
+
+If nAutPCNPJ == 1 .AND. Upper(AllTrim(cPessoa)) == "J" .AND. Len(AllTrim(cCGC)) >= 14
+    oConsultaCNPJ := LjCallApiAutoPreenchimento():New()
+    oConsultaCNPJ:BuscaCNPJCarol(AllTrim(cCGC))
+    oResposta := oConsultaCNPJ:GetResposta()
+
+    If oResposta:hasproperty('Error') .AND. Len(oResposta['Error']) > 0
+        LjGrvLog("buscaCNPJ", "Erro ao consultar CNPJ:", oResposta['Error'][1]['Mensagem'])
+        FWAlertWarning(oResposta['Error'][1]['Mensagem'], "Auto Preenchimento CNPJ")
+    Else
+        aRuaNumero := SepNumEnd(oResposta["Endereco"][1]["endereco"])
+
+        oJson["A1_NOME"]   := oResposta["Empresa"][1]["nome"]
+        oJson["A1_NREDUZ"] := SubStr(oResposta["Empresa"][1]["nomeFantasia"], 1, 20)
+        oJson["A1_CNAE"]   := SubStr(oResposta["Empresa"][1]["cnae"],1,4)+"-"+;
+                              SubStr(oResposta["Empresa"][1]["cnae"],5,1)+"/"+;
+                              SubStr(oResposta["Empresa"][1]["cnae"],6,2)
+                            
+        oJson["A1_CEP"]    := oResposta["Endereco"][1]["cep"]
+        oJson["A1_END"]    := aRuaNumero[1]
+        oJson["A1_BAIRRO"] := oResposta["Endereco"][1]["bairro"]
+        oJson["A1_MUN"]    := oResposta["Endereco"][1]["municipio"]
+        oJson["A1_EST"]    := oResposta["Endereco"][1]["estado"]
+        oJson["A1_PAIS"]   := oResposta["Endereco"][1]["pais"]
+        oJson["A1_TEL"]    := oResposta["Telefone"][1]["telefone"]
+        oJson["A1_DDD"]    := oResposta["Telefone"][1]["ddd"]
+    EndIf
+
+    //oConsultaCNPJ:FreeVar()
+    FreeObj(oResposta)
+    oResposta := Nil
+    FreeObj(oConsultaCNPJ)
+    oConsultaCNPJ := Nil
+
+EndIf
+
+cJson := oJson:toJson()
+
+Return cJson
+
+
+/*/{Protheus.doc} SepNumEnd
+Extrai rua e numero de um endereco completo
+@author caio.okamoto
+@since 29/04/2026
+@param cEndCompleto, caracter, Endereco completo do banco
+@return array, {cRua, cNumero, nConfianca}
+/*/
+Static Function SepNumEnd(cEndCompleto)
+Local cTexto := AllTrim(cEndCompleto)
+Local cRua := ""
+Local cNumero := ""
+Local nConfianca := 0
+Local nPos := 0
+Local cUltimaParte := ""
+Local lValidado := .F.
+Local aSeparador := {" ", ",", ".", "-"}
+Local nX := 0
+Local lAchouNum := .F.
+
+// Verifica se tem marcador de validado
+If RAt(", Numero", cTexto)
+    lValidado := .T.
+EndIf
+
+// Tenta encontrar numero no final
+// Padrao: procura por espaco/virgula/ponto/hifen seguido de numeros
+For nX := 1 To Len(aSeparador)
+    nPos := RAt(aSeparador[nX], cTexto)
+    
+    lAchouNum := EhNumero(cTexto, nPos, @cUltimaParte )    
+    
+    If lAchouNum
+        Exit
+    EndIf
+Next
+    
+// Verifica se a ultima parte e um numero (pode ter letras no final tipo 123-A)
+If lAchouNum
+    cNumero := cUltimaParte
+    cRua    := AllTrim(SubStr(cTexto, 1, nPos - 1))
+    If lValidado
+        cRua := AllTrim( StrTran( StrTran(cRua, ", Numero", ""), ",", "" ) )
+        cRua := Iif(Right(cRua, 1) == ",", SubStr(cRua,1,Len(cRua)-1), cRua )
+    EndIf
+    nConfianca := 1
+Else
+    cRua        := cTexto
+    cNumero     := ""
+    nConfianca  := 0
+EndIf
+
+    
+Return {cRua, cNumero, nConfianca}
+
+/*/{Protheus.doc} EhNumero
+Verifica se a ultima parte do endereco e um numero
+@author caio.okamoto
+@since 29/04/2026
+@param cTexto, caracter, Endereco completo
+        nPos, numerico, Posicao do separador
+        cUltimaParte, caracter, Retorna a ultima parte do endereco
+@return lRet, logico, Se for numero retorna .T.
+/*/
+Static Function EhNumero(cTexto, nPos, cUltimaParte )
+Local lRet       := .F.
+
+cUltimaParte := AllTrim(SubStr(cTexto, nPos + 1))
+        
+// Verifica se a ultima parte e um numero (pode ter letras no final tipo 123-A)
+If IsDigit(Left(cUltimaParte, 1)) .And. Len(cUltimaParte) >= 1 .And. Len(cUltimaParte) <= 10
+    lRet := .T.
+EndIf
+
+Return lRet
+
+/*/{Protheus.doc} LjSmxAtAutPCC
+Apresenta a tela de parâmetros (Pergunte "LJCADCLIAP") para que o operador configure
+o comportamento do auto preenchimento de CNPJ e CEP na tela de cadastro de clientes SmartX.
+
+Após a confirmação da tela de parâmetros, atualiza as variáveis estáticas do arquivo
+que controlam o auto preenchimento durante a sessão corrente:
+
+  -  (MV_PAR01): Habilita/desabilita a consulta automática ao CNPJ via API Carol.
+      1 = Habilitado  — ao sair do campo A1_CGC com CNPJ válido, os dados da empresa
+                        são preenchidos automaticamente (nome, endereço, CNAE, telefone, etc.)
+      2 = Desabilitado — nenhuma consulta é realizada; apenas a validação padrão do CGC é feita.
+
+  - nAutPCEP (MV_PAR02): Habilita/desabilita a consulta automática ao CEP via ViaCEP / TAS.
+      1 = Habilitado  — ao sair do campo A1_CEP com CEP válido, os dados do endereço
+                        nAutPCNPJsão preenchidos automaticamente (logradouro, bairro, município, UF).
+      2 = Desabilitado — nenhuma consulta é realizada; o operador deve preencher o endereço manualmente.
+
+Chamada como pageAction no DataView SmartX via BuildAdvplAction (botão "Auto Preenchimento").
+
+@type     Function
+@author   caio.okamoto
+@since    30/04/2026
+@version  v1.0
+@return   oResp, json, JSON vazio (resposta obrigatória para AdvplAction sem setHasResponse)
+/*/
+
+
+Function LjSmxAtAutPCC() As json
+    Local oResp As json
+
+    Pergunte("LJCADCLIAP", .T.)
+    nAutPCNPJ := MV_PAR01
+    nAutPCEP  := MV_PAR02
+
+    oResp := JsonObject():new()
+Return oResp
+
+/*/{Protheus.doc} LjSmxStiCgcVld
+Wrapper SmartX para a função STICGCVLD (STIIncCustomer.PRW).
+Valida o CPF/CNPJ informado no campo A1_CGC e gera automaticamente o código (A1_COD)
+e a loja (A1_LOJA) do cliente, conforme as regras do parâmetro MV_LJTPGCC.
+Retorna um JSON com os campos gerados em caso de sucesso, ou indicador de erro.
+@type     Function
+@author   caio.okamoto
+@since    06/05/2026
+@version  v1.0
+@param    cCGC,    Caractere, CPF ou CNPJ informado no campo A1_CGC
+@param    cPessoa, Caractere, Tipo de pessoa: "F" para Física (CPF) ou "J" para Jurídica (CNPJ)
+@return   cJson,   Caractere, JSON com {"ok":"1","A1_COD":"...","A1_LOJA":"..."} ou {"ok":"0"}
+/*/
+Function LjSmxStiCgcVld(cCGC as character, cPessoa as character) as character
+    Local cJson as character
+    Local oJson as object
+    Local aRet  as array
+
+    cJson := ''
+    oJson := JsonObject():New()
+    aRet  := {}
+
+    Default cPessoa := "J"
+
+    aRet := STICGCVld(AllTrim(cCGC), cPessoa, "", Nil, .T., "01")
+
+    If ValType(aRet) == "A" .AND. Len(aRet) >= 3 .AND. aRet[3] == .T.
+        oJson["ok"]      := "1"
+        oJson["A1_COD"]  := AllTrim(aRet[1])
+        oJson["A1_LOJA"] := AllTrim(aRet[2])
+    Else
+        oJson["ok"] := "0"
+        LjGrvLog("LjSmxStiCgcVld", "CPF/CNPJ inválido ou código não gerado", AllTrim(cCGC))
+    EndIf
+
+    cJson := oJson:toJson()
+
+Return cJson
+
+/*/{Protheus.doc} buildDomMailEvent
+Monta a ação (AdvplAction + SetFieldsAction) disparada no onChange de A1_DOMMAIL.
+Ao confirmar a seleção do domínio, chama LjSmxConcatEmail que concatena
+A1_MAILDIG + rótulo do domínio selecionado e grava o resultado em A1_EMAIL.
+@type  Method
+@author caio.okamoto
+@since 09/05/2026
+@version v1.0
+@return jAction, JSON, Ação vinculada ao onChange de A1_DOMMAIL
+/*/
+Method buildDomMailEvent() as json class LojaCadCli
+    Local oFieldEmail  As Object
+    Local oSetFields   As Object
+    Local oAdvplAct    As Object
+
+    oFieldEmail := totvs.framework.structure.interface.BuildTargetFieldStructure():new()
+    oFieldEmail:setIdentifier("A1_EMAIL")
+    oFieldEmail:setProperty("value", "{{$response.A1_EMAIL}}")
+
+    oSetFields := totvs.framework.structure.interface.BuildSetFieldsAction():new()
+    oSetFields:setLabel("concatEmail")
+    oSetFields:setIdentifier("concatEmail")
+    oSetFields:addTargetField(oFieldEmail:getStructure())
+
+    oAdvplAct := totvs.framework.structure.interface.BuildAdvplAction():new()
+    oAdvplAct:setLabel("concatEmail")
+    oAdvplAct:setRoutine("totvs.varejo.loja.SmartX.Model.LjSmxConcatEmail")
+    oAdvplAct:setParams({"{{$model.A1_MAILDIG}}", "{{$model.A1_DOMMAIL}}"})
+    oAdvplAct:setHasResponse(.T.)
+    oAdvplAct:setAction(oSetFields:getAction())
+
+Return oAdvplAct:getAction()
+
+/*/{Protheus.doc} LjSmxConcatEmail
+Concatena o nome digitado (A1_MAILDIG) com o rótulo do domínio selecionado (A1_DOMMAIL)
+e retorna o e-mail completo para ser gravado em A1_EMAIL.
+Se A1_MAILDIG já contiver '@', usa-o diretamente sem concatenar o domínio.
+Se A1_DOMMAIL estiver vazio, retorna A1_MAILDIG como e-mail.
+@type  Function
+@author caio.okamoto
+@since 09/05/2026
+@version v1.0
+@param  cMailDig,  Caractere, Valor de A1_MAILDIG (nome da caixa)
+@param  cDomKey,   Caractere, Chave numérica do domínio selecionado em A1_DOMMAIL
+@return cJson, Caractere, JSON com {"A1_EMAIL":"nome@dominio.com"}
+/*/
+Function LjSmxConcatEmail(cMailDig as character, cDomKey as character) as character
+    Local oJson     As Object
+    Local aDominios As Array
+    Local cNome     As Character
+    Local cDomLabel As Character
+    Local nI        As Numeric
+
+    oJson     := JsonObject():New()
+    cNome     := AllTrim(cMailDig)
+    cDomLabel := ""
+
+    // Se o nome já contém '@', é um e-mail completo — usa direto
+    If At("@", cNome) > 0
+        oJson["A1_EMAIL"] := cNome
+        Return oJson:toJson()
+    EndIf
+
+    // Busca o rótulo do domínio pela chave numérica
+    If !Empty(cDomKey)
+        aDominios := LjSmxOpDomMail()
+        For nI := 1 To Len(aDominios)
+            If AllTrim(aDominios[nI][1]) == AllTrim(cDomKey)  // [1]=chave, [2]=label
+                cDomLabel := AllTrim(aDominios[nI][2])
+                Exit
+            EndIf
+        Next
+    EndIf
+
+    oJson["A1_EMAIL"] := cNome + cDomLabel
+
+Return oJson:toJson()
+
+/*/{Protheus.doc} LjSmxOpDomMail
+Retorna as opções de domínio de e-mail para o campo virtual A1_DOMMAIL.
+Lê o parâmetro MV_LJDMAIL separado por ';' e retorna array de pares {chave, valor},
+mesmo padrão da função LjOpDomMail() utilizada no LOJACADCLI.PRW.
+@type  Function
+@author caio.okamoto
+@since 04/05/2026
+@version v1.0
+@return aRet, Array, Array de pares {{"1","@gmail.com"},{"2","@hotmail.com"},...} no formato
+         esperado por BuildFieldProperties:setOptionsList() do SmartX, ou {} se vazio
+/*/
+Function LjSmxOpDomMail() as array
+    Local cDominios As Character
+    Local aLista    As Array
+    Local aRet      As Array
+    Local nI        As Numeric
+
+    cDominios := SuperGetMV("MV_LJDMAIL", .F., "")
+    aLista    := {}
+    aRet      := {}
+
+    If !Empty(cDominios)
+        aLista := StrTokArr(cDominios, ";")
+        For nI := 1 To Len(aLista)
+            AAdd(aRet, { cValToChar(nI), AllTrim(aLista[nI]) })
+        Next
+    EndIf
+
+Return aRet

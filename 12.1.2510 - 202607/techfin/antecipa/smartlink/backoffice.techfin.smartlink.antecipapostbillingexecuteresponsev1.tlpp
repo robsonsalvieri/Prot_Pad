@@ -1,0 +1,343 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader
+	Classe de Integração Novo Antecipa
+	Leitura do retorno dos eventos de pós faturamento
+	@type class
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+class AntecipaPostBillingExecuteResponseV1MessageReader from LongNameClass	
+	data jMessage  as json
+    data cMock     as character
+    data lMock     as logical
+
+	public method new() constructor
+	public method read()
+	public method mock()
+end class
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+method New() class AntecipaPostBillingExecuteResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 9/13/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaPostBillingExecuteResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaPostBillingExecuteResponseV1MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class AntecipaPostBillingExecuteResponseV1MessageReader
+
+    local lSuccess	:= .F. as logical
+    local cCompany	:= ""  as character
+    local cBranch	:= ""  as character
+    local cPayload	:= ""  as character
+	local cIdReq	:= ""  as character
+	local cSource   := ""  as character 
+	local nPosFil   := 0   as numeric
+    local aIdent	:= {}  as array
+	local aSM0      := {}  as array
+
+	cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+
+	if ::jMessage:FromJSON(cPayload) == NIL
+
+		if !Empty(::jMessage["data"]["erpRequestId"]) .And. ::jMessage["data"]["requestSource"] == 1//-- Evento nasceu no ERP
+			//------------------------------------------------------------------------
+			//-- Execução via retorno de evento criado no ERP
+			aIdent := StrTOKArr2(::jMessage["data"]["erpRequestId"], "|", .T.)//"erpRequestId": "cEmpAnt|cFilAnt|cIdReq"
+			if Len(aIdent) == 3
+				cCompany := aIdent[1]
+				cBranch  := aIdent[2]
+				cIdReq 	 := aIdent[3]
+				cSource  := "1"				
+			EndIF
+		else
+			//------------------------------------------------------------------------
+			//-- Execução via solicitação direta da Supplier/Techfin
+			if !Empty(::jMessage["data"]["processingData"]) .And. ::jMessage["data"]["requestSource"] == 2//-- Evento nasceu na Techfin
+				if Len(::jMessage["data"]["processingData"]) > 0
+					if ::jMessage["data"]["processingData"][1]:hasProperty("documentNumber")
+						aSM0 := FwLoadSM0()
+						//Pega o primeiro CNPJ, somente para abrir o ambiente em AntPostBill
+						cBranchCNPJ := ::jMessage["data"]["processingData"][1]["documentNumber"]
+						if !Empty(cBranchCNPJ) .and. (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+							aIdent := {aSM0[nPosFil][1], aSM0[nPosFil][2]}
+							cSource := "2"
+						endIf
+					endIf
+				endIf
+			endIf
+		endIf
+
+		if Len(aIdent) >= 2
+			cCompany := aIdent[1]
+			cBranch  := aIdent[2]
+			lSuccess := StartJob("AntPostBill", GetEnvServer(), .T., cCompany, cBranch, ::jMessage["data"]:toJson(), cPayload, cIdReq, cSource )
+		endIf
+
+	endIf
+
+	FwFreeObj(::jMessage)
+	FwFreeArray(aIdent)
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} AntPostBill
+	Totvs Antecipa Post Billing - executa a regra de negócio da confirmação dos eventos de pós-faturamento
+	@type function
+	@author Squad TechFin
+	@since 9/20/2025
+	@param cCompany	 , character, Grupo Empresa
+	@param cBranch 	 , character, Filial
+	@param cData	 , character, dados do evento
+	@param cPayload	 , character, mensagem recebida
+    @param cIdMsg	 , character, Id da mensagem de original
+    @param cSource	 , character, Origem da mensagem: 1-ERP, 2-Techfin/Supplier
+/*/
+Function AntPostBill(cCompany as character, cBranch as character, cData as character, cPayload as character, cIdMsg as character, cSource as character)
+		 
+	local nX 		         := 0                  as numeric
+	local nZ 		         := 0                  as numeric
+	Local nPos 		         := 0                  as numeric
+	local nStatus	         := 0                  as numeric
+	local nModelOperation    := 3                  as numeric
+    local dARFData           := CtoD("//")         as date
+	local cLog 		         := ''                 as character
+	local cEvent 	         := ''                 as character
+	local cLogModel	         := ''                 as character
+	local cMSUID	         := ''                 as character
+	local cTransCode         := ''                 as character
+	local lDisarmTransaction := .F.                as logical
+	local aLogs		         := {}                 as array
+	local aEvents 	         := {}                 as array
+	local aFieldsUpd         := {}                 as array
+	local oModel 	         := Nil                as object
+	local oMdlMaster         := Nil                as object
+	local oEvent 	         := Nil                as object
+	local oResult	         := Nil                as object
+	local jData              := JsonObject():New() as json
+	
+	RPCSetType(3) 
+	RpcClearEnv()
+	RPCSetEnv(cCompany, cBranch,,,'FIN') 
+
+	//-- Eventos suportados no processamendo dessa fila
+	/*
+	aEvents[n,1] - Identificação do evento vinda da mensagem Techfin
+	aEvents[n,2] - Descrição do Evento
+	aEvents[n,3] - Método a ser executado
+	aEvents[n,4] - Identificação do evento dentro do Model 'monitorBilling'
+	aEvents[n,5] - conteudo para ARF_TIPO
+	*/
+	Aadd(aEvents,{'0', 'Recompra'	, {|| oEvent:FRecompra() }, 3, 'R'})
+	Aadd(aEvents,{'1', 'Prorrogação', {|| oEvent:FProrroga() }, 1, 'P'})
+	Aadd(aEvents,{'2', 'Bonificação', {|| oEvent:FBonifica() }, 2, 'B'})
+
+	jData:fromJson(cData)
+
+	If jData["requestType"] == 2 .And. jData["status"] == 1//requestType: 1-Simulação; 2-Confirmação
+
+		dARFData   := StoD( Substr(jData["dateTime"],1,4) + Substr(jData["dateTime"],6,2) + Substr(jData["dateTime"],9,2) )
+
+		For nX:= 1 to Len( jData["processingData"] )
+
+			cEvent := cValtoChar(jData["processingData"][nX]["processingType"]) //0-Recompra; 1-Prorrogação; 2-Bonificação
+			nPos   := AScan(aEvents, {|x| x[1] == cEvent})
+
+			If nPos == 0 
+	 			aAdd(aLogs, {"error", "Event code not supported", "Json attribute 'processingType': "+ cEvent })
+				Loop
+			EndIf
+			
+			aFieldsUpd := {}
+			nStatus    := jData["processingData"][nX]["requestStatus"]			
+
+			If cSource == "1"//-- Solicitado pelo usuário, ja existe ARF pendente
+				cMSUID := jData["processingData"][nX]["erpInstallmentId"]
+				If !totvs.protheus.backoffice.techfin.util.setPositionByUUID( 'ARF', cMSUID )
+					aAdd(aLogs, {"error", "Post billing - erpInstallmentId not found.", "ARF_MSUID: " + cMSUID})
+					Loop
+				EndIf
+			Else//-- Solicitado via Techfin, ainda não existe ARF
+				cTransCode := Alltrim(jData["processingData"][nX]["transactionCode"])
+				If !AntPostSeek( cTransCode )
+					aAdd(aLogs, {"error", "Post billing - TransactionCode not found.", "ARE_TRANSC: " + cTransCode})
+					Loop
+				EndIf
+			EndIf
+
+			Begin Transaction
+				lDisarmTransaction := .F.
+				If nStatus == 1//-- Evento Aprovado
+					If cSource == "1"
+						nModelOperation := MODEL_OPERATION_UPDATE
+						Aadd(aFieldsUpd,{'ARF_STATUS','2'})// 1=Em processamento;2=Aprovado;3=Reprovado
+					Else
+						nModelOperation := MODEL_OPERATION_INSERT		
+						Aadd(aFieldsUpd,{'ARF_FILIAL', FwxFilial('ARF') })
+						Aadd(aFieldsUpd,{'ARF_DATA',   dARFData })
+						Aadd(aFieldsUpd,{'ARF_TIPO',   aEvents[nPos,5] })
+						Aadd(aFieldsUpd,{'ARF_STATUS', '2' })
+						Aadd(aFieldsUpd,{'ARF_NUMSOL', ARE->ARE_NUM })
+						Aadd(aFieldsUpd,{'ARF_ITEM',   ARE->ARE_ITEM })
+						Aadd(aFieldsUpd,{'ARF_FILTIT', ARE->ARE_FILTIT })
+						Aadd(aFieldsUpd,{'ARF_PREFIX', ARE->ARE_PREFIX })
+						Aadd(aFieldsUpd,{'ARF_NUMTIT', ARE->ARE_NUMTIT })
+						Aadd(aFieldsUpd,{'ARF_PARTIT', ARE->ARE_PARTIT })
+						Aadd(aFieldsUpd,{'ARF_TIPTIT', ARE->ARE_TIPTIT })
+						Aadd(aFieldsUpd,{'ARF_CLITIT', ARE->ARE_CLITIT })
+						Aadd(aFieldsUpd,{'ARF_LOJTIT', ARE->ARE_LOJTIT })
+						Aadd(aFieldsUpd,{'ARF_VLSOL',  ARE->ARE_VLSOL })
+						Aadd(aFieldsUpd,{'ARF_VENATU', SE1->E1_VENCREA })
+
+						If cEvent == "0"//-- Recompra
+							If ARF->(FieldPos("ARF_DEBREC")) > 0 
+								Aadd(aFieldsUpd,{'ARF_DEBREC', jData["processingData"][nX]["installmentTotalDebitAmount"] })
+							EndIf
+						ElseIf cEvent == "1"//-- Prorrogação
+							Aadd(aFieldsUpd,{'ARF_VENNOV', StoD(StrTran(jData["processingData"][nX]["newDueDate"],"-","")) })
+							If ARF->(FieldPos("ARF_CUSTO")) > 0 
+								Aadd(aFieldsUpd,{'ARF_CUSTO' , jData["processingData"][nX]["installmentFeeDebitedAmount"] })
+							EndIf
+						ElseIf cEvent == "2"//-- Bonificação
+							Aadd(aFieldsUpd,{'ARF_DESCON', jData["processingData"][nX]["installmentDebitedAmount"] })
+							If ARF->(FieldPos("ARF_CUSTO")) > 0 
+								Aadd(aFieldsUpd,{'ARF_CUSTO' , jData["processingData"][nX]["installmentFeeDebitedAmount"] })
+							EndIf
+						EndIf
+					EndIf
+				ElseIf nStatus == 3 .or.nStatus == 4// Evento Negado/Rejeitado
+					Aadd(aFieldsUpd,{'ARF_STATUS','3'})
+				EndIF 
+
+				If Len(aFieldsUpd) > 0
+					totvs.protheus.backoffice.techfin.antecipa.postbilling.SetEventToModelDef( aEvents[nPos,4] )
+					totvs.protheus.backoffice.techfin.antecipa.postbilling.SetOriginToModelDef( 2 )
+					oModel := FWLoadModel("totvs.protheus.backoffice.techfin.antecipa.postbilling.monitorBilling")
+					oModel:SetOperation( nModelOperation )
+					oModel:Activate()     
+					oMdlMaster := oModel:GetModel('ARFMASTER')  
+
+					For nZ:=1 to Len(aFieldsUpd)
+						oMdlMaster:SetValue(aFieldsUpd[nZ,1], aFieldsUpd[nZ,2]) 
+					Next nZ
+
+					If !(oModel:VldData() .and. oModel:CommitData())
+						cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+						cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+						cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+						If cSource == "1"
+							aAdd(aLogs, {"error", "Model validation erpRequestId (ARF_MSUID): "+ cMSUID, cLogModel})
+						Else
+							aAdd(aLogs, {"error", "Model validation transactionCode (ARE_TRANSC): "+ cTransCode, cLogModel})
+						EndIf
+						lDisarmTransaction := .T.
+					Else
+						oEvent := totvs.protheus.backoffice.techfin.smartlink.antecipa.events.AntecipaEvents():new()
+						oEvent:setData( jData["processingData"][nX] )
+						Eval( aEvents[nPos,3] )
+						oResult := oEvent:getResult()
+
+						If Len( oResult['error'] ) > 0
+							aAdd(aLogs, {"error", "Post Billing ["+aEvents[nPos,2]+"]", "ARF_MSUID: " + cMSUID})
+							For nZ := 1 to Len(oResult['error'])
+								aAdd(aLogs, {"error", "Processing failure.", oResult['error'][nZ]['description'] })
+							Next nZ
+
+							dbSelectArea("ARF")
+							If RecLock("ARF",.F.)
+								ARF->ARF_STATUS := "3"
+								ARF->(MsUnLock())
+							EndIf
+						EndIf
+					EndIf
+					oModel:DeActivate()
+					oModel:Destroy()
+				EndIf
+
+				If lDisarmTransaction
+					DisarmTransaction()
+				EndIf
+			End Transaction
+		Next nX
+	EndIf
+
+    // Log da integração
+    If Len(aLogs) > 0
+        cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+    EndIf
+
+	totvs.protheus.backoffice.techfin.util.LogSmartLink(cPayload, '', '', "1", "PostBilling", "T", cIdMsg, cLog) //cMessage, cAlias, cUUID, cProduct, cOperation, cOrigin, cIdMsg, cLog
+	RpcClearEnv()
+
+Return .T.
+
+/*/{Protheus.doc} AntPostSeek
+	Posiciona nas tabelas ARE e SE1 pelo transactionCode retornado pela Techfin
+	@type   function
+	@author Squad TechFin
+	@since  17/03/2026
+	@param  cTransCode, character, TransactionCode
+    @return lRet,       logical,   Se .T., posicionou corretamente nas tabelas ARE e SE1
+/*/
+Static Function AntPostSeek( cTransCode as character ) as logical         
+    Local cQuery       := ""  as character
+    Local lRet         := .F. as logical
+    Local nRecno       := 0   as numeric
+	Default cTransCode := ""
+
+    cQuery := "SELECT R_E_C_N_O_ AS ARERECNO FROM " +RetSqlName("ARE")+ " "
+    cQuery += "WHERE ARE_FILIAL = ? "
+    cQuery += "AND ARE_TRANSC = ? "
+    cQuery += "AND D_E_L_E_T_ = ?"
+
+    oExec := FwExecStatement():New(ChangeQuery(cQuery))
+    oExec:SetString( 1, FwXFilial("ARE") )
+    oExec:SetString( 2, cTransCode )    
+    oExec:SetString( 3, ' ' )
+
+    nRecno := oExec:ExecScalar("ARERECNO")
+
+    If nRecno > 0
+        DbSelectArea("ARE")
+        ARE->(DbGoTo(nRecno))
+        lRet := .T.
+    EndIf
+
+	If lRet
+		dbSelectArea("SE1")
+		SE1->(dbSetOrder(1))
+		lRet := SE1->(msSeek(FwXFilial("SE1",ARE->ARE_FILTIT)+ARE->(ARE_PREFIX+ARE_NUMTIT+ARE_PARTIT+ARE_TIPTIT)))
+	EndIf
+
+    oExec:Destroy()
+    oExec := Nil 
+    FwFreeObj(oExec)
+
+Return lRet

@@ -1,0 +1,626 @@
+#Include "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH" 
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#include 'BACKOFFICE.ALC.SUBSTITUTION.REPOSITORY.CH'
+
+namespace alc.substitutionRepository
+using namespace pgc.utils
+
+/*/{Protheus.doc} alcSubstitutionRepository
+	Classe repository para a API de substituição dos aprovadores.
+@author juan.felipe
+@since 07/06/2024
+/*/
+Class alcSubstitutionRepository FROM FWAdapterBaseV2
+    public  Data lOk As Logical
+    private Data cMessage As Character
+    public  Data oJsonRequest As Object
+
+    public Method New()
+    public Method getValidateApprover()
+    public Method putPermanentSubstitution()
+    public Method postTemporaryAbsent()
+    public Method putTimelyTransfer()
+    private Method transferApprovalGroups()
+    public Method transferApproverDocuments()
+    public Method transferSelectedDocuments()
+    private Method recordAbsenceData()
+EndClass
+
+
+/*/{Protheus.doc} New
+	Método construtor
+@author juan.felipe
+@since 07/06/2024
+/*/
+Method New(cVerb) Class alcSubstitutionRepository
+    Default cVerb := 'GET'
+
+    Self:lOk          := .F.
+    Self:cMessage     := ''
+    Self:oJsonRequest := Nil
+
+    _Super:New(cVerb, .T.)
+Return Self
+
+
+/*/{Protheus.doc} getValidateApprover
+	Valida se o aprovador é superior.
+@author juan.felipe
+@since 07/06/2024
+@param cOriginalApprover, character, código do aprovador.
+@param cNewApprover, character, código do novo aprovador.
+@param lPermanent, logical, indica se é transferência permanente.
+@param lTimely, logical, indica se é transferência pontual.
+@return oJsonRet, object, json com a mensagem de sucesso ou erro.
+/*/
+Method getValidateApprover(cOriginalApprover, cNewApprover, lPermanent, lTimely) Class alcSubstitutionRepository
+    Local aAreas As Array
+    Local cName As Character
+    Local nCode As Numeric
+    Local cOriginalUser As Character
+    Local cNewUser As Character
+    Local cApproverAux As Character
+    Local oJsonRet As Object
+    Local oUtils As Object
+    Default cOriginalApprover := ''
+    Default cNewApprover := ''
+    Default lPermanent := .F.
+    Default lTimely := .F.
+
+    aAreas := {SAK->(GetArea()), GetArea()}
+    cOriginalUser := ''
+    cNewUser := ''
+
+    oJsonRet := JsonObject():New()
+    oUtils := pgcUtils():New()
+
+    If !Empty(cNewApprover)
+        cApproverAux := cNewApprover
+    Else
+        cApproverAux := cOriginalApprover
+    EndIf
+
+    SAK->(dbSetOrder(1))
+    If Self:lOk := SAK->(MsSeek(FWxFilial('SAK') + cOriginalApprover))
+        cName := AllTrim(SAK->AK_NOME)
+        cOriginalUser := SAK->AK_USER
+
+		If cOriginalApprover == cNewApprover
+            Self:cMessage := STR0002 //-- Não é permitido realizar a transferência para o mesmo aprovador.
+            Self:lOk := .F.
+        ElseIf Self:lOk := FWIsAdmin(__cUserID) .Or. cOriginalUser == __cUserID //-- Verifica se o usuário atual é administrador ou se é o próprio aprovador original
+            Self:cMessage := STR0001 //-- Transferência permitida.
+        ElseIf Self:lOk := !Empty(SAK->AK_APROSUP) .And. SAK->(MsSeek(FWxFilial('SAK') + SAK->AK_APROSUP)) .And. SAK->AK_USER == __cUserID
+            Self:cMessage := STR0001 //-- Transferência permitida.
+        Else
+            Self:cMessage := STR0003 + cName //-- O aprovador que está atualmente logado no sistema não é superior do aprovador XXXXX
+        EndIf
+        
+        If Self:lOk .And. !Empty(cNewApprover) //-- Valida o novo aprovador
+            If Self:lOk := SAK->(MsSeek(FWxFilial('SAK') + cNewApprover))
+                cNewUser := SAK->AK_USER
+            Else
+                Self:cMessage := STR0005 + cNewApprover + STR0006 //-- O novo aprovador XXXXX não foi localizado.
+            EndIf
+        EndIf
+
+        //-- Valida existência dos registros
+        Self:lOk := Self:lOk .And. Self:transferApproverDocuments(cOriginalApprover, cOriginalUser, cNewApprover, cNewUser, .T., .F., lPermanent, lTimely)
+        Self:lOk := Self:lOk .And. Self:transferApprovalGroups(cOriginalApprover, cNewApprover, cNewUser, .T.)
+
+        If Self:lOk
+            Self:cMessage := STR0001 //-- Transferência permitida.
+        EndIf
+    Else
+        Self:cMessage := STR0007 + cApproverAux + STR0006 //-- O aprovador XXXXX não foi localizado.
+    EndIf
+
+    nCode := IIf(Self:lOk, 200, 400)
+
+    oJsonRet := oUtils:setClassResponse(nCode, Self:cMessage)
+    oJsonRet['approverUser'] := cOriginalUser
+    oJsonRet['newApproverUser'] := cNewUser
+
+    FreeObj(oUtils)
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x) })
+Return oJsonRet
+
+/*/{Protheus.doc} putPermanentSubstitution
+	Realiza transferência permanente do aprovador.
+@author juan.felipe
+@since 07/06/2024
+@param oJsonRequest, object, json da requisição.
+@return oJsonRet, object, json com a mensagem de sucesso ou erro.
+/*/
+Method putPermanentSubstitution(oJsonRequest) Class alcSubstitutionRepository
+    Local aAreas As Array
+    Local cOriginalApprover As Character
+    Local cOriginalUser As Character
+    Local cNewApprover As Character
+    Local cNewUser As Character
+    Local nCode As Numeric
+    Local oJsonValidate As Object
+    Local oJsonRet As Object
+    Local oUtils As Object
+    Default oJsonRequest := JsonObject():New()
+
+    aAreas           := {SAK->(GetArea()), SAL->(GetArea()), SCR->(GetArea()), GetArea()}
+    cNewUser := ''
+    oJsonValidate    := JsonObject():New()
+    oJsonRet         := JsonObject():New()
+    oUtils           := pgcUtils():New()
+
+    cOriginalApprover := oJsonRequest['originalApprover']
+    cNewApprover := oJsonRequest['newApprover']
+
+    oJsonValidate := Self:getValidateApprover(cOriginalApprover, cNewApprover, .T.) //-- Valida e obtém usuário do aprovador
+
+    Begin Transaction
+        If Self:lOk
+            cNewUser := oJsonValidate['newApproverUser']
+            cOriginalUser := oJsonValidate['approverUser']
+
+            Self:lOk := Self:transferApproverDocuments(cOriginalApprover, cOriginalUser, cNewApprover, cNewUser,,, .T.)
+            Self:lOk := Self:lOk .And. Self:transferApprovalGroups(cOriginalApprover, cNewApprover, cNewUser)
+
+            If Self:lOk
+                Self:cMessage := STR0008 //-- Os documentos e grupos de aprovação foram transferidos com sucesso.
+            EndIf
+        EndIf
+
+        If !Self:lOk
+            DisarmTransaction()
+        EndIf
+    End Transaction
+
+    nCode := IIf(Self:lOk, 200, 400)
+
+    oJsonRet := oUtils:setClassResponse(nCode, Self:cMessage)
+
+    FreeObj(oJsonValidate)
+    FreeObj(oUtils)
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x) })
+Return oJsonRet
+
+/*/{Protheus.doc} transferApproverDocuments
+	Transfere os documentos do aprovador.
+@author juan.felipe
+@since 11/06/2024
+@param cOriginalApprover, character, aprovador original.
+@param cOriginalUser, character, usuário original.
+@param cNewApprover, character, novo aprovador.
+@param cNewUser, character, novo usuário do aprovador.
+@param lValidate, logical, apenas validação da existência dos registros.
+@return lRet, logical, transferência realizada com sucesso.
+/*/
+Method transferApproverDocuments(cOriginalApprover, cOriginalUser, cNewApprover, cNewUser, lValidate, lDevolution, lPermanent, lTimely) Class alcSubstitutionRepository
+    Local lRet As Logical
+    Local lFound As Logical
+    Local lSCRTpTran As Logical
+    lOCAL lAlcSolCtb As Logical
+    Local cAliasTemp As Character
+    Local cAliasDBM As Character
+    Local cQuery As Character
+    Local oQuery As Object
+    Local oJsonAbsence As Object
+    Default cOriginalApprover := ''
+    Default cOriginalUser := ''
+    Default cNewApprover := ''
+    Default cNewUser := ''
+    Default lValidate := .F.
+    Default lDevolution := .F.
+    Default lPermanent := .F.
+    Default lTimely := .F.
+
+    lRet   := .T.
+    lFound := .F.
+    lSCRTpTran := SCR->(FieldPos('CR_TPTRAN')) > 0
+    lAlcSolCtb := SuperGetMv("MV_APRSCEC",.F.,.F.)
+
+    //-- Define mensagem de erro inicial, caso não ocorra erro não exibirá esta mensagem
+    Self:cMessage := STR0009 //-- Não foram localizados documentos para realização da transferência.
+
+    If !lDevolution .And. !lTimely .And. (lPermanent .Or. !Empty(cNewApprover)) //-- Valida ausência do aprovador
+        If Empty(cNewApprover)
+            oJsonAbsence := A230GetAbsence(cOriginalApprover, cOriginalUser)
+        Else
+            oJsonAbsence := A230GetAbsence(cNewApprover, cNewUser)
+        EndIf
+
+        If oJsonAbsence['hasAbsence']
+            If Empty(cNewApprover)
+                Self:cMessage := STR0011 + DToC(oJsonAbsence['DKJ_DATFIM']) //-- A transferência permanente do aprovador não é permitida, pois o mesmo se encontra em período de ausência até:
+            Else
+                Self:cMessage := STR0012 + DToC(oJsonAbsence['DKJ_DATFIM']) //-- O aprovador informado não pode ser utilizado como substituto, pois o mesmo se encontra em período de ausência até:
+            EndIf
+            lRet := .F.
+        EndIf
+
+        FreeObj(oJsonAbsence)
+    EndIf
+
+    If lRet
+        cQuery := ''
+        cQuery += " SELECT SCR.CR_NUM, "
+        cQuery += "     SCR.CR_TIPO, "
+        cQuery += "     SCR.CR_USER, "
+        cQuery += "     SCR.CR_APROV, "
+        cQuery += "     CR_APRORI "
+        cQuery += " FROM " + RetSQLName('SCR') + " SCR "
+        cQuery += " WHERE SCR.CR_FILIAL = ? "
+        cQuery += "     AND SCR.CR_APROV = ? "
+        cQuery += "     AND SCR.CR_USER = ? "
+        cQuery += "     AND SCR.CR_STATUS IN('01', '02') "
+        If lDevolution .And. lSCRTpTran
+            cQuery += " AND SCR.CR_TPTRAN = '2'"
+        EndIf
+        cQuery += "     AND SCR.D_E_L_E_T_ = ' ' "
+
+        oQuery := FWPreparedStatement():New(cQuery)
+        oQuery:SetString(1, FWxFilial('SCR'))
+        oQuery:SetString(2, cOriginalApprover)
+        oQuery:SetString(3, cOriginalUser)
+
+        cAliasTemp := MpSysOpenQuery(oQuery:getFixQuery())
+
+        SCR->(dbSetOrder(3)) //-- CR_FILIAL+CR_TIPO+CR_NUM+CR_APROV
+
+        lRet := !(cAliasTemp)->(Eof())
+
+        If !lRet .And. !lTimely
+            Return .T.
+        EndIf
+
+        If !lValidate
+            While !(cAliasTemp)->(Eof()) //-- Atualiza aprovador do registro
+                If SCR->(MsSeek(FWxFilial('SCR') + (cAliasTemp)->CR_TIPO + (cAliasTemp)->CR_NUM + (cAliasTemp)->CR_APROV))
+                    SCR->(RecLock('SCR', .F.))
+                    SCR->CR_USER    := cNewUser
+                    SCR->CR_APROV   := cNewApprover
+                    SCR->CR_USERORI := (cAliasTemp)->CR_USER
+                    SCR->CR_APRORI  := (cAliasTemp)->CR_APROV
+
+                    If lSCRTpTran
+                        If lDevolution
+                            SCR->CR_TPTRAN  := ''
+                        Else
+                            SCR->CR_TPTRAN  := '1'
+                        EndIf
+                    EndIf
+                    
+                    SCR->(MsUnlock())
+
+                    If SCR->CR_TIPO $ 'IP|SA|IC|IR|IM' .Or. (SCR->CR_TIPO == 'SC' .And. lAlcSolCtb) //-- Transfere itens de documentos gerados por entidades contábeis
+                        cAliasDBM := A094GetDBM(SCR->CR_NUM, SCR->CR_ITGRP, SCR->CR_TIPCOM, SCR->CR_GRUPO, SCR->CR_USERORI, SCR->CR_APRORI, .T.)
+
+                        While !(cAliasDBM)->(Eof())
+                            DBM->(DbGoTo((cAliasDBM)->R_E_C_N_O_))
+                            DBM->(RecLock('DBM', .F.))
+                            DBM->DBM_USER   := SCR->CR_USER
+                            DBM->DBM_USAPRO := SCR->CR_APROV
+                            DBM->DBM_USEROR := SCR->CR_USERORI
+                            DBM->DBM_USAPOR := SCR->CR_APRORI
+                            DBM->(MsUnlock())
+                            (cAliasDBM)->(DbSkip())
+                        EndDo
+
+                        (cAliasDBM)->(dbCloseArea())
+                    EndIf
+
+                    lFound := .T.
+                EndIf
+
+                (cAliasTemp)->(dbSkip())
+            EndDo
+
+            lRet := lRet .And. lFound
+        EndIf
+
+        (cAliasTemp)->(dbCloseArea())
+        oQuery:Destroy()
+        FreeObj(oQuery)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} transferApprovalGroups
+	Transfere grupos de aprovação para o novo aprovador.
+@author juan.felipe
+@since 11/06/2024
+@param cOriginalApprover, character, aprovador original.
+@param cNewApprover, character, novo aprovador.
+@param cNewUser, character, novo usuário do aprovador.
+@param lValidate, logical, apenas validação da existência dos registros.
+@return lRet, logical, transferência realizada com sucesso.
+/*/
+Method transferApprovalGroups(cOriginalApprover, cNewApprover, cNewUser, lValidate) Class alcSubstitutionRepository
+    Local lRet As Logical
+    Local lFound As Logical
+    Local cAliasTemp As Character
+    Local cQuery As Character
+    Local oQuery As Object
+    Default cOriginalApprover := ''
+    Default cNewApprover := ''
+    Default cNewUser := ''
+    Default lValidate := .F.
+
+    lRet  := .F.
+    lFound := .F.
+
+    //-- Define mensagem de erro inicial, caso não ocorra erro não exibirá esta mensagem
+    Self:cMessage := STR0010 //-- Não foram localizados grupos de aprovação para o aprovador informado. 
+
+    cQuery := ''
+    cQuery += " SELECT SAL.AL_COD, "
+    cQuery += "     SAL.AL_USER, "
+    cQuery += "     SAL.AL_APROV "
+    cQuery += " FROM " + RetSQLName('SAL') + " SAL "
+    cQuery += " WHERE SAL.AL_FILIAL = ? "
+    cQuery += "     AND SAL.AL_APROV = ? "
+    cQuery += "     AND SAL.D_E_L_E_T_ = ' ' "
+
+    oQuery := FWPreparedStatement():New(cQuery)
+    oQuery:SetString(1, FWxFilial('SAL'))
+    oQuery:SetString(2, IIf(lValidate .And. !Empty(cNewApprover), cNewApprover, cOriginalApprover))
+
+    cAliasTemp := MpSysOpenQuery(oQuery:getFixQuery())
+
+    SAL->(dbSetOrder(3)) //-- AL_FILIAL+AL_COD+AL_APROV
+
+    lRet := !(cAliasTemp)->(Eof())
+
+    If !lValidate
+        While !(cAliasTemp)->(Eof()) //-- Atualiza aprovador do registro
+            If SAL->(MsSeek(FWxFilial('SCR') + (cAliasTemp)->AL_COD + (cAliasTemp)->AL_APROV))
+                SAL->(RecLock('SAL', .F.))
+                SAL->AL_USER  := cNewUser
+                SAL->AL_APROV := cNewApprover
+                SAL->(MsUnlock())
+
+                lFound := .T.
+            EndIf
+
+            (cAliasTemp)->(dbSkip())
+        EndDo
+
+        lRet := lRet .And. lFound
+    EndIf
+
+    (cAliasTemp)->(dbCloseArea())
+    oQuery:Destroy()
+    FreeObj(oQuery)
+Return lRet
+
+/*/{Protheus.doc} postTemporaryAbsent
+	Realiza transferência temporária do aprovador.
+@author juan.felipe
+@since 13/06/2024
+@param oJsonRequest, object, json da requisição.
+@return oJsonRet, object, resposta no formato json.
+/*/
+Method postTemporaryAbsent(oJsonRequest) Class alcSubstitutionRepository
+    Local aItems As Array
+    Local oUtils As Object
+    Local oJsonRet As Object
+    Local oJsonValidate As Object
+    Local cOriginalUser As Character
+    Local cOriginalApprover As Character
+    Local cNewUser As Character
+    Local cNewApprover As Character
+    Local dInitalDate As Date
+    Local dFinalDate As Date
+    Local nCode As Numeric
+    Default oJsonRequest := JsonObject():New()
+
+    oUtils := pgcUtils():New()
+    oJsonRet := JsonObject():New()
+
+    aItems := oJsonRequest['items']
+    cOriginalApprover := oJsonRequest['originalApprover']
+    cNewApprover := oJsonRequest['newApprover']
+    dInitalDate := SToD(oJsonRequest['initialDate'])
+    dFinalDate := SToD(oJsonRequest['finalDate'])
+
+    oJsonValidate := Self:getValidateApprover(cOriginalApprover, cNewApprover, .F.) //-- Valida e obtém usuário do aprovador
+    
+    Begin Transaction
+        cOriginalUser := oJsonValidate['approverUser']
+        cNewUser := oJsonValidate['newApproverUser']
+
+        Self:lOk := Self:lOk .And. Self:transferSelectedDocuments(aItems, cOriginalApprover, cNewApprover, cNewUser, .F.)
+    
+        If Self:lOk
+            Self:recordAbsenceData(cOriginalApprover, cNewApprover, cOriginalUser, cNewUser, dInitalDate, dFinalDate)
+            Self:cMessage := STR0013 //-- Os documentos foram transferidos com sucesso.
+        Else
+            DisarmTransaction()
+        EndIf
+    End Transaction
+
+    nCode := IIf(Self:lOk, 200, 400)
+
+    oJsonRet := oUtils:setClassResponse(nCode, Self:cMessage)
+
+    FreeObj(oUtils)
+    FreeObj(oJsonRequest)
+Return oJsonRet
+
+/*/{Protheus.doc} putTimelyTransfer
+	Realiza transferência pontual dos documentos.
+@author juan.felipe
+@since 19/07/2024
+@param oJsonRequest, object, json da requisição.
+@return oJsonRet, object, resposta no formato json.
+/*/
+Method putTimelyTransfer(oJsonRequest) Class alcSubstitutionRepository
+    Local aItems As Array
+    Local oUtils As Object
+    Local oJsonRet As Object
+    Local oJsonValidate As Object
+    Local cOriginalUser As Character
+    Local cOriginalApprover As Character
+    Local cNewUser As Character
+    Local cNewApprover As Character
+    Local nCode As Numeric
+    Default oJsonRequest := JsonObject():New()
+
+    oUtils := pgcUtils():New()
+    oJsonRet := JsonObject():New()
+
+    aItems := oJsonRequest['items']
+    cOriginalApprover := oJsonRequest['originalApprover']
+    cNewApprover := oJsonRequest['newApprover']
+
+    oJsonValidate := Self:getValidateApprover(cOriginalApprover, cNewApprover, .F.) //-- Valida e obtém usuário do aprovador
+    
+    Begin Transaction
+        cOriginalUser := oJsonValidate['approverUser']
+        cNewUser := oJsonValidate['newApproverUser']
+
+        Self:lOk := Self:lOk .And.Self:transferSelectedDocuments(aItems, cOriginalApprover, cNewApprover, cNewUser, .T.)
+    
+        If Self:lOk
+            Self:cMessage := STR0013 //-- Os documentos foram transferidos com sucesso.
+        Else
+            DisarmTransaction()
+        EndIf
+    End Transaction
+
+    nCode := IIf(Self:lOk, 200, 400)
+
+    oJsonRet := oUtils:setClassResponse(nCode, Self:cMessage)
+
+    FreeObj(oUtils)
+    FreeObj(oJsonRequest)
+Return oJsonRet
+
+/*/{Protheus.doc} transferSelectedDocuments
+	Realiza transferência dos documentos selecionados do aprovador.
+@author juan.felipe
+@since 13/06/2024
+@param aItems, array, array com os documentos.
+@param cOriginalApprover, character, aprovador original.
+@param cNewApprover, character, novo aprovador.
+@param cNewUser, character, novo usuário do aprovador.
+@return lRet, logical, transferência realizada com sucesso.
+/*/
+Method transferSelectedDocuments(aItems, cOriginalApprover, cNewApprover, cNewUser, lTimely) Class alcSubstitutionRepository
+    Local lRet As Logical
+    Local lSCRTpTran As Logical
+    Local lAlcSolCtb As Logical
+    Local aAreas As Array
+    Local nX As Numeric
+    Local nLenType As Numeric
+    Local nLenNum As Numeric
+    Local nLenApprover As Numeric
+    Local cType As Character
+    Local cNumber As Character
+    Local cApprover As Character
+    Local cAliasDBM As Character
+    Default aItems := {}
+    Default cOriginalApprover := ''
+    Default cNewApprover := ''
+    Default cNewUser := ''
+    Default lTimely := .F.
+
+    aAreas     := {SCR->(GetArea()), GetArea()}
+    lRet       := !lTimely
+    lSCRTpTran := SCR->(FieldPos('CR_TPTRAN')) > 0
+    lAlcSolCtb := SuperGetMv("MV_APRSCEC",.F.,.F.)
+
+    SCR->(dbSetOrder(3)) //-- CR_FILIAL+CR_TIPO+CR_NUM+CR_APROV
+
+    nLenType     := TamSX3('CR_TIPO')[1]
+    nLenNum      := TamSX3('CR_NUM')[1]
+    nLenApprover := TamSX3('CR_APROV')[1]
+
+    For nX := 1 To Len(aItems)
+        cType     := Padr(aItems[nX]['cr_tipo'], nLenType)
+        cNumber   := Padr(aItems[nX]['cr_num' ], nLenNum)
+        cApprover := Padr(cOriginalApprover    , nLenApprover)
+
+        If lRet := SCR->(MsSeek(FWxFilial('SCR') + cType + cNumber + cApprover))
+            SCR->(RecLock('SCR', .F.))
+            SCR->CR_USERORI := SCR->CR_USER
+            SCR->CR_APRORI  := SCR->CR_APROV
+            SCR->CR_USER    := cNewUser
+            SCR->CR_APROV   := cNewApprover
+
+            If lSCRTpTran
+                If !lTimely
+                    SCR->CR_TPTRAN  := '2'
+                Else
+                    SCR->CR_TPTRAN  := '3'
+                EndIf
+            EndIf
+
+            If SCR->CR_TIPO $ 'IP|SA|IC|IR|IM' .Or. (SCR->CR_TIPO == 'SC' .And. lAlcSolCtb) 
+                cAliasDBM := A094GetDBM(SCR->CR_NUM, SCR->CR_ITGRP, SCR->CR_TIPCOM, SCR->CR_GRUPO, SCR->CR_USERORI, SCR->CR_APRORI, .T.)
+
+                While !(cAliasDBM)->(Eof())
+                    DBM->(DbGoTo((cAliasDBM)->R_E_C_N_O_))
+                    DBM->(RecLock('DBM', .F.))
+                    DBM->DBM_USER   := SCR->CR_USER
+                    DBM->DBM_USAPRO := SCR->CR_APROV 
+                    DBM->DBM_USEROR := SCR->CR_USERORI
+                    DBM->DBM_USAPOR := SCR->CR_APRORI
+                    DBM->(MsUnlock())
+                    (cAliasDBM)->(DbSkip())
+                EndDo
+
+                (cAliasDBM)->(dbCloseArea())
+            EndIf
+
+            SCR->(MsUnlock())
+        Else
+             Self:cMessage := STR0014 + aItems[nX]['cr_num'] + STR0015 //-- O documento XXXXX não foi localizado na base de dados.
+        EndIf
+    Next nX
+
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x) })
+Return lRet
+
+/*/{Protheus.doc} recordAbsenceData
+	Grava dados da ausência do aprovador.
+@author juan.felipe
+@since 13/06/2024
+@param cOriginalApprover, character, aprovador original.
+@param cNewApprover, character, novo aprovador.
+@param cOriginalUser, character, usuário original do aprovador.
+@param cNewUser, character, novo usuário do aprovador.
+@param dInitalDate, date, data inicial da ausência.
+@param dFinalDate, date, data final da ausência.
+@return Nil, nulo.
+/*/
+Method recordAbsenceData(cOriginalApprover, cNewApprover, cOriginalUser, cNewUser, dInitalDate, dFinalDate) Class alcSubstitutionRepository
+    Local cFilDKJ As Character
+    Local lHasDKJ As Logical
+    Local nLenApprover As Numeric
+    Default cOriginalApprover := ''
+    Default cNewApprover := ''
+    Default cOriginalUser := ''
+    Default cNewUser := ''
+    Default dInitalDate := SToD('')
+    Default dFinalDate := SToD('')
+
+    If AliasIndic('DKJ') .And. !Empty(RetSqlName('DKJ'))
+        nLenApprover := TamSX3('DKJ_APRORI')[1]
+        cOriginalApprover := Padr(cOriginalApprover, nLenApprover)
+        cFilDKJ := FWxFilial('DKJ')
+
+        DKJ->(DbSetOrder(1))
+
+        lHasDKJ := DKJ->(MsSeek(cFilDKJ + cOriginalApprover))
+
+        DKJ->(RecLock('DKJ', !lHasDKJ))
+        DKJ->DKJ_FILIAL := cFilDKJ
+        DKJ->DKJ_USRORI := cOriginalUser
+        DKJ->DKJ_USRSUB := cNewUser
+        DKJ->DKJ_APRORI := cOriginalApprover
+        DKJ->DKJ_APRSUB := cNewApprover
+        DKJ->DKJ_DATINI := dInitalDate
+        DKJ->DKJ_DATFIM := dFinalDate
+        DKJ->(MsUnlock())
+    EndIf
+Return Nil

@@ -1,0 +1,1242 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "retail.salesconnectretail.obj.ch"
+
+namespace totvs.protheus.retail.salesconnectretail.obj
+
+using namespace totvs.protheus.retail.salesconnectretail.dto
+
+/*/{Protheus.doc} SalesConnectRetailObj
+Objeto consolidado de processamento da API POST /api/retail/v1/SalesConnectRetail/.
+Segue o padrao Function+Obj usado no projeto (ver CreditoObj/IntegracaoTotvsPdvObj),
+substituindo a antiga estrutura em 6 arquivos (Api/Auth/Validator/Parser/Builder/Service).
+
+Pipeline executado em :Process():
+  1. Authenticate  : valida X-PASS-KEY vs token fixo da API (no fonte)
+  2. ParseRequest  : desserializa JSON em SalesConnectRetailRequestDto
+  3. ValidateBadRequest : campos obrigatorios e modelo fiscal
+  4. ParseXml      : decodifica base64 e extrai SL1/SL2/SL4/DKM via RmiXmlSefaz
+  5. ValidateDuplicate  : checa SL1 (filial+serpdv+numcfis) com situa OK/RX
+  6. BuildArrays   : monta aCab/aItens/aPagtos/aTrib formato Protheus
+  7. DispatchRetailSales: Begin Transaction + RetailSales(...) + Try/Catch
+
+Saidas publicas (lidas pela Function thin SalesConnectRetailApi):
+  nHttpStatus : HTTP status final (200/400/401/409/422/500)
+  cReturn     : JSON do body de resposta (SalesConnectRetailResponseDto ou ErrorDto)
+
+@author  Thalys Augusto Alves Juvenal
+@since   18/05/2026
+@version 1.0
+@type class
+/*/
+Class SalesConnectRetailObj
+    Protected Data cAuthToken   as Character
+    Protected Data jParams      as Object
+    Protected Data cBody        as Character
+    Public  Data nHttpStatus  as Numeric
+    Public  Data cReturn      as Character
+
+    Public    Data oRequestDto  as Object
+    Protected Data oXmlSefaz    as Object
+    Protected Data oParsedSL1   as Object
+    Protected Data aParsedSL2   as Array
+    Protected Data aParsedSL4   as Array
+    Protected Data aParsedDKM   as Array
+    Protected Data cUuid        as Character
+
+    Public  Method New(cAuthToken as Character, jParans as Object, cBody as Character) as Object
+    Public  Method Process() as Logical
+
+    Protected Method Authenticate() as Logical
+    Protected Method ParseRequest() as Logical
+    Protected Method ValidateBadRequest() as Object
+    Protected Method ValidateDuplicate() as Object
+    Protected Method ParseXml() as Logical
+    Protected Method BuildArrays() as Array
+    Protected Method DispatchRetailSales(aBuilt as Array) as Logical
+    Protected Method MaskCpfCnpj(cDoc as Character) as Character
+    Protected Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical
+    Protected Method BuildSuccess(cCodFil as Character, cNumero as Character) as Logical
+    Protected Method ValidateProductCodes() as Logical
+    Protected Method PadField(cField as Character, xValue) as Character
+    Protected Method ParseIsoDate(cIso as Character) as Date
+    Protected Method AddSL4Opc(aLinha as Array, cAdminCod as Character, cBandeira as Character, cAutoriz as Character, cNsuTef as Character, cDocTef as Character, lTemBandeir as Logical, lTemTef as Logical) as Logical
+    Protected Method SanIndPres(cVal as Character) as Character
+    Protected Method FidVal(lFid as Logical, xVal) as Numeric
+    Protected Method NumOrZero(xVal) as Numeric
+EndClass
+
+//------------------------------------------------------------------
+// HELPERS protegidos - sanitizam valores ANTES de injetar nos arrays
+// Auto* do RetailSales/MVC, evitando erro FWNOWIDTH (tamanho de campo
+// divergente) e datas vazias por incompatibilidade de formato ISO.
+//------------------------------------------------------------------
+
+/*/{Protheus.doc} PadField
+Sanitiza valor para coluna Character: AllTrim + cValToChar + PadR ate
+o tamanho EXATO da SX3. Sem isso o MVC reporta FWNOWIDTH e nao grava.
+@param cField, character, nome do campo (ex: "L1_OPERADO")
+@param xValue, variant,   valor cru
+@return character, valor com tamanho exato (PadR a direita com espaco)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method PadField(cField as Character, xValue) as Character Class SalesConnectRetailObj
+    Local cClean as Character
+    Local nTam   as Numeric
+
+    If ValType(xValue) == "U"
+        cClean := ""
+    Else
+        cClean := AllTrim(cValToChar(xValue))
+    EndIf
+    nTam   := TamSx3(cField)[1]
+
+    If nTam <= 0
+        Return cClean
+    EndIf
+
+Return PadR(cClean, nTam)
+
+/*/{Protheus.doc} ParseIsoDate
+Converte string ISO "YYYY-MM-DDTHH:MM:SS" (ou "YYYY-MM-DD") em Date
+via SToD (formato YYYYMMDD), independente de SET DATE do ambiente.
+Retorna data vazia (CtoD("")) se input invalido.
+@param cIso, character, ex: "2025-08-04T12:08:41"
+@return date, a data convertida; CtoD("") (vazia) se o input for invalido
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method ParseIsoDate(cIso as Character) as Date Class SalesConnectRetailObj
+    Local cAno as Character
+    Local cMes as Character
+    Local cDia as Character
+
+    If ValType(cIso) != "C" .Or. Len(AllTrim(cIso)) < 10
+        Return CtoD("")
+    EndIf
+
+    cAno := SubStr(cIso, 1, 4)
+    cMes := SubStr(cIso, 6, 2)
+    cDia := SubStr(cIso, 9, 2)
+
+Return SToD(cAno + cMes + cDia)
+
+/*/{Protheus.doc} AddSL4Opc
+Acrescenta na linha SL4 (por referencia) as colunas OPCIONAIS L4_ADMINIS,
+L4_BANDEIR e os campos TEF (L4_AUTORIZ/L4_NSUTEF/L4_DOCTEF), apenas quando
+preenchidas e (bandeira/TEF) quando o campo existir no SX3. Campo vazio em
+MsExecAuto dispara FWNOSTRUCT, por isso o append e condicional.
+NAO inclui L4_FORMAID: o RetailSales (RSFormaId, RetailSales.prw) calcula esse
+campo agrupando por L4_AUTORIZ - por isso e essencial gravar o L4_AUTORIZ.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+@param  aLinha,      array,     linha SL4 ({campo,valor,nil}); alterada por referencia
+@param  cAdminCod,   character, L4_ADMINIS (vazio = nao grava)
+@param  cBandeira,   character, L4_BANDEIR (vazio/sem campo = nao grava)
+@param  cAutoriz,    character, L4_AUTORIZ - codigo de autorizacao TEF (chave do FORMAID)
+@param  cNsuTef,     character, L4_NSUTEF  - NSU do TEF
+@param  cDocTef,     character, L4_DOCTEF  - documento/comprovante TEF
+@param  lTemBandeir, logical,   .T. se L4_BANDEIR existe no SX3
+@param  lTemTef,     logical,   .T. se os campos TEF existem no SX3
+@return logical, sempre .T.
+/*/
+Method AddSL4Opc(aLinha as Array, cAdminCod as Character, cBandeira as Character, cAutoriz as Character, cNsuTef as Character, cDocTef as Character, lTemBandeir as Logical, lTemTef as Logical) as Logical Class SalesConnectRetailObj
+    If !Empty(cAdminCod)
+        AAdd(aLinha, {"L4_ADMINIS", ::PadField("L4_ADMINIS", cAdminCod), Nil})
+    EndIf
+    If lTemBandeir .And. !Empty(cBandeira)
+        AAdd(aLinha, {"L4_BANDEIR", ::PadField("L4_BANDEIR", cBandeira), Nil})
+    EndIf
+    If lTemTef .And. !Empty(cAutoriz)
+        AAdd(aLinha, {"L4_AUTORIZ", ::PadField("L4_AUTORIZ", cAutoriz), Nil})
+    EndIf
+    If lTemTef .And. !Empty(cNsuTef)
+        AAdd(aLinha, {"L4_NSUTEF", ::PadField("L4_NSUTEF", cNsuTef), Nil})
+    EndIf
+    If lTemTef .And. !Empty(cDocTef)
+        AAdd(aLinha, {"L4_DOCTEF", ::PadField("L4_DOCTEF", cDocTef), Nil})
+    EndIf
+Return .T.
+
+/*/{Protheus.doc} SanIndPres
+Saneamento defensivo do L1_INDPRES (Indicador de Presenca). O XML SEFAZ pode
+trazer indPres="0" ("Nao se aplica") - valido na SEFAZ, mas REJEITADO pelo
+Protheus (SX3 L1_INDPRES -> FWNOLIST). Valida contra a lista de valores validos
+(cBox da SX3, com fallback ao conjunto SEFAZ 1;2;3;4;5;9) e, se invalido/vazio,
+assume "1" (operacao presencial - venda varejo e majoritariamente presencial).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+@param  cVal, character, valor cru do indPres lido do XML
+@return character, L1_INDPRES valido
+/*/
+Method SanIndPres(cVal as Character) as Character Class SalesConnectRetailObj
+    Local cIndPres as Character
+    Local cBox     as Character
+    Local cValidos as Character
+    Local aBox     as Array
+    Local nI       as Numeric
+    Local nPos     as Numeric
+
+    cIndPres := AllTrim(cValToChar(cVal))
+
+    // Lista de valores validos: tenta do cBox da SX3 (robusto a customizacao do
+    // ambiente); fallback para o conjunto SEFAZ padrao. Delimitado por ";" nas
+    // pontas para casar valor EXATO (evita "2" casar dentro de "12").
+    cBox     := ""
+    cValidos := ";"
+    If ExistFunc("X3CBox")
+        cBox := X3CBox("L1_INDPRES")
+    EndIf
+    If !Empty(cBox)
+        aBox := StrTokArr(cBox, ";")
+        For nI := 1 To Len(aBox)
+            nPos := At("=", aBox[nI])
+            If nPos > 1
+                cValidos += AllTrim(SubStr(aBox[nI], 1, nPos - 1)) + ";"
+            EndIf
+        Next nI
+    EndIf
+    If cValidos == ";"
+        cValidos := ";1;2;3;4;5;9;"
+    EndIf
+
+    If Empty(cIndPres) .Or. !( (";" + cIndPres + ";") $ cValidos )
+        LjGrvLog("SalesConnectRetailObj", ;
+            "[" + ::cUuid + "] L1_INDPRES '" + cIndPres + "' fora da lista valida -> assumindo '1' (presencial)")
+        cIndPres := "1"
+    EndIf
+Return cIndPres
+
+/*/{Protheus.doc} FidVal
+Retorna xVal quando lFid (cliente Fidelidade) e 0 caso contrario. Usado para
+separar PIS/COFINS Fidelidade x Normal nos arrays da SL2 sem usar Iif (regra Sonar).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+@param  lFid, logical, .T. usa o valor; .F. zera
+@param  xVal, numeric, valor base (PIS/COFINS)
+@return numeric, xVal ou 0
+/*/
+Method FidVal(lFid as Logical, xVal) as Numeric Class SalesConnectRetailObj
+    Local nRet as Numeric
+    If lFid
+        nRet := xVal
+    Else
+        nRet := 0
+    EndIf
+Return nRet
+
+/*/{Protheus.doc} NumOrZero
+Retorna xVal quando e numerico e 0 caso contrario (substitui Iif na montagem dos
+valores de pagamento da SL4 - regra Sonar).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+@param  xVal, variant, valor a avaliar
+@return numeric, xVal se numerico, senao 0
+/*/
+Method NumOrZero(xVal) as Numeric Class SalesConnectRetailObj
+    Local nRet as Numeric
+    If ValType(xVal) == "N"
+        nRet := xVal
+    Else
+        nRet := 0
+    EndIf
+Return nRet
+
+/*/{Protheus.doc} New
+Construtor do SalesConnectRetailObj. Recebe o token X-PASS-KEY ja extraido
+pela Function thin (desacoplado do framework REST para facilitar testes
+e reuso fora do contexto HTTP - Job, schedule, menu, etc.).
+@param cAuthToken, character, valor cru do header X-PASS-KEY (sem prefixo)
+@param jParans,    json,      query string (futuro uso)
+@param cBody,      character, payload JSON cru
+@return object, self
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method New(cAuthToken as Character, jParans as Object, cBody as Character) as Object Class SalesConnectRetailObj
+    ::cAuthToken  := cAuthToken
+    ::jParams     := jParans
+    ::cBody       := cBody
+    ::nHttpStatus := 200
+    ::cReturn     := ""
+    ::oRequestDto := Nil
+    ::oXmlSefaz   := Nil
+    ::oParsedSL1  := Nil
+    ::aParsedSL2  := {}
+    ::aParsedSL4  := {}
+    ::aParsedDKM  := {}
+    ::cUuid       := FwUUIDv4()
+Return Self
+
+/*/{Protheus.doc} Process
+Orquestra o pipeline completo do POST de venda Varejo. Cada etapa
+abortada retorna .F. e preenche nHttpStatus + cReturn via BuildError.
+@return logical, .T. sucesso, .F. erro
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method Process() as Logical Class SalesConnectRetailObj
+    Local aBuilt as Array
+    Local lRet   as Logical
+
+    LjGrvLog("SalesConnectRetailObj", ;
+        "[" + ::cUuid + "] inicio - ambiente ativo: empresa '" + AllTrim(cEmpAnt) + ;
+        "' filial '" + AllTrim(cFilAnt) + "'")
+
+    // IMPORTANTE: a abertura de empresa/filial NAO e feita aqui. Conforme
+    // doc TOTVS (centraldeatendimento 4410465974167), em API REST NAO se
+    // usa RpcSetEnv/PrepareEnv. O ambiente e preparado pelo framework REST
+    // a partir do header "tenantId: <grupoEmpresas>,<filial>" combinado
+    // com PREPAREIN do AppServer.ini. Logo, cEmpAnt/cFilAnt ja chegam
+    // posicionados na filial correta quando esta Function executa.
+
+    lRet := ::Authenticate()
+
+    If lRet
+        lRet := ::ParseRequest()
+    EndIf
+
+    If lRet
+        lRet := ::ValidateBadRequest():isValid
+    EndIf
+
+    If lRet
+        lRet := ::ParseXml()
+    EndIf
+
+    If lRet
+        // CA #5 V2: aviso se cProd nao existe na SB1 (so loga)
+        ::ValidateProductCodes()
+        lRet := ::ValidateDuplicate():isValid
+    EndIf
+
+    If lRet
+        aBuilt := ::BuildArrays()
+        lRet   := ::DispatchRetailSales(aBuilt)
+    EndIf
+
+    If lRet
+        ::BuildSuccess(AllTrim(cFilAnt), SL1->L1_NUM)
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 200 OK numero=" + SL1->L1_NUM)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} Authenticate
+Valida o cabecalho X-PASS-KEY contra o token fixo da API (definido neste fonte).
+O header carrega APENAS o token (sem prefixo) - a autenticacao usuario/senha
+do ERP e feita pelo framework REST do Protheus ANTES desta Function ser
+invocada (autenticacao em duas camadas: ERP user/pwd + token API).
+
+@return logical, .T. autorizado, .F. caso contrario (nHttpStatus=401)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method Authenticate() as Logical Class SalesConnectRetailObj
+    Local cAuthHeader as Character
+    Local cExpected   as Character
+
+    If ValType(::cAuthToken) == "C"
+        cAuthHeader := AllTrim(::cAuthToken)
+    Else
+        cAuthHeader := ""
+    EndIf
+    // Token fixo da API (produto TOTVS) - DVARPV-6451 / DVARPV-6461
+    cExpected   := "2lz3fw3vOvPd0TsQ1Kj8hGast77d1YKZRj6LYRwIZG3M"
+
+    If Empty(cAuthHeader) .Or. Empty(cExpected)
+        ::BuildError("0002", STR0001, 401)   // "Token X-PASS-KEY invalido ou ausente"
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 401: X-PASS-KEY ausente")
+        Return .F.
+    EndIf
+
+    If !(cAuthHeader == cExpected)
+        ::BuildError("0002", STR0001, 401)   // "Token X-PASS-KEY invalido ou ausente"
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 401: X-PASS-KEY incorreto")
+        Return .F.
+    EndIf
+Return .T.
+
+/*/{Protheus.doc} ParseRequest
+Desserializa cBody em SalesConnectRetailRequestDto. Captura erros de JSON
+invalido e responde 400/0001.
+@return logical, .T. sucesso, .F. erro (nHttpStatus=400)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method ParseRequest() as Logical Class SalesConnectRetailObj
+    Local oErr as Object
+    Try
+        ::oRequestDto := SalesConnectRetailRequestDto():New()
+        ::oRequestDto:fromJson(::cBody)
+    Catch oErr
+        ::BuildError("0001", STR0002, 400)   // "JSON invalido"
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 400: JSON invalido | " + oErr:Description)
+        Return .F.
+    EndTry
+Return .T.
+
+/*/{Protheus.doc} ValidateBadRequest
+Valida campos obrigatorios do request DTO. Retorna SalesConnectRetailValidationResult e,
+quando invalido, ja escreve nHttpStatus=400 e cReturn via BuildError.
+@return object, SalesConnectRetailValidationResult (isValid/code/message)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method ValidateBadRequest() as Object Class SalesConnectRetailObj
+    Local oReq      as Object
+    Local aRequired as Array
+    Local nI        as Numeric
+    Local oResult   as Object
+
+    oReq      := ::oRequestDto
+    aRequired := { ;
+        { "fiscalModel",    cValToChar(oReq:nModeloFiscal) }, ;
+        { "xmlSefazBase64", oReq:cXmlSefazBase64 }, ;
+        { "saleDate",       oReq:cVendaData }, ;
+        { "documentSeries", oReq:cSerieNota }, ;
+        { "posId",          oReq:cIdCaixa }, ;
+        { "accessKey",      oReq:cChaveAcesso } }
+
+    For nI := 1 To Len(aRequired)
+        If Empty(aRequired[nI, 2])
+            oResult := SalesConnectRetailValidationResult():New(.F., "0001", STR0003 + aRequired[nI, 1])   // "Campo obrigatorio ausente: "
+            ::BuildError(oResult:code, oResult:message, 400)
+            LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 400: " + oResult:message)
+            Return oResult
+        EndIf
+    Next nI
+
+    If ValType(oReq:oVendaCustodiaXml) != "J" .Or. Empty(oReq:oVendaCustodiaXml["protocolNumber"])
+        oResult := SalesConnectRetailValidationResult():New(.F., "0001", STR0003 + "authorization.protocolNumber")   // "Campo obrigatorio ausente: "
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 400: " + oResult:message)
+        Return oResult
+    EndIf
+
+    If ValType(oReq:aPagamentos) != "A" .Or. Len(oReq:aPagamentos) == 0
+        oResult := SalesConnectRetailValidationResult():New(.F., "0001", STR0004)   // "Pagamentos nao informados"
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 400: " + oResult:message)
+        Return oResult
+    EndIf
+
+    If oReq:nModeloFiscal != 65 .And. oReq:nModeloFiscal != 55
+        oResult := SalesConnectRetailValidationResult():New(.F., "0005", STR0005)   // "Modelo fiscal nao suportado (somente 65=NFC-e e 55=NF-e)"
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 400: " + oResult:message)
+        Return oResult
+    EndIf
+
+Return SalesConnectRetailValidationResult():New(.T., "", "")
+
+/*/{Protheus.doc} ParseXml
+Decodifica o XML SEFAZ Base64 e instancia RmiXmlSefaz UMA UNICA VEZ,
+extraindo em sequencia SL1, SL2, SL4 e DKM. Erros de parse caem em 400/0004.
+@return logical, .T. sucesso, .F. erro
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method ParseXml() as Logical Class SalesConnectRetailObj
+    Local cXml     as Character
+    Local oReq     as Object
+    Local nModelo  as Numeric
+    Local oXml     as Object
+    Local nQtdItens as Numeric
+    Local oDetPag
+    Local aPagNodes as Array
+    Local nI        as Numeric
+    Local nJ        as Numeric
+    Local oItem     as Object
+    Local oIntegrator as Object
+    Local jResult
+    Local jTribs
+    Local oErr      as Object
+    Local oError    as Object
+    Local nTipoRmi  as Numeric
+    Local nQuant    as Numeric
+    Local nVDesc    as Numeric
+    Local nVRatDesc as Numeric
+    Local nVProd    as Numeric
+    Local nVOutro   as Numeric
+    Local nVRatAcr  as Numeric
+    Local nVBC      as Numeric
+    Local nVFCP     as Numeric
+    Local nPRedBC   as Numeric
+    Local cOrig     as Character
+    Local cCST      as Character
+
+    oReq    := ::oRequestDto
+    nModelo := oReq:nModeloFiscal
+
+    // Traducao modelo SEFAZ -> enum interno do RmiXmlSefaz:
+    //   nTipo=1 -> SAT  (fora do escopo)
+    //   nTipo=2 -> NFCE
+    //   nTipo=5 -> SPED (cobre NF-e modelo 55)
+    // Mapeamento conforme orientacao do projeto:
+    //   65 (NFC-e SEFAZ) -> 5 (SPED no RmiXmlSefaz)
+    //   55 (NF-e  SEFAZ) -> 2 (NFCE no RmiXmlSefaz)
+    Do Case
+    Case nModelo == 65
+        nTipoRmi := 5
+    Case nModelo == 55
+        nTipoRmi := 2
+    Otherwise
+        // nao deve chegar aqui (ValidateBadRequest ja barra modelos invalidos)
+        nTipoRmi := 5
+    EndCase
+
+    Try
+        cXml := Decode64(oReq:cXmlSefazBase64)
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] consumidor=" + ::MaskCpfCnpj(oReq:cCpfCnpjConsumidor))
+
+        ::oXmlSefaz := RmiXmlSefaz():New(nTipoRmi, cXml)
+
+        // Validar parse OK
+        If !::oXmlSefaz:getStatus()
+            oError := ErrorClass():New()
+            oError:description := "RmiXmlSefaz parse falhou: " + ::oXmlSefaz:getErro()
+            Throw oError
+        EndIf
+
+        oXml := ::oXmlSefaz
+
+        // ---------- SL1 (cabecalho) - V2 ----------
+        // NFC-e (65) e NF-e (55) compartilham a mesma estrutura XML.
+        ::oParsedSL1 := JsonObject():New()
+        ::oParsedSL1["L1_NUMCFIS"] := oXml:get(, {"ide", "nNF"}, "")
+        ::oParsedSL1["L1_DOC"]     := ::oParsedSL1["L1_NUMCFIS"]
+        ::oParsedSL1["L1_VLRTOT"]  := oXml:getTotal({"ICMSTot", "vProd"}, 0)  - ;
+                                      oXml:getTotal({"ICMSTot", "vDesc"}, 0)  - ;
+                                      oXml:getTotal({"DescAcrEntr", "vDescSubtot"}, 0)
+        ::oParsedSL1["L1_VALBRUT"] := (oXml:getTotal({"ICMSTot", "vProd"},  0) + ;
+                                       oXml:getTotal({"ICMSTot", "vOutro"}, 0) + ;
+                                       oXml:getTotal({"DescAcrEntr", "vAcresSubtot"}, 0)) - ;
+                                       oXml:getTotal({"ICMSTot", "vDesc"}, 0) - ;
+                                       oXml:getTotal({"DescAcrEntr", "vDescSubtot"}, 0)
+        ::oParsedSL1["L1_VLRLIQ"]  := ::oParsedSL1["L1_VALBRUT"]
+        ::oParsedSL1["L1_VALMERC"] := oXml:getTotal({"ICMSTot", "vProd"},  0)
+        ::oParsedSL1["L1_DESCONT"] := 0
+        ::oParsedSL1["L1_DESPESA"] := oXml:getTotal({"ICMSTot", "vOutro"}, 0)
+        ::oParsedSL1["L1_FRETE"]   := oXml:getTotal({"ICMSTot", "vFrete"}, 0)
+        ::oParsedSL1["L1_SEGURO"]  := oXml:getTotal({"ICMSTot", "vSeg"},   0)
+        If nModelo == 65
+            ::oParsedSL1["L1_ESPECIE"] := "NFCE"
+        Else
+            ::oParsedSL1["L1_ESPECIE"] := "NFE"
+        EndIf
+        ::oParsedSL1["L1_INDPRES"] := ::SanIndPres(oXml:get(, {"ide", "indPres"}, ""))
+        ::oParsedSL1["L1_TROCO1"]  := oXml:get("SELF:OXML:_PAG", {"vTroco"}, 0)
+
+        // ---------- SL2 (itens) - V2: ~40 campos expandidos ----------
+        ::aParsedSL2 := {}
+        // Determinar quantidade de itens (det pode ser Object unico ou Array)
+        If ValType(oXml:oXml) != "U" .And. ValType(oXml:oXml:_DET) == "A"
+            nQtdItens := Len(oXml:oXml:_DET)
+        Else
+            nQtdItens := 1
+        EndIf
+
+        For nI := 1 To nQtdItens
+            oItem := JsonObject():New()
+
+            // Identificacao
+            oItem["L2_ITEM"]    := StrZero(nI, TamSx3("L2_ITEM")[1])
+            oItem["L2_PRODUTO"] := oXml:getDet({"prod", "cProd"}, nI, "")
+            oItem["L2_POSIPI"]  := oXml:getDet({"prod", "NCM"},   nI, "")
+            oItem["L2_DESCRI"]  := oXml:getDet({"prod", "xProd"}, nI, "")
+            oItem["L2_UM"]      := oXml:getDet({"prod", "uCom"},  nI, "")
+            oItem["L2_CF"]      := oXml:getDet({"prod", "CFOP"},  nI, "")
+
+            // Quantidades e valores (calculos spec V2 §6.1)
+            nQuant     := oXml:getDet({"prod", "qCom"},     nI, 0)
+            nVDesc     := oXml:getDet({"prod", "vDesc"},    nI, 0)
+            nVRatDesc  := oXml:getDet({"prod", "vRatDesc"}, nI, 0)
+            nVProd     := oXml:getDet({"prod", "vProd"},    nI, 0)
+            nVOutro    := oXml:getDet({"prod", "vOutro"},   nI, 0)
+            nVRatAcr   := oXml:getDet({"prod", "vRatAcr"},  nI, 0)
+
+            oItem["L2_QUANT"]   := nQuant
+            oItem["L2_PRCTAB"]  := oXml:getDet({"prod", "vUnCom"}, nI, 0)
+            oItem["L2_VALDESC"] := nVDesc
+            oItem["L2_DESCPRO"] := nVRatDesc
+            If nQuant > 0
+                oItem["L2_VRUNIT"] := oItem["L2_PRCTAB"] - ((nVDesc + nVRatDesc) / nQuant)
+            Else
+                oItem["L2_VRUNIT"] := 0
+            EndIf
+            oItem["L2_VLRITEM"] := nVProd - (nVDesc + nVRatDesc)
+            If nVProd > 0
+                oItem["L2_DESC"] := (nVDesc * 100) / nVProd
+            Else
+                oItem["L2_DESC"] := 0
+            EndIf
+            oItem["L2_DESPESA"] := nVOutro + nVRatAcr
+
+            // Documento (herda do cabecalho)
+            oItem["L2_DOC"]     := ::oParsedSL1["L1_NUMCFIS"]
+            oItem["L2_ESPECIE"] := ::oParsedSL1["L1_ESPECIE"]
+
+            // ICMS - via getDetIcms (busca em todos os grupos ICMS00..ICMSSN900)
+            nVBC                := oXml:getDetIcms("vBC",   nI, 0)
+            cOrig               := oXml:getDetIcms("orig",  nI, "")
+            cCST                := oXml:getDetIcms("CST",   nI, "")
+            oItem["L2_PICM"]    := oXml:getDetIcms("pICMS", nI, 0)
+            oItem["L2_VALICM"]  := oXml:getDetIcms("vICMS", nI, 0)
+            oItem["L2_BASEICM"] := nVBC
+            oItem["L2_MODBC"]   := oXml:getDetIcms("modBC", nI, "")
+            oItem["L2_ORIGEM"]  := cOrig
+            oItem["L2_CLASFIS"] := AllTrim(cValToChar(cOrig)) + AllTrim(cValToChar(cCST))
+
+            // PIS dual track - buffers internos (_PIS_*)
+            oItem["L2_CSTPIS"]  := oXml:getDetPIS("CST",  nI, "")
+            oItem["_PIS_VAL"]   := oXml:getDetPIS("vPIS", nI, 0)
+            oItem["_PIS_BASE"]  := oXml:getDetPIS("vBC",  nI, 0)
+            oItem["_PIS_ALIQ"]  := oXml:getDetPIS("pPIS", nI, 0)
+
+            // COFINS dual track
+            oItem["L2_CSTCOF"]  := oXml:getDetCOF("CST",     nI, "")
+            oItem["_COF_VAL"]   := oXml:getDetCOF("vCOFINS", nI, 0)
+            oItem["_COF_BASE"]  := oXml:getDetCOF("vBC",     nI, 0)
+            oItem["_COF_ALIQ"]  := oXml:getDetCOF("pCOFINS", nI, 0)
+
+            // ICMS ST Retido
+            oItem["L2_BRICMS"]  := oXml:getDetIcms("vBCSTRet",   nI, 0)
+            oItem["L2_ICMSRET"] := oXml:getDetIcms("vICMSSTRet", nI, 0)
+
+            // FECP
+            nVFCP               := oXml:getDetIcms("vFCP", nI, 0)
+            If nVFCP > 0
+                oItem["L2_BASFECP"] := nVBC
+            Else
+                oItem["L2_BASFECP"] := 0
+            EndIf
+            oItem["L2_ALQFECP"] := oXml:getDetIcms("pFCP",      nI, 0)
+            oItem["L2_VALFECP"] := nVFCP
+            oItem["L2_ALQFCST"] := oXml:getDetIcms("pFCPSTRet", nI, 0)
+            oItem["L2_VFECPST"] := oXml:getDetIcms("vFCPSTRet", nI, 0)
+
+            // Reducao de BC
+            nPRedBC             := oXml:getDetIcms("pRedBC", nI, 0)
+            If nPRedBC > 0
+                oItem["L2_PREDIC"] := 100 - nPRedBC
+            Else
+                oItem["L2_PREDIC"] := 0
+            EndIf
+
+            AAdd(::aParsedSL2, oItem)
+        Next nI
+
+        // ---------- SL4 (pagamentos) ----------
+        // <pag><detPag> pode ser Object unico ou Array dependendo da quantidade.
+        ::aParsedSL4 := {}
+        aPagNodes   := {}
+        If ValType(oXml:oXml) != "U" .And. ValType(oXml:oXml:_PAG) != "U"
+            If ValType(oXml:oXml:_PAG:_DETPAG) == "A"
+                aPagNodes := oXml:oXml:_PAG:_DETPAG
+            Else
+                AAdd(aPagNodes, oXml:oXml:_PAG:_DETPAG)
+            EndIf
+        EndIf
+
+        For nI := 1 To Len(aPagNodes)
+            oDetPag := aPagNodes[nI]
+            oItem   := JsonObject():New()
+            If ValType(oDetPag:_TPAG) == "O"
+                oItem["L4_FORMA"] := oDetPag:_TPAG:TEXT
+            Else
+                oItem["L4_FORMA"] := ""
+            EndIf
+            If ValType(oDetPag:_VPAG) == "O"
+                oItem["L4_VALOR"] := Val(oDetPag:_VPAG:TEXT)
+            Else
+                oItem["L4_VALOR"] := 0
+            EndIf
+            oItem["L4_NSUTEF"]  := ""
+            oItem["L4_BANDEIR"] := ""
+            oItem["L4_AUTORIZ"] := ""
+            // Dados de cartao (quando tPag em {03,04})
+            If XmlChildEx(oDetPag, "_CARD") != Nil
+                If ValType(oDetPag:_CARD:_CAUT) == "O"
+                    oItem["L4_NSUTEF"]  := oDetPag:_CARD:_CAUT:TEXT
+                    oItem["L4_AUTORIZ"] := oDetPag:_CARD:_CAUT:TEXT
+                EndIf
+                If ValType(oDetPag:_CARD:_TBAND) == "O"
+                    oItem["L4_BANDEIR"] := oDetPag:_CARD:_TBAND:TEXT
+                EndIf
+            EndIf
+            AAdd(::aParsedSL4, oItem)
+        Next nI
+
+        // ---------- DKM (tributos IBS/CBS) ----------
+        ::aParsedDKM := {}
+        If FindClass("totvs.protheus.backoffice.fiscal.TaxOperandIntegrator")
+            oIntegrator := totvs.protheus.backoffice.fiscal.TaxOperandIntegrator():New()
+            jResult := oIntegrator:ProcessItemTaxJson(cXml)
+            If !jResult:hasProperty("warning")
+                For nI := 1 To Len(jResult)
+                    jTribs := jResult[nI]["tributos"]
+                    For nJ := 1 To Len(jTribs)
+                        oItem := JsonObject():New()
+                        oItem["DKM_ITEM"]   := StrZero(nI, TamSx3("DKM_ITEM")[1])
+                        oItem["DKM_IDTRIB"] := jTribs[nJ]["id"]
+                        oItem["DKM_BASE"]   := jTribs[nJ]["base_valor"]
+                        oItem["DKM_ALIQ"]   := jTribs[nJ]["aliquota"]
+                        oItem["DKM_VALOR"]  := jTribs[nJ]["amount"]
+                        oItem["DKM_CLASS"]  := jTribs[nJ]["esc_CST"]
+                        oItem["DKM_VBIS"]   := jTribs[nJ]["esc_vi_tributado"]
+                        oItem["DKM_VDIF"]   := jTribs[nJ]["esc_vi_diferido"]
+                        oItem["DKM_VOUT"]   := jTribs[nJ]["esc_vi_outros"]
+                        oItem["DKM_BPOST"]  := jTribs[nJ]["esc_base_original"]
+                        oItem["DKM_ALQFF"]  := jTribs[nJ]["esc_aliquota_original"]
+                        AAdd(::aParsedDKM, oItem)
+                    Next nJ
+                Next nI
+            Else
+                LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] DKM warning: " + jResult["warning"])
+            EndIf
+        EndIf
+    Catch oErr
+        ::BuildError("0004", STR0006, 400)   // "XML invalido ou modelo nao suportado"
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 400: XML parse error | " + oErr:Description)
+        Return .F.
+    EndTry
+Return .T.
+
+/*/{Protheus.doc} ValidateDuplicate
+Verifica via DbSeek (indice 2 da SL1: L1_FILIAL+L1_SERIE+L1_DOC+L1_PDV) se
+ja existe venda com mesma filial+serie+doc e situa OK/RX. Em duplicidade
+preenche 409/0003. Sem query SQL embutida (regra CS1000).
+@return object, SalesConnectRetailValidationResult
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method ValidateDuplicate() as Object Class SalesConnectRetailObj
+    Local cCodFil  as Character
+    Local cSerie   as Character
+    Local cNumDoc  as Character
+    Local oResult  as Object
+    Local cArea    as Character
+    Local lDup     as Logical
+
+    // CS1000: checagem de existencia por INDICE NATIVO (DbSeek), sem query SQL
+    // embutida. Indice 2 da SL1: L1_FILIAL + L1_SERIE + L1_DOC + L1_PDV.
+    // Usa a filial do ambiente preparado (tenantId), nao a do payload,
+    // garantindo coerencia com onde a SL1 sera de fato gravada.
+    cCodFil := xFilial("SL1")
+    cSerie  := PadR(AllTrim(cValToChar(::oRequestDto:cSerieNota)), TamSx3("L1_SERIE")[1])
+    cNumDoc := PadR(AllTrim(cValToChar(::oParsedSL1["L1_DOC"])),   TamSx3("L1_DOC")[1])
+    lDup    := .F.
+
+    cArea := GetArea()
+    SL1->(DbSetOrder(2))
+    If SL1->(DbSeek(cCodFil + cSerie + cNumDoc))
+        // A mesma serie+doc pode existir em PDVs distintos (o indice inclui
+        // L1_PDV ao final); varre enquanto filial+serie+doc bater, buscando
+        // um registro com situacao ativa (OK/RX) = duplicidade real.
+        While !SL1->(Eof()) .And. ;
+              SL1->L1_FILIAL == cCodFil .And. ;
+              PadR(AllTrim(SL1->L1_SERIE), TamSx3("L1_SERIE")[1]) == cSerie .And. ;
+              PadR(AllTrim(SL1->L1_DOC),   TamSx3("L1_DOC")[1])   == cNumDoc
+            If AllTrim(SL1->L1_SITUA) == "OK" .Or. AllTrim(SL1->L1_SITUA) == "RX"
+                lDup := .T.
+                Exit
+            EndIf
+            SL1->(DbSkip())
+        EndDo
+    EndIf
+    RestArea(cArea)
+
+    If lDup
+        oResult := SalesConnectRetailValidationResult():New(.F., "0003", STR0007)   // "Venda ja registrada (duplicidade)"
+        ::BuildError(oResult:code, oResult:message, 409)
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 409: duplicidade")
+        Return oResult
+    EndIf
+
+Return SalesConnectRetailValidationResult():New(.T., "", "")
+
+/*/{Protheus.doc} BuildArrays
+Monta aCab/aItens/aPagtos/aTrib no formato Protheus {nome, valor, nil}
+combinando o request DTO com os DTOs parseados do XML SEFAZ.
+Mapeamento conforme spec DVARPV-6451 §7.
+@return array, {aCab, aItens, aPagtos, aTrib}
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method BuildArrays() as Array Class SalesConnectRetailObj
+    Local oReq        as Object
+    Local cMvVendPad  as Character
+    Local cCli        as Character
+    Local cLoj        as Character
+    Local cCgc        as Character
+    Local aCab        as Array
+    Local aItens      as Array
+    Local lFidelidade as Logical
+    Local cVendItem   as Character
+    Local cLoteItem   as Character
+    Local oPaymentMap    as Object
+    Local nItemSeq    as Numeric
+    Local aPagamentos as Array
+    Local oPag        as Object
+    Local aParcelas   as Array
+    Local nP          as Numeric
+    Local oParc       as Object
+    Local cFormaProt  as Character
+    Local cAdminCod   as Character
+    Local cOper       as Character
+    Local cLocalProd  as Character
+    Local cUMov       as Character
+    Local aLinhaSL4   as Array
+    Local aPagtos as Array
+    Local aTrib   as Array
+    Local nI      as Numeric
+    Local aSae        as Array
+    Local cBandeira   as Character
+    Local cTband      as Character
+    Local cAutoriz    as Character
+    Local cNsuTef     as Character
+    Local cDocTef     as Character
+    Local lTemTef     as Logical
+    Local lTemBandeir as Logical
+
+    cMvVendPad := SuperGetMv("MV_VENDPAD", .F., "")
+
+    oReq := ::oRequestDto
+    If Empty(oReq:cCodigoCliente)
+        cCli := AllTrim(SuperGetMv("MV_CLIPAD", .F., ""))
+    Else
+        cCli := oReq:cCodigoCliente
+    EndIf
+    If Empty(oReq:cLojaCliente)
+        cLoj := AllTrim(SuperGetMv("MV_LOJAPAD", .F., ""))
+    Else
+        cLoj := oReq:cLojaCliente
+    EndIf
+    cCgc := StrTran(StrTran(StrTran(oReq:cCpfCnpjConsumidor, "-", ""), "/", ""), ".", "")
+
+    // L1_OPERADO com null-check (P1 review): operador pode vir vazio/nil
+    cOper := ""
+    If ValType(oReq:oOperador) == "J" .And. ValType(oReq:oOperador["backofficeId"]) == "C"
+        cOper := oReq:oOperador["backofficeId"]
+    EndIf
+
+    // L1_UMOV: chave unica do movimento via MD5 tipo 2 (retorno hexadecimal,
+    // 32 chars) baseada em Empresa (FwCodEmp) + Filial + Numero da Nota (L1_DOC) + Serie.
+    // Ref.: https://tdn.totvs.com/display/tec/MD5  (MD5(cTexto, nTipo); nTipo=2=hex)
+    cUMov := MD5( AllTrim(cValToChar(FwCodEmp())) + ;
+                  AllTrim(cValToChar(xFilial("SL1"))) + ;
+                  AllTrim(cValToChar(::oParsedSL1["L1_DOC"])) + ;
+                  AllTrim(cValToChar(oReq:cSerieNota)), 2 )
+
+    // Sanitiza Character via PadField (TamSx3 + PadR) para evitar FWNOWIDTH
+    // e Date via ParseIsoDate (SToD com YYYYMMDD) para evitar data vazia.
+    aCab := { ;
+        {"L1_FILIAL",  ::PadField("L1_FILIAL",  xFilial("SL1")),                                Nil}, ;
+        {"L1_CLIENTE", ::PadField("L1_CLIENTE", cCli),                                          Nil}, ;
+        {"L1_LOJA",    ::PadField("L1_LOJA",    cLoj),                                          Nil}, ;
+        {"L1_CGCCLI",  ::PadField("L1_CGCCLI",  cCgc),                                          Nil}, ;
+        {"L1_OPERADO", ::PadField("L1_OPERADO", cOper),                                         Nil}, ;
+        {"L1_EMISSAO", ::ParseIsoDate(oReq:cVendaData),                                         Nil}, ;
+        {"L1_EMISNF",  ::ParseIsoDate(oReq:cVendaData),                                         Nil}, ;
+        {"L1_DTLIM",   ::ParseIsoDate(oReq:cVendaData),                                         Nil}, ;
+        {"L1_HORA",    ::PadField("L1_HORA",    SubStr(oReq:cVendaData, 12, 8)),                Nil}, ;
+        {"L1_NUMMOV",  ::PadField("L1_NUMMOV",  SubStr(oReq:cIdCaixa, 2)),                      Nil}, ;
+        {"L1_SERPDV",  ::PadField("L1_SERPDV",  oReq:cSerieNota),                               Nil}, ;
+        {"L1_SERIE",   ::PadField("L1_SERIE",   oReq:cSerieNota),                               Nil}, ;
+        {"L1_UMOV",    ::PadField("L1_UMOV",    cUMov),                                         Nil}, ;
+        {"L1_KEYNFCE", ::PadField("L1_KEYNFCE", oReq:cChaveAcesso),                             Nil}, ;
+        {"L1_PRONFCE", ::PadField("L1_PRONFCE", oReq:oVendaCustodiaXml["protocolNumber"]),   Nil}, ;
+        {"L1_RETSFZ",  ::PadField("L1_RETSFZ",  ;
+                       cValToChar(oReq:oVendaCustodiaXml["protocolNumber"]) + ;
+                       cValToChar(oReq:oVendaCustodiaXml["returnCode"])     + ;
+                       cValToChar(oReq:oVendaCustodiaXml["returnMessage"])),               Nil}, ;
+        {"L1_ORIGEM",  ::PadField("L1_ORIGEM",  "N"),                                           Nil}, ;
+        {"L1_NUMCFIS", ::PadField("L1_NUMCFIS", ::oParsedSL1["L1_NUMCFIS"]),                    Nil}, ;
+        {"L1_DOC",     ::PadField("L1_DOC",     ::oParsedSL1["L1_DOC"]),                        Nil}, ;
+        {"L1_VLRTOT",  ::oParsedSL1["L1_VLRTOT"],                                              Nil}, ;
+        {"L1_VALBRUT", ::oParsedSL1["L1_VALBRUT"],                                             Nil}, ;
+        {"L1_VLRLIQ",  ::oParsedSL1["L1_VLRLIQ"],                                              Nil}, ;
+        {"L1_VALMERC", ::oParsedSL1["L1_VALMERC"],                                             Nil}, ;
+        {"L1_DESCONT", ::oParsedSL1["L1_DESCONT"],                                             Nil}, ;
+        {"L1_DESPESA", ::oParsedSL1["L1_DESPESA"],                                             Nil}, ;
+        {"L1_FRETE",   ::oParsedSL1["L1_FRETE"],                                               Nil}, ;
+        {"L1_SEGURO",  ::oParsedSL1["L1_SEGURO"],                                              Nil}, ;
+        {"L1_ESPECIE", ::PadField("L1_ESPECIE", ::oParsedSL1["L1_ESPECIE"]),                    Nil}, ;
+        {"L1_INDPRES", ::PadField("L1_INDPRES", ::oParsedSL1["L1_INDPRES"]),                    Nil}, ;
+        {"L1_TROCO1",  ::oParsedSL1["L1_TROCO1"],                                              Nil} }
+
+    // CA #7 e spec V2 §7.5: PIS/COFINS Fidelidade vs Normal via RMIRetApur.
+    // RMIRetApur retorna .T. quando cliente tem cadastro apurado (Fidelidade).
+    // Avaliado UMA vez ANTES do loop: depende apenas do consumidor (invariante
+    // por item), evitando chamada de API por iteracao (regra CA1003-2).
+    // Em ambientes sem a funcao ou erro, default Normal (lFidelidade = .F.).
+    // Chamada dinamica via tlpp.call (padrao TLPP) em vez de macro &() - evita
+    // anti-pattern e passa o parametro corretamente. Ref TDN pageId=777264302.
+    If ExistFunc("RMIRetApur")
+        lFidelidade := tlpp.call("RMIRetApur", oReq:cCpfCnpjConsumidor)
+    Else
+        lFidelidade := .F.
+    EndIf
+
+    aItens := {}
+    For nI := 1 To Len(::aParsedSL2)
+
+        // Vendedor por item (CA #7): item.vendedor -> header.operador -> MV_VENDPAD
+        cVendItem := ""
+        cLoteItem := ""
+        If nI <= Len(oReq:aAtributosComplementaresItens) .And. ValType(oReq:aAtributosComplementaresItens[nI]) == "J"
+            If ValType(oReq:aAtributosComplementaresItens[nI]["salesperson"]) == "C"
+                cVendItem := oReq:aAtributosComplementaresItens[nI]["salesperson"]
+            EndIf
+            // P1 review: validar tipo de produtoLote E idRetaguarda antes de acessar
+            If ValType(oReq:aAtributosComplementaresItens[nI]["productBatch"]) == "J" .And. ;
+               ValType(oReq:aAtributosComplementaresItens[nI]["productBatch"]["backofficeId"]) == "C"
+                cLoteItem := oReq:aAtributosComplementaresItens[nI]["productBatch"]["backofficeId"]
+            EndIf
+        EndIf
+        If Empty(cVendItem) .And. ValType(oReq:oOperador) == "J"
+            cVendItem := oReq:oOperador["backofficeId"]
+        EndIf
+        If Empty(cVendItem)
+            cVendItem := AllTrim(cMvVendPad)
+        EndIf
+
+        // L2_LOCAL (Armazem) - obrigatorio. Triggers MVC nao disparam via
+        // MsExecAuto, entao buscamos manualmente em SB1.B1_LOCPAD.
+        // Fallback "01" (armazem padrao TOTVS) se produto nao existir.
+        cLocalProd := Posicione("SB1", 1, ;
+                                xFilial("SB1") + PadR(AllTrim(::aParsedSL2[nI]["L2_PRODUTO"]), TamSx3("B1_COD")[1]), ;
+                                "B1_LOCPAD")
+        If Empty(AllTrim(cLocalProd))
+            cLocalProd := "01"
+        EndIf
+
+        AAdd(aItens, { ;
+            {"L2_ITEM",     ::aParsedSL2[nI]["L2_ITEM"],                                                    Nil}, ;
+            {"L2_PRODUTO",  ::PadField("L2_PRODUTO",  ::aParsedSL2[nI]["L2_PRODUTO"]),                        Nil}, ;
+            {"L2_LOCAL",    ::PadField("L2_LOCAL",    cLocalProd),                                            Nil}, ;
+            {"L2_POSIPI",   ::PadField("L2_POSIPI",   ::aParsedSL2[nI]["L2_POSIPI"]),                         Nil}, ;
+            {"L2_DESCRI",   ::PadField("L2_DESCRI",   ::aParsedSL2[nI]["L2_DESCRI"]),                         Nil}, ;
+            {"L2_QUANT",    ::aParsedSL2[nI]["L2_QUANT"],                                                    Nil}, ;
+            {"L2_VRUNIT",   ::aParsedSL2[nI]["L2_VRUNIT"],                                                   Nil}, ;
+            {"L2_PRCTAB",   ::aParsedSL2[nI]["L2_PRCTAB"],                                                   Nil}, ;
+            {"L2_VLRITEM",  ::aParsedSL2[nI]["L2_VLRITEM"],                                                  Nil}, ;
+            {"L2_UM",       ::PadField("L2_UM",       ::aParsedSL2[nI]["L2_UM"]),                             Nil}, ;
+            {"L2_VALDESC",  ::aParsedSL2[nI]["L2_VALDESC"],                                                  Nil}, ;
+            {"L2_DESCPRO",  ::aParsedSL2[nI]["L2_DESCPRO"],                                                  Nil}, ;
+            {"L2_DESC",     ::aParsedSL2[nI]["L2_DESC"],                                                     Nil}, ;
+            {"L2_DESPESA",  ::aParsedSL2[nI]["L2_DESPESA"],                                                  Nil}, ;
+            {"L2_DOC",      ::PadField("L2_DOC",      ::aParsedSL2[nI]["L2_DOC"]),                            Nil}, ;
+            {"L2_ESPECIE",  ::PadField("L2_ESPECIE",  ::aParsedSL2[nI]["L2_ESPECIE"]),                        Nil}, ;
+            {"L2_CF",       ::PadField("L2_CF",       ::aParsedSL2[nI]["L2_CF"]),                             Nil}, ;
+            {"L2_PICM",     ::aParsedSL2[nI]["L2_PICM"],                                                     Nil}, ;
+            {"L2_VALICM",   ::aParsedSL2[nI]["L2_VALICM"],                                                   Nil}, ;
+            {"L2_BASEICM",  ::aParsedSL2[nI]["L2_BASEICM"],                                                  Nil}, ;
+            {"L2_MODBC",    ::PadField("L2_MODBC",    ::aParsedSL2[nI]["L2_MODBC"]),                          Nil}, ;
+            {"L2_ORIGEM",   ::PadField("L2_ORIGEM",   ::aParsedSL2[nI]["L2_ORIGEM"]),                         Nil}, ;
+            {"L2_CLASFIS",  ::PadField("L2_CLASFIS",  ::aParsedSL2[nI]["L2_CLASFIS"]),                        Nil}, ;
+            {"L2_CSTPIS",   ::PadField("L2_CSTPIS",   ::aParsedSL2[nI]["L2_CSTPIS"]),                         Nil}, ;
+            {"L2_VALPS2",   ::FidVal(lFidelidade, ::aParsedSL2[nI]["_PIS_VAL"]),                             Nil}, ;
+            {"L2_BASEPS2",  ::FidVal(lFidelidade, ::aParsedSL2[nI]["_PIS_BASE"]),                             Nil}, ;
+            {"L2_ALIQPS2",  ::FidVal(lFidelidade, ::aParsedSL2[nI]["_PIS_ALIQ"]),                             Nil}, ;
+            {"L2_VALPIS",   ::FidVal(!lFidelidade, ::aParsedSL2[nI]["_PIS_VAL"]),                             Nil}, ;
+            {"L2_BASEPIS",  ::FidVal(!lFidelidade, ::aParsedSL2[nI]["_PIS_BASE"]),                             Nil}, ;
+            {"L2_ALIQPIS",  ::FidVal(!lFidelidade, ::aParsedSL2[nI]["_PIS_ALIQ"]),                             Nil}, ;
+            {"L2_CSTCOF",   ::PadField("L2_CSTCOF",   ::aParsedSL2[nI]["L2_CSTCOF"]),                         Nil}, ;
+            {"L2_VALCF2",   ::FidVal(lFidelidade, ::aParsedSL2[nI]["_COF_VAL"]),                             Nil}, ;
+            {"L2_BASECF2",  ::FidVal(lFidelidade, ::aParsedSL2[nI]["_COF_BASE"]),                             Nil}, ;
+            {"L2_ALIQCF2",  ::FidVal(lFidelidade, ::aParsedSL2[nI]["_COF_ALIQ"]),                             Nil}, ;
+            {"L2_VALCOFI",  ::FidVal(!lFidelidade, ::aParsedSL2[nI]["_COF_VAL"]),                             Nil}, ;
+            {"L2_BASECOF",  ::FidVal(!lFidelidade, ::aParsedSL2[nI]["_COF_BASE"]),                             Nil}, ;
+            {"L2_ALIQCOF",  ::FidVal(!lFidelidade, ::aParsedSL2[nI]["_COF_ALIQ"]),                             Nil}, ;
+            {"L2_BRICMS",   ::aParsedSL2[nI]["L2_BRICMS"],                                                   Nil}, ;
+            {"L2_ICMSRET",  ::aParsedSL2[nI]["L2_ICMSRET"],                                                  Nil}, ;
+            {"L2_BASFECP",  ::aParsedSL2[nI]["L2_BASFECP"],                                                  Nil}, ;
+            {"L2_ALQFECP",  ::aParsedSL2[nI]["L2_ALQFECP"],                                                  Nil}, ;
+            {"L2_VALFECP",  ::aParsedSL2[nI]["L2_VALFECP"],                                                  Nil}, ;
+            {"L2_ALQFCST",  ::aParsedSL2[nI]["L2_ALQFCST"],                                                  Nil}, ;
+            {"L2_VFECPST",  ::aParsedSL2[nI]["L2_VFECPST"],                                                  Nil}, ;
+            {"L2_PREDIC",   ::aParsedSL2[nI]["L2_PREDIC"],                                                   Nil}, ;
+            {"L2_LOTECTL",  ::PadField("L2_LOTECTL",  cLoteItem),                                             Nil}, ;
+            {"L2_VEND",     ::PadField("L2_VEND",     cVendItem),                                             Nil} })
+    Next nI
+
+    // SL4 V2/Fase E:
+    //   L4_FORMA    -> PaymentMap (de-para tPag; a SAE nao tem a forma)
+    //   L4_ADMINIS  -> SAE.AE_COD (via MHW_CODIGO); fallback acquirerCode
+    //   L4_BANDEIR  -> SAE.AE_CDBASF (ou tBand do XML)
+    //   L4_AUTORIZ/L4_NSUTEF/L4_DOCTEF -> dados TEF do payload (authorizationCode/
+    //                  tefNsu/tefDoc). L4_FORMAID NAO e gravado aqui: o RetailSales
+    //                  (RSFormaId) calcula agrupando por L4_AUTORIZ.
+    aPagtos     := {}
+    oPaymentMap := SalesConnectRetailPaymentMap():New()
+    nItemSeq    := 0
+    aPagamentos := oReq:aPagamentos
+
+    // Guardas: L4_BANDEIR e os campos TEF so sao gravados se existirem no SX3
+    // deste ambiente (campo inexistente em MsExecAuto dispara FWNOSTRUCT).
+    If Select("SL4") == 0
+        DbSelectArea("SL4")
+    EndIf
+    lTemBandeir := ( SL4->(FieldPos("L4_BANDEIR")) > 0 )
+    lTemTef     := ( SL4->(FieldPos("L4_AUTORIZ")) > 0 )
+
+    For nI := 1 To Len(aPagamentos)
+        oPag       := aPagamentos[nI]
+        cFormaProt := oPaymentMap:tPagToL4Forma(oPag["method"])
+
+        // tBand vem do XML (<detPag><card><tBand> -> aParsedSL4), pareado por
+        // ordem com o pagamento do body. Sem detPag correspondente -> "".
+        cTband := ""
+        If nI <= Len(::aParsedSL4)
+            cTband := AllTrim(cValToChar(::aParsedSL4[nI]["L4_BANDEIR"]))
+        EndIf
+
+        // De-para nativo na SAE (AE_TIPO=forma + AE_CDPGSF=tPag + AE_CDBASF=tBand).
+        // Fallback: acquirerCode do payload.
+        aSae      := oPaymentMap:saeResolve(cFormaProt, oPag["method"], cTband)
+        cAdminCod := ""
+        If !Empty(aSae[1])
+            cAdminCod := aSae[1]
+        ElseIf ValType(oPag["acquirerCode"]) == "C" .And. !Empty(oPag["acquirerCode"])
+            cAdminCod := oPag["acquirerCode"]
+        EndIf
+        cBandeira := aSae[2]
+        If Empty(cBandeira)
+            cBandeira := cTband
+        EndIf
+
+        // Dados TEF do payload -> L4_AUTORIZ/L4_NSUTEF/L4_DOCTEF. O L4_AUTORIZ e a
+        // CHAVE que o RetailSales (RSFormaId) usa para agrupar e numerar o L4_FORMAID
+        // (parcelas do mesmo cartao tem a mesma autorizacao -> mesmo FORMAID).
+        cAutoriz := ""
+        cNsuTef  := ""
+        cDocTef  := ""
+        If ValType(oPag["authorizationCode"]) == "C"
+            cAutoriz := AllTrim(oPag["authorizationCode"])
+        EndIf
+        If ValType(oPag["tefNsu"]) == "C"
+            cNsuTef := AllTrim(oPag["tefNsu"])
+        EndIf
+        If ValType(oPag["tefDoc"]) == "C"
+            cDocTef := AllTrim(oPag["tefDoc"])
+        EndIf
+
+        // CA #11: 1 linha SL4 por parcela
+        If ValType(oPag["installments"]) == "A" .And. Len(oPag["installments"]) > 0
+            aParcelas := oPag["installments"]
+            For nP := 1 To Len(aParcelas)
+                oParc    := aParcelas[nP]
+                nItemSeq++
+                aLinhaSL4 := { ;
+                    {"L4_ITEM",     StrZero(nItemSeq, TamSx3("L4_ITEM")[1]),               Nil}, ;
+                    {"L4_FORMA",    ::PadField("L4_FORMA",   cFormaProt),                             Nil}, ;
+                    {"L4_VALOR",    ::NumOrZero(oParc["amount"]),          Nil} }
+                ::AddSL4Opc(aLinhaSL4, cAdminCod, cBandeira, cAutoriz, cNsuTef, cDocTef, lTemBandeir, lTemTef)
+                AAdd(aPagtos, aLinhaSL4)
+            Next nP
+        Else
+            // A vista (1 linha SL4)
+            nItemSeq++
+            aLinhaSL4 := { ;
+                {"L4_ITEM",     StrZero(nItemSeq, TamSx3("L4_ITEM")[1]),               Nil}, ;
+                {"L4_FORMA",    ::PadField("L4_FORMA",   cFormaProt),                             Nil}, ;
+                {"L4_VALOR",    ::NumOrZero(oPag["amount"]),            Nil} }
+            ::AddSL4Opc(aLinhaSL4, cAdminCod, cBandeira, cAutoriz, cNsuTef, cDocTef, lTemBandeir, lTemTef)
+            AAdd(aPagtos, aLinhaSL4)
+        EndIf
+    Next nI
+
+    aTrib := {}
+    For nI := 1 To Len(::aParsedDKM)
+        AAdd(aTrib, { ;
+            {"DKM_ITEM",   ::aParsedDKM[nI]["DKM_ITEM"],                     Nil}, ;
+            {"DKM_IDTRIB", ::PadField("DKM_IDTRIB", ::aParsedDKM[nI]["DKM_IDTRIB"]), Nil}, ;
+            {"DKM_BASE",   ::aParsedDKM[nI]["DKM_BASE"],                            Nil}, ;
+            {"DKM_ALIQ",   ::aParsedDKM[nI]["DKM_ALIQ"],                            Nil}, ;
+            {"DKM_VALOR",  ::aParsedDKM[nI]["DKM_VALOR"],                           Nil}, ;
+            {"DKM_CLASS",  ::PadField("DKM_CLASS",  ::aParsedDKM[nI]["DKM_CLASS"]),  Nil}, ;
+            {"DKM_VBIS",   ::aParsedDKM[nI]["DKM_VBIS"],                            Nil}, ;
+            {"DKM_VDIF",   ::aParsedDKM[nI]["DKM_VDIF"],                            Nil}, ;
+            {"DKM_VOUT",   ::aParsedDKM[nI]["DKM_VOUT"],                            Nil}, ;
+            {"DKM_BPOST",  ::aParsedDKM[nI]["DKM_BPOST"],                           Nil}, ;
+            {"DKM_ALQFF",  ::aParsedDKM[nI]["DKM_ALQFF"],                           Nil} })
+    Next nI
+
+Return { aCab, aItens, aPagtos, aTrib }
+
+/*/{Protheus.doc} DispatchRetailSales
+Despacha a venda para grava\E7\E3o usando RsGrvVenda (wrapper oficial do
+projeto - ver RetailSales.prw:495). RsGrvVenda configura as Privates
+obrigatorias (lMsHelpAuto / lMsErroAuto / lAutoErrNoFile), invoca a
+RetailSales via MsExecAuto e captura erros via GetAutoGrLog.
+
+IMPORTANTE: chamar RetailSales() diretamente NAO funciona - precisa do
+wrapper RsGrvVenda para que o MVC processe as validacoes/triggers e
+realmente persista em SL1/SL2/SL4/DKM.
+
+Em caso de falha (lRet=.F. ou exception), DisarmTransaction e responde
+500 com mensagem generica (detalhe vai SOMENTE para o LjGrvLog com UUID).
+
+@param aBuilt, array, {aCab, aItens, aPagtos, aTrib}
+@return logical, .T. sucesso, .F. erro
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method DispatchRetailSales(aBuilt as Array) as Logical Class SalesConnectRetailObj
+    Local aCab      as Array
+    Local aItens    as Array
+    Local aPagtos   as Array
+    Local aTrib     as Array
+    Local aRetVenda as Array
+    Local lRetGrv   as Logical
+    Local cErroGrv  as Character
+    Local oErr      as Object
+    Local lOk       as Logical
+
+    aCab    := aBuilt[1]
+    aItens  := aBuilt[2]
+    aPagtos := aBuilt[3]
+    aTrib   := aBuilt[4]
+    lOk     := .F.
+
+    Try
+        Begin Transaction
+            // Wrapper oficial do projeto (RetailSales.prw:495) - configura
+            // Privates do MsExecAuto e captura erros do MVC via GetAutoGrLog.
+            aRetVenda := RsGrvVenda(aCab, aItens, aPagtos, 3, aTrib)
+            lRetGrv   := aRetVenda[1]
+            cErroGrv  := aRetVenda[2]
+
+            If lRetGrv
+                lOk := .T.
+            Else
+                DisarmTransaction()
+                ::BuildError("0099", STR0008 + ::cUuid, 500)   // "Erro interno ao processar venda. Consulte log com UUID: "
+                LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 500: RsGrvVenda retornou .F. | erros MVC: " + cErroGrv)
+                // NAO usar Return dentro da transacao (regra CA1002): mantem
+                // lOk=.F. e deixa o fluxo cair ate End Transaction, que efetiva
+                // o rollback marcado pelo DisarmTransaction(). O retorno .F.
+                // acontece no Return lOk apos a transacao.
+            EndIf
+        End Transaction
+    Catch oErr
+        DisarmTransaction()
+        // SEC: nao expor oErr:Description no body (pode vazar detalhes internos);
+        //      mensagem generica + UUID permite correlacao com LjGrvLog.
+        ::BuildError("0099", STR0008 + ::cUuid, 500)   // "Erro interno ao processar venda. Consulte log com UUID: "
+        LjGrvLog("SalesConnectRetailObj", "[" + ::cUuid + "] 500: " + oErr:Description + " | Stack: " + oErr:ErrorStack)
+        Return .F.
+    EndTry
+
+Return lOk
+
+/*/{Protheus.doc} MaskCpfCnpj
+Mascara CPF/CNPJ para auditoria em log preservando apenas 3 primeiros
+e 2 ultimos digitos. NAO usar para gravar SL1->L1_CGCCLI (dado fiscal
+precisa ficar integro).
+@param cDoc, character, CPF (11) ou CNPJ (14) somente digitos
+@return character, valor mascarado (ex: "123***90")
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method MaskCpfCnpj(cDoc as Character) as Character Class SalesConnectRetailObj
+    Local cClean as Character
+    Local nLen   as Numeric
+
+    If ValType(cDoc) == "C"
+        cClean := AllTrim(cDoc)
+    Else
+        cClean := ""
+    EndIf
+    nLen   := Len(cClean)
+
+    If nLen < 6
+        Return "***"
+    EndIf
+Return Left(cClean, 3) + "***" + Right(cClean, 2)
+
+/*/{Protheus.doc} BuildError
+Preenche nHttpStatus e cReturn com um ErrorDto serializado.
+@param cCode,    character, codigo de erro (0001..0099)
+@param cMessage, character, mensagem
+@param nStatus,  numeric,   HTTP status final
+@return logical, sempre .F.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical Class SalesConnectRetailObj
+    Local oDto as Object
+    ::nHttpStatus := nStatus
+    oDto := SalesConnectRetailErrorDto():New(cCode, cMessage)
+    ::cReturn := oDto:toJson()
+Return .F.
+
+/*/{Protheus.doc} BuildSuccess
+Preenche nHttpStatus=200 e cReturn com SalesConnectRetailResponseDto serializado.
+@param cCodFil, character, codigo da filial gravada
+@param cNumero, character, SL1->L1_NUM gerado
+@return logical, sempre .T.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method BuildSuccess(cCodFil as Character, cNumero as Character) as Logical Class SalesConnectRetailObj
+    Local oDto as Object
+    ::nHttpStatus := 200
+    oDto := SalesConnectRetailResponseDto():New(cCodFil, cNumero, "OK")
+    ::cReturn := oDto:toJson()
+Return .T.
+
+/*/{Protheus.doc} ValidateProductCodes
+CA #5 V2 - Verifica que cProd do XML existe na SB1. NAO bloqueia em
+divergencia (alinhado com CA #6 - sem validacao de FK na API), apenas
+loga aviso para auditoria.
+
+Referencia: Guia Pratico EFD ICMS/IPI Secao 10.5.3.2 - codigo do produto
+escriturado deve ser o mesmo do documento fiscal.
+
+@return logical, sempre .T. (nao bloqueia o fluxo)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  18/05/2026
+/*/
+Method ValidateProductCodes() as Logical Class SalesConnectRetailObj
+    Local nI       as Numeric
+    Local cProdXml as Character
+    Local cArea    as Character
+
+    cArea := GetArea()
+    DbSelectArea("SB1")
+    SB1->(DbSetOrder(1))
+
+    For nI := 1 To Len(::aParsedSL2)
+        cProdXml := AllTrim(::aParsedSL2[nI]["L2_PRODUTO"])
+        If !SB1->(DbSeek(xFilial("SB1") + PadR(cProdXml, TamSX3("L2_PRODUTO")[1])))
+            LjGrvLog("SalesConnectRetailObj", ;
+                "[" + ::cUuid + "] AVISO CA#5: produto '" + cProdXml + ;
+                "' do XML nao existe na SB1 - sera tratado pelo GravaBatch")
+        EndIf
+    Next nI
+
+    RestArea(cArea)
+Return .T.
+

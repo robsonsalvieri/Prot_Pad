@@ -1,0 +1,260 @@
+#include 'tlpp-core.th'
+#include 'totvs.ch'
+#include 'backoffice.ngf.payment.data.ch'
+
+NAMESPACE totvs.protheus.backoffice.ngf.payment
+USING NAMESPACE totvs.protheus.backoffice.ngf.util
+USING NAMESPACE gfin.util
+
+Static __oSeqSEI  := NIL
+
+/*/{Protheus.doc} PaymentLoan
+  Efetua o pagamento de um emprestimo
+  @type  Function
+  @author Vitor Duca
+  @since 18/01/2022
+  @version 1.0
+  @param oBodyRequest, Json, Body da requisição
+  @return jResponse, Json, Resposta da requisição
+/*/
+Function PaymentLoan(oBodyRequest As Json)
+	Local jResponse      := JsonObject():new() As Json
+	Local nX             := 0                  As Numeric
+	Local aJsonBody      := {}                 As Array
+	Local aExecAuto      := {}                 As Array
+	Local cField         := ""                 As Character
+	Local cIndex         := ""                 As Character
+	Local aParams        := {}                 As Array
+	Local cIdContabil    := FWUUIDV4()         As Character
+	Local cBranch        := Padr(oBodyRequest["eh_filial"],TamSx3("EH_FILIAL")[1])   As Character
+	Local cNumber        := Padr(oBodyRequest["eh_numero"],TamSx3("EH_NUMERO")[1])   As Character
+	Local cRevision      := Padr(oBodyRequest["eh_revisao"],TamSx3("EH_REVISAO")[1]) As Character
+	Local lPaymentParcel := .T. As Logical
+	Local cMessageSucess := ""  As Character
+
+	PRIVATE lMsErroAuto As Logical
+
+	lMsErroAuto := .F.
+	cMessageSucess := STR0001 //"Contrato amortizado com sucesso"
+
+	aParams := oBodyRequest["param"]
+	cIndex := cBranch + cNumber + cRevision
+
+	aJsonBody := oBodyRequest["dados"]
+
+	// Trata os campos enviados
+	For nX := 1 to len(aJsonBody)
+		cField := oBodyRequest["dados"][nX]["field"]
+    If cField $ "dA181DtApr|dA181DTDEB"
+			Aadd(aExecAuto, { cField, STOD(oBodyRequest["dados"][nX]["value"]), NIL } )
+		ElseIf cField == "NOVOPROCESSO"
+			Aadd(aExecAuto, { cField, &(oBodyRequest["dados"][nX]["value"]), NIL } )
+		Elseif cField == "BAIXAPARCELA"
+			lPaymentParcel := &(oBodyRequest["dados"][nX]["value"])
+			Aadd(aExecAuto, { cField, &(oBodyRequest["dados"][nX]["value"]), NIL } )
+		Else
+			Aadd(aExecAuto, { cField, oBodyRequest["dados"][nX]["value"], NIL } )
+		Endif
+	Next
+
+	if aScan(aExecAuto,{|x| x[1] == "CONTRATOPARCELA"}) > 0
+		If lPaymentParcel
+			cMessageSucess := STR0002 //"Parcela paga com sucesso"
+		Else
+			cMessageSucess := STR0008 //"Parcela efetiva gerada com sucesso"
+		Endif
+	Endif
+
+	If SEH->(DBSeek(cIndex))
+		SetFunName("FINA181")
+		MsExecAuto({|u,v,w,x,y,z| FinA181(u,v,w,x,y,z)}, 3, .T.,, aExecAuto, aParams, cIdContabil)
+
+		If lMsErroAuto
+			jResponse := answerFormat(.F., 500, STR0003, totvs.protheus.backoffice.ngf.util.GetError()) //'Não foi possivel efetuar o pagamento'
+		Else
+			jResponse := answerFormat(.T., 201, cMessageSucess, '')
+			jResponse["response"]["contract"]               := JsonObject():new()
+			jResponse["response"]["contract"]["branch"]     := cBranch
+			jResponse["response"]["contract"]["number"]     := cNumber
+			jResponse["response"]["contract"]["revision"]   := cRevision
+			jResponse["response"]["contract"]["idcontabil"] := cIdContabil
+		Endif
+	Endif
+Return jResponse
+
+/*/{Protheus.doc} getSequenceParcels
+  obtem a sequencia referente ao pagamento da parcela (SEI)
+
+  @param  cNumber As Character, numero do emprestimo
+  @param  cRevision As Character, numero de revisao do emprestimo
+  @param  cParcel As Character, numero de parcela do emprestimo
+  @return cSequence As Json, sequencia do pagamento da parcela SEI
+
+  @author Vinicius Prado
+  @since 28/01/2022
+/*/
+Function getSequenceParcels(cNumber as Character, cRevision as Character, cParcel as Character, cBranch as Character) as Character
+	Local aAreaAnt := {} as Array
+	Local cSequence := "" as Character
+	Local cQuery := ""  as Character
+
+	aAreaAnt := GetArea()
+
+	If __oSeqSEI == Nil
+		cQuery := " SELECT MAX(EI_SEQ) SEQUENCE FROM " + RetSqlName("SEI")
+		cQuery += " WHERE EI_FILIAL = ? AND "
+		cQuery += " EI_NUMERO  = ? AND "
+		cQuery += " EI_REVISAO = ? AND "
+		cQuery += " EI_PARCELA = ? AND "
+		cQuery += " EI_STATUS  = '' AND "
+		cQuery += " D_E_L_E_T_ = ' ' "
+
+		cQuery := ChangeQuery(cQuery)
+		__oSeqSEI := FWPreparedStatement():New(cQuery)
+	EndIF
+
+	__oSeqSEI:SetString(1,xFilial('SEI',cBranch))
+	__oSeqSEI:SetString(2,cNumber)
+	__oSeqSEI:SetString(3,cRevision)
+	__oSeqSEI:SetString(4,cParcel)
+
+	cQuery := __oSeqSEI:GetFixQuery()
+	cSequence := MpSysExecScalar(cQuery,"SEQUENCE")
+
+	RestArea(aAreaAnt)
+
+Return cSequence
+
+/*/{Protheus.doc} ReversePaymentLoan
+  Estorna o pagamento ou amortização de um emprestimo
+  @type  Function
+  @author Vitor Duca
+  @since 26/04/2022
+  @version 1.0
+  @param cPathParam, Character, PathParam da requisição, deve conter essas informações
+  @param oBodyRequest, Json, Corpo da requisição que deve conter os campos referente a contabilização
+  (EI_FILIAL, EI_NUMERO, EI_REVISAO, EI_SEQ) na mesma ordem
+  @return jResponse, Json, Json de resposta que sera enviado
+/*/
+Function ReversePaymentLoan(cPathParam As Character, oBodyRequest As Json) As Json
+  Local jResponse       As Json
+  Local aRescueID := {} As Array
+  Local cNumber   := "" As Character
+  Local cRevision := "" As Character
+  Local aParams   := {} As Array
+  Local aJsonBody := {} As Array
+  Local nX        := 0  As Numeric
+  Local aExecAuto := {} As Array
+  Local cIdContabil := FWUUIDV4() As Character
+
+  Local cMessageSucess := STR0004 As Character //"Amortização estornada com sucesso"
+  Local cMessageFail   := STR0005 As Character //"Não foi possivel estornar a amortização do emprestimo"
+
+  PRIVATE lMsErroAuto As Logical
+
+  jResponse := JsonObject():new()
+  lMsErroAuto := .F.
+
+  aParams := oBodyRequest["param"]
+  aRescueID := STRtokARR(cPathParam, '|')
+  cNumber := Padr(aRescueID[2], TamSx3("EH_NUMERO")[1])
+  cRevision := Padr(aRescueID[3], TamSx3("EH_REVISAO")[1])
+
+  SEH->(DbSetOrder(1))
+  If SEH->(DBSeek(xFilial("SEH") + cNumber + cRevision))
+
+    If oBodyRequest["type"] == "payment"
+      cMessageSucess := STR0006 //"Pagamento da parcela estornado com sucesso"
+      cMessageFail := STR0007 //"Não foi possivel estornar o pagamento da parcela"
+
+      aJsonBody := oBodyRequest["dados"]
+      // Trata os campos enviados
+      For nX := 1 to len(aJsonBody)
+        if oBodyRequest["dados"][nX]["field"] $ 'NOVOPROCESSO|ESTORNABAIXA'
+        Aadd(aExecAuto, { oBodyRequest["dados"][nX]["field"], &(oBodyRequest["dados"][nX]["value"]), NIL } )
+        else
+          Aadd(aExecAuto, { oBodyRequest["dados"][nX]["field"], (oBodyRequest["dados"][nX]["value"]), NIL } )
+        endIf
+      Next
+
+    EndIf
+
+    SetFunName("FINA181")
+
+    MsExecAuto({|u,v,w,x,y,z| FinA181(u,v,w,x,y,z)}, 4, .T., aRescueID[4], aExecAuto, aParams, cIdContabil)
+
+    If lMsErroAuto
+      jResponse := answerFormat(.F., 500, cMessageFail, totvs.protheus.backoffice.ngf.util.GetError())
+    Else
+      jResponse := answerFormat(.T., 201, cMessageSucess, '')
+      jResponse["response"]["contract"] := JsonObject():new()
+      jResponse["response"]["contract"]["branch"] := xFilial("SEH")
+      jResponse["response"]["contract"]["number"] := cNumber
+      jResponse["response"]["contract"]["revision"] := cRevision
+      jResponse["response"]["contract"]["idcontabil"] := cIdContabil
+    EndIf
+  EndIf
+
+Return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDataBaseParcel
+	Obtem a data base para calculo do template com base nas parcelas.
+
+	@author vinicius.prado
+	@since 18/11/2022
+	@return dDataBaseParc, date, data base para calculo
+/*/
+//-------------------------------------------------------------------
+Function getDataBaseParcel() As Date
+	Local cQuery := "" as Character
+  Local cPrepQuery := "" as Character
+  Local dDataBaseParc := STOD("") as Date
+  Local cVencto := "" as Character
+  Local nDaysDiff := 0 as Numeric
+  Local cDBMS	:= UPPER(TcGetDb()) as Character
+
+  cPrepQuery := " E2_VENCORI VENCTO FROM "+ RetSqlName("SE2")
+  cPrepQuery += " WHERE E2_FILIAL = '" + SE2->E2_FILIAL + "'"
+  cPrepQuery += " AND E2_PREFIXO = '" + SE2->E2_PREFIXO + "'"
+  cPrepQuery += " AND E2_NUM = '" + SE2->E2_NUM + "'"
+  cPrepQuery += " AND E2_TIPO = '" + SE2->E2_TIPO + "'"
+  cPrepQuery += " AND E2_FORNECE = '" + SE2->E2_FORNECE + "'"
+  cPrepQuery += " AND E2_LOJA = '" + SE2->E2_LOJA + "'"
+  cPrepQuery += " AND E2_VENCORI < '" + DTOS(SE2->E2_VENCORI) + "'"
+  cPrepQuery += " AND D_E_L_E_T_ = ' ' "
+
+  If cDBMS <> 'ORACLE'
+    cPrepQuery += " ORDER BY E2_VENCTO DESC "
+  Endif
+
+  If cDBMS == 'ORACLE'
+    cQuery := " SELECT "+ cPrepQuery +" AND ROWNUM < 2 "
+    cQuery += " ORDER BY E2_VENCTO DESC "
+  ElseIf cDBMS == 'POSTGRES'
+    cQuery := "SELECT "+ cPrepQuery +" LIMIT 1"
+  Else
+    cQuery := " SELECT TOP 1 " + cPrepQuery
+  EndIf
+
+  cQuery := ChangeQuery(cQuery)
+  cVencto := MpSysExecScalar(cQuery,"VENCTO")
+
+  If SE2->E2_VENCTO != SE2->E2_VENCORI
+    nDaysDiff := SE2->E2_VENCTO - SE2->E2_VENCORI // Ajuste no periodo de dias por conta dos feriados/finais de semana
+  EndIf
+
+  If Empty(cVencto)
+    If nDaysDiff <> 0
+      dDataBaseParc := DaySum(SEH->EH_DATA, nDaysDiff)
+    Else
+      dDataBaseParc := SEH->EH_DATA
+    EndIf
+  Else
+    If nDaysDiff <> 0
+      dDataBaseParc := DaySum(STOD(cVencto), nDaysDiff)
+    Else
+      dDataBaseParc := STOD(cVencto)
+    EndIf
+  EndIf
+Return dDataBaseParc

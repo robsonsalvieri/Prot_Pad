@@ -1,0 +1,645 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "mntinsightssuggestpreventive.ch"
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} mntInsightsSuggestPreventive
+Função executada pela rota "mnt-insight/suggest-preventive/:equipment"
+Valida os parâmetros enviados e realiza o envio da predição
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 16/10/2025
+
+@return Nil  
+/*/ 
+//------------------------------------------------------------------------------
+@Get ( endpoint = 'mnt-insight/suggest-preventive/:equipment' )
+function mntInsightsSuggestPreventive()
+
+    Local oError
+	Local bLastError
+    Local aResponse  := { Nil ,200 }
+    Local jPathParam := oRest:getPathParamsRequest()
+
+	bLastError := ErrorBlock( { | oError | MntWSError( oError ), .F., Break( oError ) } )
+
+    Begin Sequence
+
+        If jPathParam:HasProperty( 'equipment' ) .And. !Empty( jPathParam[ 'equipment' ] )
+
+            aResponse := fChart( oRest, jPathParam[ 'equipment' ] )
+
+        Else
+
+            aResponse[1] := STR0001 // "O equipamento deve ser informado."
+            aResponse[2] := 400
+            
+        EndIf
+
+        oRest:SetStatusCode( aResponse[ 2 ] )
+        oRest:SetResponse( aResponse[ 1 ] )
+
+	End Sequence
+    
+    ErrorBlock( bLastError )
+
+return
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fChart
+Função responsável por realizar o processo de carregar os dados e montar o JSON
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 16/10/2025
+@params oRest, objeto, que contêm os parâmetros da requisição
+@params cCodBem, caractere, Código do Bem a ser consultado
+
+@return array, retorna na primeira posição o objeto Json com os dados da predição
+                e na segunda posição o Código de status HTTP
+/*/ 
+//------------------------------------------------------------------------------
+static function fChart( oRest, cCodBem )
+
+    Local aRegs    := {}
+    Local aResponse := {}
+
+    aRegs := fPredict( cCodBem )
+
+    If !Empty( aRegs )
+        
+        // Montagem do retorno JSON
+        aAdd( aResponse, fMontaJson( aRegs[1], aRegs[2] ) )
+        aAdd( aResponse, 200 )
+
+    Else
+
+        aAdd( aResponse, STR0002 ) // "Equipamento não encontrado."
+        aAdd( aResponse, 400 )
+
+    EndIf
+
+return aResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fPredict
+Função responsável por carregar as predições do Bem 
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 16/10/2025
+@params cBem, caractere, Codigo do bem
+
+@return array, Retorna um array com o Código do bem e as predições
+/*/ 
+//------------------------------------------------------------------------------
+static function fPredict( cBem )
+
+    Local cQuery    := ''
+    Local cAliasQry := GetNextAlias()
+    Local aRet := {}
+
+    dbSelectArea( 'ST9' )
+    dbSetOrder( 1 ) // T9_FILIAL + T9_CODBEM
+    If msSeek( FWxFilial( 'ST9' ) + cBem )
+
+        cQuery += 'SELECT '
+        cQuery +=   'R_E_C_N_O_ AS REC '
+        cQuery += 'FROM ' + RetSqlName( 'I21' ) + ' I21 '
+        cQuery += 'WHERE '
+        cQuery +=   'I21.I21_KEY = ' + ValToSQL( cEmpAnt + '|' + AllTrim( FWxFilial( 'ST9' ) ) + '|' + ST9->T9_CODBEM ) + ' '
+        cQuery +=   "AND I21.I21_INSIGT = 'SuggestPreventives' "
+        cQuery +=   "AND I21.D_E_L_E_T_ = ' ' "
+        cQuery +=  'ORDER BY I21.I21_DTPROC DESC '
+
+        cQuery := ChangeQuery( cQuery )
+
+        dbUseArea( .T.,'TOPCONN',TcGenQry( , , cQuery ), cAliasQry, .T., .T. )
+
+        dbSelectArea( cAliasQry )
+        dbGoTop()
+        If (cAliasQry)->( !Eof() )
+
+            DbSelectArea( 'I21' )
+            DbGoTo((cAliasQry)->REC)
+
+            aAdd( aRet, ST9->(Recno()) )
+            aAdd( aRet, I21->I21_PAYLOD )
+
+        EndIf
+    
+        (cAliasQry)->(DbCloseArea())
+
+    EndIf
+
+return aRet
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fMontaJson
+Função responsável por montar o Json com o retorno
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 16/10/2025
+@params nBemRec,  caractere, Código do Bem
+@params cPredict, caractere, Json ainda em formato String com as predições
+
+
+@return oResponse, objeto, Json que contêm os dados do gráfico com os custos e as predições
+/*/ 
+//------------------------------------------------------------------------------
+static function fMontaJson( nBemRec, cPredict )
+
+    Local nI        := 1
+    Local nY        := 1
+    Local nX        := 1
+    Local nValTot   := 0
+    Local nRecur    := 0
+    Local aTarefas  := {}
+    Local cServRef  := Alltrim( SuperGetMv( 'MV_NGSEREF', .F., '' ) )
+    Local cServCon  := Alltrim( SuperGetMv( 'MV_NGSECON', .F., '' ) )
+    Local cServPn   := Alltrim( SuperGetMv( 'MV_NGSERPN', .F., '' ) )
+    Local cServRod  := Alltrim( SuperGetMv( 'MV_NGRODIZ', .F., '' ) )
+    Local cServCa   := Alltrim( SuperGetMv( 'MV_NGSERCA', .F., '' ) )
+    Local oResponse := JsonObject():New()
+    Local oJson     := JsonObject():New()
+    Local oPredicts
+
+    DbSelectArea( 'ST9' )
+    DbGoTo( nBemRec )
+
+    oJson := JsonObject():New()
+
+    oJson:FromJson( StrTran( SubStr( cPredict, 2, ( Len( cPredict ) - 2 ) ), '\','' ) )
+
+    oResponse['maintenance'] := {}
+
+    For nI := 1 To Len( oJson )
+
+        oPredicts := JsonObject():New()
+
+        If ValType( oJson[ nI, 'prediction_type' ] ) == 'C' .And. oJson[ nI, 'prediction_type' ] $ 'new_preventive_from_corrective/suggest_executing_preventive/update_existing_preventive' .And. ValType( oJson[ nI, 'message' ] ) == 'C' .And.;
+        AllTrim( oJson[ nI, 'service' ] ) != cServRef .And. AllTrim( oJson[ nI, 'service' ] ) != cServCon .And. AllTrim( oJson[ nI, 'service' ] ) != cServPn .And.;
+        AllTrim( oJson[ nI, 'service' ] ) != cServRod .And. AllTrim( oJson[ nI, 'service' ] ) != cServCa
+        
+            oPredicts[ 'prediction_type' ] := oJson[ nI, 'prediction_type' ]
+
+            
+            If ValType( oJson[ nI, 'status' ] ) = 'C'
+
+                oPredicts[ 'status' ] := AllTrim( oJson[ nI, 'status' ] )
+
+            Else
+
+                oPredicts[ 'status' ] := 'active'
+
+            EndIf
+
+            If ValType( oJson[ nI, 'message' ] ) == 'C'
+
+                oPredicts[ 'analysis' ] := DecodeUTF8( oJson[ nI, 'message' ] )
+
+            EndIf
+          
+            nRecur := 0
+
+            If oJson[ nI, 'prediction_type' ] $ 'new_preventive_from_corrective
+
+                oPredicts[ 'name_man' ]         := ''
+                oPredicts[ 'new_recurrence' ]   := oJson[ nI, 'recurrence', 'recurrence_days' ]
+                oPredicts[ 'sequence' ]         := '001'
+            
+            Else
+
+                If ValType( oJson[ nI, 'message' ] ) == 'C'
+            
+                    oPredicts[ 'sequence' ] := PadR( oJson[ nI, 'sequence' ], FWTamSX3( 'TF_SEQRELA' )[1] )
+
+                EndIf
+
+                dbSelectArea( 'STF' )
+                dbSetOrder( 1 ) // TF_FILIAL + TF_CODBEM + TF_SERVICO + TF_SEQRELA
+                If msSeek( FWxFilial( 'STF' ) + PadR( ST9->T9_CODBEM, FWTamSX3( 'TF_CODBEM' )[1] ) + PadR( oJson[ nI, 'service' ], FWTamSX3( 'TF_SERVICO' )[1] ) + oPredicts[ 'sequence' ] )
+
+                    oPredicts[ 'name_man' ] := STF->TF_NOMEMAN
+                    
+                    If STF->TF_TIPACOM == 'T'
+
+                        DO CASE
+                            CASE STF->TF_UNENMAN == 'D'
+
+                                nRecur := STF->TF_TEENMAN
+
+                            CASE STF->TF_UNENMAN == 'S'
+
+                                nRecur := STF->TF_TEENMAN * 7
+
+                            CASE STF->TF_UNENMAN == 'M'
+
+                                nRecur := STF->TF_TEENMAN * 30
+
+                            CASE STF->TF_UNENMAN == 'H'
+
+                                nRecur := STF->TF_TEENMAN / 24
+
+                        END CASE
+
+                    Else
+
+                        nRecur := oJson[ nI, 'recurrence', 'recurrence_days' ]
+
+                    EndIf
+
+                Else
+
+                    oPredicts[ 'name_man' ]         := ''
+                    nRecur := oJson[ nI, 'recurrence', 'recurrence_days' ]
+
+                EndIf
+
+                If oJson[ nI, 'prediction_type' ] $ 'suggest_executing_preventive'
+
+                    oPredicts[ 'recurrence' ] := nRecur
+
+                Else
+                    
+                    oPredicts[ 'new_recurrence' ] := nRecur
+
+                EndIf
+
+            EndIf
+            
+            oPredicts[ 'service' ]          := AllTrim( oJson[ nI, 'service' ] )
+            oPredicts[ 'service_desc' ]     := AllTrim( NGSEEK( 'ST4', AllTrim( oJson[ nI, 'service' ] ), 1, 'T4_NOME' ) )
+            oPredicts[ 'area' ]             := AllTrim( NGSEEK( 'ST4', AllTrim( oJson[ nI, 'service' ] ), 1, 'T4_CODAREA' ) )
+            oPredicts[ 'area_desc' ]        := AllTrim( NGSEEK( 'STD', oPredicts[ 'area' ], 1, 'TD_NOME' ) )
+            oPredicts[ 'type_man' ]         := AllTrim( NGSEEK( 'ST4', AllTrim( oJson[ nI, 'service' ] ), 1, 'T4_TIPOMAN' ) )
+            oPredicts[ 'type_desc' ]        := AllTrim( NGSEEK( 'STE', oPredicts[ 'type_man' ], 1, 'TE_NOME' ) )
+            oPredicts[ 'last_maintenance' ] := SubStr( oJson[ nI, 'last_execution' ], 1, 10 )
+            oPredicts[ 'calend' ]           := AllTrim( ST9->T9_CALENDA )
+            oPredicts[ 'calend_desc' ]      := AllTrim( NGSEEK( 'SH7', oPredicts[ 'calend' ], 1, 'H7_DESCRI' ) ) 
+            oPredicts[ 'tasks' ]            := {}
+
+            If (( ValType( oJson[ nI, 'steps', 'prediction' ] ) == 'A' .And. Len( oJson[ nI, 'steps', 'prediction' ] ) > 0 ) .Or.;
+            ( ValType( oJson[ nI, 'inputs', 'prediction' ] ) == 'A' .And. Len( oJson[ nI, 'inputs', 'prediction' ] ) > 0 )) .Or.;
+            oJson[ nI, 'prediction_type' ] $ 'suggest_executing_preventive'
+
+                If oJson[ nI, 'prediction_type' ] $ 'suggest_executing_preventive'
+
+                    // Carrega os registros da base
+                    aTarefas := fCarregaTar( ST9->T9_CODBEM, oPredicts[ 'service' ], oPredicts[ 'sequence' ] )
+                
+                Else
+
+                    // Carrega os registros da I21
+                    aTarefas := fTarefas( oJson[ nI, 'inputs' ], oJson[ nI, 'steps' ] )
+
+                EndIf
+
+                nValTot := aTarefas[ 2 ]
+                aTarefas := aTarefas[ 1 ]
+
+                oPredicts[ 'predicted_cost' ] := nValTot
+
+                If Len( aTarefas ) > 0
+
+                    For nX := 1 To Len( aTarefas )
+
+                        aAdd( oPredicts[ 'tasks' ], JsonObject():New() )
+
+                        oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'code' ] := AllTrim( aTarefas[ nX, 1 ] )
+
+                        If '0' != aTarefas[ nX, 1 ]
+
+                            oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'desc' ] := AllTrim( NGSEEK( 'TT9', aTarefas[ nX, 1 ], 1, 'TT9_DESCRI' ) )                        
+
+                        Else
+
+                            oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'desc' ] := STR0003 // "SEM ESPECIFICAÇÃO DE TAREFA"
+
+                        EndIf
+
+                        If Len( aTarefas[ nX, 2 ] ) > 0
+
+                            oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'inputs' ] := JsonObject():New()
+
+                            oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'inputs', 'inputs_new' ] := {}
+
+                            For nY := 1 To Len( aTarefas[ nX, 2 ] )
+
+                                aAdd( oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'inputs', 'inputs_new' ], aTarefas[ nX, 2, nY ] )
+
+                            Next nY
+
+                        EndIf
+
+                        If Len( aTarefas[ nX, 3 ] ) > 0
+
+                            oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'steps' ] := JsonObject():New()
+
+                            oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'steps', 'steps_new' ] := {}
+
+                            For nY := 1 To Len( aTarefas[ nX, 3 ] )
+
+                                aAdd( oPredicts[ 'tasks', Len( oPredicts[ 'tasks' ] ), 'steps', 'steps_new' ], aTarefas[ nX, 3, nY ] )
+
+                            Next nY
+
+                        EndIf
+
+                    Next nX
+
+                EndIf
+
+            EndIf
+
+            aAdd( oResponse['maintenance'], oPredicts )
+            oPredicts := Nil
+
+        EndIf
+
+
+    Next nI
+
+    oResponse['equipment'] := AllTrim( ST9->T9_CODBEM )
+
+return oResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fTarefas
+Função responsável por montar o Json de tarefas e totalizar o valor em Insumos da O.s.
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 16/10/2025
+@params aInsumos,  array, Array contendo os Insumos
+@params aEtapas, array, Array contendo as Etapas
+
+
+@return oResponse, array, retorna um array onde na primeira posição tem a estrutura
+de Tarefas, Insumos e Etapas e na segunda posição o valor total de todos os Insumos somados
+/*/ 
+//------------------------------------------------------------------------------
+static function fTarefas( oInsumos, oEtapas )
+
+    Local aTarefas := {}
+    Local nI
+    Local nTar     := 1
+    Local nValTot := 0
+    Local cTarefa := ''
+    Local cTipHr  := ''
+    Local aInsumos := {}
+    Local aEtapas :=  {}
+
+    If ValType( oInsumos[ 'prediction_type' ] ) == 'C' .And. oInsumos[ 'prediction_type' ] == 'multi_label_classification'
+
+        aInsumos := oInsumos[ 'prediction' ]
+
+    EndIf
+
+    If ValType( oEtapas[ 'prediction_type' ] ) == 'C' .And. oEtapas[ 'prediction_type' ] == 'multi_label_classification'
+
+        aEtapas :=  oEtapas[ 'prediction' ]
+
+    EndIf
+
+    If Len( aInsumos ) > 0
+
+        For nI := 1 To Len( aInsumos )
+
+            If ValType( aInsumos[ nI, 'tl_tarefa' ] ) == 'C' .And. AllTrim( aInsumos[ nI, 'tl_tarefa' ] ) <> 'None' 
+
+                cTarefa := AllTrim( aInsumos[ nI, 'tl_tarefa' ] )
+
+            Else
+
+                cTarefa := '0'
+
+            EndIf
+
+            If Len( aTarefas ) < 1 .Or. aScan( aTarefas, { |x| x[1] == cTarefa } ) == 0
+
+                aAdd( aTarefas, { cTarefa, {}, {} } )
+                nTar := len( aTarefas )
+
+            Else
+
+                nTar := aScan( aTarefas, { |x| x[1] == cTarefa } )
+
+            EndIf
+
+            aAdd( aTarefas[ nTar, 2 ], JsonObject():new() )
+
+            If ValType( aInsumos[ nI, 'tl_codigo' ] ) == 'C' .And. ValType( aInsumos[ nI, 'tl_tiporeg' ] ) == 'C';
+            .And. ValType( aInsumos[ nI, 'tl_quantid' ] ) == 'N'
+
+                aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_codigo' ] := AllTrim( aInsumos[ nI, 'tl_codigo' ] )
+                aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_nomecodi' ] := NOMINSBRW( AllTrim( aInsumos[ nI, 'tl_tiporeg' ] ), AllTrim( aInsumos[ nI, 'tl_codigo' ] ) )
+                aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_tiporeg' ] := AllTrim( aInsumos[ nI, 'tl_tiporeg' ] )
+                aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_quantid' ] := aInsumos[ nI, 'tl_quantid' ]
+
+                If AllTrim( aInsumos[ nI, 'tl_tiporeg' ] ) == 'P'
+
+                    cTipHr := NGSEEK( 'SB1', AllTrim( aInsumos[ nI, 'tl_codigo' ] ), 1, 'B1_UM' )
+
+                ElseIf AllTrim( aInsumos[ nI, 'tl_tiporeg' ] ) == 'M'
+
+                    cTipHr := 'H'
+
+                EndIf
+
+                nValTot += NGCALCUSTI( aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_codigo' ], aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_tiporeg' ],;
+                 aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_quantid' ], , cTipHr )
+
+            EndIf
+
+            If ValType( aInsumos[ nI, 'tl_tiporeg' ] ) == 'C' .And. AllTrim( aInsumos[ nI, 'tl_tiporeg' ] ) == 'P';
+            .And. !Empty( aInsumos[ nI, 'tl_destino' ] )
+
+                aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_destino' ] := aInsumos[ nI, 'tl_destino' ]
+            
+            EndIf
+
+        Next nI
+
+    EndIf
+
+    If Len( aEtapas ) > 0
+
+        For nI := 1 To Len( aEtapas )
+
+            If ( ValType( aEtapas[ nI, 'tq_tarefa' ] ) == 'C' ) .And. ( AllTrim( aEtapas[ nI, 'tq_tarefa' ] ) <> 'None' )
+
+                cTarefa := AllTrim( aEtapas[ nI, 'tq_tarefa' ] )
+
+            Else
+
+                cTarefa := '0'
+
+            EndIf
+
+            If Len( aTarefas ) < 1 .Or. aScan( aTarefas, { |x| x[1] == cTarefa } ) == 0
+
+                aAdd( aTarefas, { cTarefa, {}, {} } )
+                nTar := len( aTarefas )
+
+            Else
+
+                nTar := aScan( aTarefas, { |x| x[1] == cTarefa } )
+
+            EndIf
+
+            aAdd( aTarefas[ nTar, 3 ], JsonObject():new() )
+
+            If ValType( aEtapas[ nI, 'tq_etapa' ] ) == 'C' .And. ValType( aEtapas[ nI, 'tq_tarefa' ] ) == 'C';
+
+                aTarefas[ nTar, 3, Len( aTarefas[ nTar, 3 ] ), 'tq_etapa' ] := AllTrim( aEtapas[ nI, 'tq_etapa' ] )
+                aTarefas[ nTar, 3, Len( aTarefas[ nTar, 3 ] ), 'tq_nomeetap' ] := AllTrim( aEtapas[ nI, 'tq_tarefa' ] )
+
+            EndIf
+
+        Next nI
+
+    EndIf
+
+return { aTarefas, nValTot }
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fCarregaTar
+Função responsável por montar o Json de tarefas e totalizar o valor em Insumos da O.s.
+utilizada apenas para o tipo "suggest_executing_preventive" pois carrega as infos da base
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 04/12/2025
+@params cCodBem,  caractere, Código do Bem
+@params cServico, caractere, Código do Serviço
+@params cSequence, caractere, Sequência da Manutenção
+
+
+@return oResponse, array, retorna um array onde na primeira posição tem a estrutura
+de Tarefas, Insumos e Etapas e na segunda posição o valor total de todos os Insumos somados
+/*/ 
+//------------------------------------------------------------------------------
+static function fCarregaTar( cCodBem, cServico, cSequence )
+
+    Local aTarefas := {}
+    Local nTar     := 1
+    Local nValTot := 0
+    Local cTarefa := ''
+    Local cTipHr  := ''
+    Local cQuery := ''
+    Local cAliasQry := GetNextAlias()
+
+    cQuery := 'SELECT '
+    cQuery +=   'STG.TG_TAREFA, STG.TG_CODIGO, STG.TG_TIPOREG, STG.TG_QUANTID, STG.TG_DESTINO '
+    cQuery += 'FROM ' + RetSqlName( 'STG' ) + ' STG '
+    cQuery += 'WHERE '
+    cQuery +=   'STG.TG_FILIAL = ' + ValToSQL( FWxFilial( 'STF' ) ) + ' '
+    cQuery +=   'AND STG.TG_CODBEM = ' + ValToSQL( cCodBem ) + ' '
+    cQuery +=   'AND STG.TG_SERVICO = ' + ValToSQL( cServico ) + ' '
+    cQuery +=   'AND STG.TG_SEQRELA = ' + ValToSQL( cSequence ) + ' '
+    cQuery +=   "AND STG.D_E_L_E_T_ = ' ' "
+
+    cQuery := ChangeQuery( cQuery )
+
+    dbUseArea( .T., 'TOPCONN', TCGENQRY(,,cQuery),cAliasQry, .F., .T. )
+
+    While (cAliasQry)->( !Eof() )
+
+        cTarefa := (cAliasQry)->TG_TAREFA
+
+        If Len( aTarefas ) < 1 .Or. aScan( aTarefas, { |x| x[1] == cTarefa } ) == 0
+
+            aAdd( aTarefas, { cTarefa, {}, {} } )
+            nTar := len( aTarefas )
+
+        Else
+
+            nTar := aScan( aTarefas, { |x| x[1] == cTarefa } )
+
+        EndIf
+
+        aAdd( aTarefas[ nTar, 2 ], JsonObject():new() )
+
+        aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_codigo' ] := AllTrim( (cAliasQry)->TG_CODIGO )
+        aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_nomecodi' ] := NOMINSBRW( AllTrim( (cAliasQry)->TG_TIPOREG ), AllTrim( (cAliasQry)->TG_CODIGO ) )
+        aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_tiporeg' ] := AllTrim( (cAliasQry)->TG_TIPOREG )
+        aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_quantid' ] := (cAliasQry)->TG_QUANTID
+
+        If AllTrim( (cAliasQry)->TG_TIPOREG ) == 'P'
+
+            cTipHr := NGSEEK( 'SB1', AllTrim( (cAliasQry)->TG_CODIGO ), 1, 'B1_UM' )
+
+        ElseIf AllTrim( (cAliasQry)->TG_TIPOREG ) == 'M'
+
+            cTipHr := 'H'
+
+        EndIf
+
+        nValTot += NGCALCUSTI( aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_codigo' ], aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_tiporeg' ],;
+            aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_quantid' ], , cTipHr )
+
+        If AllTrim( (cAliasQry)->TG_TIPOREG ) == 'P'
+
+            aTarefas[ nTar, 2, Len( aTarefas[ nTar, 2 ] ), 'tl_destino' ] := (cAliasQry)->TG_DESTINO
+
+        EndIf
+
+        (cAliasQry)->( dbSkip() )
+
+    End
+
+    (cAliasQry)->( dbCloseArea() )
+
+    cQuery := ''
+    cAliasQry := GetNextAlias()
+
+    cQuery := 'SELECT '
+    cQuery +=   'STH.TH_TAREFA, STH.TH_ETAPA '
+    cQuery += 'FROM ' + RetSqlName( 'STH' ) + ' STH '
+    cQuery += 'WHERE '
+    cQuery +=   'STH.TH_FILIAL = ' + ValToSQL( FWxFilial( 'STF' ) ) + ' '
+    cQuery +=   'AND STH.TH_CODBEM = ' + ValToSQL( cCodBem ) + ' '
+    cQuery +=   'AND STH.TH_SERVICO = ' + ValToSQL( cServico ) + ' '
+    cQuery +=   'AND STH.TH_SEQRELA = ' + ValToSQL( cSequence ) + ' '
+    cQuery +=   "AND STH.D_E_L_E_T_ = ' ' "
+
+    cQuery := ChangeQuery( cQuery )
+
+    dbUseArea( .T., 'TOPCONN', TCGENQRY(,,cQuery),cAliasQry, .F., .T. )
+
+    While (cAliasQry)->( !Eof() )
+
+        cTarefa := AllTrim( (cAliasQry)->TH_TAREFA )
+
+        If Len( aTarefas ) < 1 .Or. aScan( aTarefas, { |x| x[1] == cTarefa } ) == 0
+
+            aAdd( aTarefas, { cTarefa, {}, {} } )
+            nTar := len( aTarefas )
+
+        Else
+
+            nTar := aScan( aTarefas, { |x| x[1] == cTarefa } )
+
+        EndIf
+
+        aAdd( aTarefas[ nTar, 3 ], JsonObject():new() )
+
+        aTarefas[ nTar, 3, Len( aTarefas[ nTar, 3 ] ), 'tq_etapa' ] := AllTrim( (cAliasQry)->TH_ETAPA )
+        aTarefas[ nTar, 3, Len( aTarefas[ nTar, 3 ] ), 'tq_nomeetap' ] := NgSeek( 'TPA', (cAliasQry)->TH_ETAPA, 1, 'TPA_DESCRI' )
+
+        (cAliasQry)->( dbSkip() )
+
+    End
+
+    (cAliasQry)->( dbCloseArea() )
+
+return { aTarefas, nValTot }

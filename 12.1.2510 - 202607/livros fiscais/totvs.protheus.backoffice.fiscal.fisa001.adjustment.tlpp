@@ -1,0 +1,2662 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FILEIO.CH"
+#INCLUDE "FWMBROWSE.CH"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "FISCAL.FISA001.ADJUSTMENT.CH"
+
+Namespace totvs.protheus.backoffice.fiscal.fisa001.adjustment
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} facilitatorPisCofins
+Facilitador de Ajustes PIS/COFINS - Inclusão e Exclusão em Lote de Registros CF5
+
+@description
+Função principal que constrói um assistente (Wizard) interativo de 5 etapas
+para inclusão ou exclusão em lote de ajustes de crédito EFD PIS/COFINS na
+tabela CF5, a partir de documentos selecionados da SFT (Livros Fiscais).
+
+@type Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@version 12.1.2510
+
+@obs Etapas do wizard:
+- Etapa 1: Identificação e Filtros (Ação, Tipo de Ajuste, Período, Filiais)
+- Etapa 2: Seleção de Documentos SFT filtrados pelo período e filiais
+- Etapa 3: Dados do Ajuste CF5 (PIS/COFINS, Código Ajuste, Data Ref., Código Crédito)
+- Etapa 4: Preview dos registros CF5 a incluir/excluir
+- Etapa 5: Confirmação e processamento em lote
+
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Function facilitatorPisCofins()
+
+	Local oNewPag    := NIL as object
+	Local oStepWiz   := NIL as object
+	Local aCoords    := FWGetDialogSize() as array
+	Local nSteps     := 0 as numeric
+	Local oMkFil     := NIL as object
+	Local oSX3Util   := fStructFields() as object
+
+	// Privates compartilhadas entre steps
+	Private c042Acao    := "" as character  // 1=Incluir Ajuste;2=Excluir Ajuste
+	Private c042TpNfs   := "" as character  // 1=Nfs. Entrada;2=Nfs. Saida
+	Private cTipoAju    := "" as character  // "0"=Reducao, "1"=Acrescimo (CF5_INDAJU)
+	Private cMarcarDoc  := "" as character  // "1"=Sim, "2"=Não
+	Private dDataDe     := CToD("") as date
+	Private dDataAte    := CToD("") as date
+	Private aFiliais    := {} as array
+	Private cFilSelDesc := "" as character
+	Private cPisCof     := "1" as character  // "1"=PIS, "2"=COFINS
+	Private cCodAju     := "" as character
+	Private dDtRef      := CToD("") as date
+	Private cCodCre     := "" as character
+	Private cTipAju     := "" as character
+	Private cCtaCont    := "" as character
+	Private cCodCon     := "" as character
+	Private cTipAtv     := "" as character
+	Private cTipAjst    := "" as character
+	Private cDocDe      := "" as character
+	Private cDocAte     := "" as character
+	Private cSerieDe    := "" as character
+	Private cSerieAte   := "" as character
+	Private cTempoProc  := DToC(Date()) + "-" + Time()
+
+	Private oFontWiz    := TFont():New('Arial',,23,,.F.,,,,,.F.,.F.) as object
+
+	Private cAliasFil   := GetNextAlias() as character
+	Private oJsTotStep3 := IniValoresTotal() as object
+	Private oTmpDocsSFT := NIL as object
+	Private oTmpDocsCF5 := NIL as object
+	Private oMkDocs     := NIL as object     // FwFormBrowse do step 2
+	Private oPanBrwStep2:= NIL as object     // Painel do step 2 onde o FwFormBrowse será inserido
+	Private cTrbFacilit := "" as character
+
+	oStepWiz := FWWizardControl():New(,{aCoords[3] * 0.85, aCoords[4] * 0.85})
+	oStepWiz:ActiveUISteps()
+
+	//----------------------------
+	// Etapa 1 - Identificação e Filtros
+	//----------------------------
+	nSteps += 1
+	oNewPag := oStepWiz:AddStep(cValToChar(nSteps))
+	oNewPag:SetStepDescription(STR0001) //"Identificação e Filtros"
+	oNewPag:SetConstruction({|oPanel| Step1IdenFilt(oPanel, @cAliasFil, @oMkFil, oSX3Util)})
+	oNewPag:SetNextAction({|| ValidStep1(oMkFil, oSX3Util)})
+
+	//----------------------------
+	// Etapa 2 - Seleção de Documentos SFT
+	//----------------------------
+	nSteps += 1
+	oNewPag := oStepWiz:AddStep(cValToChar(nSteps))
+	oNewPag:SetStepDescription(STR0002) //"Seleção de Documentos"
+	oNewPag:SetConstruction({|oPanel| Step2SelDoc(oPanel, oSX3Util)})
+	oNewPag:SetNextAction({|| ValidStep2() .And. MontaPreview(oTmpDocsSFT, oJsTotStep3)})
+
+	//----------------------------
+	// Etapa 3 - Preview
+	//----------------------------
+	nSteps += 1
+	oNewPag := oStepWiz:AddStep(cValToChar(nSteps))
+	oNewPag:SetStepDescription(STR0003) //"Preview"
+	oNewPag:SetConstruction({|oPanel| Step3Preview(oPanel, oJsTotStep3)})
+	oNewPag:SetNextAction({||.T.})
+
+	//----------------------------
+	// Etapa 4 - Dados do Ajuste CF5
+	//----------------------------
+	nSteps += 1
+	oNewPag := oStepWiz:AddStep(cValToChar(nSteps))
+	oNewPag:SetStepDescription(STR0004) //"Dados do Ajuste"
+	oNewPag:SetConstruction({|oPanel| Step4DadosAju(oPanel, oSX3Util)})
+	oNewPag:SetNextAction({|| ValidStep4()})
+
+	//----------------------------
+	// Etapa 5 - Confirmação
+	//----------------------------
+	nSteps += 1
+	oNewPag := oStepWiz:AddStep(cValToChar(nSteps))
+	oNewPag:SetStepDescription(STR0005) //"Confirmação"
+	oNewPag:SetConstruction({|oPanel| Step5Confirm(oPanel)})
+	oNewPag:SetNextAction({||FwMsgRun(NIL, {|| ProcAjustCF5()},STR0006) .Or. .T.}) //"Processando ajustes..."
+
+	oStepWiz:Activate()
+	oStepWiz:Destroy()
+
+	fDestroiTmpSFT(@oTmpDocsSFT)
+	fDestroiTmpSFT(@oTmpDocsCF5)
+	oFontWiz := NIL
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Step1IdenFilt
+Monta a tela da Etapa 1: Identificação e Filtros.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oPanel, object, Painel do step
+@param cAliasFil, character, Alias da filial
+@param oMkFil, object, Objeto de marcação de filial
+@param oSX3Util, object, Utilitário para estrutura de campos
+@return Nil
+*/
+//-------------------------------------------------------------------
+Static Function Step1IdenFilt(oPanel, cAliasFil, oMkFil, oSX3Util)
+
+	Local oLayMain   := FWLayer():New() as object
+	Local oPanLeft   := NIL as object
+	Local oPanRight  := NIL as object
+	Local oLayLeft   := FWLayer():New() as object
+	Local oLayRight  := FWLayer():New() as object
+	Local oPanLTit   := NIL as object
+	Local oPanLForm  := NIL as object
+	Local oPanRTit   := NIL as object
+	Local oPanRBrw   := NIL as object
+	Local aEstrut    := {} as array
+	Local aFields    := {} as array
+	Local oMsmGet    := NIL as object
+	Local nPos       := 0 as numeric
+	Local cQryFil    := "" as character
+	Local lAllFil    := .T. as logical
+	Local aCmpFil    := {} as array
+	Local aColsFil   := {} as array
+
+	// Layout principal: esquerda 40% filtros | direita 60% filiais
+	oLayMain:Init(oPanel, .F.)
+	oLayMain:AddLine('LM', 100, .F.)
+	oLayMain:addCollumn('CL', 40, .F., 'LM')
+	oLayMain:addCollumn('CR', 60, .F., 'LM')
+	oPanLeft  := oLayMain:getColPanel('CL', 'LM')
+	oPanRight := oLayMain:getColPanel('CR', 'LM')
+
+	// --- Lado esquerdo: campos de filtro ---
+	oLayLeft:Init(oPanLeft, .F.)
+	oLayLeft:AddLine('LL1', 10, .F.)
+	oLayLeft:AddLine('LL2', 90, .F.)
+	oPanLTit  := oLayLeft:getLinePanel('LL1')
+	oPanLForm := oLayLeft:getLinePanel('LL2')
+
+	TSay():New(5, 5, {||STR0007}, oPanLTit,, oFontWiz,,,,.T.,,,(oPanLTit:nWidth / 2) - 10, (oPanLTit:nHeight / 2) - 10) //"Informe os filtros da consulta"
+
+	// Data Início
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0008 //"Data Início"
+	aEstrut[nPos][02] := 'dDataDe'
+	aEstrut[nPos][03] := 'D'
+	aEstrut[nPos][04] := oSX3Util["FT_ENTRADA"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["FT_ENTRADA"]["PICTURE"]
+	aEstrut[nPos][08] := .T.
+	dDataDe := CriaVar('FT_ENTRADA')
+
+	// Data Fim
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0009 //"Data Fim"
+	aEstrut[nPos][02] := 'dDataAte'
+	aEstrut[nPos][03] := 'D'
+	aEstrut[nPos][04] := oSX3Util["FT_ENTRADA"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["FT_ENTRADA"]["PICTURE"]
+	aEstrut[nPos][08] := .T.
+	dDataAte := CriaVar('FT_ENTRADA')
+
+	// Ação: 1=Incluir / 2=Excluir
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0010 //"Acao"
+	aEstrut[nPos][02] := 'c042Acao'
+	aEstrut[nPos][03] := 'C'
+	aEstrut[nPos][04] := 1
+	aEstrut[nPos][06] := '@!'
+	aEstrut[nPos][07] := {||Pertence('12')}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][15] := fTipoDeAcao()
+	c042Acao := "1"
+
+	// Tipo Movimento: 1=Entrada, 2=Saída
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0011 //"Tipo Movimento"
+	aEstrut[nPos][02] := 'c042TpNfs'
+	aEstrut[nPos][03] := 'C'
+	aEstrut[nPos][04] := 1
+	aEstrut[nPos][06] := '@!'
+	aEstrut[nPos][07] := {||Pertence('12')}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][15] := f042TpNfs()
+	c042TpNfs := " "
+
+	// Tipo de Ajuste: 0=Reducao / 1=Acrescimo (CF5_INDAJU)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0012 //"Tipo de Ajuste"
+	aEstrut[nPos][02] := 'cTipoAju'
+	aEstrut[nPos][03] := 'C'
+	aEstrut[nPos][04] := 1
+	aEstrut[nPos][06] := '@!'
+	aEstrut[nPos][07] := {||Pertence('01')}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][15] := fTipoAjuste()
+	cTipoAju := " "
+
+	// Doc. Fiscal De  (FT_NFISCAL)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0013 //"Doc. Fiscal De"
+	aEstrut[nPos][02] := 'cDocDe'
+	aEstrut[nPos][03] := oSX3Util["FT_NFISCAL"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["FT_NFISCAL"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["FT_NFISCAL"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][08] := .F.
+	cDocDe := Space(oSX3Util["FT_NFISCAL"]["SIZE"])
+
+	// Doc. Fiscal Até  (FT_NFISCAL)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0014 //"Doc. Fiscal Até"
+	aEstrut[nPos][02] := 'cDocAte'
+	aEstrut[nPos][03] := oSX3Util["FT_NFISCAL"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["FT_NFISCAL"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["FT_NFISCAL"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][08] := .T.
+	cDocAte := Replicate("Z", oSX3Util["FT_NFISCAL"]["SIZE"])
+
+	// Serie Doc. De  (FT_SERIE)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0015 //"Serie Doc. De"
+	aEstrut[nPos][02] := 'cSerieDe'
+	aEstrut[nPos][03] := oSX3Util["FT_SERIE"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["FT_SERIE"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["FT_SERIE"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][08] := .F.
+	cSerieDe := Space(oSX3Util["FT_SERIE"]["SIZE"])
+
+	// Serie Doc. Até  (FT_SERIE)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0016 //"Serie Doc. Até"
+	aEstrut[nPos][02] := 'cSerieAte'
+	aEstrut[nPos][03] := oSX3Util["FT_SERIE"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["FT_SERIE"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["FT_SERIE"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][08] := .T.
+	cSerieAte := Replicate("Z", oSX3Util["FT_SERIE"]["SIZE"])
+
+		// Marcar Documentos? 1=Sim; 2=Não
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := STR0017 //"Marcar Documentos?"
+	aEstrut[nPos][02] := 'cMarcarDoc'
+	aEstrut[nPos][03] := 'C'
+	aEstrut[nPos][04] := 1
+	aEstrut[nPos][06] := '@!'
+	aEstrut[nPos][07] := {||Pertence('12')}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][15] := "1=Sim;2=Não"
+	cMarcarDoc := "1"
+
+	aEval(aEstrut, {|x| aAdd(aFields, x[2])})
+	oMsmGet := MsmGet():New(,,3,,,,aFields,{0,3,(oPanLForm:nClientHeight-4)/2,(oPanLForm:nClientWidth/2)-5},,,,,,oPanLForm,,,.T.,,,.T.,aEstrut,,,,,.T.)
+
+	// --- Lado direito: seleção de filiais (SM0) ---
+	oLayRight:Init(oPanRight, .F.)
+	oLayRight:AddLine('LR1', 8, .F.)
+	oLayRight:AddLine('LR2', 92, .F.)
+	oPanRTit := oLayRight:getLinePanel('LR1')
+	oPanRBrw := oLayRight:getLinePanel('LR2')
+
+	TSay():New(5, 5, {||STR0018}, oPanRTit,, oFontWiz,,,,.T.,,,(oPanRTit:nWidth / 2) - 10, (oPanRTit:nHeight / 2) - 10) //"Filial dos documentos a processar"
+
+	// Query SM0
+	cQryFil := fQryFilial(cEmpAnt)
+
+	AAdd(aCmpFil, {"M0_CODFIL", "Cod. Filial", "C", 20, "@!", "LEFT", ""})
+	AAdd(aCmpFil, {"M0_FILIAL", "Filial"     , "C", 20, "@!", "LEFT", ""})
+	AAdd(aCmpFil, {"M0_NOME"  , "Nome"       , "C", 30, "@!", "LEFT", ""})
+	aColsFil := HeaderMark(aCmpFil)
+
+	oMkFil := AddMarkBro(oPanRBrw, @lAllFil, aCmpFil, aColsFil, cQryFil, cAliasFil)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ValidStep1
+Valida os campos obrigatórios da Etapa 1 e coleta as filiais selecionadas.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@return logical, .T. se válido
+/*/
+//-------------------------------------------------------------------
+Static Function ValidStep1(oMkFil, oSX3Util)
+
+	Local lOk     := .T. as logical
+	Local cMsg    := "" as character
+	Local cAliasF := "" as character
+	Local cAlsTrb := "" as character
+
+	If Empty(c042TpNfs)
+		cMsg += STR0019 + Chr(13) + Chr(10) //"- Campo Tipo Movimento obrigatório."
+		lOk := .F.
+	EndIf
+	If Empty(c042Acao)
+		cMsg += STR0020 + Chr(13) + Chr(10) //"- Campo Ação obrigatório."
+		lOk := .F.
+	EndIf
+	If Empty(cTipoAju)
+		cMsg += STR0021 + Chr(13) + Chr(10) //"- Campo Tipo de Ajuste obrigatório."
+		lOk := .F.
+	EndIf
+	If Empty(dDataDe)
+		cMsg += STR0022 + Chr(13) + Chr(10) //"- Campo Data Início obrigatório."
+		lOk := .F.
+	EndIf
+	If Empty(dDataAte)
+		cMsg += STR0023 + Chr(13) + Chr(10) //"- Campo Data Fim obrigatório."
+		lOk := .F.
+	EndIf
+	If !Empty(dDataDe) .And. !Empty(dDataAte) .And. dDataDe > dDataAte
+		cMsg += STR0024 + Chr(13) + Chr(10) //"- Campo Data Início não pode ser maior que Campo Data Fim."
+		lOk := .F.
+	EndIf
+	If Empty(cDocAte)
+		cMsg += STR0025 + Chr(13) + Chr(10) //"- Campo Doc. Fiscal Até obrigatório."
+		lOk := .F.
+	EndIf
+	If Empty(cSerieAte)
+		cMsg += STR0026 + Chr(13) + Chr(10) //"- Campo Série Doc. Até obrigatório."
+		lOk := .F.
+	EndIf
+
+	If lOk
+		If ValType(oMkFil) == "O"
+			cAliasF     := oMkFil:cAlias
+			aFiliais    := {}
+			cFilSelDesc := ""
+			(cAliasF)->(DbGoTop())
+			While (cAliasF)->(!EOF())
+				If (cAliasF)->OK == 1
+					AAdd(aFiliais, AllTrim((cAliasF)->M0_CODFIL))
+					cFilSelDesc += AllTrim((cAliasF)->M0_CODFIL) + " "
+				EndIf
+				(cAliasF)->(DbSkip())
+			EndDo
+
+			//Retorno para a primeira linha
+			(cAliasF)->( DbGoTop() )
+			oMkFil:Refresh(,.T.)
+			oMkFil:Refresh(,.T.)
+
+		EndIf
+		If Len(aFiliais) > 0
+
+			If c042Acao == "1"
+				fDestroiTmpSFT(@oTmpDocsSFT) // Destruo tabela temporária e mark browse caso já tenham sido criados em uma validação anterior, para evitar que dados antigos sejam apresentados ou processados.
+				FwMsgRun(NIL, {|| oTmpDocsSFT := fCriaCarregaTmpSFT(aFiliais, dDataDe, dDataAte, oSX3Util)},STR0027) //"Filtrando Documentos Fiscais..."
+				cAlsTrb := oTmpDocsSFT:GetAlias()
+			ElseIf c042Acao == "2"
+				fDestroiTmpSFT(@oTmpDocsCF5)
+				FwMsgRun(NIL, {|| oTmpDocsCF5 := fCriaCarregaTmpCF5(aFiliais, dDataDe, dDataAte, oSX3Util)}, STR0028) //"Filtrando Ajustes de PIS/COFINS..."
+				cAlsTrb := oTmpDocsCF5:GetAlias()
+			EndIf
+			(cAlsTrb)->(DbGoTop())
+
+			AtuQryBro(oSX3Util, cAlsTrb)
+		Else
+			cMsg += STR0029 + Chr(13) + Chr(10) //"- Selecione ao menos uma Filial."
+			lOk := .F.
+		EndIf
+	EndIf
+
+	If !lOk
+		MsgAlert(cMsg, STR0030) //"Campos Obrigatorios"
+	EndIf
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AtuQryBro()
+
+Função que refaz o MarkBorwse considerando alteração dos campos de filtros
+
+@author Delleon Fernandes
+@since 24/04/2026
+@version 12.1.2510
+@param oMkDocs, object, Objeto do MarkBrowse a ser atualizado
+@param cAlsTmpSFT, character, Alias da tabela temporária com os dados filtrados
+/*/
+//-------------------------------------------------------------------
+Static Function AtuQryBro(oSX3Util, cAlsTmpSFT)
+
+	If cMarcarDoc == "1" .And. Valtype(oPanBrwStep2) == "O"
+		If c042Acao == "1"
+			CriarMarkNF(oSX3Util, cAlsTmpSFT)
+		ElseIf c042Acao == "2"
+			CriarMarkCF5(oSX3Util, cAlsTmpSFT)
+		EndIf
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Step2SelDoc
+Monta a tela da Etapa 2: seleção de documentos SFT filtrados por período e filiais.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oPanel, object, Painel do step
+@param oMkDocs, object, Objeto FwFormBrowse para exibir os documentos SFT
+@param oSX3Util, object, Objeto utilitário SX3 para obter estrutura de campos e descrições
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function Step2SelDoc(oPanel, oSX3Util)
+
+	Local oLayer    := FWLayer():New() as object
+	Local oPanTit   := NIL as object
+
+	Local cAliasMark:= fTrbCorrente() as character
+	Local oBtnNews  := NIL as object
+
+	Default oPanel := Nil
+
+	oLayer:Init(oPanel, .F.)
+	oLayer:AddLine('LS1', 8, .F.)
+	oLayer:AddLine('LS2', 5, .F.)
+	oLayer:AddLine('LS3', 87, .F.)
+	oPanTit := oLayer:getLinePanel('LS1')
+	oPanBrwStep2 := oLayer:getLinePanel('LS3')
+
+	TSay():New(5, 5, {||fInfOpcStep2()}, oPanTit,, oFontWiz,,,,.T.,,,(oPanTit:nWidth / 2) - 10, (oPanTit:nHeight / 2) - 10)
+
+	// Botão de exportação para Excel
+	oBtnNews := THButton():New( 20, 1,STR0031,oPanel,{|| fExpExcelSFT(oSX3Util)},600,10,,STR0032) //"Clique aqui para exportar lista em Excel"  "Exportar lista para o Excel"
+
+	If cMarcarDoc == "1"
+		If c042Acao == "1"
+			CriarMarkNF(oSX3Util, cAliasMark)
+		ElseIf c042Acao == "2"
+			CriarMarkCF5(oSX3Util, cAliasMark)
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} fTrbCorrente
+	(Retorna o alias da tabela temporária atualmente utilizada para marcação dos documentos)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 13/05/2026
+	@version 12.1.2510
+	@param nenhum
+	@return cRet, character, Alias da tabela temporária atualmente utilizada para marcação dos documentos (SFT ou CF5), conforme ação selecionada na etapa 1.
+	/*/
+Static Function fTrbCorrente()
+	Local cRet := "" as character
+	If c042Acao == "2"
+		cRet := oTmpDocsCF5:GetAlias()
+	ElseIf cMarcarDoc == "1"
+		cRet := oTmpDocsSFT:GetAlias()
+	EndIf
+Return cRet
+
+/*/{Protheus.doc} fInfOpcStep2
+	(Retorna descrição conforme ação e tipo de movimento selecionados para ser exibida na etapa 2)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 11/05/2026
+	@version 12.1.2510
+	@param nenhum
+	@return cReturn, character, Descrição conforme ação e tipo de movimento selecionados
+/*/
+Static Function fInfOpcStep2()
+	Local cReturn := "" as character
+	If c042Acao == "2"
+		cReturn := STR0033 //"Selecione os Ajustes de PIS/COFINS a excluir."
+	ElseIf cMarcarDoc == "1"
+		cReturn := STR0034 //"Selecione os documentos/itens base para lançamentos dos ajustes. "
+	Else
+		cReturn := STR0035 //"Revise os documentos/itens que serão considerados para os ajustes via planilha excel. "
+	EndIf
+Return cReturn
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fExportaTabelaExcel
+	Gera um arquivo Excel XML com os dados de uma tabela temporária,
+	utilizando FWMSExcel (server-side) e abre no cliente quando disponível.
+
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 13/05/2026
+	@version 12.1.2510
+	@param cAliasTab, character, Alias da tabela temporária com os dados a exportar
+	@param aCampos, array, Array com os nomes dos campos a exportar
+	@param oSX3Util, object, Objeto utilitário SX3 para títulos e tipos dos campos
+	@param cAba, character, Nome da aba no arquivo Excel
+	@param cTabela, character, Nome da tabela no arquivo Excel
+	@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function fExportaTabelaExcel(cAliasTab, aCampos, oSX3Util, cAba, cTabela)
+	Local lRet       := .F. as logical
+	Local aArea      := GetArea() as array
+	Local oFWMsExcel := NIL as object
+	Local oExcel     := NIL as object
+	Local aColExport := {} as array
+	Local aLinha     := {} as array
+	Local cArqFull   := GetTempPath() + "AjustesPISCOFINS" + Replace(Time(), ":", "") + ".xml" as character
+	Local nX         := 0 as numeric
+	Local nTipoExcel := 1 as numeric
+	Local cTipoCampo := "" as character
+
+	If Empty(cAliasTab) .Or. Select(cAliasTab) == 0 .Or. (cAliasTab)->(RecCount()) == 0
+		MsgAlert(STR0036, STR0037) //"Nao ha dados para exportar. Verifique os filtros e tente novamente." "Exportar Excel"
+		RestArea(aArea)
+		Return
+	EndIf
+
+	For nX := 1 To Len(aCampos)
+		cTipoCampo := oSX3Util[aCampos[nX]]["TYPE"]
+		If cTipoCampo == "N"
+			nTipoExcel := 2
+		Else
+			nTipoExcel := 1
+		EndIf
+		AAdd(aColExport, {aCampos[nX], oSX3Util[aCampos[nX]]["DESCRIPTION"], nTipoExcel, nTipoExcel, cTipoCampo})
+	Next nX
+
+	oFWMsExcel := FWMSExcel():New()
+	oFWMsExcel:AddWorkSheet(cAba)
+	oFWMsExcel:AddTable(cAba, cTabela)
+
+	For nX := 1 To Len(aColExport)
+		oFWMsExcel:AddColumn(cAba, cTabela, aColExport[nX][2], aColExport[nX][3], aColExport[nX][4], .F.)
+	Next nX
+
+	DbSelectArea(cAliasTab)
+	(cAliasTab)->(DbGoTop())
+	While (cAliasTab)->(!EOF())
+		lRet := .T.
+		aLinha := {}
+		For nX := 1 To Len(aColExport)
+			If aColExport[nX][5] == "D"
+				AAdd(aLinha, DToC((cAliasTab)->&(aColExport[nX][1])))
+			Else
+				AAdd(aLinha, (cAliasTab)->&(aColExport[nX][1]))
+			EndIf
+		Next nX
+		oFWMsExcel:AddRow(cAba, cTabela, aLinha)
+		(cAliasTab)->(DbSkip())
+	EndDo
+	(cAliasTab)->(DbGoTop())
+
+	oFWMsExcel:Activate()
+	oFWMsExcel:GetXMLFile(cArqFull)
+	FreeObj(oFWMsExcel)
+	oFWMsExcel := NIL
+
+	If ApOleClient("msexcel")
+		oExcel := MsExcel():New()
+		oExcel:WorkBooks:Open(cArqFull)
+		oExcel:SetVisible(.T.)
+		oExcel:Destroy()
+		oExcel := NIL
+	EndIf
+
+	RestArea(aArea)
+
+Return lRet
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fExpExcelSFT
+	Exporta os dados da tabela temporária de ajustes (SFT ou CF5) para
+	um arquivo Excel XML, delegando a geração a fExportaTabelaExcel.
+
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 05/05/2026
+	@version 12.1.2510
+	@param oSX3Util, object, Objeto utilitário SX3 para obter títulos e tipos dos campos
+	@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function fExpExcelSFT(oSX3Util)
+	Local lOk := .F. as logical
+	Local aCposSFT := {"FT_FILIAL","FT_SERIE","FT_NFISCAL","FT_EMISSAO","FT_CLIEFOR","FT_LOJA","FT_ITEM","FT_PRODUTO","B1_DESC","FT_BASEPIS","FT_CSTPIS","FT_BASECOF","FT_CSTCOF"} as array
+	Local aCposCF5 := {"CF5_FILIAL","CF5_FILDOC","CF5_SERDOC","CF5_DOCNF","CF5_CLIFOR","CF5_LOJA","CF5_CODAJU","CF5_DTREF","CF5_CODCRE","CF5_CONTA","CF5_CODCON","CF5_TIPATV","CF5_TPAJST"} as array
+	Local cAlsTmp  := "" as character
+
+	If c042Acao == "2"
+		cAlsTmp := oTmpDocsCF5:GetAlias()
+		lOk := fExportaTabelaExcel(cAlsTmp, aCposCF5, oSX3Util, STR0038, STR0038) //"Ajustes PIS/COFINS"
+	Else
+		cAlsTmp := oTmpDocsSFT:GetAlias()
+		lOk := fExportaTabelaExcel(cAlsTmp, aCposSFT, oSX3Util, STR0039, STR0040) //"Itens dos Documentos Fiscais" "Documentos Fiscais"
+	EndIf
+
+	If lOk
+		MsgInfo(STR0074 + Chr(13) + Chr(10) + Chr(13) + Chr(10) + /* "Processamento concluido!" */ ;
+			STR0082 + Chr(13) + Chr(10) + Chr(13) + Chr(10)  /* "Registro(s) exportados(s) para excel" */ ;
+			, STR0078) /* "Ajustes de PIS/COFINS" */
+	EndIf
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Step4DadosAju
+Monta a tela da Etapa 4: informação dos dados do ajuste CF5.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oPanel, object, Painel do step
+@param oSX3Util, object, Objeto utilitário SX3 para obter estrutura de campos e descrições
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function Step4DadosAju(oPanel, oSX3Util)
+
+	Local oLayer     := FWLayer():New() as object
+	Local oPanTit    := NIL as object
+	Local oPanForm   := NIL as object
+	Local aEstrut    := {} as array
+	Local aFields    := {} as array
+	Local oMsmGet    := NIL as object
+	Local nPos       := 0 as numeric
+
+	oLayer:Init(oPanel, .F.)
+	oLayer:AddLine('LA1', 10, .F.)
+	oLayer:AddLine('LA2', 90, .F.)
+	oPanTit  := oLayer:getLinePanel('LA1')
+	oPanForm := oLayer:getLinePanel('LA2')
+
+	TSay():New(5, 5, {||STR0041}, oPanTit,, oFontWiz,,,,.T.,,,(oPanTit:nWidth / 2) - 10, (oPanTit:nHeight / 2) - 10) //"Informe os dados de Ajuste de PIS/COFINS"
+
+	// Código do Ajuste (CF5_CODAJU)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_CODAJU"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'cCodAju'
+	aEstrut[nPos][03] := oSX3Util["CF5_CODAJU"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_CODAJU"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_CODAJU"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	aEstrut[nPos][15] := A042CODAJU()
+	cCodAju := CriaVar("CF5_CODAJU")
+
+	// Data de Referência (CF5_DTREF)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_DTREF"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'dDtRef'
+	aEstrut[nPos][03] := oSX3Util["CF5_DTREF"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_DTREF"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_DTREF"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	dDtRef := CriaVar("CF5_DTREF")
+
+	// Código de Crédito (CF5_CODCRE) — opcional
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_CODCRE"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'cCodCre'
+	aEstrut[nPos][03] := oSX3Util["CF5_CODCRE"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_CODCRE"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_CODCRE"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][07] := {||vazio() .or. ExistCpo('SX5','ZR'+cCodCre)}
+	aEstrut[nPos][08] := .F.
+	aEstrut[nPos][11] := "ZR"
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	cCodCre := CriaVar("CF5_CODCRE")
+
+	// Cta Contabil (CF5_CONTA)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_CONTA"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'cCtaCont'
+	aEstrut[nPos][03] := oSX3Util["CF5_CONTA"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_CONTA"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_CONTA"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][07] := {||vazio().or. Ctb105Cta()}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][11] := "CT1"
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	cCtaCont := CriaVar("CF5_CONTA")
+
+	// Codigo da Contribuição (CF5_CODCON)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_CODCON"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'cCodCon'
+	aEstrut[nPos][03] := oSX3Util["CF5_CODCON"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_CODCON"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_CODCON"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][07] := {||Vazio() .Or. ExistCpo('SX5','MY'+cCodCon)}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][11] := "MY"
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	cCodCon := CriaVar("CF5_CODCON")
+
+	// Tipo de Atividade CPRB (CF5_TIPATV)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_TIPATV"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'cTipAtv'
+	aEstrut[nPos][03] := oSX3Util["CF5_TIPATV"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_TIPATV"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_TIPATV"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][07] := {||Pertence('01')}
+	aEstrut[nPos][08] := .F.
+	aEstrut[nPos][15] := "0=Servico;1=Industria"
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	cTipAtv := CriaVar("CF5_TIPATV")
+
+	// Ajuste de Crédito/Débito  (CF5_TPAJST)
+	nPos := AddStruct(@aEstrut)
+	aEstrut[nPos][01] := oSX3Util["CF5_TPAJST"]["DESCRIPTION"]
+	aEstrut[nPos][02] := 'cTipAjst'
+	aEstrut[nPos][03] := oSX3Util["CF5_TPAJST"]["TYPE"] // Tipo do campo no banco
+	aEstrut[nPos][04] := oSX3Util["CF5_TPAJST"]["SIZE"] // Tamanho do campo
+	aEstrut[nPos][06] := oSX3Util["CF5_TPAJST"]["PICTURE"] // Picture do campo
+	aEstrut[nPos][07] := {||Pertence('12')}
+	aEstrut[nPos][08] := .T.
+	aEstrut[nPos][12] := {|| fIncluiAju() }
+	aEstrut[nPos][15] := fTPAJST()
+	cTipAjst := CriaVar("CF5_TPAJST")
+
+	aEval(aEstrut, {|x| aAdd(aFields, x[2])})
+	oMsmGet := MsmGet():New(,,3,,,,aFields,{0,3,(oPanForm:nClientHeight-4)/2,(oPanForm:nClientWidth/2)-5},,,,,,oPanForm,,,.T.,,,.T.,aEstrut,,,,,.T.)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ValidStep4
+Valida os campos obrigatórios da Etapa 3 e monta o array de preview.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@return logical, .T. se válido
+/*/
+//-------------------------------------------------------------------
+Static Function ValidStep4()
+
+	Local lOk  := .T. as logical
+	Local cMsg := "" as character
+	Local nRefYM := Year(dDtRef)   * 100 + Month(dDtRef)
+	Local nDeYM  := Year(dDataDe)  * 100 + Month(dDataDe)
+	Local nAteYM := Year(dDataAte) * 100 + Month(dDataAte)
+
+	If c042Acao == "1" // Validação Somente na inclução de ajustes.
+
+		If Empty(cTipAjst)
+			cMsg += STR0042 + Chr(13) + Chr(10) //"- Ajuste de Crédito/Débito é obrigatorio."
+			lOk := .F.
+		EndIf
+		If Empty(AllTrim(cCodAju))
+			cMsg += STR0043 + Chr(13) + Chr(10) //"- Codigo do Ajuste é obrigatorio."
+			lOk := .F.
+		EndIf
+		If Empty(dDtRef)
+			cMsg += STR0044 + Chr(13) + Chr(10) //"- Data de Referencia é obrigatoria."
+			lOk := .F.
+		EndIf
+		If (nRefYM < nDeYM) .Or. (nRefYM > nAteYM)
+			cMsg += STR0045 + Chr(13) + Chr(10) //"- Data de Referencia precisa estar dentro do periodo de seleção dos documentos."
+			lOk := .F.
+		EndIf
+		If Empty(AllTrim(cCodCon))
+			cMsg += STR0046 + Chr(13) + Chr(10) //"- Codigo da Contribuicao é obrigatorio."
+			lOk := .F.
+		EndIf
+		If Empty(AllTrim(cCtaCont))
+			cMsg += STR0047 + Chr(13) + Chr(10) //"- Codigo da Conta Contabil é obrigatorio."
+			lOk := .F.
+		EndIf
+
+		If !lOk
+			MsgAlert(cMsg, STR0030) // "Campos Obrigatorios"
+		EndIf
+	EndIf
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MontaPreview
+Totatiza valores da função Step2SelDoc para apresentar na fase Step3Preview
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oTmpDocsSFT, object, Tabela temporária com os documentos SFT selecionados
+@param oJsTotStep3, object, Objeto para armazenar totais e informações a serem exibidos no preview da Etapa 3
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function MontaPreview(oTmpDocsSFT, oJsTotStep3)
+
+	Local cAlias    := "" as character
+	Local cQuery    := "" as character
+	Local oSqlQry   := Nil as object
+
+	oJsTotStep3["cDescAcao"]  := fTipoDeAcao(c042Acao)
+	oJsTotStep3["cDescTipAj"] := fTipoAjuste(cTipoAju)
+	oJsTotStep3["c042TpNfs"]  := f042TpNfs(c042TpNfs)
+	oJsTotStep3["nTotPIS"]    := 0
+	oJsTotStep3["nTotCOF"]    := 0
+	oJsTotStep3["nNFsDist"]   := 0
+	oJsTotStep3["nLinhas"]    := 0
+
+	If c042Acao == "1" .And. ValType(oTmpDocsSFT) == "O"
+
+		cQuery := "SELECT SUM(QTD_ITEM) QTD_ITEM, COUNT(QTD_ITEM) QTD_NF "
+		cQuery += " FROM ( SELECT COUNT(FT_ITEM) QTD_ITEM "
+		cQuery += " FROM ? "
+		cQuery += " WHERE OK = ? "
+		cQuery += " GROUP BY FT_FILIAL, FT_SERIE, FT_NFISCAL "
+		cQuery += " ) TRB "
+
+		cQuery := ChangeQuery(cQuery)
+		oSqlQry := FwExecStatement():New(cQuery)
+
+		// SetUnsafe é necessário para o nome da tabela temporária (não há alternativa via bind parameter).
+		// O nome é gerado internamente pelo sistema (GetRealName), não vem de entrada do usuário.
+		oSqlQry:SetUnsafe(1, oTmpDocsSFT:GetRealName())
+		oSqlQry:SetString(2, "1")
+
+		cAlias := oSqlQry:OpenAlias()
+
+		If (cAlias)->(!EOF())
+
+			oJsTotStep3["nLinhas"]  := (cAlias)->QTD_ITEM
+			oJsTotStep3["nNFsDist"] := (cAlias)->QTD_NF
+
+		EndIf
+
+	ElseIf c042Acao == "2"
+
+		cQuery := "SELECT "
+		cQuery += "	SUM(CASE WHEN CF5_PISCOF = '0' THEN VLR_VALAJU ELSE 0 END) VALPIS, "
+		cQuery += "	SUM(CASE WHEN CF5_PISCOF = '1' THEN VLR_VALAJU ELSE 0 END) VALCOF, "
+		cQuery += "	SUM(QTD_ITEM) QTD_ITEM, "
+		cQuery += "	COUNT(DISTINCT CF5_DOCNF) QTD_NF "
+		cQuery += "	FROM (SELECT "
+		cQuery += "	CF5_FILIAL, CF5_FILDOC, CF5_SERDOC, CF5_DOCNF, CF5_CLIFOR, CF5_LOJA, CF5_PISCOF, SUM(CF5_VALAJU) VLR_VALAJU, COUNT(CF5_LOJA) QTD_ITEM "
+		cQuery += "	FROM ? "
+		cQuery += "	WHERE OK = ? "
+		cQuery += "	GROUP BY CF5_FILIAL, CF5_FILDOC, CF5_SERDOC, CF5_DOCNF, CF5_CLIFOR, CF5_LOJA, CF5_PISCOF "
+		cQuery += "	) TRB"
+
+		cQuery := ChangeQuery(cQuery)
+		oSqlQry := FwExecStatement():New(cQuery)
+		
+		// SetUnsafe é necessário para o nome da tabela temporária (não há alternativa via bind parameter).
+		// O nome é gerado internamente pelo sistema (GetRealName), não vem de entrada do usuário.
+		oSqlQry:SetUnsafe(1, oTmpDocsCF5:GetRealName())
+		oSqlQry:SetString(2, "1")
+
+		cAlias := oSqlQry:OpenAlias()
+
+		If (cAlias)->(!EOF())
+
+			oJsTotStep3["nTotPIS"]  := (cAlias)->VALPIS
+			oJsTotStep3["nTotCOF"]  := (cAlias)->VALCOF
+			oJsTotStep3["nLinhas"]  := (cAlias)->QTD_ITEM
+			oJsTotStep3["nNFsDist"] := (cAlias)->QTD_NF
+
+		EndIf
+	EndIf
+
+	If oSqlQry <> Nil
+		oSqlQry:Destroy()
+		oSqlQry := Nil
+	EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ValidStep2
+Verifica se o oMkDocs possui ao menos um documento selecionado no grid para prosseguir para o preview.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 24/04/2026
+@param oMkDocs, object, FwFormBrowse da seleção de documentos SFT
+@return logical, .T. se ao menos um documento está marcado
+/*/
+//-------------------------------------------------------------------
+Static Function ValidStep2()
+
+	Local lOk    := .T. as logical
+	Local cAlias := "" as character
+	Local cMsg   := "" as character
+
+	If ValType(oMkDocs) == "O" .And. cMarcarDoc == "1"
+		lOk := .F.
+		cAlias := oMkDocs:cAlias
+		(cAlias)->(DbGoTop())
+		While (cAlias)->(!EOF())
+			If (cAlias)->OK == 1
+				lOk := .T.
+				Exit
+			EndIf
+			(cAlias)->(DbSkip())
+		EndDo
+		(cAlias)->(DbGoTop())
+		oMkDocs:Refresh(,.T.) // Necessário duplo Refresh por comportamento do FwFormBrowse com DataTables, para atualizar corretamente os checkboxes de marcação dos documentos.
+		oMkDocs:Refresh(,.T.)
+
+		If !lOk
+			cMsg := STR0048 + Chr(13) + Chr(10) //"- Selecione ao menos um documento para prosseguir."
+		EndIf
+
+	ElseIf cMarcarDoc == "2"
+		If c042Acao == "1"
+			cAlias := oTmpDocsSFT:GetAlias()
+		ElseIf c042Acao == "2"
+			cAlias := oTmpDocsCF5:GetAlias()
+		EndIf
+		lOk := (cAlias)->(!EOF())
+
+		If !lOk
+			cMsg := STR0049 + Chr(13) + Chr(10) //"- Não existem documentos para os filtros informados na etapa 1 ."
+		EndIf
+	EndIf
+
+	If !lOk
+		MsgAlert(cMsg, STR0050) // "Selecao Obrigatoria"
+	EndIf
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Step3Preview
+Monta a tela da Etapa 3: totalizacao e detalhes da operacao planejada.
+Exibe quantidade de documentos fiscais distintos, linhas selecionadas,
+totais de PIS e COFINS, e o resumo da operacao (acao, tipo de ajuste,
+periodo e filiais).
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oPanel, object, Painel do step
+@param oJsTotStep3, object, Totais da Etapa 3
+@return Nil
+*/
+//-------------------------------------------------------------------
+Static Function Step3Preview(oPanel, oJsTotStep3)
+
+	Local oLayer     := FWLayer():New() as object
+	Local oPanTit    := NIL as object
+	Local oPanTot    := NIL as object
+	Local oPanDet    := NIL as object
+
+	Local oFontTit   := TFont():New('Arial',, 22,,.T.,,,,,.F.,.F.) as object
+	Local oFontDad   := TFont():New('Arial',, 21,,.F.,,,,,.F.,.F.) as object
+
+	oLayer:Init(oPanel, .F.)
+	oLayer:AddLine('LP1',  8, .F.)
+	oLayer:AddLine('LP2', 46, .F.)
+	oLayer:AddLine('LP3', 46, .F.)
+	oPanTit := oLayer:getLinePanel('LP1')
+	oPanTot := oLayer:getLinePanel('LP2')
+	oPanDet := oLayer:getLinePanel('LP3')
+
+	TSay():New(5, 5, {||STR0051}, oPanTit,, oFontWiz,,,,.T.,,,(oPanTit:nWidth / 2) - 10, (oPanTit:nHeight / 2) - 10) //"Resumo da Selecao de Documentos"
+
+	// Seção: Totalizacao
+	TSay():New( 5,  5, {||STR0052}, oPanTot,, oFontTit,,,,.T.,,, 400, 22) //"Totalizacao"
+	TSay():New(32,  5, {||STR0053 + cValToChar(oJsTotStep3["nNFsDist"])}, oPanTot,, oFontDad,,,,.T.,,, 400, 18) //"  Documentos/Grupos : "
+	TSay():New(54,  5, {||STR0054 + cValToChar(oJsTotStep3["nLinhas"])}, oPanTot,, oFontDad,,,,.T.,,, 400, 18) //"  Linhas Selecionadas : "
+	TSay():New(76,  5, {||ShowInfoStep3(1)}, oPanTot,, oFontDad,,,,.T.,,, 400, 18) //"  Total PIS : "
+	TSay():New(98,  5, {||ShowInfoStep3(2)}, oPanTot,, oFontDad,,,,.T.,,, 400, 18) //"  Total COFINS : "
+	// Seção: Detalhes da Operacao
+	TSay():New( 5,  5, {||STR0057}, oPanDet,, oFontTit,,,,.T.,,, 400, 22) //"Detalhes da Operacao"
+	TSay():New(32,  5, {||STR0058 + oJsTotStep3["cDescAcao"]}, oPanDet,, oFontDad,,,,.T.,,, 400, 18) //"  Tipo de Acao : "
+	TSay():New(54,  5, {||STR0059 + oJsTotStep3["cDescTipAj"]}, oPanDet,, oFontDad,,,,.T.,,, 400, 18) //"  Tipo de Ajuste : "
+	TSay():New(76,  5, {||STR0060 + DToC(dDataDe) + " a " + DToC(dDataAte)}, oPanDet,, oFontDad,,,,.T.,,, 500, 18) //"  Periodo de Referencia : "
+	TSay():New(98,  5, {||STR0061 + cValToChar(Len(aFiliais)) + STR0062}, oPanDet,, oFontDad,,,,.T.,,, 400, 18) //"  Filiais Selecionadas : " " filial(is)"
+
+	oFontTit := NIL
+	oFontDad := NIL
+
+Return
+
+/*/{Protheus.doc} ShowInfoStep3
+	(Controle de exibição das descrições.)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 08/06/2026
+	@version 12.1.2510
+	@param nOperation, numeric, Operation number
+	@return cRet, character, Return value
+/*/
+Static Function ShowInfoStep3(nOperation)
+	Local cRet := "" as character
+	If !fIncluiAju()
+		If  nOperation == 1
+			cRet := STR0055 + Transform(oJsTotStep3["nTotPIS"], "@E 999,999,999.99") //"  Total PIS : "
+		ElseIf nOperation == 2
+			cRet := STR0056 + Transform(oJsTotStep3["nTotCOF"], "@E 999,999,999.99") //"  Total COFINS : "
+		EndIf
+	EndIf
+Return cRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Step5Confirm
+Monta a tela da Etapa 5: confirmação e resumo do processamento.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oPanel, object, Painel do step
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function Step5Confirm(oPanel)
+
+	Local oLayer    := FWLayer():New() as object
+	Local oPanInfo  := NIL as object
+	Local oFontRes  := TFont():New('Arial',, 21,,.F.,,,,,.F.,.F.) as object
+
+	oLayer:Init(oPanel, .F.)
+	oLayer:AddLine('LC1', 100, .F.)
+	oPanInfo := oLayer:getLinePanel('LC1')
+
+	TSay():New( 5,  5, {||STR0063}, oPanInfo,, oFontWiz,,,,.T.,,, 300, 22) //"Resumo do processamento:"
+	TSay():New(32,  5, {||STR0064 + oJsTotStep3["cDescAcao"]}, oPanInfo,, oFontRes,,,,.T.,,, 300, 18) //"  Acao : "
+	TSay():New(54,  5, {||STR0065 + oJsTotStep3["cDescTipAj"]}, oPanInfo,, oFontRes,,,,.T.,,, 300, 18) //"  Tipo de Ajuste : "
+	TSay():New(76,  5, {||STR0066 + oJsTotStep3["c042TpNfs"]}, oPanInfo,, oFontRes,,,,.T.,,, 300, 18) //"  Tipo Movimento : "
+	TSay():New(98,  5, {|| ShowInfoStep5(1) }, oPanInfo,, oFontRes,,,,.T.,,, 300, 18)
+	TSay():New(120, 5, {|| ShowInfoStep5(2) }, oPanInfo,, oFontRes,,,,.T.,,, 300, 18)
+	TSay():New(192, 5, {|| ShowInfoStep5(3) }, oPanInfo,, oFontWiz,,,,.T.,,, 300, 22)
+	TSay():New(142, 5, {||STR0069 + DToC(dDataDe) + " a " + DToC(dDataAte)}, oPanInfo,, oFontRes,,,,.T.,,, 350, 18) //"  Periodo : "
+	TSay():New(164, 5, {||STR0070 + AllTrim(cFilSelDesc)}, oPanInfo,, oFontRes,,,,.T.,,, 400, 18) //"  Filiais : "
+	TSay():New(222, 5, {||STR0073}, oPanInfo,, oFontWiz,,,,.T.,,, 300, 18) //"Confirme para iniciar o processamento."
+
+	oFontRes := NIL
+
+Return
+
+/*/{Protheus.doc} ShowInfoStep5
+	(Controle de exibição das descrições.)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 15/05/2026
+	@version 12.1.2510
+	@param nOperation, numeric, Operation number
+	@return cRet, character, Return value
+/*/
+Static Function ShowInfoStep5(nOperation)
+	Local cRet := "" as character
+	If fIncluiAju()
+		If  nOperation == 1
+			cRet := STR0067 + fTpCodAju(cCodAju) //"  Codigo Ajuste : "
+		ElseIf nOperation == 2
+			cRet := STR0068 + DToC(dDtRef) //"  Data Referencia : "
+		ElseIf nOperation == 3
+			cRet := STR0071 + cValToChar(oJsTotStep3["nLinhas"]) //"  Registros : "
+		EndIf
+	Else
+		If nOperation == 3
+			cRet := STR0072 + cValToChar(oJsTotStep3["nLinhas"]) //"  Registros de Ajustes PIS/COFINS a excluir : "
+		EndIf
+	EndIf
+Return cRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ProcAjustCF5
+	Realiza o processamento em lote dos ajustes CF5: inclusão ou exclusão de registros.
+
+	@type Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 17/04/2026
+	@return Nil
+
+	@obs Chave de duplicidade (inclusão): xFilial("CF5") + CF5_CODIGO + CF5_INDAJU + CF5_PISCOF + CF5_CODAJU + DTOS(CF5_DTREF) + CF5_CODCRE
+/*/
+//-------------------------------------------------------------------
+Static Function ProcAjustCF5()
+	If c042Acao == "1"
+		IncluiAjustCF5(.T.)
+	ElseIf c042Acao == "2"
+		ExcluiAjustesCF5()
+	EndIf
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ExcluiAjustesCF5
+	Percorre a tabela temporária de registros CF5 marcados e exclui cada
+	registro via ISAM (DbGoTo + RecLock + DbDelete + MsUnlock).
+
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 13/05/2026
+	@version 12.1.2510
+	@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function ExcluiAjustesCF5()
+	Local aArea  := GetArea() as array
+	Local cAlias   := oTmpDocsCF5:GetAlias() as character
+	Local nQtdExcl := 0 as numeric
+
+	DbSelectArea("CF5")
+	(cAlias)->(DbGoTop())
+	While (cAlias)->(!EOF())
+		If (cAlias)->OK == 1
+			CF5->(DbGoTo( (cAlias)->CF5RECNO ))
+			If !CF5->(Eof())
+				RecLock("CF5", .F.)
+				CF5->(DbDelete())
+				CF5->(MsUnlock())
+				nQtdExcl += 1
+			EndIf
+		EndIf
+		(cAlias)->(DbSkip())
+	EndDo
+
+	MsgInfo(STR0074 + Chr(13) + Chr(10) + Chr(13) + Chr(10) + /* "Processamento concluido!" */ ;
+		STR0075 + cValToChar(nQtdExcl) + Chr(13) + Chr(10) + Chr(13) + Chr(10) + /* "Registro(s) excluido(s): " */ ;
+		STR0076 + cTempoProc + Chr(13) + Chr(10) + /* "Inicio: " */ ;
+		STR0077 + DToC(Date()) + "-" + Time() + Chr(13) + Chr(10), STR0078) /* "Fim: "  "Ajustes de PIS/COFINS" */
+
+	RestArea(aArea)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} IncluiAjustCF5
+Realiza o processamento em lote dos ajustes CF5: inclusão de registros.
+
+@type Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@return Nil
+/*/
+Function IncluiAjustCF5(lShowDialog)
+	Local aArea        := GetArea() as array
+	Local aAreaSM0     := SM0->(GetArea())
+	Local nQtdAjustes  := 0 as numeric
+	Local oBulkCF5     := NIL as object
+	Local aFildCF5     := fFieldsCF5() as array
+	Local oJLctoNF     := NIL as object
+	Local cChvDoc      := "" as character
+	Local nItensDoc    := 0 as numeric
+	Local cMsg	       := "" as character
+	Local cFilBkp      := cFilant as character
+	Local oQryAddit    := Nil as object
+	Local oJAdditional := Nil as object
+	Local aInSqlCK3CONTEU := {} as array
+	Local cCstPISCOF   := "" as character
+	Local cAlias       := "" as character
+	Local cTpDesc      := Iif(cTipoAju == "0", "REDUCAO", "ACRESCIMO")
+
+	Default lShowDialog := .F.
+
+	fTipoAjuste(cTipoAju, @aInSqlCK3CONTEU)
+
+	oBulkCF5 := FwBulk():New(RetSqlName("CF5"),900)
+	oBulkCF5:setFields(aFildCF5)
+
+	oJLctoNF := JsonObject():New()
+
+	cAlias := oTmpDocsSFT:GetAlias() // Tabela temporária utilizada para processar os ajustes, com os documentos selecionados
+	(cAlias)->(DbGoTop())
+	If (cAlias)->(!EOF()) .And. c042Acao == "1"
+		DbSelectArea("CF5")
+		CF5->(DbSetOrder(1))
+		While (cAlias)->(!EOF()) // Laço com a ordenação original do browse.
+			If (cAlias)->OK == 1 // Item marcado
+
+				If (cAlias)->FT_FILIAL <> cFilant
+					cFilant := (cAlias)->FT_FILIAL // Atualiza a filial para correto funcionamento das querys.
+				EndIf
+
+				AdditionalData((cAlias)->FT_IDTRIB, @oQryAddit, @oJAdditional, aInSqlCK3CONTEU)
+				cCstPISCOF := ""
+				If oJAdditional:HasProperty(aInSqlCK3CONTEU[1])
+					cCstPISCOF += oJAdditional[aInSqlCK3CONTEU[1]]["CST"]
+				EndIf
+				If oJAdditional:HasProperty(aInSqlCK3CONTEU[2])
+					cCstPISCOF += oJAdditional[aInSqlCK3CONTEU[2]]["CST"]
+				EndIf
+
+				If nItensDoc > 0 .And. cChvDoc <> (cAlias)->(FT_FILIAL+FT_TIPOMOV+FT_SERIE+FT_NFISCAL+FT_CLIEFOR+FT_LOJA)+cCstPISCOF
+					fAddBulkCF5(@oBulkCF5, @oJLctoNF,@cMsg, @nQtdAjustes)
+					nItensDoc := 0
+					cChvDoc := (cAlias)->(FT_FILIAL+FT_TIPOMOV+FT_SERIE+FT_NFISCAL+FT_CLIEFOR+FT_LOJA)+cCstPISCOF
+				EndIf
+
+				nItensDoc += 1
+				If nItensDoc == 1 // Garante que o ajuste seja lançado apenas uma vez por documento, mesmo que haja mais de um item selecionado.
+					oJLctoNF["CF5_FILIAL"]    := xFilial("CF5") // Utilizar a filial do CF5 para evitar problemas de duplicidade caso haja mais de um documento da mesma chave (filial+documento) selecionado.
+					oJLctoNF["CF5_INDAJU"]    := cTipoAju
+					oJLctoNF["CF5_PIS"]       := "0" // 0 = Ajuste de PIS 1 = Ajuste de COFINS
+					oJLctoNF["CF5_COF"]       := "1" // 0 = Ajuste de PIS 1 = Ajuste de COFINS
+					oJLctoNF["CF5_VALAJUPIS"] := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[1]), oJAdditional[aInSqlCK3CONTEU[1]]["VALOR"], 0)
+					oJLctoNF["CF5_VALAJUCOF"] := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[2]), oJAdditional[aInSqlCK3CONTEU[2]]["VALOR"], 0)
+					oJLctoNF["CF5_CODAJU"]    := cCodAju
+					oJLctoNF["CF5_CHVDFE"]    := (cAlias)->FT_CHVNFE
+					oJLctoNF["CF5_DESAJU"]    := "AJUSTE DE " + cTpDesc + " LC 224/25 - REF. NF " + AllTrim((cAlias)->FT_NFISCAL) + "-" + AllTrim((cAlias)->FT_SERIE)
+					oJLctoNF["CF5_DTREF"]     := dDtRef
+					oJLctoNF["CF5_CODCRE"]    := cCodCre
+					oJLctoNF["CF5_CODIGOPIS"] := SXECF5CODI()
+					oJLctoNF["CF5_CODIGOCOF"] := SXECF5CODI()
+					oJLctoNF["CF5_TIPATV"]    := cTipAtv
+					oJLctoNF["CF5_CSTPIS"]    := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[1]), oJAdditional[aInSqlCK3CONTEU[1]]["CST"], '')
+					oJLctoNF["CF5_CSTCOF"]    := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[2]), oJAdditional[aInSqlCK3CONTEU[2]]["CST"], '')
+					oJLctoNF["CF5_BASEPIS"]   := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[1]), oJAdditional[aInSqlCK3CONTEU[1]]["BASE"], 0)
+					oJLctoNF["CF5_BASECOF"]   := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[2]), oJAdditional[aInSqlCK3CONTEU[2]]["BASE"], 0)
+					oJLctoNF["CF5_ALQPIS"] 	  := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[1]), oJAdditional[aInSqlCK3CONTEU[1]]["ALIQ"], 0)
+					oJLctoNF["CF5_ALQCOF"] 	  := Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[2]), oJAdditional[aInSqlCK3CONTEU[2]]["ALIQ"], 0)
+					oJLctoNF["CF5_CONTA"]     := cCtaCont
+					oJLctoNF["CF5_CODCON"]    := cCodCon
+					oJLctoNF["CF5_TPAJST"]    := cTipAjst
+					oJLctoNF["CF5_FILDOC"]    := (cAlias)->FT_FILIAL
+					oJLctoNF["CF5_TIPOMO"]    := (cAlias)->FT_TIPOMOV
+					oJLctoNF["CF5_SERDOC"]    := (cAlias)->FT_SERIE
+					oJLctoNF["CF5_DOCNF"]     := (cAlias)->FT_NFISCAL
+					oJLctoNF["CF5_CLIFOR"]    := (cAlias)->FT_CLIEFOR
+					oJLctoNF["CF5_LOJA"]      := (cAlias)->FT_LOJA
+				Else
+					oJLctoNF["CF5_VALAJUPIS"] += Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[1]), oJAdditional[aInSqlCK3CONTEU[1]]["VALOR"], 0)
+					oJLctoNF["CF5_VALAJUCOF"] += Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[2]), oJAdditional[aInSqlCK3CONTEU[2]]["VALOR"], 0)
+					oJLctoNF["CF5_BASEPIS"]   += Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[1]), oJAdditional[aInSqlCK3CONTEU[1]]["BASE"], 0)
+					oJLctoNF["CF5_BASECOF"]   += Iif(oJAdditional:HasProperty(aInSqlCK3CONTEU[2]), oJAdditional[aInSqlCK3CONTEU[2]]["BASE"], 0)
+				EndIf
+
+				cChvDoc := (cAlias)->(FT_FILIAL+FT_TIPOMOV+FT_SERIE+FT_NFISCAL+FT_CLIEFOR+FT_LOJA)+cCstPISCOF
+
+			EndIf
+
+			(cAlias)->(DbSkip())
+
+		EndDo
+
+		If nItensDoc > 0 // Se houver registros no buffer do ajuste que ainda não foram inseridos, insere antes de finalizar o processamento.
+			fAddBulkCF5(@oBulkCF5, @oJLctoNF,@cMsg, @nQtdAjustes) // Adiciona o último registro do loop, caso haja, e executa o Close do Bulk para finalizar a operação.
+		EndIf
+
+		oBulkCF5:Close() //Se os dados estiverem corretos, faz o Close do FwBulk para inserir possíveis registros não inseridos e finalizar o bulk.
+		cMsg += Alltrim(oBulkCF5:getError())
+		FwLogMsg("INFO", , "totvs.protheus.backoffice.fiscal.fisa001.adjustment", "adjustment", "", "Ocorrencia Bulk", cMsg, , , )
+
+		If oQryAddit <> Nil
+			oQryAddit:Destroy()
+			oQryAddit := Nil
+		EndIf
+		If oJAdditional <> Nil
+			FreeObj(oJAdditional)
+			oJAdditional := Nil
+		EndIf
+	EndIf
+
+	//Limpa objeto do FwBulk para reutilizar com outra tabela.
+	oBulkCF5:Destroy()
+	oBulkCF5 := Nil
+	FreeObj(oJLctoNF)
+	oJLctoNF := Nil
+
+	RestArea(aArea)
+	cFilant := cFilBkp
+	RestArea(aAreaSM0)
+
+	If lShowDialog
+		MsgInfo(STR0074 + Chr(13) + Chr(10) + Chr(13) + Chr(10) + /* "Processamento concluido!" */ ;
+			STR0080 + cValToChar(nQtdAjustes) + Chr(13) + Chr(10) + Chr(13) + Chr(10) + /* "Registros processados: " */ ;
+			STR0076 + cTempoProc + Chr(13) + Chr(10) + /* "Inicio: " */ ;
+			STR0077 + DToC(Date()) + "-" + Time() + Chr(13) + Chr(10) + Chr(13) + Chr(10) + /* "Fim: " */ ;
+			STR0079 + IIF(Empty(cMsg), "0", cMsg), STR0078) //"Erros: " "Ajustes de PIS/COFINS"
+	EndIf
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AddStruct
+Adiciona posição ao array de estrutura MsmGet com valores padrão.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param aEstruct, array, Array passado por referência
+@return numeric, nPosicao, Índice da posição adicionada
+/*/
+//-------------------------------------------------------------------
+Static Function AddStruct(aEstruct)
+
+	Local nPosicao := 0 as numeric
+
+	DEFAULT aEstruct := {}
+
+	Aadd(aEstruct,{})
+	nPosicao := Len(aEstruct)
+
+	Aadd(aEstruct[nPosicao],'')			// 01 - Titulo
+	Aadd(aEstruct[nPosicao],'')			// 02 - Campo
+	Aadd(aEstruct[nPosicao],'')			// 03 - Tipo
+	Aadd(aEstruct[nPosicao],0)			// 04 - Tamanho
+	Aadd(aEstruct[nPosicao],0)			// 05 - Decimal
+	Aadd(aEstruct[nPosicao],'')			// 06 - Picture
+	Aadd(aEstruct[nPosicao],{|| .T. })	// 07 - Valid
+	Aadd(aEstruct[nPosicao],.F.)		// 08 - Obrigat
+	Aadd(aEstruct[nPosicao],1)			// 09 - Nivel
+	Aadd(aEstruct[nPosicao],'')			// 10 - Inicializador Padrão
+	Aadd(aEstruct[nPosicao],'')			// 11 - F3
+	Aadd(aEstruct[nPosicao],{|| })		// 12 - When
+	Aadd(aEstruct[nPosicao],.F.)		// 13 - Visual
+	Aadd(aEstruct[nPosicao],.F.)		// 14 - Chave
+	Aadd(aEstruct[nPosicao],'')			// 15 - Box - Opção do combo
+	Aadd(aEstruct[nPosicao],0)			// 16 - Folder
+	Aadd(aEstruct[nPosicao],.F.)		// 17 - Não Alterável
+	Aadd(aEstruct[nPosicao],'')			// 18 - PictVar
+	Aadd(aEstruct[nPosicao],'N')		// 19 - Gatilho
+
+Return nPosicao
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HeaderMark
+Cria colunas FWBrwColumn para browse com marcação.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param aCampos, array, Estrutura dos campos [1]Nome [2]Titulo [3]Tipo [4]Tam [5]Pict [6]Align [7]CodeBlock
+@param lQuery, logical, .T.=dados via query, .F.=dados via array
+@return array, aColumns
+/*/
+//-------------------------------------------------------------------
+Static Function HeaderMark(aCampos, lQuery)
+
+	Local oColuna  := NIL as object
+	Local aColumns := {} as array
+	Local nX       := 0 as numeric
+
+	DEFAULT lQuery := .T.
+
+	For nX := 1 to Len(aCampos)
+		oColuna := FWBrwColumn():New()
+		oColuna:SetEdit(.F.)
+		oColuna:SetTitle(aCampos[nX][2])
+		oColuna:SetType(aCampos[nX][3])
+		oColuna:SetSize(aCampos[nX][4])
+		oColuna:SetPicture(aCampos[nX][5])
+		oColuna:SetAlign(aCampos[nX][6])
+		If lQuery
+			If aCampos[nX][3] == "D"
+				oColuna:SetData(&('{||StoD('+aCampos[nX][1]+')}'))
+			Else
+				oColuna:SetData(&('{||'+aCampos[nX][1]+'}'))
+			EndIf
+		Else
+			oColuna:SetData(&('{||'+aCampos[nX][1]+'}'))
+		EndIf
+		Aadd(aColumns, oColuna)
+	Next nX
+
+Return aColumns
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SetMarkAll
+Marca ou desmarca em massa todos os registros do alias.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oObjMark, object, FWMarkBrowse
+@param lMarkAll, logical, .T.=marcar, .F.=desmarcar
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function SetMarkAll(oObjMark, lMarkAll)
+
+	Local cMarkABB := '' as character
+
+	cMarkABB := oObjMark:cAlias
+
+	(cMarkABB)->(DbGoTop())
+	While (cMarkABB)->(!EOF())
+		(cMarkABB)->OK := IIf(lMarkAll, 1, 0)
+		(cMarkABB)->(DbSkip())
+	EndDo
+
+	(cMarkABB)->(DbGoTop())
+
+	lMarkAll := !lMarkAll
+	oObjMark:Refresh(,.T.)
+	oObjMark:Refresh(,.T.)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AddMarkBro
+Cria FwFormBrowse com marcação a partir de query SQL ou tabela temporária.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 17/04/2026
+@param oPanel, object, Painel
+@param lAllMark, logical, Controle por referência
+@param aCampos, array, Estrutura dos campos
+@param aColumns, array, Colunas configuradas
+@param cQuery, character, Query SQL (utilizado quando lDataTable=.F.)
+@param cAliasTab, character, Alias da tabela temporária ou alias de query
+@param lDataTable, logical, .T.=dados via tabela temporária, .F.=dados via query SQL
+@return oMark, object, FwFormBrowse por referência
+/*/
+//-------------------------------------------------------------------
+Static Function AddMarkBro(oPanel, lAllMark, aCampos, aColumns, cQuery, cAliasTab, lDataTable)
+
+	Local bMark    := NIL as codeblock
+	Local bMarkOne := NIL as codeblock
+	Local bMarkAll := NIL as codeblock
+	Local oMark	   := NIL as object
+
+	DEFAULT lDataTable := .F.
+
+	bMark := {||IIf((oMark:cAlias)->OK == 1, "LBOK", "LBNO")}
+
+	If lDataTable
+		bMarkOne := {|| RecLock(oMark:cAlias, .F.), ;
+			IIf((oMark:cAlias)->OK == 0, (oMark:cAlias)->OK := 1, (oMark:cAlias)->OK := 0), ;
+			MsUnlock() }
+		bMarkAll := {|| FwMsgRun(NIL, {|| SetMarkAllTab(@oMark, @lAllMark)},STR0081)} //"Processando..."
+	Else
+		bMarkOne := {||IIf((oMark:cAlias)->OK == 0, (oMark:cAlias)->OK := 1, (oMark:cAlias)->OK := 0)}
+		bMarkAll := {||SetMarkAll(@oMark, @lAllMark)}
+	EndIf
+
+	oMark := FwFormBrowse():New()
+	oMark:AddMarkColumns(bMark, bMarkOne, bMarkAll)
+
+	If lDataTable
+		oMark:SetDataTable(.T.)
+	Else
+		oMark:SetDataQuery(.T.)
+		oMark:SetQuery(cQuery)
+	EndIf
+
+	oMark:SetAlias(cAliasTab)
+	oMark:SetOwner(oPanel)
+	oMark:SetColumns(aColumns)
+	oMark:SetDoubleClick(bMarkOne)
+	oMark:DisableDetails()
+	oMark:DisableReport()
+	oMark:DisableConfig()
+	oMark:Activate()
+	oMark:GoTop(.T.)
+	oMark:SetFocus()
+
+Return oMark
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTipoDeAcao
+Retorna descrição do tipo de ação selecionada (inclusão ou exclusão) para exibição em preview e mensagens.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 23/04/2026
+
+@return cRet Caracter Tipo(s) de ação selecionada(s) formatado para exibição
+/*/
+//-------------------------------------------------------------------
+Static Function fTipoDeAcao(cOpcao)
+	Local cRet := "1=Incluir Ajuste;2=Excluir Ajuste"
+
+	Default cOpcao := ""
+
+	If !Empty(cOpcao)
+		If cOpcao == "1"
+			cRet := "1=Incluir Ajuste"
+		ElseIf cOpcao == "2"
+			cRet := "2=Excluir Ajuste"
+		EndIf
+	EndIf
+
+Return cRet
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fTipoAjuste
+Retorna descrição do tipo de ajuste selecionada (redução ou acréscimo) para exibição em preview e mensagens.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 23/04/2026
+
+@return cRet Caracter Tipo(s) de ajuste(s) selecionada(s) formatado para exibição
+/*/
+//-------------------------------------------------------------------
+Static Function fTipoAjuste(cOpcao, aInSqlAjuste)
+	Local cRet := "0=Redução PIS/COFINS;1=Acrescimo PIS/COFINS"
+
+	Default cOpcao := ""
+
+	If !Empty(cOpcao)
+		If cOpcao == "0"
+			cRet := "0=Redução PIS/COFINS"
+			aInSqlAjuste := {'ajuste de redução PIS','ajuste de redução COFINS'} // Não Alterar esta ordem do array, pois é utilizada para buscar as informações adicionais na query.
+		ElseIf cOpcao == "1"
+			cRet := "1=Acrescimo PIS/COFINS"
+			aInSqlAjuste := {'ajuste de acréscimo PIS','ajuste de acréscimo COFINS'} // Não Alterar esta ordem do array, pois é utilizada para buscar as informações adicionais na query.
+		EndIf
+	EndIf
+
+Return cRet
+
+/*/{Protheus.doc} f042TpNfs()
+	(Retorna descrição do tipo de NF selecionada (entrada ou saída) para exibição em preview e mensagens)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 25/04/2026
+	@version 12.1.2510
+	@param cOpcao, character, Opção selecionada (1=Entrada, 2=Saída)
+	@return cRet, character, Descrição do tipo de NF formatado para exibição
+/*/
+Static Function f042TpNfs(cOpcao)
+	Local cRet := "1=Nfs. Entrada;2=Nfs. Saida"
+
+	Default cOpcao := ""
+
+	If !Empty(cOpcao)
+		If cOpcao == "1"
+			cRet := "1=Nfs. Entrada"
+		ElseIf cOpcao == "2"
+			cRet := "2=Nfs. Saida"
+		EndIf
+	EndIf
+
+Return cRet
+
+
+ /*/{Protheus.doc} QuerySFT
+	(Monta a query de seleção dos documentos fiscais com base nos filtros selecionados)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 24/04/2026
+	@version 12.1.2510
+	@param cFilMark, character, Código da filial selecionada para filtro da query
+	@param dDataDe, date, Data de início para filtro da query
+	@param dDataAte, date, Data de fim para filtro da query
+	@param c042TpNfs, character, Tipo de NF para filtro da query (1=Entrada, 2=Saída)
+	@param oSqlQryDocs, object, Objeto FWQuery para execução da query (pode ser passado por referência ou como Nil para retorno da query em string)
+	@return Nil
+/*/
+Static Function QuerySFT(cFilMark, dDataDe, dDataAte, oSqlQryDocs)
+
+	Local cQuery := "" as character
+	Local cTpMov := "E" as character
+	Local aInSqlCK3CONTEU := {} as array
+
+	fTipoAjuste(cTipoAju, @aInSqlCK3CONTEU)
+
+	If c042TpNfs == "2"
+		cTpMov := "S"
+	EndIf
+
+	If oSqlQryDocs == Nil
+		cQuery  := "SELECT 1 OK"
+		cQuery  += ", SFT.FT_FILIAL, SFT.FT_SERIE, SFT.FT_NFISCAL, SFT.FT_EMISSAO, SFT.FT_CLIEFOR "
+		cQuery  += ", SFT.FT_LOJA, SFT.FT_ITEM, SFT.FT_PRODUTO, SB1.B1_DESC "
+		cQuery  += ", SFT.FT_BASEPIS, SFT.FT_BASECOF, SFT.FT_CSTPIS, SFT.FT_CSTCOF "
+		cQuery  += ", SFT.FT_CHVNFE, SFT.FT_TIPOMOV, SFT.FT_VALCONT, SFT.FT_IDTRIB "
+		cQuery  += " FROM " + RetSqlName("SFT") + " SFT "
+		cQuery  += " LEFT JOIN " + RetSqlName("SB1") + " SB1 ON (SB1.B1_FILIAL = ? AND SB1.B1_COD=SFT.FT_PRODUTO AND SB1.D_E_L_E_T_ = ?) " // 1 - 2
+		cQuery  += " WHERE SFT.D_E_L_E_T_ = ? " // 3
+		cQuery  += " AND SFT.FT_FILIAL = ? " // 4
+		cQuery  += " AND SFT.FT_ENTRADA >= ? " // 5
+		cQuery  += " AND SFT.FT_ENTRADA <= ? " // 6
+		cQuery  += " AND SFT.FT_TIPOMOV = ? " // 7
+		cQuery  += " AND SFT.FT_NFISCAL >= ? " // 8
+		cQuery  += " AND SFT.FT_NFISCAL <= ? " // 9
+		cQuery  += " AND SFT.FT_SERIE >= ? " // 10
+		cQuery  += " AND SFT.FT_SERIE <= ? " // 11
+		cQuery  += "  AND EXISTS ( "
+		cQuery  += "              SELECT 1 "
+		cQuery  += "      FROM " + RetSqlName("F2D") + " F2D "
+		cQuery  += "      INNER JOIN " + RetSqlName("F2B") + " F2B "
+		cQuery  += "      ON F2B.F2B_FILIAL = ? " // 12
+		cQuery  += "              AND F2B.F2B_ID     = F2D.F2D_IDCAD "
+		cQuery  += "              AND F2B.D_E_L_E_T_ = ? " // 13
+		cQuery  += "      INNER JOIN " + RetSqlName("CJ3") + " CJ3 "
+		cQuery  += "      ON CJ3.CJ3_FILIAL = ? " // 14
+		cQuery  += "              AND CJ3.CJ3_IDF2D  = F2D.F2D_ID "
+		cQuery  += "              AND CJ3.D_E_L_E_T_ = ? " // 15
+		cQuery  += "      INNER JOIN " + RetSqlName("CK3") + " CK3 "
+		cQuery  += "      ON CK3.CK3_FILIAL = ? " // 16
+		cQuery  += "              AND CK3.CK3_IDCJ2  = CJ3.CJ3_IDRESC "
+		cQuery  += "              AND CK3.CK3_CODIGO = ? " // 17 'AJUPISCOF'
+		cQuery  += "              AND CK3.CK3_CONTEU IN ( ? ) " // 18 - aInSqlCK3CONTEU
+		cQuery  += "              AND CK3.D_E_L_E_T_ = ? " // 19
+		cQuery  += "              WHERE F2D.F2D_FILIAL = ? " // 20
+		cQuery  += "              AND F2D.F2D_IDREL  = SFT.FT_IDTRIB "
+		cQuery  += "              AND F2D.D_E_L_E_T_ = ? " // 21
+		cQuery  += " 			) "
+		cQuery  += " AND NOT EXISTS "
+		cQuery  += " ( "
+		cQuery  += " SELECT 1 "
+		cQuery  += " FROM " + RetSqlName("CF5") + " CF5"
+		cQuery  += " WHERE CF5.D_E_L_E_T_ = ? " // 22
+		cQuery  += " AND CF5.CF5_FILIAL = ? " // 23
+		cQuery  += " AND CF5.CF5_FILDOC = SFT.FT_FILIAL "
+		cQuery  += " AND CF5.CF5_TIPOMO = SFT.FT_TIPOMOV "
+		cQuery  += " AND CF5.CF5_SERDOC = SFT.FT_SERIE "
+		cQuery  += " AND CF5.CF5_DOCNF  = SFT.FT_NFISCAL "
+		cQuery  += " AND CF5.CF5_CLIFOR = SFT.FT_CLIEFOR "
+		cQuery  += " AND CF5.CF5_LOJA   = SFT.FT_LOJA "
+		cQuery  += " ) "
+		cQuery  += " ORDER BY SFT.FT_FILIAL,SFT.FT_TIPOMOV,SFT.FT_SERIE,SFT.FT_NFISCAL,SFT.FT_CLIEFOR,SFT.FT_LOJA,SFT.FT_ITEM,SFT.FT_PRODUTO "
+		cQuery := ChangeQuery(cQuery)
+		oSqlQryDocs := FwExecStatement():New(cQuery)
+	EndIf
+
+	oSqlQryDocs:SetString(1, xFilial("SB1"))
+	oSqlQryDocs:SetString(2, " ")
+	oSqlQryDocs:SetString(3, " ")
+	oSqlQryDocs:SetString(4, cFilMark)
+	oSqlQryDocs:SetDate(5, dDataDe)
+	oSqlQryDocs:SetDate(6, dDataAte)
+	oSqlQryDocs:SetString(7, cTpMov)
+	oSqlQryDocs:SetString(8, cDocDe)
+	oSqlQryDocs:SetString(9, cDocAte)
+	oSqlQryDocs:SetString(10, cSerieDe)
+	oSqlQryDocs:SetString(11, cSerieAte)
+	oSqlQryDocs:SetString(12, xFilial("F2B"))
+	oSqlQryDocs:SetString(13, " ")
+	oSqlQryDocs:SetString(14, xFilial("CJ3"))
+	oSqlQryDocs:SetString(15, " ")
+	oSqlQryDocs:SetString(16, xFilial("CK3"))
+	oSqlQryDocs:SetString(17, "AJUPISCOF")
+	oSqlQryDocs:SetIn(18, aInSqlCK3CONTEU)
+	oSqlQryDocs:SetString(19, " ")
+	oSqlQryDocs:SetString(20, xFilial("F2D"))
+	oSqlQryDocs:SetString(21, " ")
+	oSqlQryDocs:SetString(22, " ")
+	oSqlQryDocs:SetString(23, xFilial("CF5"))
+
+Return
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fQryCF5
+Monta a query de seleção dos registros de ajuste CF5 com base nos filtros
+selecionados, utilizada para popular a tabela temporária de exclusão do
+wizard PIS/COFINS.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 13/05/2026
+@version 12.1.2510
+@param cFilMark, character, Código da filial selecionada para filtro da query
+@param dDataDe, date, Data de início para filtro da query (CF5_DTREF)
+@param dDataAte, date, Data de fim para filtro da query (CF5_DTREF)
+@param oStmt, object, Objeto FwExecStatement para reuso entre filiais (passado por referência)
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function fQryCF5(cFilMark, dDataDe, dDataAte, oStmt)
+
+	Local cQuery := "" as character
+	Local cTpMov := "E" as character
+
+	If c042TpNfs == "2"
+		cTpMov := "S"
+	EndIf
+
+	If oStmt == Nil
+		cQuery  := "SELECT CF5.R_E_C_N_O_ CF5RECNO"
+		cQuery  += ", CF5.CF5_FILIAL, CF5.CF5_FILDOC, CF5.CF5_TIPOMO, CF5.CF5_SERDOC"
+		cQuery  += ", CF5.CF5_DOCNF, CF5.CF5_CLIFOR, CF5.CF5_LOJA"
+		cQuery  += ", CF5.CF5_CODAJU, CF5.CF5_DTREF, CF5.CF5_CODCRE"
+		cQuery  += ", CF5.CF5_CONTA, CF5.CF5_CODCON, CF5.CF5_TIPATV, CF5.CF5_TPAJST"
+		cQuery  += ", CF5.CF5_CODIGO, CF5.CF5_PISCOF"
+		cQuery  += ", CF5.CF5_VALAJU, CF5.CF5_ALQ, CF5.CF5_BASE, CF5.CF5_CST"
+		cQuery  += " FROM " + RetSqlName("CF5") + " CF5"
+		cQuery  += " WHERE CF5.D_E_L_E_T_ = ? "  // 1
+		cQuery  += " AND CF5.CF5_FILIAL = ? "     // 2
+		cQuery  += " AND CF5.CF5_FILDOC = ? "     // 3
+		cQuery  += " AND CF5.CF5_DTREF >= ? "     // 4
+		cQuery  += " AND CF5.CF5_DTREF <= ? "     // 5
+		cQuery  += " AND CF5.CF5_INDAJU = ? "     // 6
+		cQuery  += " AND CF5.CF5_TIPOMO = ? "     // 7
+		cQuery  += " ORDER BY CF5.CF5_FILIAL, CF5.CF5_FILDOC, CF5.CF5_SERDOC, CF5.CF5_DOCNF, CF5.CF5_CLIFOR, CF5.CF5_LOJA, CF5.CF5_PISCOF"
+		cQuery := ChangeQuery(cQuery)
+		oStmt := FwExecStatement():New(cQuery)
+	EndIf
+
+	oStmt:SetString(1, " ")
+	oStmt:SetString(2, xFilial("CF5"))
+	oStmt:SetString(3, cFilMark)
+	oStmt:SetDate(4, dDataDe)
+	oStmt:SetDate(5, dDataAte)
+	oStmt:SetString(6, cTipoAju)
+	oStmt:SetString(7, cTpMov)
+
+Return
+
+
+/*/{Protheus.doc} fEstruturaTmpSFT
+Define a estrutura de campos da tabela temporária de documentos SFT
+utilizada no browse de seleção do wizard de ajustes PIS/COFINS.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 30/04/2026
+@version 12.1.2510
+@return aFlds, array, Estrutura de campos no formato {cNome, cTipo, nTam, nDec}
+/*/
+Static Function fEstruturaTmpSFT(oSX3Util)
+	Local aFlds := {} as array
+
+	// Campo de marcação
+	AAdd(aFlds, {"OK", "N",  1, 0})
+	// Campos visíveis no browse
+	AAdd(aFlds, {"FT_FILIAL" , oSX3Util["FT_FILIAL"]["TYPE"] ,  oSX3Util["FT_FILIAL"]["SIZE"],  0})
+	AAdd(aFlds, {"FT_SERIE"  , oSX3Util["FT_SERIE"]["TYPE"]  ,  oSX3Util["FT_SERIE"]["SIZE"] ,  0})
+	AAdd(aFlds, {"FT_NFISCAL", oSX3Util["FT_NFISCAL"]["TYPE"],  oSX3Util["FT_NFISCAL"]["SIZE"], 0})
+	AAdd(aFlds, {"FT_EMISSAO", oSX3Util["FT_EMISSAO"]["TYPE"],  oSX3Util["FT_EMISSAO"]["SIZE"], 0})
+	AAdd(aFlds, {"FT_CLIEFOR", oSX3Util["FT_CLIEFOR"]["TYPE"],  oSX3Util["FT_CLIEFOR"]["SIZE"], 0})
+	AAdd(aFlds, {"FT_LOJA"   , oSX3Util["FT_LOJA"]["TYPE"]   ,  oSX3Util["FT_LOJA"]["SIZE"]   , 0})
+	AAdd(aFlds, {"FT_ITEM"   , oSX3Util["FT_ITEM"]["TYPE"]   ,  oSX3Util["FT_ITEM"]["SIZE"]   , 0})
+	AAdd(aFlds, {"FT_PRODUTO", oSX3Util["FT_PRODUTO"]["TYPE"],  oSX3Util["FT_PRODUTO"]["SIZE"], 0})
+	AAdd(aFlds, {"B1_DESC"   , oSX3Util["B1_DESC"]["TYPE"]   ,  oSX3Util["B1_DESC"]["SIZE"]   , 0})
+	AAdd(aFlds, {"FT_BASEPIS", oSX3Util["FT_BASEPIS"]["TYPE"],  oSX3Util["FT_BASEPIS"]["SIZE"], oSX3Util["FT_BASEPIS"]["DECIMALS"]})
+	AAdd(aFlds, {"FT_BASECOF", oSX3Util["FT_BASECOF"]["TYPE"],  oSX3Util["FT_BASECOF"]["SIZE"], oSX3Util["FT_BASECOF"]["DECIMALS"]})
+	AAdd(aFlds, {"FT_CSTPIS" , oSX3Util["FT_CSTPIS"]["TYPE"] ,  oSX3Util["FT_CSTPIS"]["SIZE"] , 0})
+	AAdd(aFlds, {"FT_CSTCOF" , oSX3Util["FT_CSTCOF"]["TYPE"] ,  oSX3Util["FT_CSTCOF"]["SIZE"] , 0})
+	// Campos ocultos necessários para processamento em ProcAjustCF5
+	AAdd(aFlds, {"FT_CHVNFE" , oSX3Util["FT_CHVNFE"]["TYPE"] ,  oSX3Util["FT_CHVNFE"]["SIZE"] , 0})
+	AAdd(aFlds, {"FT_TIPOMOV", oSX3Util["FT_TIPOMOV"]["TYPE"],  oSX3Util["FT_TIPOMOV"]["SIZE"], 0})
+	AAdd(aFlds, {"FT_VALCONT", oSX3Util["FT_VALCONT"]["TYPE"],  oSX3Util["FT_VALCONT"]["SIZE"], oSX3Util["FT_VALCONT"]["DECIMALS"]})
+	AAdd(aFlds, {"FT_IDTRIB" , oSX3Util["FT_IDTRIB"]["TYPE"] ,  oSX3Util["FT_IDTRIB"]["SIZE"] , 0})
+
+Return aFlds
+
+
+/*/{Protheus.doc} fCriaCarregaTmpSFT
+Cria e popula a tabela temporária de documentos SFT para uso no browse
+de seleção do wizard de ajustes PIS/COFINS.
+Executa a QuerySFT com os filtros atuais, materializa o resultado via
+OpenAlias e insere os registros na tabela temporária via FwBulk.
+
+@type Function
+@author Delleon Fernandes - Squad Fiscal
+@since 30/04/2026
+@version 12.1.2510
+@param aFiliais, array, Array de filiais selecionadas
+@param dDataDe, date, Data de início do período
+@param dDataAte, date, Data de fim do período
+@return oTmpTab, object, Objeto FWTemporaryTable criado e populado
+/*/
+Function fCriaCarregaTmpSFT(aFiliais, dDataDe, dDataAte, oSX3Util)
+
+	Local oTmpTab   := NIL as object
+	Local oStmt     := NIL as object
+	Local oBulkSFT  := NIL as object
+	Local aFlds     := fEstruturaTmpSFT(oSX3Util) as array
+	Local cAlsTmp   := GetNextAlias() as character
+	Local cAlsQry   := "" as character
+	Local aData     := {} as array
+	Local cMsg      := "" as character
+	Local cDbType   := AllTrim(Upper(TcGetDb())) as character
+	Local nFil      := 0 as numeric
+	Local cFilBkp   := cFilant as character
+
+	// Cria a tabela temporária com índice de ordenação
+	oTmpTab := FWTemporaryTable():New(cAlsTmp)
+	oTmpTab:SetFields(aFlds)
+	oTmpTab:AddIndex("1", {"FT_FILIAL", "FT_TIPOMOV", "FT_SERIE", "FT_NFISCAL", "FT_CLIEFOR", "FT_LOJA", "FT_ITEM", "FT_PRODUTO"})
+	oTmpTab:Create()
+
+	cTrbFacilit := UPPER(oTmpTab:GetRealName())
+
+	If 'MSSQL' $ cDbType
+		cTrbFacilit := oTmpTab:cTableName
+	EndIf
+
+	// Inicializa FwBulk para inserção em massa (único para todas as filiais)
+	oBulkSFT := FwBulk():New(cTrbFacilit, 900)
+	If FwBulk():CanBulk()
+		oBulkSFT:SetFields(aFlds)
+	EndIf
+
+	// Executa QuerySFT individualmente por filial para que xFilial() retorne
+	// o contexto correto de cada filial selecionada durante o processamento.
+	For nFil := 1 To Len(aFiliais)
+
+		cFilant := aFiliais[nFil] // Altera filial do ambiente para a filial da iteração, garantindo que xFilial() e demais funções de contexto retornem os valores corretos para os filtros da query.
+
+		QuerySFT(aFiliais[nFil], dDataDe, dDataAte, @oStmt)
+		cAlsQry := oStmt:OpenAlias()
+
+		TcSetField(cAlsQry,"FT_EMISSAO","D",8,0)
+
+		// Popula a tabela temporária com os dados da query da filial corrente
+		(cAlsQry)->(DbGoTop())
+		While (cAlsQry)->(!EOF())
+
+			aData := {}
+			AAdd(aData, 1)                                   // OK - campo de marcação para o browse, inicializado como marcado (1=marcado, 0=desmarcado)
+			AAdd(aData, Alltrim((cAlsQry)->FT_FILIAL))       // FT_FILIAL
+			AAdd(aData, Alltrim((cAlsQry)->FT_SERIE))        // FT_SERIE
+			AAdd(aData, Alltrim((cAlsQry)->FT_NFISCAL))      // FT_NFISCAL
+			AAdd(aData, (cAlsQry)->FT_EMISSAO)               // FT_EMISSAO
+			AAdd(aData, Alltrim((cAlsQry)->FT_CLIEFOR))      // FT_CLIEFOR
+			AAdd(aData, Alltrim((cAlsQry)->FT_LOJA))         // FT_LOJA
+			AAdd(aData, Alltrim((cAlsQry)->FT_ITEM))         // FT_ITEM
+			AAdd(aData, Alltrim((cAlsQry)->FT_PRODUTO))      // FT_PRODUTO
+			AAdd(aData, Alltrim((cAlsQry)->B1_DESC))         // B1_DESC
+			AAdd(aData, (cAlsQry)->FT_BASEPIS)               // FT_BASEPIS
+			AAdd(aData, (cAlsQry)->FT_BASECOF)               // FT_BASECOF
+			AAdd(aData, Alltrim((cAlsQry)->FT_CSTPIS))       // FT_CSTPIS
+			AAdd(aData, Alltrim((cAlsQry)->FT_CSTCOF))       // FT_CSTCOF
+			AAdd(aData, Alltrim((cAlsQry)->FT_CHVNFE))       // FT_CHVNFE
+			AAdd(aData, Alltrim((cAlsQry)->FT_TIPOMOV))      // FT_TIPOMOV
+			AAdd(aData, (cAlsQry)->FT_VALCONT)               // FT_VALCONT
+			AAdd(aData, Alltrim((cAlsQry)->FT_IDTRIB))       // FT_IDTRIB
+			oBulkSFT:AddData(aData)
+			cMsg += Alltrim(oBulkSFT:getError())
+			(cAlsQry)->(DbSkip())
+		EndDo
+		(cAlsQry)->(DbCloseArea())
+
+	Next nFil
+
+	// Restaura filial do ambiente original
+	cFilant := cFilBkp
+
+	If oStmt <> NIL
+		oStmt:Destroy()
+		oStmt := NIL
+	EndIf
+
+	oBulkSFT:Close()
+	cMsg += Alltrim(oBulkSFT:getError())
+	FwLogMsg("INFO", , "totvs.protheus.backoffice.fiscal.fisa001.adjustment", "adjustment", "", "Ocorrencia Bulk", cMsg, , , )
+	oBulkSFT:Destroy()
+	oBulkSFT := NIL
+
+	DbSelectArea(cAlsTmp)
+	(cAlsTmp)->(DbGoTop())
+
+Return oTmpTab
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fEstruturaTmpCF5
+Define a estrutura de campos da tabela temporária de registros CF5
+utilizada no browse de seleção do wizard de exclusão de ajustes PIS/COFINS.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 13/05/2026
+@version 12.1.2510
+@param oSX3Util, object, Objeto utilitário SX3 para obter tipos e tamanhos dos campos
+@return aFlds, array, Estrutura de campos no formato {cNome, cTipo, nTam, nDec}
+/*/
+//-------------------------------------------------------------------
+Static Function fEstruturaTmpCF5(oSX3Util)
+	Local aFlds := {} as array
+
+	// Campo de marcação
+	AAdd(aFlds, {"OK"        , "N", 1, 0})
+	// Campos visíveis no browse
+	AAdd(aFlds, {"CF5_FILIAL", oSX3Util["CF5_FILIAL"]["TYPE"], oSX3Util["CF5_FILIAL"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_FILDOC", oSX3Util["CF5_FILDOC"]["TYPE"], oSX3Util["CF5_FILDOC"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_SERDOC", oSX3Util["CF5_SERDOC"]["TYPE"], oSX3Util["CF5_SERDOC"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_DOCNF" , oSX3Util["CF5_DOCNF"]["TYPE"] , oSX3Util["CF5_DOCNF"]["SIZE"] , 0})
+	AAdd(aFlds, {"CF5_CLIFOR", oSX3Util["CF5_CLIFOR"]["TYPE"], oSX3Util["CF5_CLIFOR"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_LOJA"  , oSX3Util["CF5_LOJA"]["TYPE"]  , oSX3Util["CF5_LOJA"]["SIZE"]  , 0})
+	AAdd(aFlds, {"CF5_CODAJU", oSX3Util["CF5_CODAJU"]["TYPE"], oSX3Util["CF5_CODAJU"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_DTREF" , oSX3Util["CF5_DTREF"]["TYPE"] , oSX3Util["CF5_DTREF"]["SIZE"] , 0})
+	AAdd(aFlds, {"CF5_CODCRE", oSX3Util["CF5_CODCRE"]["TYPE"], oSX3Util["CF5_CODCRE"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_CONTA" , oSX3Util["CF5_CONTA"]["TYPE"] , oSX3Util["CF5_CONTA"]["SIZE"] , 0})
+	AAdd(aFlds, {"CF5_CODCON", oSX3Util["CF5_CODCON"]["TYPE"], oSX3Util["CF5_CODCON"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_TIPATV", oSX3Util["CF5_TIPATV"]["TYPE"], oSX3Util["CF5_TIPATV"]["SIZE"]+15, 0})
+	AAdd(aFlds, {"CF5_TPAJST", oSX3Util["CF5_TPAJST"]["TYPE"], oSX3Util["CF5_TPAJST"]["SIZE"]+15, 0})
+	AAdd(aFlds, {"CF5_VALAJU", oSX3Util["CF5_VALAJU"]["TYPE"], oSX3Util["CF5_VALAJU"]["SIZE"], oSX3Util["CF5_VALAJU"]["DECIMALS"]})
+	AAdd(aFlds, {"CF5_ALQ"   , oSX3Util["CF5_ALQ"]["TYPE"]   , oSX3Util["CF5_ALQ"]["SIZE"]   , oSX3Util["CF5_ALQ"]["DECIMALS"]})
+	AAdd(aFlds, {"CF5_BASE"  , oSX3Util["CF5_BASE"]["TYPE"]  , oSX3Util["CF5_BASE"]["SIZE"]  , oSX3Util["CF5_BASE"]["DECIMALS"]})
+	AAdd(aFlds, {"CF5_CST"   , oSX3Util["CF5_CST"]["TYPE"]   , oSX3Util["CF5_CST"]["SIZE"]   , 0})
+	AAdd(aFlds, {"CF5_PISCOF", oSX3Util["CF5_PISCOF"]["TYPE"], oSX3Util["CF5_PISCOF"]["SIZE"], 0})
+	AAdd(aFlds, {"CF5_CODIGO", oSX3Util["CF5_CODIGO"]["TYPE"], oSX3Util["CF5_CODIGO"]["SIZE"], 0})
+	// Campos ocultos necessários para deleção e identificação em ExcluiAjustesCF5
+	AAdd(aFlds, {"CF5RECNO"  , "N", 15, 0})
+
+Return aFlds
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} fCriaCarregaTmpCF5
+Cria e popula a tabela temporária de registros CF5 para uso no browse
+de seleção do wizard de exclusão de ajustes PIS/COFINS.
+Executa a fQryCF5 com os filtros atuais e insere os registros via FwBulk.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 13/05/2026
+@version 12.1.2510
+@param aFiliais, array, Array de filiais selecionadas
+@param dDataDe, date, Data de início do período (filtro em CF5_DTREF)
+@param dDataAte, date, Data de fim do período (filtro em CF5_DTREF)
+@param oSX3Util, object, Objeto utilitário SX3 para estrutura de campos
+@return oTmpTab, object, Objeto FWTemporaryTable criado e populado
+/*/
+//-------------------------------------------------------------------
+Static Function fCriaCarregaTmpCF5(aFiliais, dDataDe, dDataAte, oSX3Util)
+
+	Local oTmpTab   := NIL as object
+	Local oStmt     := NIL as object
+	Local oBulkCF5  := NIL as object
+	Local aFlds     := fEstruturaTmpCF5(oSX3Util) as array
+	Local cAlsTmp   := GetNextAlias() as character
+	Local cAlsQry   := "" as character
+	Local aData     := {} as array
+	Local cMsg      := "" as character
+	Local cDbType   := AllTrim(Upper(TcGetDb())) as character
+	Local nFil      := 0 as numeric
+	Local cFilBkp   := cFilant as character
+	Local cAlsName  := "" as character
+
+	// Cria a tabela temporária com índice de ordenação
+	oTmpTab := FWTemporaryTable():New(cAlsTmp)
+	oTmpTab:SetFields(aFlds)
+	oTmpTab:AddIndex("1", {"CF5_FILIAL", "CF5_FILDOC", "CF5_SERDOC", "CF5_DOCNF", "CF5_CLIFOR", "CF5_LOJA", "CF5_PISCOF"})
+	oTmpTab:Create()
+
+	cAlsName := UPPER(oTmpTab:GetRealName())
+	If 'MSSQL' $ cDbType
+		cAlsName := oTmpTab:cTableName
+	EndIf
+
+	// Inicializa FwBulk para inserção em massa
+	oBulkCF5 := FwBulk():New(cAlsName, 900)
+	If FwBulk():CanBulk()
+		oBulkCF5:SetFields(aFlds)
+	EndIf
+
+	// Executa fQryCF5 individualmente por filial para que xFilial() retorne
+	// o contexto correto de cada filial selecionada durante o processamento.
+	For nFil := 1 To Len(aFiliais)
+
+		cFilant := aFiliais[nFil]
+
+		fQryCF5(aFiliais[nFil], dDataDe, dDataAte, @oStmt)
+		cAlsQry := oStmt:OpenAlias()
+
+		TcSetField(cAlsQry, "CF5_DTREF", "D", 8, 0)
+
+		(cAlsQry)->(DbGoTop())
+		While (cAlsQry)->(!EOF())
+			aData := {}
+			AAdd(aData, 1)                                    // OK
+			AAdd(aData, Alltrim((cAlsQry)->CF5_FILIAL))      // CF5_FILIAL
+			AAdd(aData, Alltrim((cAlsQry)->CF5_FILDOC))      // CF5_FILDOC
+			AAdd(aData, Alltrim((cAlsQry)->CF5_SERDOC))      // CF5_SERDOC
+			AAdd(aData, Alltrim((cAlsQry)->CF5_DOCNF ))      // CF5_DOCNF
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CLIFOR))      // CF5_CLIFOR
+			AAdd(aData, Alltrim((cAlsQry)->CF5_LOJA  ))      // CF5_LOJA
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CODAJU))      // CF5_CODAJU
+			AAdd(aData, (cAlsQry)->CF5_DTREF)                // CF5_DTREF
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CODCRE))      // CF5_CODCRE
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CONTA ))      // CF5_CONTA
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CODCON))      // CF5_CODCON
+			AAdd(aData, fTIPATV((cAlsQry)->CF5_TIPATV))      // CF5_TIPATV
+			AAdd(aData, fTPAJST((cAlsQry)->CF5_TPAJST))      // CF5_TPAJST
+			AAdd(aData, (cAlsQry)->CF5_VALAJU)               // CF5_VALAJU
+			AAdd(aData, (cAlsQry)->CF5_ALQ)                  // CF5_ALQ
+			AAdd(aData, (cAlsQry)->CF5_BASE)                 // CF5_BASE
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CST))         // CF5_CST
+			AAdd(aData, Alltrim((cAlsQry)->CF5_PISCOF))      // CF5_PISCOF
+			AAdd(aData, Alltrim((cAlsQry)->CF5_CODIGO))      // CF5_CODIGO
+			AAdd(aData, (cAlsQry)->CF5RECNO)                 // CF5RECNO  (oculto)
+			oBulkCF5:AddData(aData)
+			cMsg += Alltrim(oBulkCF5:getError())
+			(cAlsQry)->(DbSkip())
+		EndDo
+		(cAlsQry)->(DbCloseArea())
+
+	Next nFil
+
+	// Restaura filial do ambiente original
+	cFilant := cFilBkp
+
+	If oStmt != NIL
+		oStmt:Destroy()
+		oStmt := NIL
+	EndIf
+
+	oBulkCF5:Close()
+	cMsg += Alltrim(oBulkCF5:getError())
+	FwLogMsg("INFO", , "totvs.protheus.backoffice.fiscal.fisa001.adjustment", "adjustment", "", "Ocorrencia Bulk CF5", cMsg, , , )
+	oBulkCF5:Destroy()
+	FreeObj(oBulkCF5)
+	oBulkCF5 := NIL
+
+	DbSelectArea(cAlsTmp)
+	(cAlsTmp)->(DbGoTop())
+
+Return oTmpTab
+
+
+/*/{Protheus.doc} fDestroiTmpSFT
+Fecha o alias e libera o objeto da tabela temporária de documentos SFT.
+Deve ser chamada antes de recriar a tabela (mudança de filtros) e ao
+encerrar o wizard.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 30/04/2026
+@version 12.1.2510
+@param oTmpTab, object, Objeto FWTemporaryTable passado por referência
+@return Nil
+/*/
+Static Function fDestroiTmpSFT(oTmpTab)
+
+	If Valtype(oMkDocs) == "O"
+		oMkDocs:Destroy()
+		oMkDocs := NIL
+	EndIf
+
+	If ValType(oTmpTab) == "O"
+		oTmpTab:Delete()
+		oTmpTab := NIL
+	EndIf
+
+Return
+
+
+/*/{Protheus.doc} SetMarkAllTab
+Marca ou desmarca em massa todos os registros da tabela temporária,
+utilizando RecLock para garantir a integridade da escrita.
+
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 30/04/2026
+@version 12.1.2510
+@param oObjMark, object, FwFormBrowse vinculado à tabela temporária
+@param lMarkAll, logical, .T.=marcar todos, .F.=desmarcar todos
+@return Nil
+/*/
+Static Function SetMarkAllTab(oObjMark, lMarkAll)
+
+	Local cMarkABB := '' as character
+
+	cMarkABB := oObjMark:cAlias
+
+	(cMarkABB)->(DbGoTop())
+	While (cMarkABB)->(!EOF())
+		RecLock(cMarkABB, .F.)
+		(cMarkABB)->OK := IIf(lMarkAll, 1, 0)
+		MsUnlock()
+		(cMarkABB)->(DbSkip())
+	EndDo
+
+	(cMarkABB)->(DbGoTop())
+
+	lMarkAll := !lMarkAll
+	oObjMark:Refresh(,.T.)
+	oObjMark:Refresh(,.T.)
+
+Return
+
+
+/*/{Protheus.doc} IniValoresTotal
+	(Inicializa totalização do Step3Preview)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 24/04/2026
+	@version 12.1.2510
+	@param Nil
+	@return oJsTotStep3, object, JsonObject com os campos de totalização inicializados
+/*/
+Static Function IniValoresTotal()
+	Local oJsTotStep3 := JsonObject():New()
+	oJsTotStep3["nTotPIS"]  := 0
+	oJsTotStep3["nTotCOF"]  := 0
+	oJsTotStep3["nNFsDist"] := 0
+	oJsTotStep3["nLinhas"]  := 0
+	oJsTotStep3["cDescAcao"]  := ""
+	oJsTotStep3["cDescTipAj"] := ""
+	oJsTotStep3["c042TpNfs"]  := ""
+
+Return oJsTotStep3
+
+
+/*/{Protheus.doc} fTpCodAju
+	(Retorna o código do ajuste selecionado formatado para exibição)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 24/04/2026
+	@version 12.1.2510
+	@param cOpcao, character, Opção selecionada
+	@return cRet, character, Código do ajuste formatado para exibição
+/*/
+Static Function fTpCodAju(cOpcao)
+	Local cRet := ""
+	Local aOpcoes := StrToArray(A042CODAJU(),";")
+	Local nPos := 0 as numeric
+
+	If !Empty(cOpcao)
+		nPos := aScan(aOpcoes, {|x| Left(x, Len(cOpcao)) == cOpcao})
+		If nPos > 0
+			cRet := aOpcoes[nPos]
+		EndIf
+	EndIf
+
+Return cRet
+
+/*/{Protheus.doc} fFieldsCF5
+	(Define campos para ser utilizado no FWBulk da tabela CF5)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 26/04/2026
+	@version 12.1.2510
+	@return aFildCF5, Array, Campos para criar a estutura do bulk
+/*/
+Static Function fFieldsCF5()
+	Local aFildCF5 := {} as Array
+
+	AaDd(aFildCF5, {"CF5_PISCOF"} )
+	AaDd(aFildCF5, {"CF5_VALAJU"} )
+	AaDd(aFildCF5, {"CF5_CODIGO"} )
+	AaDd(aFildCF5, {"CF5_CST"} )
+	AaDd(aFildCF5, {"CF5_BASE"} )
+	AaDd(aFildCF5, {"CF5_ALQ"} )
+	AaDd(aFildCF5, {"CF5_FILIAL"} )
+	AaDd(aFildCF5, {"CF5_INDAJU"} )
+	AaDd(aFildCF5, {"CF5_CODAJU"} )
+	AaDd(aFildCF5, {"CF5_CHVDFE"} )
+	AaDd(aFildCF5, {"CF5_DESAJU"} )
+	AaDd(aFildCF5, {"CF5_DTREF"} )
+	AaDd(aFildCF5, {"CF5_CODCRE"} )
+	AaDd(aFildCF5, {"CF5_TIPATV"} )
+	AaDd(aFildCF5, {"CF5_CONTA"} )
+	AaDd(aFildCF5, {"CF5_CODCON"} )
+	AaDd(aFildCF5, {"CF5_TPAJST"} )
+	AaDd(aFildCF5, {"CF5_FILDOC"} )
+	AaDd(aFildCF5, {"CF5_TIPOMO"} )
+	AaDd(aFildCF5, {"CF5_SERDOC"} )
+	AaDd(aFildCF5, {"CF5_DOCNF"} )
+	AaDd(aFildCF5, {"CF5_CLIFOR"} )
+	AaDd(aFildCF5, {"CF5_LOJA"} )
+
+Return aFildCF5
+
+
+/*/{Protheus.doc} fAddBulkCF5
+Adiciona ao FwBulk os registros de ajuste CF5 referentes a PIS e COFINS de um
+documento fiscal, a partir dos dados acumulados no JsonObject de cache (oJLctoNF).
+Gera dois lançamentos por documento: um para PIS (nCont=1) e outro para COFINS (nCont=2).
+Ao final, chama fLimpaCacheCF5 para reinicializar o objeto de cache.
+
+@type Static Function
+@author Delleon Fernandes
+@since 26/04/2026
+@version 12.1.2510
+
+@param oBulkCF5, object, Objeto FwBulk da tabela CF5, passado por referência
+@param oJLctoNF, object, JsonObject com os dados do lançamento atual, passado por referência
+@param cMsg, character, Variável acumuladora de mensagens de erro do Bulk, passada por referência
+@param nQtdAjustes, numeric, Contador de ajustes processados, passado por referência
+
+@obs Cada chamada gera exatamente dois registros no Bulk (PIS e COFINS).
+     Os campos específicos de cada contribuição (PISCOF, VALAJU, CODIGO, CST, BASE, ALQ)
+     são preenchidos com os valores de PIS na primeira iteração e de COFINS na segunda.
+
+@see ProcAjustCF5
+@see fLimpaCacheCF5
+@table CF5
+/*/
+Static Function fAddBulkCF5(oBulkCF5, oJLctoNF,cMsg, nQtdAjustes)
+	Local nCont := 0 as numeric
+	Local aDadosCF5 := {} as Array
+
+	For nCont := 1 To 2 // Loop para adicionar os lançamentos de PIS e COFINS, onde 1 = PIS e 2 = COFINS
+		aDadosCF5 := {}
+		If nCont == 1
+			If oJLctoNF["CF5_VALAJUPIS"] == 0 // Se o valor do ajuste for zero, não adiciona o registro no bulk, pois não há ajuste a ser feito para o PIS. O mesmo vale para COFINS.
+				Loop
+			EndIf
+			aAdd(aDadosCF5, oJLctoNF["CF5_PIS"])       /* CF5_PISCOF */
+			aAdd(aDadosCF5, oJLctoNF["CF5_VALAJUPIS"]) /* CF5_VALAJU */
+			aAdd(aDadosCF5, oJLctoNF["CF5_CODIGOPIS"]) /* CF5_CODIGO */
+			aAdd(aDadosCF5, oJLctoNF["CF5_CSTPIS"])    /* CF5_CST    */
+			aAdd(aDadosCF5, oJLctoNF["CF5_BASEPIS"])   /* CF5_BASE   */
+			aAdd(aDadosCF5, oJLctoNF["CF5_ALQPIS"])    /* CF5_ALQ    */
+		Else
+			If oJLctoNF["CF5_VALAJUCOF"] == 0 // Se o valor do ajuste for zero, não adiciona o registro no bulk, pois não há ajuste a ser feito para o COFINS. O mesmo vale para PIS.
+				Loop
+			EndIf
+			aAdd(aDadosCF5, oJLctoNF["CF5_COF"])       /* CF5_PISCOF */
+			aAdd(aDadosCF5, oJLctoNF["CF5_VALAJUCOF"]) /* CF5_VALAJU */
+			aAdd(aDadosCF5, oJLctoNF["CF5_CODIGOCOF"]) /* CF5_CODIGO */
+			aAdd(aDadosCF5, oJLctoNF["CF5_CSTCOF"])    /* CF5_CST    */
+			aAdd(aDadosCF5, oJLctoNF["CF5_BASECOF"])   /* CF5_BASE   */
+			aAdd(aDadosCF5, oJLctoNF["CF5_ALQCOF"])    /* CF5_ALQ    */
+		EndIf
+		nQtdAjustes += 1
+		aAdd(aDadosCF5, oJLctoNF["CF5_FILIAL"]) /* CF5_FILIAL */
+		aAdd(aDadosCF5, oJLctoNF["CF5_INDAJU"]) /* CF5_INDAJU */
+		aAdd(aDadosCF5, oJLctoNF["CF5_CODAJU"]) /* CF5_CODAJU */
+		aAdd(aDadosCF5, oJLctoNF["CF5_CHVDFE"]) /* CF5_CHVDFE */
+		aAdd(aDadosCF5, oJLctoNF["CF5_DESAJU"]) /* CF5_DESAJU */
+		aAdd(aDadosCF5, oJLctoNF["CF5_DTREF"])  /* CF5_DTREF  */
+		aAdd(aDadosCF5, oJLctoNF["CF5_CODCRE"]) /* CF5_CODCRE */
+		aAdd(aDadosCF5, oJLctoNF["CF5_TIPATV"]) /* CF5_TIPATV */
+		aAdd(aDadosCF5, oJLctoNF["CF5_CONTA"])  /* CF5_CONTA  */
+		aAdd(aDadosCF5, oJLctoNF["CF5_CODCON"]) /* CF5_CODCON */
+		aAdd(aDadosCF5, oJLctoNF["CF5_TPAJST"]) /* CF5_TPAJST */
+		aAdd(aDadosCF5, oJLctoNF["CF5_FILDOC"]) /* CF5_FILDOC */
+		aAdd(aDadosCF5, oJLctoNF["CF5_TIPOMO"]) /* CF5_TIPOMO */
+		aAdd(aDadosCF5, oJLctoNF["CF5_SERDOC"]) /* CF5_SERDOC */
+		aAdd(aDadosCF5, oJLctoNF["CF5_DOCNF"])  /* CF5_DOCNF */
+		aAdd(aDadosCF5, oJLctoNF["CF5_CLIFOR"]) /* CF5_CLIFOR */
+		aAdd(aDadosCF5, oJLctoNF["CF5_LOJA"])   /* CF5_LOJA */
+
+		oBulkCF5:addData(aDadosCF5)
+		cMsg += Alltrim(oBulkCF5:getError())
+
+	Next nCont
+
+	fLimpaCacheCF5(@oJLctoNF)
+Return
+
+
+/*/{Protheus.doc} fLimpaCacheCF5
+Limpa (reinicializa) os campos do JsonObject oJLctoNF utilizado como cache
+de lançamento da CF5, zerando valores numéricos e esvaziando caracteres,
+de forma a preparar o objeto para receber os dados do próximo documento.
+
+@type Static Function
+@author Delleon Fernandes
+@since 26/04/2026
+@version 12.1.2510
+
+@obs Deve ser chamada antes de iniciar o preenchimento dos dados de um novo documento
+     no laço de processamento de ProcAjustCF5, garantindo que resíduos do documento
+     anterior não contaminem o próximo lançamento.
+
+@see ProcAjustCF5
+/*/
+Static Function fLimpaCacheCF5(oJLctoNF)
+
+	oJLctoNF["CF5_INDAJU"]    := ""
+	oJLctoNF["CF5_PIS"]       := ""
+	oJLctoNF["CF5_COF"]       := ""
+	oJLctoNF["CF5_VALAJUPIS"] := 0
+	oJLctoNF["CF5_VALAJUCOF"] := 0
+	oJLctoNF["CF5_CODAJU"]    := ""
+	oJLctoNF["CF5_CHVDFE"]    := ""
+	oJLctoNF["CF5_DESAJU"]    := ""
+	oJLctoNF["CF5_DTREF"]     := CtoD("")
+	oJLctoNF["CF5_CODCRE"]    := ""
+	oJLctoNF["CF5_CODIGOPIS"] := ""
+	oJLctoNF["CF5_CODIGOCOF"] := ""
+	oJLctoNF["CF5_TIPATV"]    := ""
+	oJLctoNF["CF5_CSTPIS"]    := ""
+	oJLctoNF["CF5_CSTCOF"]    := ""
+	oJLctoNF["CF5_BASEPIS"]   := 0
+	oJLctoNF["CF5_BASECOF"]   := 0
+	oJLctoNF["CF5_ALQPIS"]    := 0
+	oJLctoNF["CF5_ALQCOF"]    := 0
+	oJLctoNF["CF5_CONTA"]     := ""
+	oJLctoNF["CF5_CODCON"]    := ""
+	oJLctoNF["CF5_TPAJST"]    := ""
+
+Return
+
+/*/{Protheus.doc} AdditionalData
+( Consulta os dados adicionais necessários para os ajustes de PIS/COFINS, a partir do ID de tributação do documento fiscal.
+Preenche o JsonObject de cache (oJAdditional) com os dados retornados da consulta, utilizando o ID de tributação e o conteúdo do ajuste como chaves de acesso.)
+@type Static Function
+@author Delleon Fernandes - Squad Fiscal
+@since 26/04/2026
+@version 12.1.2510
+@param cIDTrib, character, Código do ID de Tributação do documento fiscal
+@param oQryAddit, object, Objeto FwExecStatement para consulta de dados adicionais, passado por referência
+@param oJAdditional, object, JsonObject para armazenamento dos dados adicionais, passado por referência
+@param aInSqlCK3CONTEU, array, Array de chaves para filtro na consulta de dados adicionais, utilizado na cláusula IN da query
+@return Nil
+/*/
+Static Function AdditionalData(cIDTrib, oQryAddit, oJAdditional, aInSqlCK3CONTEU)
+	Local cAliasAddi := "" as character
+	Local cQuery := "" as character
+	Local cChvCONTEU := "" as character
+
+	fTipoAjuste(cTipoAju, @aInSqlCK3CONTEU)
+
+	If oJAdditional == Nil
+		oJAdditional := JsonObject():New()
+	Else
+		fClsAdditional(@oJAdditional, aInSqlCK3CONTEU)
+	EndIf
+
+	If oQryAddit == Nil
+		cQuery  += "SELECT CJ3.CJ3_CST,CK3.CK3_CONTEU, F2D.F2D_BASE, F2D.F2D_ALIQ, F2D.F2D_VALOR "
+		cQuery  += "      FROM " + RetSqlName("F2D") + " F2D "
+		cQuery  += "      INNER JOIN " + RetSqlName("F2B") + " F2B "
+		cQuery  += "      ON F2B.F2B_FILIAL = ? " // 1
+		cQuery  += "              AND F2B.F2B_ID     = F2D.F2D_IDCAD "
+		cQuery  += "              AND F2B.D_E_L_E_T_ = ? " // 2
+		cQuery  += "      INNER JOIN " + RetSqlName("CJ3") + " CJ3 "
+		cQuery  += "      ON CJ3.CJ3_FILIAL = ? " // 3
+		cQuery  += "              AND CJ3.CJ3_IDF2D  = F2D.F2D_ID "
+		cQuery  += "              AND CJ3.D_E_L_E_T_ = ? " // 4
+		cQuery  += "      INNER JOIN " + RetSqlName("CK3") + " CK3 "
+		cQuery  += "      ON CK3.CK3_FILIAL = ? " // 5
+		cQuery  += "              AND CK3.CK3_IDCJ2  = CJ3.CJ3_IDRESC "
+		cQuery  += "              AND CK3.CK3_CODIGO = ? " // 6 'AJUPISCOF'
+		cQuery  += "              AND CK3.CK3_CONTEU IN ( ? ) " // 7 - aInSqlCK3CONTEU
+		cQuery  += "              AND CK3.D_E_L_E_T_ = ? " // 8
+		cQuery  += "              WHERE F2D.F2D_FILIAL = ? " // 9
+		cQuery  += "              AND F2D.F2D_IDREL  = ? " // 10
+		cQuery  += "              AND F2D.D_E_L_E_T_ = ? " // 11
+
+		cQuery := ChangeQuery(cQuery)
+		oQryAddit := FwExecStatement():New(cQuery)
+	EndIf
+
+	oQryAddit:SetString(1, xFilial("F2B"))
+	oQryAddit:SetString(2, " ")
+	oQryAddit:SetString(3, xFilial("CJ3"))
+	oQryAddit:SetString(4, " ")
+	oQryAddit:SetString(5, xFilial("CK3"))
+	oQryAddit:SetString(6, "AJUPISCOF")
+	oQryAddit:SetIn(7, aInSqlCK3CONTEU)
+	oQryAddit:SetString(8, " ")
+	oQryAddit:SetString(9, xFilial("F2D"))
+	oQryAddit:SetString(10, cIDTrib)
+	oQryAddit:SetString(11, " ")
+
+	cAliasAddi := oQryAddit:OpenAlias()
+
+	While (cAliasAddi)->(!Eof())
+		cChvCONTEU := Alltrim((cAliasAddi)->CK3_CONTEU)
+		oJAdditional[cChvCONTEU] := JsonObject():New()
+		oJAdditional[cChvCONTEU]["CST"]	  := Alltrim((cAliasAddi)->CJ3_CST)
+		oJAdditional[cChvCONTEU]["BASE"]  := (cAliasAddi)->F2D_BASE
+		oJAdditional[cChvCONTEU]["ALIQ"]  := (cAliasAddi)->F2D_ALIQ
+		oJAdditional[cChvCONTEU]["VALOR"] := (cAliasAddi)->F2D_VALOR
+
+		(cAliasAddi)->(DbSkip())
+	EndDo
+	(cAliasAddi)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} fClsAdditional
+	(Limpa o Json para o próximo registro ou documento a ser processado)
+	@type  Static Function
+	@author Delleon Fernandes
+	@since 28/04/2026
+	@version 12.1.2510
+	@param oJAdditional, JsonObject, Objeto JSON a ser limpo
+	@param aInSqlCK3CONTEU, Array, Array de chaves para limpeza do Json, utilizado na query de dados adicionais
+	@return Nenhum valor retornado
+/*/
+Static Function fClsAdditional(oJAdditional, aInSqlCK3CONTEU)
+	Local nI := 0 as numeric
+
+	If oJAdditional <> Nil
+		For nI:=1 to len(aInSqlCK3CONTEU)
+			oJAdditional:DelName(aInSqlCK3CONTEU[nI])
+		Next nI
+	EndIf
+Return
+
+
+/*/{Protheus.doc} SXECF5CODI
+	(Retorna o próximo código sequencial para o campo CF5_CODIGO, utilizando a função GetSXENum para garantir unicidade e controle de concorrência)
+	@type  Static Function
+	@author Delleon Fernandes
+	@since 28/04/2026
+	@version 12.1.2510
+	@param , void, Nenhum parâmetro necessário
+	@return cCodigo, character, Próximo código sequencial para o campo CF5_CODIGO
+/*/
+Static Function SXECF5CODI()
+	Local cCodigo := GetSXENum("CF5","CF5_CODIGO")
+	ConfirmSX8()
+Return cCodigo
+
+
+/*/{Protheus.doc} fStructFields
+	(Utiliza o FWSX3Util():GetFieldStruct para obter a estrutura de campos necessária para o processamento dos ajustes, 
+	garantindo que as definições estejam sempre alinhadas com a base de dados e evitando hardcoding de tamanhos e tipos)
+	@type  Function
+	@author Delleon Fernandes
+	@since 28/04/2026
+	@version 12.1.2510
+	@param , void, Nenhum parâmetro necessário
+	@return oSX3Util, object, Objeto JSON contendo a estrutura de campos para o processamento dos ajustes
+/*/
+Function fStructFields()
+	Local oSX3Util := JSonObject():New() as object
+	Local aFields := {} as array
+	Local aStrutSFT := {} as array
+	Local nX := 0 as numeric
+	Local cNomeCampo := "" as character
+
+	AAdd(aFields, "FT_FILIAL"  )
+	AAdd(aFields, "FT_SERIE"   )
+	AAdd(aFields, "FT_NFISCAL" )
+	AAdd(aFields, "FT_EMISSAO" )
+	AAdd(aFields, "FT_ENTRADA" )
+	AAdd(aFields, "FT_CLIEFOR" )
+	AAdd(aFields, "FT_LOJA"    )
+	AAdd(aFields, "FT_ITEM"    )
+	AAdd(aFields, "FT_PRODUTO" )
+	AAdd(aFields, "B1_DESC"    )
+	AAdd(aFields, "FT_BASEPIS" )
+	AAdd(aFields, "FT_BASECOF" )
+	AAdd(aFields, "FT_CSTPIS"  )
+	AAdd(aFields, "FT_CSTCOF"  )
+	AAdd(aFields, "FT_CHVNFE"  )
+	AAdd(aFields, "FT_TIPOMOV" )
+	AAdd(aFields, "FT_VALCONT" )
+	AAdd(aFields, "FT_IDTRIB"  )
+
+	AAdd(aFields, "CF5_CODAJU" )
+	AAdd(aFields, "CF5_DTREF"  )
+	AAdd(aFields, "CF5_CODCRE" )
+	AAdd(aFields, "CF5_CONTA"  )
+	AAdd(aFields, "CF5_CODCON" )
+	AAdd(aFields, "CF5_TIPATV" )
+	AAdd(aFields, "CF5_TPAJST" )
+	AAdd(aFields, "CF5_FILIAL" )
+	AAdd(aFields, "CF5_FILDOC" )
+	AAdd(aFields, "CF5_TIPOMO" )
+	AAdd(aFields, "CF5_SERDOC" )
+	AAdd(aFields, "CF5_DOCNF"  )
+	AAdd(aFields, "CF5_CLIFOR" )
+	AAdd(aFields, "CF5_LOJA"   )
+	AAdd(aFields, "CF5_INDAJU" )
+	AAdd(aFields, "CF5_CODIGO" )
+	AAdd(aFields, "CF5_PISCOF" )
+	AAdd(aFields, "CF5_VALAJU" )
+	AAdd(aFields, "CF5_ALQ"    )
+	AAdd(aFields, "CF5_BASE"   )
+	AAdd(aFields, "CF5_CST"    )
+
+	For nX := 1 To Len(aFields)
+		cNomeCampo := aFields[nX]
+		aStrutSFT  := FwSX3Util():GetFieldStruct( cNomeCampo )
+		cDescCampo := Alltrim(FWX3Titulo( cNomeCampo ))
+
+		oSX3Util[cNomeCampo] := JsonObject():New()
+		oSX3Util[cNomeCampo]["NAME"]        := aStrutSFT[1]
+		oSX3Util[cNomeCampo]["TYPE"]        := aStrutSFT[2]
+		oSX3Util[cNomeCampo]["SIZE"]        := aStrutSFT[3]
+		oSX3Util[cNomeCampo]["DECIMALS"]    := aStrutSFT[4]
+		oSX3Util[cNomeCampo]["PICTURE"]     := aStrutSFT[5]
+		oSX3Util[cNomeCampo]["DESCRIPTION"] := cDescCampo
+
+	Next nX
+
+Return oSX3Util
+
+/*/{Protheus.doc} fQryFilial
+	(Cria consulta das filiais que serão exibidas para marcação.
+	Apresenta também filiais consolidadas, caso esteja configurado via parametro MV_CONSCGC)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 06/05/2026
+	@version 12.1.2510
+	@param cEmpAnt, character, Código da empresa
+	@return cQuery, character, Consulta das filiais
+/*/
+Static Function fQryFilial(cEmpAnt)
+	Local cQuery := "" as character
+	Local oExecSM0 := Nil as object
+
+	cQuery := "SELECT 0 OK, M0_CODFIL, M0_FILIAL, M0_NOME"
+	cQuery += " FROM " + RetSqlName("SM0") + " SM0"
+	cQuery += " WHERE SM0.D_E_L_E_T_ = ' '"
+	cQuery += " AND SM0.M0_CODIGO = ? "
+	cQuery += " ORDER BY SM0.M0_CODFIL"
+
+	cQuery := ChangeQuery(cQuery)
+	oExecSM0 := FwExecStatement():New(cQuery)
+
+	oExecSM0:SetString(1, cEmpAnt)
+
+	cQuery := oExecSM0:GetFixQuery()
+
+	oExecSM0:Destroy()
+	oExecSM0 := Nil
+Return cQuery
+
+
+/*/{Protheus.doc} CriarMarkNF
+	( Cria o FwFormBrowse com coluna de marcação para registros de documentos fiscais SFT,
+	utilizado no Step 2 do wizard para exibir os documentos a serem ajustados, permitindo 
+	a seleção individual ou em massa dos registros para os quais os ajustes de PIS/COFINS 
+	serão aplicados na etapa de preview e processamento do ajuste.)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 08/05/2026
+	@version 12.1.2510
+	@param oSX3Util, object, Objeto de utilitário SX3
+	@param cAliasMark, character, Alias do MarkBrowse
+	@return NIL
+/*/
+Static Function CriarMarkNF(oSX3Util, cAliasMark)
+	Local aCmpSFT   := {} as array
+	Local aColSFT   := {} as array
+	Local lAllSFT   := .F. as logical
+	Local nX        := 0 as numeric
+	Local cPosition := "" as character
+	Local aCposMark := {"FT_FILIAL","FT_SERIE","FT_NFISCAL","FT_EMISSAO","FT_CLIEFOR","FT_LOJA","FT_ITEM","FT_PRODUTO","B1_DESC","FT_BASEPIS","FT_CSTPIS","FT_BASECOF","FT_CSTCOF"}
+
+	For nX := 1 To Len(aCposMark)
+		cPosition := "LEFT"
+		If aCposMark[nX] == "FT_CSTPIS" .or. aCposMark[nX] == "FT_CSTCOF"
+			cPosition :=  "CENTER"
+		ElseIf oSX3Util[aCposMark[nX]]["TYPE"] == "N"
+			cPosition :=  "RIGHT"
+		EndIf
+		AAdd(aCmpSFT, {aCposMark[nX], oSX3Util[aCposMark[nX]]["DESCRIPTION"], oSX3Util[aCposMark[nX]]["TYPE"], oSX3Util[aCposMark[nX]]["SIZE"], oSX3Util[aCposMark[nX]]["PICTURE"], cPosition, ""})
+	Next nX
+
+	aCposMark := {}
+	aColSFT := HeaderMark(aCmpSFT, .F.)
+
+	oMkDocs := AddMarkBro(oPanBrwStep2, @lAllSFT, aCmpSFT, aColSFT, NIL, cAliasMark, .T.)
+	oMkDocs:Refresh(,.T.) // Necessário duplo Refresh por comportamento do FwFormBrowse com DataTable
+	oMkDocs:Refresh(,.T.)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CriarMarkCF5
+	Cria o FwFormBrowse com coluna de marcação para registros CF5,
+	utilizado no Step 2 do wizard quando a ação selecionada é exclusão.
+
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 13/05/2026
+	@version 12.1.2510
+	@param oSX3Util, object, Objeto utilitário SX3 para obter estrutura de campos CF5
+	@param cAliasMark, character, Alias da tabela temporária de registros CF5
+	@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function CriarMarkCF5(oSX3Util, cAliasMark)
+	Local aCmpCF5   := {} as array
+	Local aColCF5   := {} as array
+	Local lAllCF5   := .F. as logical
+	Local nX        := 0 as numeric
+	Local cPosition := "" as character
+	Local aCposMark := {"CF5_FILIAL","CF5_FILDOC","CF5_SERDOC","CF5_DOCNF","CF5_CLIFOR","CF5_LOJA","CF5_CODAJU",;
+		"CF5_DTREF","CF5_CODCRE","CF5_CONTA","CF5_CODCON","CF5_TIPATV","CF5_TPAJST","CF5_CODIGO", "CF5_VALAJU", "CF5_ALQ", "CF5_BASE", "CF5_CST"}
+	For nX := 1 To Len(aCposMark)
+		cPosition := "LEFT"
+		If oSX3Util[aCposMark[nX]]["TYPE"] == "N"
+			cPosition := "RIGHT"
+		EndIf
+		AAdd(aCmpCF5, {aCposMark[nX], oSX3Util[aCposMark[nX]]["DESCRIPTION"], oSX3Util[aCposMark[nX]]["TYPE"], oSX3Util[aCposMark[nX]]["SIZE"], oSX3Util[aCposMark[nX]]["PICTURE"], cPosition, ""})
+	Next nX
+
+	aCposMark := {}
+	aColCF5 := HeaderMark(aCmpCF5, .F.)
+
+	oMkDocs := AddMarkBro(oPanBrwStep2, @lAllCF5, aCmpCF5, aColCF5, NIL, cAliasMark, .T.)
+	oMkDocs:Refresh(,.T.) // Necessário duplo Refresh por comportamento do FwFormBrowse com DataTable
+	oMkDocs:Refresh(,.T.)
+
+Return
+
+
+/*/{Protheus.doc} fIncluiAju
+	(Valida se deixa ou não editar os campos de CF5 no Step3Preview, de acordo com a ação selecionada (inclusão ou exclusão))
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 13/05/2026
+	@version 12.1.2510
+	@param param_name, param_type, param_descr
+	@return .T. ou .F. dependendo se a ação é inclusão ou exclusão, respectivamente.
+
+/*/
+Static Function fIncluiAju()
+Return (c042Acao == "1")
+
+/*/{Protheus.doc} fTPAJST
+	(Retorna opções do campo CF5_TPAJST formatadas para exibição, onde 1=Crédito e 2=Débito)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 14/05/2026
+	@version 12.1.2510
+	@param cTpAjst, character, Código do tipo de ajuste (1=Crédito, 2=Débito)
+	@return cRet, character, Descrição do tipo de ajuste
+/*/
+Static Function fTPAJST(cTpAjst)
+	Local cRet := "1=Crédito;2=Débito"
+
+	If cTpAjst <> Nil
+		If cTpAjst == "1"
+			cRet := "Crédito"
+		ElseIf cTpAjst == "2"
+			cRet := "Débito"
+		Else
+			cRet := " "
+		EndIf
+	EndIf
+
+Return cRet
+
+/*/{Protheus.doc} fTIPATV
+	(Retorna opções do campo CF5_TIPATV formatadas para exibição, onde 0=Servico e 1=Industria)
+	@type  Static Function
+	@author Delleon Fernandes - Squad Fiscal
+	@since 14/05/2026
+	@version 12.1.2510
+	@param cTipAtv, character, Código do tipo de atividade (0=Servico, 1=Industria)
+	@return cRet, character, Descrição do tipo de atividade
+/*/
+Static Function fTIPATV(cTipAtv)
+	Local cRet := "0=Servico;1=Industria"
+
+	If cTipAtv <> Nil
+		If cTipAtv == "0"
+			cRet := "Servico"
+		ElseIf cTipAtv == "1"
+			cRet := "Industria"
+		Else
+			cRet := " "
+		EndIf
+	EndIf
+
+Return cRet
+

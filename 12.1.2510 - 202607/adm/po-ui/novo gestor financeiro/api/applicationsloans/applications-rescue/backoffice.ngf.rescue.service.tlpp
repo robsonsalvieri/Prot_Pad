@@ -1,0 +1,572 @@
+#include 'tlpp-core.th'
+#INCLUDE 'protheus.ch'
+#INCLUDE 'totvs.ch'
+#INCLUDE 'backoffice.ngf.rescue.service.ch'
+
+NAMESPACE totvs.protheus.backoffice.ngf.rescue
+USING NAMESPACE totvs.protheus.backoffice.ngf.template
+USING NAMESPACE gfin.util
+
+Static cMV_APLCAL4 := ""
+Static __oTemplate := NIL
+
+/*/{Protheus.doc} CalculationRescue
+    Calculo do resgate atraves da função Fa171Calc
+    @type  Function
+    @author Vitor Duca
+    @since 17/04/2023
+    @version 1.0
+    @param jData, Json, Body da requisição
+		Exemplo do jData que deve ser enviado
+		{
+			filial: "D MG 01",
+			numero: "APL001",
+			revisao: "01",
+			operation: "trigger" ou "open" (Define como o calculo irá ocorrer)
+			field: "vlCredito_nA181VlCrd", (Campo que esta sendo alterado no front)
+			forms: {
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+			}
+		}
+    @return jRet, Json, Resposta em formato Json que sera enviado
+		Exemplo do jRet que deve ser enviado
+		{
+			response: {
+				result: .t.
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+				nome do campo: valor,
+			}
+		}
+/*/
+Function CalculationRescue(jData As Json) as Json
+	Local cFilSEH 	:= "" As Character
+	Local cNumero 	:= "" As Character
+	Local cRevisao 	:= "" As Character
+	Local jForms 	:= JsonObject():new() As Json
+	Local jResponse := JsonObject():new() As Json
+	Local cField 	:= "" As Character
+	Local nValorIRF := 0 As Numeric
+
+	Private lPergAplIm := .F.
+
+	Default jData := JsonObject():new()
+
+	If Empty(cMV_APLCAL4)
+		cMV_APLCAL4 := GetMv("MV_APLCAL4")
+	Endif
+
+	If jData:hasProperty('aplimune')
+		lPergAplIm := jData['aplimune']
+	Endif
+
+	cFilSEH  := Padr(jData[ 'filial' ] , TamSx3("EH_FILIAL")[1])
+	cNumero  := Padr(jData[ 'numero' ] , TamSx3("EH_NUMERO")[1])
+	cRevisao := Padr(jData[ 'revisao' ], TamSx3("EH_REVISAO")[1])
+
+	DbSelectArea("SEH")
+	SEH->(DbSetOrder(1))
+	SEH->(DbGoTop())
+
+	If SEH->(DbSeek(cFilSEH + cNumero + cRevisao))
+
+		Pergunte("AFI181", .F.) //Recupera os perguntes da rotina de resgates
+
+		jForms:FromJson(jData["forms"]:ToJson())
+
+		If jData:hasProperty("field")
+			cField := jData["field"]
+		Endif
+
+		If AllTrim(jData["operation"]) == "open"
+			IniCalculateRescue(@jForms, cFilSEH, cNumero, cRevisao, cField)
+			jResponse[ 'result' ]	:= .T.
+			jResponse[ 'response' ] := JsonObject():new()
+			jResponse[ 'response' ]:FromJson(jForms:ToJson())
+
+			If SEH->EH_TIPO == "TEM" .and. __oTemplate <> NIL
+				jResponse[ 'response' ]['template'] := __oTemplate:getResults()
+			Endif
+		Else
+			Do Case
+			Case AllTrim(SEH->EH_TIPO) == "CP"
+				rescueCP(@jForms, cField)
+
+			Case SEH->EH_TIPO $ cMV_APLCAL4
+				rescueQuotas(@jForms, cField)
+				nValorIRF := jForms["irRendBruto_nA181IRRdBruto"]
+
+			OtherWise
+				rescueNoQuotas(@jForms, cField)
+				nValorIRF := jForms["vlIRF"]
+
+			End Case
+
+			If Round(jForms["vlCredito_nA181VlCrd"],2) > Round(jForms["nA181VlAtu"] - nValorIRF - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"],2)
+				jResponse := answerFormat(.F., 400, STR0001, STR0002) //"Não foi possivel efetuar o calculo do resgate" # "O valor a ser creditado nesse resgate deve ser equivalente ao seu valor líquido do resgate"
+				jForms["vlCredito_nA181VlCrd"] := 0
+			Else
+				jResponse[ 'result' ]	:= .T.
+				jResponse[ 'response' ] := JsonObject():new()
+				jResponse[ 'response' ]:FromJson(jForms:ToJson())
+
+				If SEH->EH_TIPO == "TEM" .and. __oTemplate <> NIL
+					jResponse[ 'response' ]['template'] := __oTemplate:getResults()
+				Endif
+			Endif
+
+		Endif
+
+	Endif
+
+Return jResponse
+
+/*/{Protheus.doc} IniCalculateRescue
+	Deve ser chamado na inicialização dos calculos do resgate
+	propriedade operation = "open"
+	@type  Function
+	@author Vitor Duca
+	@since 17/04/2023
+	@version 1.0
+	@param jForms, Json, Formulario que foi criado no front
+	@param cFilSEH, Character, Filial da tabela SEH
+	@param cNumero, Character, Numero do contrato na SEH
+	@param nRevisao, Character, Revisão do contrato na SEH
+	@param cField, Character, Campo que esta sendo alterado no formulario
+/*/
+Function IniCalculateRescue(jForms As Json, cFilSEH As Character, cNumero As Character, cRevisao As Character, cField As Character)
+	Local aCalculos := {} As Array
+	Local aAreaSE9 	:= SE9->(FwGetArea()) As Array
+	Local aAreaSE0 	:= SE9->(FwGetArea()) As Array
+	Local lDeduzIR	:= (StrZero(Month(dDataBase),2) $ SuperGetMv("MV_10892",,"05#11"))
+
+	Default jForms 		:= JsonObject():new()
+	Default cFilSEH 	:= ""
+	Default cNumero 	:= ""
+	Default cRevisao 	:= ""
+	Default cField 		:= ""
+
+	SE9->(DbSetOrder(1))
+	If SE9->(MsSeek(xFilial("SE9")+SEH->(EH_CONTRAT+EH_BCOCONT+EH_AGECONT)))
+		jForms["vlUnitCotas_nA181VlCota"] := SE9->E9_VLRCOTA
+
+		SE0->(DbSetOrder(1))
+		If SE0->(MsSeek(xFilial("SE0")+SE9->(E9_BANCO+E9_AGENCIA+E9_CONTA+E9_NUMERO)+Str(21001231-Val(DTOS(dDataBase)),11)))
+			jForms["vlUnitCotas_nA181VlCota"] := SE0->E0_VALOR
+		Endif
+
+	Endif
+
+	If !SEH->EH_TIPO $ cMV_APLCAL4 .Or. AllTrim(SEH->EH_TIPO) == "CP"
+		aCalculos := CalculateNoQuotas(dDataBase, SEH->EH_SALDO)
+		jForms["vlIRF"] := aCalculos[2]
+	Else
+		aCalculos := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], (SEH->EH_SLDCOTA * jForms["vlUnitCotas_nA181VlCota"]),, lDeduzIR)
+		jForms["irRendBruto_nA181IRRdBruto"] := aCalculos[2]
+	EndIf
+
+	jForms["nA181VlAtu"] 				:= aCalculos[1]
+	jForms["vlResgate_nA181VlResg"] 	:= jForms["nA181VlAtu"]
+	jForms["difSwap_nA181VlSwap"] 		:= 0.00
+	jForms["irSwap_nA181IRSwap"] 		:= 0.00
+	jForms["vlIof_nA181VlIOF"] 			:= aCalculos[3]
+	jForms["vlTaxa_nA181VlTaxa"] 		:= aCalculos[4]
+	jForms["VlResgSPrinc"] 				:= SEH->EH_SALDO
+	jForms["VlResgSJuros"] 				:= jForms["nA181VlAtu"] - SEH->EH_SALDO
+	jForms["vlSaldoSPrinc"] 			:= 0.00
+	jForms["vlSaldoSJuros"] 			:= 0.00
+
+	jForms["qtCotasResg_n181CtRg"]   	:= 0 // Quantidade de cotas resgatadas
+	jForms["saldoCotas_n181SldQs"]  	:= 0 // Saldo em cotas a resgatar
+
+	If !SEH->EH_TIPO $ cMV_APLCAL4
+		jForms["vlSaldoApl"] 			:= jForms["vlSaldoSPrinc"] - jForms["vlSaldoSJuros"]
+		jForms["vlCredito_nA181VlCrd"]	:= jForms["vlResgate_nA181VlResg"] - jForms["vlIRF"]  - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+	Else
+		jForms["vlSaldoApl"]			:= Iif((jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"]) < 0,0,(jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"]))
+
+		jForms["vlCredito_nA181VlCrd"]	:= jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+
+		jForms["qtCotasResg_n181CtRg"] 	:= jForms["vlResgate_nA181VlResg"] / jForms["vlUnitCotas_nA181VlCota"]
+		jForms["saldoRs_n181SldRs"]    	:= jForms["saldoCotas_n181SldQs"] * jForms["vlUnitCotas_nA181VlCota"]// Saldo em Reais a resgatar
+	EndIf
+
+	jForms["nA181CrdAnt"] 				:= jForms["vlCredito_nA181VlCrd"]
+	jForms["rendBruto_na181RdBruto"] 	:= aCalculos[7]
+	jForms["na181BaseCalc"]				:= aCalculos[11]
+
+	FwRestArea(aAreaSE0)
+	FwRestArea(aAreaSE9)
+Return
+
+/*/{Protheus.doc} getTaxaIRF
+	Recupera a taxa do IR cadastrada na tabela AR do SX5
+	@type  Static Function
+	@author Vitor Duca
+	@since 17/04/2023
+	@version 1.0
+	@return nTaxa, Numeric, Taxa do IRF
+/*/
+Function getTaxaIRF() As Numeric
+	Local aTabIRF 	:= {} As Array
+	Local nAscan 	:= 0 As Numeric
+	Local nTaxa 	:= 0 As Numeric
+	Local nDias 	:= (dDataBase - SEH->EH_DATA) As Numeric
+
+	//-- Tabela Base de IR
+	aTabIrf	:= {{ 180, 22.5 },;
+		{ 360, 20.0 },;
+		{ 720, 17.5 },;
+		{ 1000000, 15.0 } }
+
+	//-- Pesquisa a aliquota conforme o tempo da aplicacao
+	nAscan := Ascan( aTabIrf, { |e| e[1] >= nDias } )
+
+	//-- A taxa de IR sera:
+	//-- Se o campo de TAXA de IR estiver preenchido no cadastro, utiliza esta taxa.
+	nTaxa := SEH->EH_TAXAIRF
+	//-- Se o campo estiver vazio utilizar:
+	If Empty(nTaxa)
+		//-- A tabela Base acima
+		nTaxa := aTabIrf[nAscan][2]
+		//-- A tabela AR se ela existir
+		If SX5->(MsSeek(xFilial("SX5")+"AR"))
+			nTaxa := Val(TabelaIrf("AR", nDias))
+		EndIf
+	EndIf
+
+Return nTaxa
+
+/*/{Protheus.doc} rescueCP
+	Calculo do resgate para caderneta de poupança
+	@type  Function
+	@author Vitor Duca
+	@since 17/04/2023
+	@version 1.0
+	@param jForms, Json, Formulario criado no front
+	@param cField, Character, Campo que esta sendo alterado no front
+/*/
+Function rescueCP(jForms As Json, cField As Character)
+	Default jForms := JsonObject():new()
+	Default cField := ""
+
+	//Se valor do resgate é diferente do valor do crédito, houve alteração
+	If jForms["vlResgate_nA181VlResg"] != jForms["vlCredito_nA181VlCrd"]
+
+		If cField $ 'vlCredito_nA181VlCrd'
+			jForms["vlResgate_nA181VlResg"] := jForms["vlCredito_nA181VlCrd"]
+		Else
+			jForms["vlCredito_nA181VlCrd"] 	:= jForms["vlResgate_nA181VlResg"]
+		EndIf
+
+		If jForms["vlResgate_nA181VlResg"] >= jForms["VlResgSJuros"]
+			jForms["vlSaldoSPrinc"]	:= SEH->EH_SALDO - ( jForms["vlResgate_nA181VlResg"] - jForms["VlResgSJuros"] )
+			jForms["vlSaldoSJuros"]	:= 0
+			jForms["vlSaldoApl"]	:= jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"]
+
+			jForms["VlResgSPrinc"] 	:= jForms["vlResgate_nA181VlResg"] - jForms["VlResgSJuros"]
+		Else
+			jForms["vlSaldoSPrinc"]	:= SEH->EH_SALDO
+			jForms["vlSaldoSJuros"]	:= jForms["VlResgSJuros"] - jForms["vlResgate_nA181VlResg"]
+			jForms["vlSaldoApl"]	:= jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"]
+
+			jForms["VlResgSPrinc"] 	:= 0
+			jForms["VlResgSJuros"] 	:= jForms["VlResgSJuros"] - jForms["vlResgate_nA181VlResg"]
+		EndIf
+
+		jForms["nA181VlAtu"]  := jForms["VlResgSPrinc"] + jForms["VlResgSJuros"]
+
+	EndIf
+
+	jForms["vlIRF"] 				:= 0
+	jForms["difSwap_nA181VlSwap"] 	:= 0
+	jForms["irSwap_nA181IRSwap"] 	:= 0
+	jForms["vlIof_nA181VlIOF"] 		:= 0
+	jForms["vlTaxa_nA181VlTaxa"] 	:= 0
+
+Return
+
+/*/{Protheus.doc} rescueQuotas
+	Calculo do resgate que possui cotas (contrato bancario)
+	@type  Function
+	@author Vitor Duca
+	@since 17/04/2023
+	@version 1.0
+	@param jForms, Json, Formulario criado no front
+	@param cField, Character, campo que esta sendo alterado no front
+/*/
+Function rescueQuotas(jForms As Json, cField As Character)
+	Local aCalc 	:= {} 	As Array
+	Local nTaxaIRF  := 0	As Numeric
+	Local nProp 	:= 0 	As Numeric
+	Local lDeduzIR	:= (StrZero(Month(dDataBase),2) $ SuperGetMv("MV_10892",,"05#11"))
+	Local aAreaSE0  := SE0->(FwGetArea()) As Array
+	Local nCotaAnt  := 0 As Numeric
+
+	Default jForms := JsonObject():new()
+	Default cField := ""
+
+	nCotaAnt := SEH->EH_VLRCOTA
+
+	DbSelectArea("SE0")
+	SE0->(DbSetOrder(2))
+	If MsSeek(xFilial("SE0")+SEH->(EH_BANCO+EH_AGENCIA+EH_CONTA+EH_CONTRAT)+(DTOS(DataValida(dDataBase - Day(dDataBase), .F.))))
+		nCotaAnt := SE0->E0_VALOR
+	Endif
+	FwRestArea(aAreaSE0)
+
+	Do Case
+	Case ( cField $ "vlResgate_nA181VlResg#vlUnitCotas_nA181VlCota" )
+		// Caso seja alterado o valor das cotas, recalcula os valores
+		// do resgate, rendimento, etc.
+		If cField $ "vlUnitCotas_nA181VlCota"
+			aCalc := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], (SEH->EH_SLDCOTA * jForms["vlUnitCotas_nA181VlCota"]),, lDeduzIR)
+
+			jForms["nA181VlAtu"] 					:= aCalc[1]
+			jForms["vlResgate_nA181VlResg"] 		:= jForms["nA181VlAtu"]
+			jForms["irRendBruto_nA181IRRdBruto"]	:= aCalc[2]
+			jForms["difSwap_nA181VlSwap"] 			:= 0.00
+			jForms["irSwap_nA181IRSwap"] 			:= 0.00
+			jForms["vlIof_nA181VlIOF"] 				:= aCalc[3]
+			jForms["vlTaxa_nA181VlTaxa"] 			:= aCalc[4]
+			jForms["VlResgSPrinc"] 					:= SEH->EH_SALDO
+			jForms["VlResgSJuros"] 					:= jForms["nA181VlAtu"] - SEH->EH_SALDO
+			jForms["vlSaldoSPrinc"] 				:= 0.00
+			jForms["vlSaldoSJuros"] 				:= 0.00
+			jForms["vlCredito_nA181VlCrd"]			:= jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+		Endif
+
+		nProp := SEH->EH_SALDO * jForms["vlResgate_nA181VlResg"] / jForms["nA181VlAtu"]
+
+		aCalc := Fa171Calc(dDataBase, nProp,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], jForms["vlResgate_nA181VlResg"],, lDeduzIR,,,, jForms["vlTaxa_nA181VlTaxa"])
+
+		jForms["irRendBruto_nA181IRRdBruto"]	:= aCalc[2]
+		jForms["vlIof_nA181VlIOF"]				:= aCalc[3]
+		jForms["vlTaxa_nA181VlTaxa"]			:= aCalc[4]
+		jForms["VlResgSJuros"]					:= aCalc[5]
+		jForms["rendBruto_na181RdBruto"]		:= aCalc[7]
+		jForms["na181BaseCalc"]					:= aCalc[11]
+		jForms["VlResgSPrinc"]					:= jForms["vlResgate_nA181VlResg"] - jForms["VlResgSJuros"] + jForms["difSwap_nA181VlSwap"]
+		jForms["qtCotasResg_n181CtRg"]       	:= jForms["vlResgate_nA181VlResg"] / jForms["vlUnitCotas_nA181VlCota"]
+		jForms["saldoCotas_n181SldQs"]      	:= SEH->EH_SLDCOTA - jForms["qtCotasResg_n181CtRg"]
+
+	Case ( cField $ "qtCotasResg_n181CtRg#vlCredito_nA181VlCrd" )
+
+		// Encontra o valor do resgate para o valor do crédito atual
+		// Resgate parcial, recalcula o valor do IR
+		If Str(jForms["vlCredito_nA181VlCrd"] + jForms["vlIof_nA181VlIOF"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["vlTaxa_nA181VlTaxa"],19,2) != Str(SEH->EH_SLDCOTA * jForms["vlUnitCotas_nA181VlCota"],19,2) .or. (jForms["qtCotasResg_n181CtRg"] < SEH->EH_SLDCOTA)
+			If cField == "qtCotasResg_n181CtRg"
+				jForms["vlCredito_nA181VlCrd"] := (jForms["qtCotasResg_n181CtRg"] * jForms["vlUnitCotas_nA181VlCota"])
+				aCalc := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], jForms["vlCredito_nA181VlCrd"],, lDeduzIR)
+				jForms["vlCredito_nA181VlCrd"] -= (aCalc[2] + aCalc[3] + aCalc[4])
+			Else
+				aCalc := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, nCotaAnt, jForms["vlUnitCotas_nA181VlCota"], jForms["vlCredito_nA181VlCrd"],, lDeduzIR)
+				aCalc := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, nCotaAnt, jForms["vlUnitCotas_nA181VlCota"], jForms["vlCredito_nA181VlCrd"] + aCalc[2]+aCalc[3],, lDeduzIR)
+			EndIf
+
+			jForms["irRendBruto_nA181IRRdBruto"]	:= aCalc[2]
+			jForms["vlIof_nA181VlIOF"]				:= aCalc[3]
+			jForms["vlTaxa_nA181VlTaxa"] 			:= aCalc[4]
+			jForms["VlResgSJuros"]					:= aCalc[5]
+			jForms["rendBruto_na181RdBruto"]		:= aCalc[7]
+			jForms["na181BaseCalc"]					:= aCalc[11]
+
+			jForms["vlResgate_nA181VlResg"]			:= jForms["vlCredito_nA181VlCrd"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["vlIof_nA181VlIOF"] + jForms["vlTaxa_nA181VlTaxa"]
+		Else // Resgate total
+			aCalc := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], (SEH->EH_SLDCOTA * jForms["vlUnitCotas_nA181VlCota"]),, lDeduzIR)
+
+			jForms["nA181VlAtu"] 			:= aCalc[1]
+			jForms["vlResgate_nA181VlResg"] := jForms["nA181VlAtu"]
+
+			nProp := NoRound((jForms["vlResgate_nA181VlResg"] - SEH->EH_SALDO) * jForms["vlResgate_nA181VlResg"] / jForms["nA181VlAtu"], TamSX3("EH_SALDO")[2])
+
+			aCalc := Fa171Calc(dDataBase, nProp,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], jForms["vlResgate_nA181VlResg"],, lDeduzIR)
+
+			jForms["irRendBruto_nA181IRRdBruto"]	:= aCalc[2]
+			jForms["vlIof_nA181VlIOF"]				:= aCalc[3]
+			jForms["vlTaxa_nA181VlTaxa"]			:= aCalc[4]
+			jForms["VlResgSJuros"]					:= aCalc[5]
+			jForms["rendBruto_na181RdBruto"]		:= aCalc[7]
+			jForms["na181BaseCalc"]					:= aCalc[11]
+			jForms["VlResgSPrinc"]					:= jForms["vlResgate_nA181VlResg"] - jForms["VlResgSJuros"] + jForms["difSwap_nA181VlSwap"]
+			jForms["vlCredito_nA181VlCrd"]	   		:= jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+		Endif
+
+		If cField <> "qtCotasResg_n181CtRg"
+			jForms["qtCotasResg_n181CtRg"] 	:= (jForms["vlIof_nA181VlIOF"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["vlCredito_nA181VlCrd"] + jForms["vlTaxa_nA181VlTaxa"]) / jForms["vlUnitCotas_nA181VlCota"]
+		EndIf
+		jForms["saldoCotas_n181SldQs"] 		:= (SEH->EH_SLDCOTA - jForms["qtCotasResg_n181CtRg"])
+
+	Case (cField $ "vlIof_nA181VlIOF#irRendBruto_nA181IRRdBruto#vlTaxa_nA181VlTaxa")
+
+		If cField $ "vlIof_nA181VlIOF"
+			nTaxaIRF := getTaxaIRF()
+
+			jForms["irRendBruto_nA181IRRdBruto"] := (nTaxaIRF / 100) * (jForms["rendBruto_na181RdBruto"] - jForms["vlIof_nA181VlIOF"])
+		EndIf
+
+		If cField == "vlTaxa_nA181VlTaxa"
+			If jForms["vlCredito_nA181VlCrd"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["irSwap_nA181IRSwap"] + jForms["vlIof_nA181VlIOF"] + jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"] > jForms["nA181VlAtu"]
+				aCalc := Fa171Calc(dDataBase, SEH->EH_SLDCOTA,,,, SEH->EH_VLRCOTA, jForms["vlUnitCotas_nA181VlCota"], (SEH->EH_SLDCOTA * jForms["vlUnitCotas_nA181VlCota"]),, lDeduzIR)
+				jForms["vlResgate_nA181VlResg"]      	:= jForms["nA181VlAtu"]
+				jForms["rendBruto_na181RdBruto"]     	:= aCalc[7]
+
+				nTaxaIRF := getTaxaIRF()
+				jForms["irRendBruto_nA181IRRdBruto"] 	:= (nTaxaIRF / 100) * (jForms["rendBruto_na181RdBruto"] - jForms["vlTaxa_nA181VlTaxa"])
+
+				jForms["vlCredito_nA181VlCrd"] 			:= jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+			Else
+				If ( jForms["vlCredito_nA181VlCrd"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["irSwap_nA181IRSwap"] + jForms["vlIof_nA181VlIOF"] + jForms["vlTaxa_nA181VlTaxa"] - jForms["difSwap_nA181VlSwap"] ) > jForms["nA181VlAtu"]
+					jForms["vlCredito_nA181VlCrd"]    	:= jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+				Else
+					jForms["vlResgate_nA181VlResg"]    	:= jForms["vlCredito_nA181VlCrd"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["vlIof_nA181VlIOF"] + jForms["vlTaxa_nA181VlTaxa"] + jForms["irSwap_nA181IRSwap"] - jForms["difSwap_nA181VlSwap"]
+				EndIf
+			EndIf
+		Else // "irRendBruto_nA181IRRdBruto"
+			If jForms["irRendBruto_nA181IRRdBruto"] >= 0 .And. jForms["irRendBruto_nA181IRRdBruto"] <= jForms["vlCredito_nA181VlCrd"] .And. jForms["saldoRs_n181SldRs"] <= 0
+				jForms["vlCredito_nA181VlCrd"] := jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"]
+			EndIf
+
+			jForms["vlResgate_nA181VlResg"] := jForms["vlCredito_nA181VlCrd"] + jForms["vlIof_nA181VlIOF"] + jForms["irRendBruto_nA181IRRdBruto"] + jForms["vlTaxa_nA181VlTaxa"]
+		EndIf
+
+		jForms["qtCotasResg_n181CtRg"]	:= jForms["vlResgate_nA181VlResg"] / jForms["vlUnitCotas_nA181VlCota"]
+		jForms["saldoCotas_n181SldQs"] 	:= SEH->EH_SLDCOTA - jForms["qtCotasResg_n181CtRg"]
+		jForms["saldoRs_n181SldRs"] 	:= jForms["saldoCotas_n181SldQs"] * jForms["vlUnitCotas_nA181VlCota"]
+	EndCase
+
+	updateValues(@jForms, cField)
+
+Return
+
+/*/{Protheus.doc} rescueNoQuotas
+	Calculo do resgate sem cotas
+	@type  Function
+	@author Vitor Duca
+	@since 17/04/2023
+	@version 1.0
+	@param jForms, Json, Formulario criado no front
+	@param cField, Character, campo que esta sendo alterado no front
+/*/
+Function rescueNoQuotas(jForms As Json, cField As Character)
+	Local nProp := 0 As Numeric
+	Local aCalc := {} As Array
+
+	Default jForms := JsonObject():new()
+	Default cField := ""
+
+	Do Case
+	Case ( cField $ "vlResgate_nA181VlResg" )
+		nProp := NoRound(SEH->EH_SALDO * jForms["vlResgate_nA181VlResg"] / jForms["nA181VlAtu"], TamSX3("EH_SALDO")[2])
+		aCalc := CalculateNoQuotas(dDataBase,nProp)
+		jForms["vlIRF"] := aCalc[2]
+		jForms["vlIof_nA181VlIOF"] := aCalc[3]
+		jForms["vlTaxa_nA181VlTaxa"] := aCalc[4]
+		jForms["VlResgSJuros"] := aCalc[5]
+
+	Case ( cField $ "vlCredito_nA181VlCrd" )
+
+		If Round(jForms["nA181CrdAnt"],2) != Round(jForms["vlCredito_nA181VlCrd"],2)
+			jForms["vlResgate_nA181VlResg"] := NoRound(jForms["vlCredito_nA181VlCrd"] * (jForms["vlResgate_nA181VlResg"] + jForms["difSwap_nA181VlSwap"]) / jForms["nA181CrdAnt"], TamSX3("EH_SALDO")[2])
+			nProp := NoRound(SEH->EH_SALDO * jForms["vlResgate_nA181VlResg"] / jForms["nA181VlAtu"], TamSX3("EH_SALDO")[2])
+			aCalc := CalculateNoQuotas(dDataBase,nProp)
+			jForms["vlIRF"] := aCalc[2]
+			jForms["vlIof_nA181VlIOF"] := aCalc[3]
+			jForms["vlTaxa_nA181VlTaxa"] := aCalc[4]
+			jForms["VlResgSJuros"] := aCalc[5]
+		EndIf
+
+	Case ( cField $ "difSwap_nA181VlSwap" ) .And. jForms["difSwap_nA181VlSwap"] > 0
+		nProp := NoRound(SEH->EH_SALDO * (jForms["vlResgate_nA181VlResg"] + jForms["difSwap_nA181VlSwap"]) / jForms["nA181VlAtu"], TamSX3("EH_SALDO")[2])
+		aCalc := CalculateNoQuotas(dDataBase,SEH->EH_SALDO)
+		jForms["vlIof_nA181VlIOF"] := aCalc[3]
+		jForms["vlTaxa_nA181VlTaxa"] := aCalc[4]
+		jForms["VlResgSJuros"] := aCalc[5]
+		jForms["VlResgSPrinc"] := jForms["vlResgate_nA181VlResg"] - jForms["VlResgSJuros"] + jForms["difSwap_nA181VlSwap"]
+	EndCase
+
+	updateValues(@jForms, cField)
+
+Return
+
+/*/{Protheus.doc} updateValues
+	Atualiza os valores que não dependem diretamente dos calculos retornados
+	pela função Fa171Calc ou CalculateNoQuotas
+	@type  Function
+	@author Vitor Duca
+	@since 19/04/2023
+	@version 1.0
+	@param jForms, Json, Formularios enviado pelo Front
+	@param cField, Character, Campo que esta sendo alterado pelo front
+/*/
+Function updateValues(jForms As Json, cField As Character)
+	Default jForms := JsonObject():new()
+	Default cField := ""
+
+	If ( cField $ "difSwap_nA181VlSwap" )
+		jForms["irSwap_nA181IRSwap"] := Iif(jForms["difSwap_nA181VlSwap"] > 0, jForms["difSwap_nA181VlSwap"] * SEH->EH_TXIRSWP / 100, 0)
+	EndIf
+
+	If ( jForms["VlResgSPrinc"] > SEH->EH_SALDO .Or. Abs(jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"]) < MV_PAR03 )
+		jForms["VlResgSPrinc"]	:= SEH->EH_SALDO
+		jForms["VlResgSJuros"] 	:= jForms["vlResgate_nA181VlResg"] - jForms["VlResgSPrinc"] + jForms["difSwap_nA181VlSwap"]
+		jForms["nA181VlAtu"]  	:= jForms["VlResgSPrinc"] + jForms["VlResgSJuros"]
+	EndIf
+
+	If !(SEH->EH_TIPO $ cMV_APLCAL4)
+		jForms["VlResgSPrinc"] 			:= jForms["vlResgate_nA181VlResg"] - jForms["VlResgSJuros"] + jForms["difSwap_nA181VlSwap"]
+		jForms["vlSaldoSJuros"]			:= jForms["nA181VlAtu"] - SEH->EH_SALDO - jForms["VlResgSJuros"]
+		jForms["vlSaldoSPrinc"]			:= jForms["nA181VlAtu"] - jForms["VlResgSJuros"] - jForms["VlResgSPrinc"] - jForms["vlSaldoSJuros"]
+		jForms["vlSaldoApl"]			:= jForms["vlSaldoSPrinc"] + jForms["vlSaldoSJuros"]
+		jForms["vlCredito_nA181VlCrd"]	:= Round(jForms["vlResgate_nA181VlResg"] - jForms["vlIRF"] - jForms["irSwap_nA181IRSwap"] - jForms["vlIof_nA181VlIOF"] - jForms["vlTaxa_nA181VlTaxa"] + jForms["difSwap_nA181VlSwap"], 2)
+		jForms["nA181CrdAnt"]			:= jForms["vlCredito_nA181VlCrd"]
+	Else
+		jForms["vlSaldoSPrinc"]			:= Iif((SEH->EH_SALDO - jForms["na181BaseCalc"]) >= 0,(SEH->EH_SALDO - jForms["na181BaseCalc"]),0)
+		jForms["vlSaldoSJuros"]			:= (jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"]) - jForms["vlSaldoSPrinc"]
+		jForms["vlSaldoSJuros"]			:= Iif(jForms["vlSaldoSJuros"] >= 0, jForms["vlSaldoSJuros"], 0)
+		jForms["vlSaldoApl"]			:= jForms["nA181VlAtu"] - jForms["vlResgate_nA181VlResg"] - jForms["irRendBruto_nA181IRRdBruto"]
+		jForms["vlSaldoApl"]			:= Iif(jForms["vlSaldoApl"] >= 0, jForms["vlSaldoApl"],0)
+		jForms["saldoCotas_n181SldQs"]  := If(jForms["vlSaldoApl"]>=0,jForms["saldoCotas_n181SldQs"],0) // Zera o saldo em cotas, caso o saldo em R$ seja 0
+		jForms["nA181CrdAnt"] 			:= jForms["vlCredito_nA181VlCrd"]
+		jForms["saldoRs_n181SldRs"]  	:= jForms["saldoCotas_n181SldQs"] * jForms["vlUnitCotas_nA181VlCota"]// Saldo em Reais a resgatar
+	EndIf
+
+Return
+
+/*/{Protheus.doc} CalculateNoQuotas
+	Calculo dos resgates que não possuem cotas (SEH->EH_TIPO <> MV_APLCAL4)
+	@type  Function
+	@author Vitor Duca
+	@since 19/04/2023
+	@version 1.0
+	@param dData, Date, Data para calculo
+	@param nValorBase, Numeric, Valor base para calculo
+	@return aCalculos, Array, Matriz contendo os valores calculado da aplicação
+/*/
+Function CalculateNoQuotas(dData As Date, nValorBase As Numeric) As Array
+	Local aCalculos := {} As Array
+
+	If SEH->EH_TIPO == "TEM"
+
+		If __oTemplate == NIL
+			__oTemplate := totvs.protheus.backoffice.ngf.template.Template():new()
+		Endif
+
+		If __oTemplate:openTemplate(SEH->EH_FILIAL, SEH->EH_NUMERO, SEH->EH_REVISAO)
+
+			__oTemplate:setIRImune(lPergAplIm)
+			__oTemplate:setValorBase(nValorBase)
+			__oTemplate:setDateVenc(dData)
+			__oTemplate:calcTemplate()
+
+			aCalculos := __oTemplate:getAplLegado()
+		Endif
+	Else
+		aCalculos := Fa171Calc(dData, nValorBase, .T.)
+	Endif
+
+Return aCalculos

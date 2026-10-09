@@ -1,0 +1,469 @@
+#INCLUDE "TOTVS.CH"
+#INCLUDE "FWMVCDEF.CH"
+#INCLUDE "PSHSTATUSENVIO.CH"
+
+namespace totvs.protheus.retail.rmi.classes.pshStatusEnvio
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} inicia
+Inicia o processo de consulta de status do envio.
+
+Exemplo de parâmetros recebidos do schedule:
+  aParams[1]: "PDVSYNC"
+  aParams[2]: "T1"
+  aParams[3]: "D MG 01 "
+  aParams[4]: "000000"
+  aParams[5]: "000004000001"
+
+@type    function
+@param   aParams, Array, Parâmetros recebidos pelo agendamento de consulta
+@return  Nil
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Function inicia(aParams)
+
+    Local oStatusEnvio  := nil
+    Local cSemaforo     := ""
+    Local lContinua     := .F.
+
+    if len(aParams) >= 3
+
+        ljGrvLog(/*cNumControl*/, "Parâmetros recebidos pela função:", aParams)
+        aParams[1] := allTrim(aParams[1])
+
+        if aParams[1] == "PDVSYNC"
+
+            //Alterado para RPCSetType(3) para não consumir licença
+            rpcSetType(3)
+            lContinua := rpcSetEnv(aParams[2], aParams[3], /*cEnvUser*/, /*cEnvPass*/, "LOJA", "pshStatusEnvio")
+
+            if lContinua
+
+                cSemaforo := "STATUSENVIO" +"_"+ aParams[1] +"_"+ aParams[2]
+                
+                If !LockByName(cSemaforo, .T./*lEmpresa*/, .F./*lFilial*/)
+                    LjxjMsgErr( I18n("Serviço #1 já esta sendo utilizado por outra instância.", {cSemaforo}) )    //"Serviço #1 já esta sendo utilizado por outra instância."
+                    rpcClearEnv()        
+                    Return Nil
+                EndIf
+
+                ljxjMsgErr("consultaStatusEnvio" + " - " + cSemaforo + " - " + time() + " - " + cValTochar( ThreadId() ), /*cSolucao*/, /*cRotina*/, aParams)
+
+                oStatusEnvio := totvs.protheus.retail.rmi.classes.pshStatusEnvioPdvSync.StatusEnvioPdvSync():new()
+                
+                if oStatusEnvio:getSucesso()
+                    oStatusEnvio:processa()
+                endIf
+
+                fwFreeObj(oStatusEnvio)
+            endIf
+
+            //Libera semaforo para proxima execução
+            UnLockByName(cSemaforo, .T./*lEmpresa*/, .F./*lFilial*/)
+
+            //Encerra o ambiente, fechando as devidas conexões
+            rpcClearEnv()
+        endIf
+
+    endIf
+
+    fwFreeArray(aParams)
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Classe StatusEnvio
+Classe responsável por consultar e processar status de envio de integração,
+tratar o retorno e gravar os resultados em lote.
+
+@type    class
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Class StatusEnvio
+
+    Data jConfigPsh                     as Object       //Configurações do PSH
+    Data cTabela                        as Character    //Tabela com os resultados da consulta
+    Data aJsonRetorno                   as Array        //Array com o retorno da consulta de status
+    Data jResultado                     as Object       //Json com o resultado do tratamento do retorno da consulta de status preparado para a gravação
+    Data cLote                          as Character    //Número do lote que está sendo processado
+    Data cAssinante                     as Character    //Código do assinante
+    Data jConfAssin                     as Object       //Configurações do assinante
+    Data oRest                          as Object       //Objeto de consumo do serviço REST
+    Data oBulk                          as Object       //Objeto de gravação em massa na MHL
+    Data lSucesso                       as Logical      //Define se a classe esta com erro
+    Data cErro                          as Character    //Mensagem de erro
+
+	Public Method new()                 as Object
+    Public Method processa()            as Variant
+    Public Method getSucesso()          as Logical
+
+    Protected Method consultaStatus()   as Logical
+    Protected Method trataRetorno()     as Logical
+    Protected Method finaliza()         as Variant
+
+    Private Method valida()              as Variant
+    Private Method registros()          as Variant
+    Private Method grava()              as Variant
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Método construtor da classe StatusEnvio.
+
+@type    method
+@param   cAssinante, Caracter, Código do assinante usado para configuração
+@return  Object, Instância da classe StatusEnvio
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method new(cAssinante) as Object Class StatusEnvio
+
+    self:jConfigPsh := iif( existFunc("ljRetCadAx"), ljRetCadAx("PSH", /*cId*/), jsonObject():New() )
+
+    iif( !self:jConfigPsh:hasProperty("limiteDiasConsultaStatus"), self:jConfigPsh["limiteDiasConsultaStatus"] := 7, nil )
+    iif( !self:jConfigPsh:hasProperty("qtdRetornoQuery")         , self:jConfigPsh["qtdRetornoQuery"] := 10000     , nil )
+    iif( !self:jConfigPsh:hasProperty("timeout")                 , self:jConfigPsh["timeout"] := 300               , nil )
+    iif( !self:jConfigPsh:hasProperty("qtdBulk")                 , self:jConfigPsh["qtdBulk"] := 1000              , nil )
+
+    self:cTabela        := ""
+    self:aJsonRetorno   := {}
+    self:jResultado     := nil
+    self:cLote          := ""
+    self:lSucesso       := .T.
+    self:cErro          := ""
+
+    MHO->( DbSetOrder(1) )  //MHO_FILIAL + MHO_COD
+    if MHO->( DbSeek(xFilial("MHO") + cAssinante) )
+
+        self:cAssinante := MHO->MHO_COD
+        self:jConfAssin := JsonObject():New()
+        self:jConfAssin:FromJson( AllTrim(MHO->MHO_CONFIG) )
+
+        //Valida se a configuração de URL para consulta de status existe, caso contrário atribui a URL padrão
+        if !self:jConfAssin:hasProperty("urlConsultaStatus") .or. empty(self:jConfAssin["urlConsultaStatus"])
+            self:jConfAssin["urlConsultaStatus"] := iif( self:jConfAssin["autenticacao"]["environment"] == "2"  ,;  //Produção
+                                                        STR0001 ,;   //"https://pdvsync.varejo.totvs.com.br/controleprocesso/api/retaguarda/v3/LojaLoteStatusRetorno"
+                                                        STR0002 )    //"https://pdvsync-homologacao.varejo.totvs.com.br/controleprocesso/api/retaguarda/v3/LojaLoteStatusRetorno"
+        endIf
+    endIf
+
+    //Valida se as configurações necessárias para execução
+    self:valida()
+
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} processa
+Executa o fluxo principal de consulta de status, tratamento de retorno
+e gravação de resultados para cada lote pendente.
+
+@type    method
+@return  Variant, Retorna nil ou o resultado da execução do processamento
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method processa() as Variant Class StatusEnvio
+
+    local aAux := {}
+
+    //Verifica se o horário atual é superior ao ao tempo decorrido desde a última consulta é superior ao tempo mínimo configurado para nova consulta
+    if hrs2Min( elapTime(self:jConfigPsh["horaLojaLote"], time()) ) > self:jConfigPsh["tempoConsultaLojaLote"]
+
+        //Consulta os registros que precisam ser atualizados com o status de processamento
+        self:registros()
+
+        if !(self:cTabela)->( eof() )
+
+            //Iniciando objeto de consulta de status
+            self:oRest      := fwRest():new("")
+            self:oRest:setTimeOut(self:jConfigPsh["timeout"])
+            self:oRest:setPath(self:jConfAssin["urlConsultaStatus"])
+
+            //Iniciando objeto da gravação em massa de erros
+            //O array com os campos que serão gravados pelo FwBulk deve estar na mesma ordem da inclusão do registro(self:oBulk:addData)
+            aAdd( aAux, {"MHL_FILIAL"})
+            aAdd( aAux, {"MHL_ALIAS" })
+            aAdd( aAux, {"MHL_RECNO" })
+            aAdd( aAux, {"MHL_STATUS"})
+            aAdd( aAux, {"MHL_DATA"  })
+            aAdd( aAux, {"MHL_HORA"  })
+            aAdd( aAux, {"MHL_CODMEN"})
+            aAdd( aAux, {"MHL_ERROR" })
+            aAdd( aAux, {"MHL_CHAVE" })
+            aAdd( aAux, {"MHL_CASSIN"})
+            aAdd( aAux, {"MHL_CPROCE"})
+            aAdd( aAux, {"MHL_UIDORI"})
+            aAdd( aAux, {"MHL_LOTE"  })
+
+            self:oBulk := FwBulk():new(retSqlName("MHL"), self:jConfigPsh["qtdBulk"])
+            self:oBulk:setFields(aAux)    
+
+            while !(self:cTabela)->( eof() )
+
+                self:cLote                          := (self:cTabela)->MIK_LOTE
+                self:aJsonRetorno                   := {}
+                self:jResultado                     := JsonObject():new()
+                self:jResultado["sucesso"]          := {}
+                self:jResultado["naoProcessados"]   := {}
+                self:jResultado["erros"]            := nil
+
+                //Consulta status de processamento no destino
+                if self:consultaStatus()
+
+                    //Trata retorno da consulta e prepara estrutura para gravação dos erros
+                    if self:trataRetorno()
+
+                        //Grava erros identificados
+                        self:grava()
+                    endIf
+                endIf
+
+                fwFreeArray(self:aJsonRetorno)  
+                fwFreeObj(self:jResultado)
+
+                (self:cTabela)->( dbSkip() )
+            endDo
+
+            self:oBulk:close()
+            self:oBulk:destroy()
+        endIf
+
+        (self:cTabela)->( dbCloseArea() )
+
+        //Finaliza o processo atualizando configurações.
+        self:finaliza()
+    endIf
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} registros
+Método para consultar os lotes que precisam ser atualizados com o status de processamento.
+
+@type    method
+@return  Character, Alias ou consulta aberta contendo os lotes pendentes de baixa
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method registros() as Variant Class StatusEnvio
+
+    Local cSql := ""
+
+    //Retorna os processos de envio ativos para abertura de lote
+    cSql := " SELECT DISTINCT MIK_LOTE "
+    cSql += " FROM " + RetSqlName("MIK")
+    cSql += " WHERE MIK_FILIAL = '" + xFilial("MIK") + "'"
+    cSql +=       " AND MIK_DTFECH >= '" + dToS(dDataBase - self:jConfigPsh["limiteDiasConsultaStatus"]) + "'"
+    cSql +=       " AND MIK_STATBX IN ('1', '4')"       //1=Pendente baixa, 2=Baixado com sucesso 3=Falha na baixa, 4=Baixa parcial"
+    cSql +=       " AND D_E_L_E_T_ = ' '"
+    cSql += " ORDER BY MIK_LOTE"
+    cSql +=       " OFFSET 0 ROWS"
+    cSql +=       " FETCH NEXT " + cValToChar(self:jConfigPsh["qtdRetornoQuery"]) + " ROWS ONLY"    
+
+    cSql := changeQuery(cSql)
+    ljGrvLog(/*cNumControl*/, "Antes da consulta que retorna os lotes com status pendente de baixa.", cSql)
+    self:cTabela := mpSysOpenQuery(cSql, /*cAlias*/, /*aSetField*/, /*cDriver*/, /*aBindParam*/)
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} consultaStatus
+Consulta o serviço remoto para obter o status de processamento do lote atual.
+
+@type    method
+@return  Logical, Verdadeiro se a consulta foi executada corretamente, falso caso contrário
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method consultaStatus() as Logical Class StatusEnvio
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} trataRetorno
+Método para tratar o retorno da consulta de status do lote e preparar os dados de registro de erros.
+
+@type    method
+@return  Logical, Verdadeiro se o retorno foi tratado com sucesso, falso caso haja falha
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method trataRetorno() as Logical Class StatusEnvio
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} grava
+Grava os erros identificados no processamento do lote e atualiza o status de baixa.
+Tabelas MHL e MIK.
+
+@type    method
+@return  Variant, Retorna nil após o término da gravação
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method grava() as Variant Class StatusEnvio
+
+    Local cStatusBx := "2"  //"1=Pendente baixa", "2=Baixado com sucesso", "3=Falha na baixa", "4=Baixa parcial"
+    Local cSql      := ""
+    Local aLojas    := {}
+    Local nLoja     := 0
+    Local nErro     := 0
+    Local cLoja     := ""
+    Local cErro     := ""
+    Local cChave    := ""
+
+    Begin Transaction
+
+        //Grava erros na MHL
+        if self:jResultado["erros"] <> nil
+
+            //3=Falha na baixa
+            cStatusBx := "3"
+
+            //Delete erros anteriores do lote
+            //Utiliza indice xpto-MHL_FILIAL, MHL_LOTE, R_E_C_N_O_, D_E_L_E_T_
+            cSql := " DELETE FROM " + retSqlName("MHL") 
+            cSql += " WHERE MHL_LOTE = '" + self:cLote + "'"
+
+            ljGrvLog(/*cNumControl*/, "Executa delete na MHL para remover erros anteriores do lote.", cSql)
+            tcSqlExec(cSql)
+
+            //MHR_FILIAL, MHR_LOTE, MHR_CPROCE, MHR_IDRET, R_E_C_N_O_, D_E_L_E_T_
+            MHR->( dbSetOrder(7) )
+
+            aLojas := self:jResultado["erros"]:getNames()
+
+            for nLoja:=1 to len(aLojas)
+
+                for nErro:=1 to len(self:jResultado["erros"][aLojas[nLoja]])
+
+                    cLoja := aLojas[nLoja]
+                    cErro := self:jResultado["erros"][aLojas[nLoja]][nErro]["erro"]
+
+                    //MHR_FILIAL, MHR_LOTE, MHR_CPROCE, MHR_IDRET, R_E_C_N_O_, D_E_L_E_T_
+                    if MHR->( dbSeek(xFilial("MHR") + self:cLote + self:jResultado["erros"][cLoja][nErro]["processo"] + self:jResultado["erros"][cLoja][nErro]["chave"]) )
+
+                        //MHQ_FILIAL, MHQ_CPROCE, MHQ_UUID, MHQ_EVENTO, MHQ_CHVUNI, R_E_C_N_O_, D_E_L_E_T_
+                        cChave := posicione("MHQ", 9, xFilial("MHQ") + MHR->MHR_CPROCE + MHR->MHR_UIDMHQ, "MHQ_CHVUNI")
+
+                        //O array de extrutura (aStrBulk) deve estar na mesma ordem da inclusão do registro no fwBulk (oStBulk:addData)
+                        //Chave - MHL_FILIAL, MHL_ALIAS, MHL_RECNO, MHL_SEQ, R_E_C_D_E_L_                        
+                        self:oBulk:addData(  {  cLoja           ,;  //MHL_FILIAL
+                                                "MHR"           ,;  //MHL_ALIAS
+                                                MHR->(recno())  ,;  //MHL_RECNO
+                                                "3"             ,;  //MHL_STATUS
+                                                dDataBase       ,;  //MHL_DATA
+                                                time()          ,;  //MHL_HORA
+                                                "STATUSBX"      ,;  //MHL_CODMEN
+                                                cErro           ,;  //MHL_ERROR
+                                                cChave          ,;  //MHL_CHAVE 
+                                                MHR->MHR_CASSIN ,;  //MHL_CASSIN
+                                                MHR->MHR_CPROCE ,;  //MHL_CPROCE
+                                                MHR->MHR_UIDMHQ ,;  //MHL_UIDORI
+                                                self:cLote      })  //MHL_LOTE
+                    endIf
+                next nErro
+            next nLoja
+
+            ljGrvLog(/*cNumControl*/, "Executa flush no fwBulk para gravar os registros.")
+            self:oBulk:flush()
+        endIf
+
+        if !empty(self:jResultado["naoProcessados"])
+
+            //1=Pendente baixa
+            cStatusBx := "1"
+
+            //Se existir registros não processados, mas já teve algum registro com erro ou sucesso, significa que foi processado parcialmente
+            //4=Baixa parcial
+            if self:jResultado["erros"] <> nil .or. !empty(self:jResultado["sucesso"])
+                cStatusBx := "4"
+            endIf
+        endIf
+
+        //Se for diferente de 1 significa que foi processado
+        if cStatusBx <> "1"
+
+            //Atualiza status de baixa da MIK
+            //Utiliza indice 1-MIK_FILIAL, MIK_LOTE, MIK_CPROCE, R_E_C_N_O_, D_E_L_E_T_
+            cSql := " UPDATE " + retSqlName("MIK") 
+            cSql += " SET MIK_STATBX = '" + cStatusBx + "'"
+            cSql += " WHERE MIK_FILIAL = '" + xFilial("MIK") + "'"
+            cSql += " AND MIK_LOTE = '" + self:cLote + "'"
+            cSql += " AND D_E_L_E_T_ = ' '"
+
+            ljGrvLog(/*cNumControl*/, "Executa update na MIK para atualizar o status de baixa.", cSql)
+            tcSqlExec(cSql)
+        endIf
+
+    End Transaction
+
+    fwFreeArray(aLojas)
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} finaliza
+Finaliza o processo atualizando configurações.
+
+@type    method
+@return  Variant, Retorna nil após o término
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method finaliza() as Variant Class StatusEnvio
+
+    //Atualiza a hora da última consulta na tabela de configuração para controle do próximo agendamento
+    pshGrvCad("PSH", MODEL_OPERATION_UPDATE, {  { "MIHMASTER", "MIH_DESC"    , "CONFIGURACAO"}, ;
+                                                { "MIHDETAIL", "horaLojaLote", time()        }} )
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} valida
+Efetua validações necessárias para execução do processo
+
+@type    method
+@return  Variant
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method valida() as Variant Class StatusEnvio
+
+    self:cErro := ""
+
+    //Verifica se os campos existem no dicionário de dados (SX3)
+    if MIK->( columnPos("MIK_STATBX") ) == 0 .or. MHL->( columnPos("MHL_LOTE") ) == 0
+        self:lSucesso   := .F.
+        self:cErro      := STR0003          //"Campos necessários para execução do processo não existem no dicionário de dados: MIK_STATBX, MHL_LOTE"
+        self:cErro      += CRLF + STR0004   //"Aplique o último pacote acumulado do Varejo: https://tdn.totvs.com/pages/releaseview.action?pageId=532654397"
+    endIf
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getSucesso
+Retorna o conteúdo da propriedade lSucesso.
+
+@type    method
+@return  Logical, Conteúdo da propriedade lSucesso
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method getSucesso() as Logical Class StatusEnvio
+    if !self:lSucesso
+        ljxjMsgErr(self:cErro, /*cSolucao*/, "StatusEnvio", /*xVar*/)
+    endIf
+Return self:lSucesso

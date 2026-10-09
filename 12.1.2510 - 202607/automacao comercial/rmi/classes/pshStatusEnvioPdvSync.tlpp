@@ -1,0 +1,281 @@
+#INCLUDE "TOTVS.CH"
+#INCLUDE "PSHSTATUSENVIO.CH"
+
+namespace totvs.protheus.retail.rmi.classes.pshStatusEnvioPdvSync
+
+using namespace totvs.protheus.retail.rmi.classes.pshStatusEnvio
+using namespace totvs.protheus.retail.rmi.classes.pdvsync
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Classe StatusEnvioPdvSync
+Classe especializada em consulta de status de envio usando o serviço PDV Sync,
+responsável por mapear processos, consultar o status do lote e tratar os retornos.
+
+@type    class
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Class StatusEnvioPdvSync from StatusEnvio
+
+    Data oPdvSync                       as Object       //Objeto da classe PdvSync para consulta de status do lote
+    Data oProcessos                     as Object       //Objeto com os processos ativos de envio para consulta de status
+
+	Public Method new()                 as Object
+
+    Protected Method consultaStatus()   as Logical
+    Protected Method trataRetorno()     as Logical
+    Protected Method finaliza()         as Variant
+
+    Private Method getProcessos()       as Variant
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Método construtor da classe StatusEnvioPdvSync, que inicializa a configuração do PDV Sync
+e carrega os processos ativos de envio.
+
+@type    method
+@return  Object, Instância inicializada de StatusEnvioPdvSync
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method new() as Object Class StatusEnvioPdvSync
+
+    _Super:new("PDVSYNC")
+
+    self:oPdvSync := PdvSync():New( self:jConfAssin["autenticacao"]["tenent"]         ,;
+                                    self:jConfAssin["autenticacao"]["user"]           ,;
+                                    self:jConfAssin["autenticacao"]["password"]       ,;
+                                    self:jConfAssin["autenticacao"]["clientId"]       ,;
+                                    self:jConfAssin["autenticacao"]["clientSecret"]   ,;
+                                    self:jConfAssin["autenticacao"]["environment"]    )
+
+    self:getProcessos()
+
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} consultaStatus
+Consulta o serviço PDV Sync para obter o status de processamento do lote atual,
+armazenando as páginas de retorno em self:aJsonRetorno.
+
+@type    method
+@return  Logical, Verdadeiro se a consulta foi realizada com sucesso, falso caso contrário
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method consultaStatus() as Logical Class StatusEnvioPdvSync
+
+    Local aHeader   := {}
+    Local lRetorno  := .F.
+    Local cRetorno  := ""
+    Local lContinua := .T.
+    Local nPosPagina:= 0
+    Local nPagina   := 0
+    Local aAux      := {}
+
+    //Carrega o aHeader com os dados de autenticação
+    if (aAux := self:oPdvSync:Token())[1]
+        aHeader := self:oPdvSync:getHeader()
+    endIf
+    ljGrvLog(/*cNumControl*/, "Após retorno da autenticação:", {aAux, aHeader})
+
+    if len(aHeader) > 0
+
+        //Cria posicão para informar a pagina
+        aAdd(aHeader, "")
+        nPosPagina := len(aHeader)
+
+        //Seta parametros de consulta
+        self:oRest:setGetParams("inquilino=" + self:jConfAssin["inquilino"] + "&loteorigem=" + allTrim(self:cLote))
+
+        while lContinua
+
+            //Incrementa a página para o próximo retorno
+            nPagina++
+            aHeader[nPosPagina] := "pagina: " + cValToChar(nPagina)
+
+            //Busca o lote
+            ljGrvLog(/*cNumControl*/, "Antes da consulta de status:", classDataArr(self:oRest))
+            if self:oRest:get(aHeader)  
+
+                lRetorno := .T.
+                cRetorno := deCodeUTF8( self:oRest:getResult() )
+
+                aAdd( self:aJsonRetorno, JsonObject():new() )
+                self:aJsonRetorno[nPagina]:fromJson(cRetorno)
+
+                //Verifica se tem próxima página
+                lContinua := self:aJsonRetorno[nPagina]:hasProperty("data") .and. self:aJsonRetorno[nPagina]["data"]:hasProperty("hasnext") .and. self:aJsonRetorno[nPagina]["data"]["hasnext"]
+            else
+
+                lRetorno    := .F.
+                cRetorno    := STR0005 + cLote + " - " + self:oRest:getLastError() + " - " + IIF( valType(self:oRest:getResult()) == "C", self:oRest:getResult(), "" )  //"Não foi possível realizar a consulta do status do lote: "
+                lContinua   := .F.
+                ljxjMsgErr(cRetorno, /*cSolucao*/, /*cRotina*/, /*cVar*/)
+            endIf
+            ljGrvLog(/*cNumControl*/, "Após consulta de status:", {lRetorno, cRetorno, classDataArr(self:oRest)})
+
+        endDo
+    endIf
+
+    fwFreeArray(aHeader)
+
+Return lRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} trataRetorno
+Trata o retorno da consulta de status do lote, identificando processos e erros
+para montagem da estrutura de gravação de resultados.
+
+@type    method
+@return  Logical, Verdadeiro se o retorno foi tratado com sucesso, falso caso contrário
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method trataRetorno() as Logical Class StatusEnvioPdvSync
+
+    Local lRetorno  := .F.
+    Local jRetorno  := nil
+    Local nPagina   := 0
+    Local nLojaLote := 0
+    Local cLoja     := ""    
+    Local nErro     := 0
+    Local cProcesso := ""
+    Local cChave    := ""
+    Local cErro     := ""
+    Local nPos      := 0
+
+    for nPagina:=1 to len(self:aJsonRetorno)
+
+        jRetorno := self:aJsonRetorno[nPagina]
+
+        if jRetorno["success"]
+
+            if jRetorno:hasProperty("data") .and. jRetorno["data"]:hasProperty("lojaLotes") .and. valType(jRetorno["data"]["lojaLotes"]) == "A"
+
+                lRetorno := .T.
+
+                for nLojaLote:=1 to len(jRetorno["data"]["lojaLotes"])
+
+                    cLoja := jRetorno["data"]["lojaLotes"][nLojaLote]["idRetaguardaLoja"]
+
+                    //0-EmPreparacao, 1-EmProcessamento, 2-Disponivel e 4-EmProcessoDeBaixa
+                    if jRetorno["data"]["lojaLotes"][nLojaLote]["status"] <= 2 .or. jRetorno["data"]["lojaLotes"][nLojaLote]["status"] == 4
+
+                        aAdd(self:jResultado["naoProcessados"], cLoja)
+
+                    //5-BaixadoComSucesso
+                    elseIf jRetorno["data"]["lojaLotes"][nLojaLote]["status"] == 5
+                        
+                        aAdd(self:jResultado["sucesso"], cLoja)
+
+                    //3-Indisponivel e 6-BaixadoComErro
+                    elseIf jRetorno["data"]["lojaLotes"][nLojaLote]["status"] == 3 .or. jRetorno["data"]["lojaLotes"][nLojaLote]["status"] == 6
+
+                        self:jResultado["erros"] := JsonObject():new() 
+                        self:jResultado["erros"][cLoja] := {}
+                        
+                        for nErro:=1 to len(jRetorno["data"]["lojaLotes"][nLojaLote]["errosIdentificados"])
+
+                            //Carrega processo
+                            self:oProcessos:get(jRetorno["data"]["lojaLotes"][nLojaLote]["errosIdentificados"][nErro]["tipoLojaLote"], @cProcesso)
+                            
+                            cChave := jRetorno["data"]["lojaLotes"][nLojaLote]["errosIdentificados"][nErro]["idRetaguarda"]
+                            cErro  := jRetorno["data"]["lojaLotes"][nLojaLote]["errosIdentificados"][nErro]["erro"]
+
+                            //Verifica se ja tem o erro para o processo e idRetaguarda
+                            if ( nPos := aScan( self:jResultado["erros"][cLoja], {|x| x["processo"] == cProcesso .and. x["chave"] == cChave} ) ) == 0
+                                aAdd(self:jResultado["erros"][cLoja], JsonObject():new())
+                                nPos := len(self:jResultado["erros"][cLoja])
+                            else
+                                cErro := self:jResultado["erros"][cLoja][nPos]["erro"] + " - " + cErro
+                            endIf
+
+                            self:jResultado["erros"][cLoja][nPos]["processo"]   := cProcesso
+                            self:jResultado["erros"][cLoja][nPos]["chave"]      := cChave
+                            self:jResultado["erros"][cLoja][nPos]["erro"]       := cErro
+                        next nErro
+                    endIf
+
+                next nLojaLote
+            endIf
+        endIf
+
+    next nPagina
+
+Return lRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getProcessos
+Carrega o mapeamento de processos ativos de envio para de/para entre
+PDV Sync e Protheus, armazenando o resultado em self:oProcessos.
+
+@type    method
+@return  Variant, Retorna nil após carregar os processos ativos
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method getProcessos() as Variant Class StatusEnvioPdvSync
+
+    Local aArea     := GetArea()
+    Local cSql      := ""
+    Local cTabela   := ""
+    Local oAux      := JsonObject():new()
+
+    self:oProcessos := tHashMap():new()
+
+    //Retorna os processos de envio ativos
+    cSql := " SELECT MHP_CPROCE, MHP_CONFIG "
+    cSql += " FROM " + RetSqlName("MHP")
+    cSql += " WHERE MHP_FILIAL = '" + xFilial("MHP") + "'"
+    cSql +=       " AND MHP_CASSIN = '" + padR("PDVSYNC", tamSx3("MHP_CASSIN")[1]) + "'"
+    cSql +=       " AND MHP_TIPO = '1'"   //1=Envio
+    cSql +=       " AND MHP_ATIVO = '1'"  //1=Sim
+    cSql +=       " AND D_E_L_E_T_ = ' '"
+
+    cSql := changeQuery(cSql)
+    ljGrvLog(/*cNumControl*/, "Antes da consulta que retorna os processos de envio ativos.", cSql)
+    cTabela := mpSysOpenQuery(cSql, /*cAlias*/, /*aSetField*/, /*cDriver*/, /*aBindParam*/)
+
+    while !(cTabela)->( Eof() )
+        
+        //Verifica se o json de configuração esta valido.
+        if oAux:fromJson( (cTabela)->MHP_CONFIG ) == nil
+            self:oProcessos:set(val(oAux["codigotipo"]), (cTabela)->MHP_CPROCE)
+        endIf
+
+        (cTabela)->( dbSkip() )
+    endDo
+    (cTabela)->( dbCloseArea() )
+
+    fwFreeObj(oAux)
+
+    restArea(aArea)
+
+Return nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} finaliza
+Finaliza o processo atualizando configurações.
+
+@type    method
+@return  Variant, Retorna nil após o término
+@author  Rafael Tenorio da Costa
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Method finaliza() as Variant Class StatusEnvioPdvSync
+
+    _Super:finaliza()
+
+    //Envia sinal de execução para os micros-Serviços do SYNC
+    pshPostStatus("STATUSPDVSYNC", .T.)
+
+Return nil

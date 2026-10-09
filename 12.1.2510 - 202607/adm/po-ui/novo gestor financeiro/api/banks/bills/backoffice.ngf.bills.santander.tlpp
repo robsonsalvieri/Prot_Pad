@@ -1,0 +1,1268 @@
+#include 'tlpp-core.th'
+#include "BACKOFFICE.NGF.BILLS.SANTANDER.CH"
+#include "COLORS.CH"
+
+NameSpace totvs.protheus.backoffice.ngf.santander
+Using NameSpace totvs.protheus.backoffice.ngf.bills.functions
+
+/*/{Protheus.doc} Prepara XML para envio ao Santander
+    @type function
+    @version 1.0
+    @author francisco.oliveira
+    @since 26/11/2021
+    @param cXmlSantan Layout As Character
+    @return XML ajustado para o Santander
+/*/
+
+//Dados de entrada do serviço – Header/Dados – Inclui, altera e baixa boleto
+
+Function prepare033(oLayout As Json, cXMLAuto as Character) As Character
+
+	Local cWsdlURL	 := ''	As Character
+	Local cErroXml	 := ''  As Character
+	Local cWarnXml	 := ''  As Character
+	Local cResError  := ''  As Character
+	Local cTicket	 := ''  As Character
+	Local cSoap		 := ''  As Character
+	Local cRegBoleto := ''  As Character
+	Local cInfo		 := ''  As Character
+	Local cText		 := ''  As Character
+	Local cXmlLayout := '' 	As Character
+	Local lRet		 := .F.	As Logical
+	Local lExistInfo := .F.	As Logical
+	Local oWsdl       		As Object
+	Local oBodyXML          As Object
+	Local lRotAuto	:= .F.  As Logical
+	Local cMessage  := ""	As Character
+
+	Local cCert	:= NGFConvLin(oLayout['credentials']['certificate']['cert'])
+	Local cKey	:= NGFConvLin(oLayout['credentials']['certificate']['key'])
+
+	DEFAULT cXMLAuto := ""
+
+	If !Empty(cXMLAuto)
+		lRotAuto := .T.
+	Endif
+
+	oWsdl := TWsdlManager():New()
+
+	oWsdl:cSSLCertFile		:= cCert
+	oWsdl:cSSLKeyFile		:= cKey
+	oWsdl:lSSLInsecure 		:= .T.
+
+	oLayout['XmlSantanderError']    := ""
+	oLayout['XmlSantanderRequest']  := ""
+	oLayout['XmlSantanderTicket']   := ""
+	oLayout['XmlSantanderResponse'] := ""
+
+	cWsdlURL := "https://ymbdlb.santander.com.br/dl-ticket-services/TicketEndpointService/TicketEndpointService.wsdl"
+
+	cXmlLayout := GeraTicket(oLayout)
+
+	//Permite realizar gravações complementares no XML para transmissao
+	If FindFunction('getF713LYT')
+		oLayout['XmlSantanderError'] := getF713LYT(@cXmlLayout, SA6->A6_BCOOFI)
+	EndIf
+	oLayout['XmlSantanderRequest'] := cXmlLayout
+
+	If Empty(oLayout['XmlSantanderError'])
+		If (File(cCert) .AND. File(cKey)) .or. lRotAuto
+			lRet := oWsdl:ParseURL( cWsdlURL ) 
+			If lRet .or. lRotAuto
+				lRet := oWsdl:SetOperation( "create" )
+				If lRet .or. lRotAuto
+					oWsdl:SendSoapMsg(oLayout['XmlSantanderRequest'])
+					cSoap := (oWsdl:GetSoapResponse() )
+
+					If lRotAuto
+						cSoap := cXMLAuto
+					Endif
+
+					oBodyXML  := XMLPARSER(cSoap , "_", @cErroXml, @cWarnXml)
+
+					//Verificar se existe no soap o _DLWIN ou _NS2
+					cInfo := 'oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY:_DLWMIN_CREATERESPONSE:_TICKETRESPONSE:_RETCODE:TEXT'
+					cText := 'oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY:_DLWMIN_CREATERESPONSE:_TICKETRESPONSE:_TICKET:TEXT'
+					cMessage := 'oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY:_DLWMIN_CREATERESPONSE:_TICKETRESPONSE:_MESSAGE:TEXT'
+					lExistInfo := XmlChildEx(oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY,'_DLWMIN_CREATERESPONSE') <> nil
+					If !lExistInfo
+						cInfo := 'oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY:_NS2_CREATERESPONSE:_TICKETRESPONSE:_RETCODE:TEXT'
+						cText := 'oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY:_NS2_CREATERESPONSE:_TICKETRESPONSE:_TICKET:TEXT'
+						cMessage := 'oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY:_NS2_CREATERESPONSE:_TICKETRESPONSE:_MESSAGE:TEXT'
+						lExistInfo := XmlChildEx(oBodyXML:_SOAPENV_ENVELOPE:_SOAPENV_BODY,'_NS2_CREATERESPONSE') <> nil
+					Endif
+
+					If lExistInfo
+						If &cInfo == "0" 
+							cTicket := &cText
+							oLayout['XmlSantanderTicket'] := cTicket
+							FreeObj(oWsdl)
+							oWsdl := Nil
+							oWsdl := TWsdlManager():New()
+							oWsdl:cSSLCertFile	:= cCert
+							oWsdl:cSSLKeyFile	:= cKey
+							oWsdl:lSSLInsecure 	:= .T.
+							cWsdlURL := "https://ymbcash.santander.com.br/ymbsrv/CobrancaV3EndpointService/CobrancaV3EndpointService.wsdl"
+							lRet := oWsdl:ParseURL( cWsdlURL )
+							If !lRotAuto
+								If lRet
+									lRet := oWsdl:SetOperation( "registraTitulo" )
+									If lRet
+										cRegBoleto := GeraRegBol(cTicket, oLayout['credentials']['environment'], oLayout['credentials']['estacao'])
+										oWsdl:SendSoapMsg(cRegBoleto)
+										cSoap := (oWsdl:GetSoapResponse() )
+										oLayout['XmlSantanderResponse'] := cSoap
+									Else
+										oLayout['XmlSantanderError'] := "Operação não encontrada: " + oWsdl:cError
+									Endif
+								Else
+									oLayout['XmlSantanderError'] := "Erro na comunicação: " + oWsdl:cError
+								Endif
+							Endif
+							FreeObj(oWsdl)
+						Else
+							cResError := &cMessage
+							oLayout['XmlSantanderError'] := cResError
+						Endif
+					Else
+						oLayout['XmlSantanderError'] := 'Falha no retorno do banco. Por favor, verifique. (_NS2 e _DLWMIN ausentes.)'
+						oLayout['XmlSantanderResponse'] := cSoap
+					Endif
+				Else
+					oLayout['XmlSantanderError'] := "Operação não encontrada: " + oWsdl:cError
+				Endif
+			Else
+				oLayout['XmlSantanderError'] := "Erro na comunicação: " + oWsdl:cError
+			Endif
+		Else
+			oLayout['XmlSantanderError'] := "Arquivos de certificado nao encontrados: Verificar os arquivos na pasta indicada em configuracao de contas -> Editar -> Configurar Certificado"
+		EndIf
+	EndIf
+
+Return
+
+/*/{Protheus.doc} Prepara XML para envio ao Santander
+    @type function
+    @version 1.0
+    @author francisco.oliveira
+    @since 29/11/2021
+    @param cXmlSantan Layout As Character
+    @return XML ajustado para o Santander
+/*/
+
+Static Function GeraRegBol(cTicket As Character, cEnvironm As Character, cEstacao As Character ) As Character
+
+	Local cGeraBolet	:= "" As Character
+	Local tpAmbiente	:= "" As Character // T = Teste P = Produção
+	Local cNSU			:= "" As Character
+	Local cDataAux		:= "" As Character
+	Local cDtNSU		:= "" As Character
+
+	If cEnvironm == "2" // Homologação
+		tpAmbiente	:= "T" // T = Teste P = Produção
+		cNSU		:= "TST" + PadL(SEE->EE_FAXATU, 17, "0")
+	Else
+		tpAmbiente 	:= "P" // T = Teste P = Produção
+		cNSU		:= PadL(SEE->EE_FAXATU, 20, "0")
+	Endif
+
+	cDataAux := DTOS(Date())
+	cDtNSU	 := SubStr(cDataAux, 7, 2) + SubStr(cDataAux, 5, 2) + SubStr(cDataAux, 1, 4)
+
+	cGeraBolet += "<soapenv:Envelope xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' " + Chr(10)
+	cGeraBolet += "xmlns:impl='http://impl.webservice.v3.ymb.app.bsbr.altec.com/'> " + Chr(10)
+	cGeraBolet += "<soapenv:Header/>" + Chr(10)
+	cGeraBolet += "<soapenv:Body>" + Chr(10)
+	cGeraBolet += "	<impl:registraTitulo>" + Chr(10)
+	cGeraBolet += "		<dto>" + Chr(10)
+	cGeraBolet += "			<dtNsu>" + cDtNSU + "</dtNsu>" + Chr(10)
+	cGeraBolet += "			<estacao>" + cEstacao + "</estacao>" + Chr(10)
+	cGeraBolet += "			<nsu>" + cNSU + "</nsu>" + Chr(10)
+	cGeraBolet += "			<ticket>" + cTicket + "</ticket>" + Chr(10)
+	cGeraBolet += "			<tpAmbiente>" + tpAmbiente + "</tpAmbiente>" + Chr(10)
+	cGeraBolet += "		</dto>" + Chr(10)
+	cGeraBolet += "	</impl:registraTitulo>" + Chr(10)
+	cGeraBolet += "</soapenv:Body>" + Chr(10)
+	cGeraBolet += "</soapenv:Envelope>" + Chr(10)
+
+Return cGeraBolet
+
+/*/{Protheus.doc} Prepara XML para envio ao Santander Geração de TICKET
+    @type function
+    @version 1.0
+    @author francisco.oliveira
+    @since 26/11/2021
+    @param cXmlSantan Layout As Character
+    @return XML ajustado para o Santander
+/*/
+
+Static Function GeraTicket(oLayout As Json) As Character
+
+	Local cXmlTicket	:= ""   As Character
+	Local cIdCNAB       := ""   As Character
+	Local cProtesto		:= "0"  As Character
+	Local cDiasProt		:= "00" As Character
+	Local cDiasRec		:= ""   As Character
+	Local cMensag1		:= ""   As Character
+	Local cFormData     := ""   As Character
+	Local cDataAux		:= ""   As Character
+	Local cCodEmprSEE	:= ""   As Character
+	Local cNossoNum		:= ""   As Character
+	Local cVlrAbat      := ""   As Character
+	Local cNrCPFCNPJ    := ""   As Character
+	Local cPercMulta	:= ""   As Character
+	Local cDiasMulta	:= ""   As Character
+	Local cPercJuros	:= ""   As Character
+	Local cTipoDesc		:= ""   As Character
+	Local cVlrDesc		:= ""   As Character
+	Local cDtLimDesc	:= ""   As Character
+	Local cNumTit		:= ""   As Character
+	Local cTpPessoa		:= ""	As Character
+	Local aChvPIX		:= {}	As Array
+	Local cTipoChavePIX := ""	As Character
+
+	cCodEmprSEE	:= PadL(Alltrim(SEE->EE_CODEMP), 9, "0") // Codigo do convenio informado pelo banco.
+	cNrCPFCNPJ	:= PadL(Alltrim(SA1->A1_CGC), 15, "0")
+	cNossoNum	:= PadL(Alltrim(NossoNum()), 12, "0")
+	cNossoNum += MODULO11(cNossoNum, 2, 9)
+	cIdCNAB		:= PadL(AllTrim(SE1->E1_IDCNAB), 15, "0")
+
+	If oLayout:hasProperty('NUM_TIT_BENEF') .And. !Empty(oLayout['NUM_TIT_BENEF'])
+        cNumTit := Upper(oLayout['NUM_TIT_BENEF'])
+		oLayout:DelName('NUM_TIT_BENEF')
+    Else
+        cNumTit := SE1->E1_NUM
+    EndIf
+
+	If Len(Alltrim(SA1->A1_CGC)) < 14
+		cTpPessoa := "01"
+	Else
+		cTpPessoa := "02"
+	Endif
+
+	cXmlTicket += "<soapenv:Envelope xmlns:soapenv='http://schemas.xmlsoap.org/soap/envelope/' " + Chr(10)
+	cXmlTicket += "xmlns:impl='http://impl.webservice.dl.app.bsbr.altec.com/'>" + Chr(10)
+	cXmlTicket += "<soapenv:Header/>" + Chr(10)
+	cXmlTicket += 	"<soapenv:Body>" + Chr(10)
+	cXmlTicket += 		"<impl:create>" + Chr(10)
+	cXmlTicket += 			"<TicketRequest>" + Chr(10)
+	cXmlTicket += 				"<dados>" + Chr(10)
+
+	// DADOS DO BANCO E EMPRESA (CLIENTE)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>CONVENIO.COD-BANCO</key>" + Chr(10)
+	cXmlTicket += 						"<value>0033</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>CONVENIO.COD-CONVENIO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cCodEmprSEE + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// DADOS DO PAGADOR
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.TP-DOC</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cTpPessoa + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.NUM-DOC</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cNrCPFCNPJ + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.NOME</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + SubStr(Alltrim(oLayout['PAGADOR']['NOME']), 1, 40) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.ENDER</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + SubStr(Alltrim(oLayout['ENDERECO']['LOGRADOURO']), 1, 40) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.BAIRRO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + SubStr(Alltrim(oLayout['ENDERECO']['BAIRRO']), 1, 30) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.CIDADE</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + SubStr(Alltrim(oLayout['ENDERECO']['CIDADE']), 1, 20) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.UF</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + SubStr(oLayout['ENDERECO']['UF'], 1, 2) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>PAGADOR.CEP</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + SubStr(oLayout['ENDERECO']['CEP'], 1, 8) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES DO BOLETO
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.NOSSO-NUMERO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cNossoNum + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.SEU-NUMERO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cNumTit + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.DT-VENCTO</key>" + Chr(10)
+
+	cFormData  := StrTran(oLayout['DATA_VENCIMENTO'],".","")
+
+	cXmlTicket += 						"<value>" + cFormData + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	cDataAux   := DtoS(SE1->E1_EMISSAO)
+	cFormData  := SubStr(cDataAux, 7, 2) + SubStr(cDataAux, 5, 2) + SubStr(cDataAux, 1, 4)
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.DT-EMISSAO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cFormData + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.ESPECIE</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + PadL(AllTrim(SEA->EA_ESPECIE), 2, "0") + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.VL-NOMINAL</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['VALOR'], 15, 0) + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES DA MULTA
+
+	If oLayout['MULTA']['TIPO'] == 1
+		cPercMulta := totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['MULTA']['PERCENTUAL'], 5, 2)
+		cDiasMulta := totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['MULTA']['DIAS'], 2)
+	Else
+		cPercMulta := "00000"
+		cDiasMulta := "00"
+	Endif
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.PC-MULTA</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cPercMulta + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.QT-DIAS-MULTA</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cDiasMulta + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES DE JUROS
+
+	If oLayout['JUROS_MORA']['TIPO'] == 1 //"Dia"
+		cPercJuros := totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['JUROS_MORA']['PERCENTUAL'], 5, 2)
+	Else
+		cPercJuros := "00000"
+	Endif
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.PC-JURO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cPercJuros + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES DE DESCONTOS
+
+	cTipoDesc	:= "0"
+	cVlrDesc	:= "000000000000000"
+	cDtLimDesc	:= "00000000"
+
+	If oLayout['DESCONTO']['TIPO'] == 1 // Valor fixo até a data informada
+		If Val(oLayout['DESCONTO']['VALOR']) > 0
+			cTipoDesc	:= "1"
+			cDataAux  	:= DtoS(oLayout['DESCONTO']['DATA'])
+			cVlrDesc	:= totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['DESCONTO']['VALOR'], 15, 2)
+			cDtLimDesc 	:= SubStr(cDataAux, 7, 2) + SubStr(cDataAux, 5, 2) + SubStr(cDataAux, 1, 4)
+		Endif
+	ElseIf oLayout['DESCONTO']['TIPO'] == 2 // Valor por antecipação dia corrido
+		If Val(oLayout['DESCONTO']['VALOR']) > 0
+			cDataAux  	:= Dtos(DaySub(Stod(cDataAux), oLayout['DESCONTO']['DIAS']))
+			cDtLimDesc 	:= SubStr(cDataAux, 7, 2) + SubStr(cDataAux, 5, 2) + SubStr(cDataAux, 1, 4)
+			cTipoDesc	:= "2"
+			cVlrDesc	:= totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['DESCONTO']['VALOR'], 15, 2)
+		Endif
+	ElseIf oLayout['DESCONTO']['TIPO'] == 3 // Valor por antecipação dia útil
+		If Val(oLayout['DESCONTO']['VALOR']) > 0
+			cDataAux    := DtoS(CalcDiaDta(StoD(cDataAux), oLayout['DESCONTO']['DIAS'], .T. ))
+			cDtLimDesc 	:= SubStr(cDataAux, 7, 2) + SubStr(cDataAux, 5, 2) + SubStr(cDataAux, 1, 4)
+			cTipoDesc	:= "3"
+			cVlrDesc	:= totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['DESCONTO']['VALOR'], 15, 2)
+		Endif
+	Endif
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.TP-DESC</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cTipoDesc + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.VL-DESC</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cVlrDesc + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.DT-LIMI-DESC</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cDtLimDesc + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	cVlrAbat := totvs.protheus.backoffice.ngf.bills.functions.zeros(oLayout['VALOR_ABATIMENTO'], 15, 0)
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.VL-ABATIMENTO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cVlrAbat + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+
+	// INFORMAÇÕES DO PROTESTO
+
+	If SEE->EE_DIASPRT > "0" .And. !Empty(SEE->EE_DIASPRT)
+		cProtesto := "1"
+		cDiasProt := PadL(Alltrim(SEE->EE_DIASPRT), 2, "0")
+	Endif
+
+	cXmlTicket += 						"<key>TITULO.TP-PROTESTO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cProtesto + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.QT-DIAS-PROTESTO</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cDiasProt + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES SOBRE A BAIXA DO BOLETO
+
+	cDiasRec := PadL(SEE->EE_DIASREC, 2, "0")
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.QT-DIAS-BAIXA</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cDiasRec + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES DO PAGAMENTO
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.TP-PAGAMENTO</key>" + Chr(10)
+	cXmlTicket += 						"<value>1</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.VL-PERC-MINIMO</key>" + Chr(10)
+	cXmlTicket += 						"<value>000000000000000</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>TITULO.VL-PERC-MAXIMO</key>" + Chr(10)
+	cXmlTicket += 						"<value>000000000000000</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+
+	// INFORMAÇÕES DO PIX
+	// Manter o nome da tag com letra minuscula, para que todos os bancos tenham a tag padronizada
+	If FindFunction("totvs.protheus.backoffice.ngf.bills.functions.isLayoutBolPIX()") .and. isLayoutBolPIX(oLayout, @aChvPIX)
+		Do Case
+			Case aChvPIX[1][1] == "01" // Telefone
+				cTipoChavePIX := "03"
+			Case aChvPIX[1][1] == "02" // E-mail
+				cTipoChavePIX := "04"
+			Case aChvPIX[1][1] == "03" // CPF/CNPJ
+				If Len(aChvPIX[1][2]) > 11
+					cTipoChavePIX := "02"
+				Else
+					cTipoChavePIX := "01"
+				Endif
+			Case aChvPIX[1][1] == "04"	// Chave Aleatória
+				cTipoChavePIX := "05"
+		End Case
+
+		cXmlTicket += 					"<entry>" + Chr(10)
+		cXmlTicket += 						"<key>TITULO.TIPO-CHAVE-DICT</key>" + Chr(10)
+		cXmlTicket += 						"<value>" + cTipoChavePIX + "</value>" + Chr(10)
+		cXmlTicket += 					"</entry>" + Chr(10)
+		cXmlTicket += 					"<entry>" + Chr(10)
+		cXmlTicket += 						"<key>TITULO.COD-CHAVE-DICT</key>" + Chr(10)
+		cXmlTicket += 						"<value>" + aChvPIX[1][2] + "</value>" + Chr(10)
+		cXmlTicket += 					"</entry>" + Chr(10)
+	Endif
+
+	// INFORMAÇÕES DA MENSAGEM
+
+	cMensag1 :=  Iif(!Empty(AllTrim(SEE->EE_FORMEN1)), SubStr(AllTrim(&(SEE->EE_FORMEN1)), 1, 72 ), "")
+
+	cXmlTicket += 					"<entry>" + Chr(10)
+	cXmlTicket += 						"<key>MENSAGEM</key>" + Chr(10)
+	cXmlTicket += 						"<value>" + cMensag1 + "</value>" + Chr(10)
+	cXmlTicket += 					"</entry>" + Chr(10)
+	cXmlTicket += 				"</dados>" + Chr(10)
+	cXmlTicket += 			"<expiracao>100</expiracao>" + Chr(10)
+	cXmlTicket += 			"<sistema>YMB</sistema>" + Chr(10)
+	cXmlTicket += 			"</TicketRequest>" + Chr(10)
+	cXmlTicket += 		"</impl:create>" + Chr(10)
+	cXmlTicket += 	"</soapenv:Body>" + Chr(10)
+	cXmlTicket += "</soapenv:Envelope>" + Chr(10)
+
+	oLayout['agencia']   := Alltrim(getAgenciaSEE())
+	oLayout['nrcpfcnpj'] := cNrCPFCNPJ
+
+Return cXmlTicket
+
+/*/{Protheus.doc} Santander033
+    Gera o boleto do Banco Caixa Economica Federal
+    @type function
+    @version  12.1.33
+    @author francisco.oliveira
+    @since 01/12/2021
+    @param cData, Character, dados do boleto
+    @param oPrint, Object, Objeto do FWMSPrinter
+/*/
+Function Santander033(cData As Character, oPrint AS Object)
+
+	Local aDados      As Array
+	Local nOffset     As Numeric
+	Local nOffsetLine As Numeric
+	Local nOffsetRec  As Numeric
+	Local nOffsetBol  As Numeric
+	Local nLinha      As Numeric
+	Local nColuna     As Numeric
+	Local nLimBen     As Numeric
+	Local nLimPag     As Numeric
+	Local nI 	      As Numeric
+	Local nMaxCharLin As Numeric
+	Local nIniLinha   As Numeric
+	Local nTamUrl     As Numeric
+	Local nNumLin     As Numeric
+	Local nOffsetPix  As Numeric
+	Local nNextLin    As Numeric
+	Local nLinSpace   As Numeric
+	Local oData       As Object
+	Local oFont7      As Object
+	Local oFont8      As Object
+	Local oFont10     As Object
+	Local oFont11     As Object
+	Local oFont15     As Object
+	Local oFont14n    As Object
+	Local cTextAux	  As Character
+	Local cVlrAux	  As Character
+	Local ctxtAux	  As Character
+
+	oData := JsonObject():new()
+	oData:fromJson(cData)
+
+	oFont7     := TFont():New("Arial" ,9,7,.T.,.T.,5,.T.,5,.T.,.F.)
+	oFont8     := TFont():New("Arial" ,9,8,.T.,.F.,5,.T.,5,.T.,.F.)
+	oFont8n    := TFont():New("Arial" ,9,8,.T.,.T.,5,.T.,5,.T.,.F.)
+	oFont10    := TFont():New("Arial" ,9,10,.T.,.T.,5,.T.,5,.T.,.F.)
+	oFont11    := TFont():New("Arial" ,9,11,.T.,.T.,5,.T.,5,.T.,.F.)
+	oFont15    := TFont():New("Arial" ,9,17,.T.,.T.,5,.T.,5,.T.,.F.)
+	oFont14n   := TFont():New("Arial" ,9,16,.T.,.T.,5,.T.,5,.T.,.F.)
+
+	nLinha      := 10
+	nColuna     := 10
+	nOffsetBol  := 0
+	nOffsetRec  := 0
+	nOffsetLine := 0
+	aDados      := {}
+	nLimBen		:= 45
+	nLimPag		:= 65
+	nLinSpace	:= 10
+	nNextLin	:= 0
+	nOffsetPix	:= 0
+
+	// Beneficiario
+	aAdd(aDados, oData['beneficiario']['banco'])     // 1 - Numero do Banco
+	aAdd(aDados, oData['beneficiario']['agencia'])   // 2 - Agencia/Conta Beneficiário
+	aAdd(aDados, oData['beneficiario']['nome'])      // 3 - Nome Benef.
+	aAdd(aDados, oData['beneficiario']['cnpj'])      // 4 - CNPJ Benef.
+	aAdd(aDados, oData['beneficiario']['endereco'])  // 5 - Endereço Benef.
+
+	// Pagador
+	aAdd(aDados, oData['pagador']['nome'])                    // 6 - Pagador
+	aAdd(aDados, oData['pagador']['cnpj/cpf'])                // 7 - CPF Pagador
+	aAdd(aDados, oData['pagador']['logradouro'])  			// 8 - End. Logradouro, Numero.
+	aAdd(aDados, oData['pagador']['bairro'])   	  			// 9 - Bairro
+
+	// Dados do Boleto
+	aAdd(aDados, oData['boleto']['nossoNumero'])     // 10 - Nosso Numero
+	aAdd(aDados, oData['boleto']['numeroDocumento']) // 11 - Numero documento
+	aAdd(aDados, oData['boleto']['linhaDigitavel'])  // 12 - Linha Digitavel
+	aAdd(aDados, oData['boleto']['codigoBarras'])    // 13 - Cod. Barras
+	aAdd(aDados, oData['boleto']['localPagamento'])  // 14 - Local Pagamento
+	aAdd(aDados, oData['boleto']['usoBanco'])        // 15 - Uso Banco
+	aAdd(aDados, oData['boleto']['mensagem'])        // 16 - Mensagem
+	aAdd(aDados, oData['boleto']['vencimento'])      // 17 - Vencimento
+	aAdd(aDados, oData['boleto']['emissao'])         // 18 - Emissao
+	aAdd(aDados, oData['boleto']['processamento'])   // 19 - Processamento
+	aAdd(aDados, oData['boleto']['especieDoc'])      // 20 - Especie Documento
+	aAdd(aDados, oData['boleto']['especie'])         // 21 - Especie Moeda
+	aAdd(aDados, oData['boleto']['aceite'])          // 22 - Aceite
+	aAdd(aDados, oData['boleto']['carteira'])        // 23 - Carteira
+	aAdd(aDados, oData['boleto']['valor'])           // 24 - Valor
+
+	If Val(oData['boleto']['desconto']) > 0
+		cTextAux := oData['boleto']['dtadesconto']
+		cTextAux := SubStr(cTextAux, 1,2) +"/" + SubStr(cTextAux, 3,2) + "/" + SubStr(cTextAux, 5,4)
+		cVlrAux  := Alltrim(Transform(Val(oData['boleto']['vlrdesconto']) / 100, "@E 9,999,999,999,999.99"))
+
+		If Val(oData['boleto']['desconto']) == 1
+			ctxtAux := STR0035 // " - Valor fixo"
+		ElseIf Val(oData['boleto']['desconto']) == 2
+			ctxtAux := STR0036 // " - Valor por antecipação dia corrido"
+		ElseIf Val(oData['boleto']['desconto']) == 3
+			ctxtAux := STR0037 // " - Valor por antecipação dia útil"
+		Endif
+
+		aAdd(aDados, STR0038 + cTextAux + STR0039 + cVlrAux + ctxtAux ) // 25 - "Até "# " conceder desconto de R$ "
+	Else
+		aAdd(aDados, "") // 25 - "Até "# " conceder desconto de R$ "
+	Endif
+
+	If Val(oData['boleto']['juroMulta']) > 0
+		cTextAux := Transform(Val(oData['boleto']['juroMulta']) / 100, "@E 999.99")
+		aAdd(aDados, STR0040 + cTextAux + "%") // 26 - "Após o vencimento cobrar multa de "
+	Else
+		aAdd(aDados, "") // 26 - "Após o vencimento cobrar multa de "
+	Endif
+
+	aAdd(aDados, oData['boleto']['totalCobrado'])    // 27 - Valor Cobrado
+
+	aAdd(aDados, "") // 28 - Livre
+	aAdd(aDados, "") // 29 - Livre
+	aAdd(aDados, "") // 30 - Livre
+
+	If Val(oData['boleto']['acao']) > 0
+		aAdd(aDados, STR0041 + oData['boleto']['acaodias'] + STR0042 ) // 31 - "Será enviado para Protesto após " # " dias de atraso"
+	Else
+		aAdd(aDados, "" ) //31 - "Será enviado para Protesto após " # " dias de atraso"
+	Endif
+
+	aAdd(aDados, oData['beneficiario']['logradouro']) 	// 32 - logradouro
+	aAdd(aDados, oData['beneficiario']['bairro'])  		// 33 - bairro
+
+	If Val(oData['boleto']['devolver']) > 0
+		cTextAux := PadL(Val(oData['boleto']['devolver']), 2, "0")
+		aAdd(aDados, STR0043 + cTextAux + STR0044 )  // 34 - "Não receber após" #  " dias de atraso"
+	Else
+		aAdd(aDados, "")  // 34 - "Não receber após" #  " dias de atraso"
+	Endif
+
+	If Val(oData['boleto']['pcjuro']) > 0
+		cTextAux := Transform(Val(oData['boleto']['pcjuro']) / 100, "@E 999.99")
+		aAdd(aDados, STR0045 +  cTextAux + "%") // 35 - "Após o vencimento cobrar juros de mora de "
+	Else
+		aAdd(aDados, "") // 35 - "Após o vencimento cobrar juros de mora de "
+	Endif
+
+	aAdd(aDados, oData['pagador']['endereco'])   	  // 36 - endereco
+	aAdd(aDados, oData['boleto']['qrCode'])           // 37 - qrCode para impressão
+	aAdd(aDados, oData['boleto']['msgAbatimento'])    // 38 - Abatimento
+	aAdd(aDados, oData['boleto']['mensagem2'])		  // 39 - Mensagem 2
+	
+	oPrint:SetPortrait()
+	oPrint:StartPage()
+
+	//RECIBO DO PAGADOR
+	nOffset := nOffsetRec
+	If !Empty(aDados[37])
+		nOffsetPix	:= 50
+	EndIf
+
+	oPrint:SayBitmap( nLinha +  8 + nOffset, nColuna + 20 , 'NGFSANTAN.bmp', 110, 30) //Logo do banco
+	oPrint:Line     ( nLinha +  8 + nOffset, nColuna + 140, nLinha + 37 + nOffset, nColuna + 140, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Say      ( nLinha + 25 + nOffset, nColuna + 158, aDados[1],     oFont15 )   // Numero do Banco
+	oPrint:Line     ( nLinha +  8 + nOffset, nColuna + 210, nLinha + 37 + nOffset, nColuna + 210, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Say      ( nLinha + 39 + nOffset, nColuna + 420, STR0001,    oFont14n  ) // Recibo do pagador
+
+	oPrint:Box(nLinha + 42, nColuna + 3, nLinha + 338, nColuna + 560, "-1")
+
+	// RECIBO DO PAGADOR
+
+	// LINHA 01 - DADOS DO PAGAMENTO
+	oPrint:Say  ( nLinha + 52 + nOffset, nColuna +   5, STR0002,    oFont10  ) // Local de pagamento
+	oPrint:Say  ( nLinha + 62 + nOffset, nColuna +   5, STR0003, oFont10 ) // "Pagável em qualquer agência bancária"
+	oPrint:Line ( nLinha + 42 + nOffset, nColuna + 425, nLinha + 65 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Say  ( nLinha + 52 + nOffset, nColuna + 430, STR0004,   oFont10 ) // Vencimento
+	oPrint:Say  ( nLinha + 62 + nOffset, nColuna + 500, aDados[17], oFont10)
+	oPrint:Line ( nLinha + 65 + nOffset, nColuna +   3, nLinha + 65 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+
+	// LINHA 02 - DADOS BENEFICIARIO
+	oPrint:Say  ( nLinha + 75 + nOffset, nColuna +   5, STR0005,   oFont10 ) // Beneficiário
+	oPrint:Say  ( nLinha + 85 + nOffset, nColuna +   5, SubStr(aDados[3],1,nLimBen), oFont10)
+	oPrint:Line ( nLinha + 65 + nOffset, nColuna + 315, nLinha + 88 + nOffset, nColuna + 315, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 75 + nOffset, nColuna + 320, STR0006,   oFont10 ) // CPF/CNPJ do Beneficiário
+	oPrint:Say  ( nLinha + 85 + nOffset, nColuna + 320, aDados[4], oFont10)
+	oPrint:Line ( nLinha + 65 + nOffset, nColuna + 425, nLinha + 88 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 75 + nOffset, nColuna + 430, STR0007,   oFont10 ) // Agência / Código do Beneficiário
+	oPrint:Say  ( nLinha + 85 + nOffset, nColuna + 445, aDados[2], oFont10)
+
+	oPrint:Line ( nLinha + 88 + nOffset, nColuna + 3, nLinha + 88 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// LINHA 03 - ENDEREÇO BENEFICIARIO
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna +   5, STR0008,   oFont10 ) // Endereço do Beneficiário
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna +   5, SubStr(aDados[32],1,nLimBen) , oFont10)
+	oPrint:Say  ( nLinha + 118 + nOffset, nColuna +   5, SubStr(aDados[33],1,nLimBen), oFont10)
+	oPrint:Say  ( nLinha + 128 + nOffset, nColuna +   5, Substr(aDados[5],1,nLimBen), oFont10)
+	oPrint:Line ( nLinha +  88 + nOffset, nColuna + 315, nLinha + 131 + nOffset, nColuna + 315, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna + 320, STR0009,   oFont10 ) // Espécie Doc
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna + 320, aDados[20], oFont10)
+	oPrint:Line ( nLinha +  88 + nOffset, nColuna + 380, nLinha + 131 + nOffset, nColuna + 380, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna + 385, STR0010,   oFont10 ) // Aceite
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna + 385, aDados[22], oFont10)
+	oPrint:Line ( nLinha +  88 + nOffset, nColuna + 425, nLinha + 131 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 98  + nOffset, nColuna + 430, STR0011,   oFont10 ) // Nosso Número
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna + 445, aDados[10], oFont10)
+
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 3, nLinha + 131 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// // LINHA 04 - DADOS DA COBRANÇA
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna +   5, STR0012,   oFont10 ) // Uso do Banco
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 100, nLinha + 154 + nOffset, nColuna + 100, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 105, STR0013,   oFont10 ) // Carteira
+	oPrint:Say  ( nLinha + 151 + nOffset, nColuna + 105, aDados[23], oFont10)
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 190, nLinha + 154 + nOffset, nColuna + 190, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 195, STR0014,   oFont10 ) // Espécie
+	oPrint:Say  ( nLinha + 151 + nOffset, nColuna + 195, aDados[21], oFont10)
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 255, nLinha + 154 + nOffset, nColuna + 255, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 260, STR0015,   oFont10 ) // Quantidade
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 315, nLinha + 154 + nOffset, nColuna + 315, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 320, STR0016,   oFont10 ) // Valor
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 425, nLinha + 154 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 430, STR0017,   oFont10 ) // (=) Valor do Documento
+	oPrint:Say  ( nLinha + 151 + nOffset, nColuna + 445, aDados[24], oFont10)
+
+	oPrint:Line ( nLinha + 154 + nOffset, nColuna + 3, nLinha + 154 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// BOX DAS INSTRUÇÕES - TEXTO DE RESPONSABILIDADE DO BENEFICIÁRIO
+
+	// BOX E LINHAS A DIREITA DO BOX - DADOS DO BOLETO DE COBRANÇA
+
+	oPrint:Say  ( nLinha + 164 + nOffset, nColuna + 5, STR0018,   oFont10 ) // Instruções - Texto de Responsabilidade do Beneficiário
+
+	nNextLin := 0
+	
+	If !Empty(aDados[25])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[25], oFont8n) // Descontos
+		nNextLin += nLinSpace // nLinSpace -> tamanho 14 pulo de linha entre as mensagens
+	EndIf
+
+	If !Empty(aDados[26])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[26], oFont8n) // Juros Mora
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[31])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[31], oFont8n) // Protesto / devolver
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[34])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[34], oFont8n) // Não Receber apos
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[35])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[35], oFont8n) // PC JUROS
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[38])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[38], oFont8n) // Valor de abatimento
+		nNextLin += nLinSpace
+	EndIf	
+	If !Empty(aDados[16])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, SubStr(aDados[16],1,72), oFont8n) // Mensagem SEE
+		nNextLin += nLinSpace
+	EndIf	
+	If !Empty(aDados[39])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, SubStr(aDados[39],1,72), oFont8n) // Mensagem2 SEE
+		nNextLin += nLinSpace
+	EndIf		
+
+	oPrint:Say  ( nLinha + 164 + nOffset, nColuna + 430, STR0019, oFont10 ) // (-) Desconto/Abatimento
+	oPrint:Say  ( nLinha + 174 + nOffset, nColuna + 430, ''     , oFont10)
+	oPrint:Line ( nLinha + 154 + nOffset, nColuna + 425, nLinha + 177 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 177 + nOffset, nColuna + 425, nLinha + 177 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 187 + nOffset, nColuna + 430, STR0020, oFont10 ) // (-) Outras Deduções
+	oPrint:Line ( nLinha + 177 + nOffset, nColuna + 425, nLinha + 200 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 200 + nOffset, nColuna + 425, nLinha + 200 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 210 + nOffset, nColuna + 430, STR0021, oFont10 ) // (+) Mora/Multa
+	oPrint:Line ( nLinha + 200 + nOffset, nColuna + 425, nLinha + 223 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 223 + nOffset, nColuna + 425, nLinha + 223 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 233 + nOffset, nColuna + 430, STR0022, oFont10 ) // (+) Outros Acréscimos
+	oPrint:Line ( nLinha + 223 + nOffset, nColuna + 425, nLinha + 246 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 246 + nOffset, nColuna + 425, nLinha + 246 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 256 + nOffset, nColuna + 430, STR0023, oFont10 ) // (=) Valor Cobrado
+	oPrint:Say  ( nLinha + 266 + nOffset, nColuna + 430, ''     , oFont10)
+	oPrint:Line ( nLinha + 246 + nOffset, nColuna + 425, nLinha + 269 + nOffset + nOffsetPix, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 269 + nOffset, nColuna +   3, nLinha + 269 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	// BOX DAS INSTRUÇÕES - COM DADOS DO PAGADOR
+
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 430, STR0024,   oFont10 ) // Número do Documento
+	oPrint:Say  ( nLinha + 289 + nOffset, nColuna + 445, aDados[11], oFont10)
+	oPrint:Line ( nLinha + 269 + nOffset, nColuna + 425, nLinha + 292 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 292 + nOffset, nColuna + 425, nLinha + 292 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 302 + nOffset, nColuna + 430, STR0025,   oFont10 ) // Data do Processamento
+	oPrint:Say  ( nLinha + 312 + nOffset, nColuna + 445, aDados[19], oFont10)
+	oPrint:Line ( nLinha + 292 + nOffset, nColuna + 425, nLinha + 315 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 315 + nOffset, nColuna + 425, nLinha + 315 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 325 + nOffset, nColuna + 430, STR0026,   oFont10 ) // Data do Documento
+	oPrint:Say  ( nLinha + 335 + nOffset, nColuna + 445, aDados[18], oFont10)
+	oPrint:Line ( nLinha + 315 + nOffset, nColuna + 425, nLinha + 338 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	// LINHA 04 - DADOS DO PAGADOR
+
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna +  5, STR0027,   oFont10 ) // Pagador
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 45, SubStr(aDados[6],1,40), oFont10)
+
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 290, STR0028,   oFont10 ) // CPF/CNPJ
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 335, aDados[7], oFont10)
+
+	// LINHA 05 - ENDEREÇO DO PAGADOR
+
+	oPrint:Say  ( nLinha + 289 + nOffset, nColuna +  5, STR0029,   oFont10 ) // Endereço
+	oPrint:Say  ( nLinha + 289 + nOffset, nColuna + 45, SubStr(aDados[8],1,nLimPag), oFont10)
+	oPrint:Say  ( nLinha + 299 + nOffset, nColuna + 45, SubStr(aDados[9],1,nLimPag), oFont10)
+	oPrint:Say  ( nLinha + 309 + nOffset, nColuna + 45, SubStr(aDados[36],1,nLimPag), oFont10)
+
+	// // LINHA 06 - DADOS DO AVALISTA
+
+	oPrint:Say  ( nLinha + 330 + nOffset, nColuna +  5, STR0030,   oFont10 ) // Beneficiário Final
+	oPrint:Say  ( nLinha + 330 + nOffset, nColuna + 75, SubStr(aDados[3],1,nLimBen), oFont10)
+
+	oPrint:Say  ( nLinha + 330 + nOffset, nColuna + 350, STR0031,   oFont10 ) // Código de Baixa
+
+	oPrint:Say  ( nLinha + 348 + nOffset, nColuna + 380, STR0032,   oFont10 ) // Autenticação Mecânica - Recibo do Pagador
+
+	oPrint:Say  ( nLinha + 368 + nOffset, nColuna + 3, Replicate("--", 67), oFont14n)
+
+	nLinha := nLinha + 380
+
+	oPrint:SayBitmap( nLinha +  8 + nOffset, nColuna +  20, 'NGFSANTAN.bmp', 110, 30) //Logo do banco
+	oPrint:Line     ( nLinha +  8 + nOffset, nColuna + 140, nLinha + 37 + nOffset, nColuna + 140, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Say      ( nLinha + 25 + nOffset, nColuna + 158, aDados[1],     oFont15 )   // Numero do Banco
+	oPrint:Line     ( nLinha +  8 + nOffset, nColuna + 210, nLinha + 37 + nOffset, nColuna + 210, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Say      ( nLinha + 25 + nOffset, nColuna + 215, aDados[12],    oFont14n  ) // Linha Digitavel	
+
+	oPrint:Box(nLinha + 42, nColuna + 3, nLinha + 338 + nOffset + nOffsetPix, nColuna + 560, "-1")
+
+	// RECIBO DO PAGADOR
+
+	// LINHA 01 - DADOS DO PAGAMENTO
+	oPrint:Say  ( nLinha + 52 + nOffset, nColuna +   5, STR0002,    oFont10  ) // Local de pagamento
+	oPrint:Say  ( nLinha + 62 + nOffset, nColuna +   5, STR0003, oFont10 )
+	oPrint:Line ( nLinha + 42 + nOffset, nColuna + 425, nLinha + 65 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Say  ( nLinha + 52 + nOffset, nColuna + 430, STR0004,   oFont10 ) // Vencimento
+	oPrint:Say  ( nLinha + 62 + nOffset, nColuna + 500, aDados[17], oFont10)
+	oPrint:Line ( nLinha + 65 + nOffset, nColuna +   3, nLinha + 65 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// LINHA 02 - DADOS BENEFICIARIO
+	oPrint:Say  ( nLinha + 75 + nOffset, nColuna +   5, STR0005,   oFont10 ) // Beneficiário
+	oPrint:Say  ( nLinha + 85 + nOffset, nColuna +   5, SubStr(aDados[3],1,nLimBen), oFont10)
+	oPrint:Line ( nLinha + 65 + nOffset, nColuna + 315, nLinha + 88 + nOffset, nColuna + 315, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 75 + nOffset, nColuna + 320, STR0006,   oFont10 ) // CPF/CNPJ do Beneficiário
+	oPrint:Say  ( nLinha + 85 + nOffset, nColuna + 320, aDados[4], oFont10)
+	oPrint:Line ( nLinha + 65 + nOffset, nColuna + 425, nLinha + 88 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 75 + nOffset, nColuna + 430, STR0007,   oFont10 ) // Agência / Código do Beneficiário
+	oPrint:Say  ( nLinha + 85 + nOffset, nColuna + 445, aDados[2], oFont10)
+
+	oPrint:Line ( nLinha + 88 + nOffset, nColuna + 3, nLinha + 88 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// LINHA 03 - ENDEREÇO BENEFICIARIO
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna +   5, STR0008,   oFont10 ) // Endereço do Beneficiário
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna +   5, SubStr(aDados[32],1,nLimBen) , oFont10)
+	oPrint:Say  ( nLinha + 118 + nOffset, nColuna +   5, SubStr(aDados[33],1,nLimBen), oFont10)
+	oPrint:Say  ( nLinha + 128 + nOffset, nColuna +   5, SubStr(aDados[5],1,nLimBen), oFont10)
+	oPrint:Line ( nLinha +  88 + nOffset, nColuna + 315, nLinha + 131 + nOffset, nColuna + 315, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna + 320, STR0009,   oFont10 ) // Espécie Doc
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna + 320, aDados[20], oFont10)
+	oPrint:Line ( nLinha +  88 + nOffset, nColuna + 380, nLinha + 131 + nOffset, nColuna + 380, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna + 385, STR0010,   oFont10 ) // Aceite
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna + 385, aDados[22], oFont10)
+	oPrint:Line ( nLinha +  88 + nOffset, nColuna + 425, nLinha + 131 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha +  98 + nOffset, nColuna + 430, STR0011,   oFont10 ) // Nosso Número
+	oPrint:Say  ( nLinha + 108 + nOffset, nColuna + 445, aDados[10], oFont10)
+
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 3, nLinha + 131 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// // LINHA 04 - DADOS DA COBRANÇA
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna +   5, STR0012,   oFont10 ) // Uso do Banco
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 100, nLinha + 154 + nOffset, nColuna + 100, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 105, STR0013,   oFont10 ) // Carteira
+	oPrint:Say  ( nLinha + 151 + nOffset, nColuna + 105, aDados[23], oFont10)
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 190, nLinha + 154 + nOffset, nColuna + 190, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 195, STR0014,   oFont10 ) // Espécie
+	oPrint:Say  ( nLinha + 151 + nOffset, nColuna + 195, aDados[21], oFont10)
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 255, nLinha + 154 + nOffset, nColuna + 255, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 260, STR0015,   oFont10 ) // Quantidade
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 315, nLinha + 154 + nOffset, nColuna + 315, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 320, STR0016,   oFont10 ) // Valor
+	oPrint:Line ( nLinha + 131 + nOffset, nColuna + 425, nLinha + 154 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+	oPrint:Say  ( nLinha + 141 + nOffset, nColuna + 430, STR0017,   oFont10 ) // (=) Valor do Documento
+	oPrint:Say  ( nLinha + 151 + nOffset, nColuna + 445, aDados[24], oFont10)
+
+	oPrint:Line ( nLinha + 154 + nOffset, nColuna + 3, nLinha + 154 + nOffset, 570, CLR_BLACK )   // Linha Horizontal
+
+	// BOX DAS INSTRUÇÕES - TEXTO DE RESPONSABILIDADE DO BENEFICIÁRIO
+
+	// BOX E LINHAS A DIREITA DO BOX - DADOS DO BOLETO DE COBRANÇA
+
+	oPrint:Say  ( nLinha + 164 + nOffset, nColuna + 5, STR0018,   oFont10 ) // Instruções - Texto de Responsabilidade do Beneficiário
+	
+	nNextLin := 0
+
+	If !Empty(aDados[25])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[25], oFont8n) // Descontos
+		nNextLin += nLinSpace // nLinSpace -> tamanho 14 pulo de linha entre as mensagens
+	EndIf
+
+	If !Empty(aDados[26])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[26], oFont8n) // Juros Mora
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[31])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[31], oFont8n) // Protesto / devolver
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[34])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[34], oFont8n) // Não Receber apos
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[35])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[35], oFont8n) // PC JUROS
+		nNextLin += nLinSpace
+	EndIf
+	If !Empty(aDados[38])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, aDados[38], oFont8n) // Valor de abatimento
+		nNextLin += nLinSpace
+	EndIf	
+	If !Empty(aDados[16])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, SubStr(aDados[16],1,72), oFont8n) // Mensagem SEE
+		nNextLin += nLinSpace
+	EndIf	
+	If !Empty(aDados[39])
+		oPrint:Say  ( nLinha + 177 + nOffset + nNextLin, nColuna + 5, SubStr(aDados[39],1,72), oFont8n) // Mensagem2 SEE
+		nNextLin += nLinSpace
+	EndIf	
+
+	// Pix QRCode
+	If !Empty(aDados[37])
+
+		oPrint:QRCode( nLinha + 260 + nOffset , nColuna + 320 ,aDados[37], 100 )
+
+		nNextLin := 0
+		oPrint:Say( nLinha + 257 + nOffset + nNextLin, nColuna + 5, STR0047, oFont8 )  // 'Escolha a forma mais conveniente para realizar seu pagamento:'
+		nNextLin += nLinSpace
+		oPrint:Say( nLinha + 257 + nOffset + nNextLin, nColuna + 5, STR0048, oFont8 )   // 'Código de Barras ou QR Code.'
+		nNextLin += nLinSpace
+		oPrint:Say( nLinha + 257 + nOffset + nNextLin, nColuna + 5, STR0049, oFont8 )   // 'Basta acessar o aplicativo da sua instituição financeira e utilizar apenas uma das opções.'
+		nNextLin += nLinSpace
+
+		oPrint:Say( nLinha + 257 + nOffset + nNextLin, nColuna + 5, STR0050, oFont8n )  // 'Pix Copia e Cola'
+
+		nMaxCharLin := 100
+		nNextLin += nLinSpace
+		nTamUrl := Len(aDados[37])
+		nNumLin := (nTamUrl / nMaxCharLin)
+
+		If (nNumLin - Int(nNumLin)) != 0
+			nNumLin := Int(nNumLin) + 1
+		EndIf
+		nIniLinha := 1
+
+		For nI := 1 to nNumLin
+			oPrint:Say( nLinha + 257 + nOffset + nNextLin, nColuna + 5, SubStr(aDados[37],nIniLinha,nMaxCharLin), oFont8 )  
+			nIniLinha += nMaxCharLin
+			nNextLin += nLinSpace
+		Next			
+
+	EndIf	
+
+	oPrint:Say  ( nLinha + 164 + nOffset, nColuna + 430, STR0019, oFont10 ) // (-) Desconto/Abatimento
+	oPrint:Say  ( nLinha + 174 + nOffset, nColuna + 430, ''     , oFont10)
+	oPrint:Line ( nLinha + 154 + nOffset, nColuna + 425, nLinha + 177 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 177 + nOffset, nColuna + 425, nLinha + 177 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 187 + nOffset, nColuna + 430, STR0020, oFont10 ) // (-) Outras Deduções
+	oPrint:Line ( nLinha + 177 + nOffset, nColuna + 425, nLinha + 200 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 200 + nOffset, nColuna + 425, nLinha + 200 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 210 + nOffset, nColuna + 430, STR0021, oFont10 ) // (+) Mora/Multa
+	oPrint:Say  ( nLinha + 220 + nOffset, nColuna + 430, ''     , oFont10)
+	oPrint:Line ( nLinha + 200 + nOffset, nColuna + 425, nLinha + 223 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 223 + nOffset, nColuna + 425, nLinha + 223 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 233 + nOffset, nColuna + 430, STR0022, oFont10 ) // (+) Outros Acréscimos
+	oPrint:Line ( nLinha + 223 + nOffset, nColuna + 425, nLinha + 246 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 246 + nOffset, nColuna + 425, nLinha + 246 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 256 + nOffset, nColuna + 430, STR0023, oFont10 ) // (=) Valor Cobrado
+	oPrint:Say  ( nLinha + 266 + nOffset, nColuna + 430, ''     , oFont10)
+	oPrint:Line ( nLinha + 246 + nOffset, nColuna + 425, nLinha + 269 + nOffset + nOffsetPix, nColuna + 425, CLR_BLACK ) // Divisor de Coluna	
+
+	nOffset += nOffsetPix
+
+	oPrint:Line ( nLinha + 269 + nOffset, nColuna +   3, nLinha + 269 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	// BOX DAS INSTRUÇÕES - COM DADOS DO PAGADOR
+
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 430, STR0024,   oFont10 ) // Número do Documento
+	oPrint:Say  ( nLinha + 289 + nOffset, nColuna + 445, aDados[11], oFont10)
+	oPrint:Line ( nLinha + 269 + nOffset, nColuna + 425, nLinha + 292 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 292 + nOffset, nColuna + 425, nLinha + 292 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 302 + nOffset, nColuna + 430, STR0025,   oFont10 ) // Data do Processamento
+	oPrint:Say  ( nLinha + 312 + nOffset, nColuna + 445, aDados[19], oFont10)
+	oPrint:Line ( nLinha + 292 + nOffset, nColuna + 425, nLinha + 315 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+	oPrint:Line ( nLinha + 315 + nOffset, nColuna + 425, nLinha + 315 + nOffset  , 570, CLR_BLACK ) // Linha horizontal
+
+	oPrint:Say  ( nLinha + 325 + nOffset, nColuna + 430, STR0026,   oFont10 ) // Data do Documento
+	oPrint:Say  ( nLinha + 335 + nOffset, nColuna + 445, aDados[18], oFont10)
+	oPrint:Line ( nLinha + 315 + nOffset, nColuna + 425, nLinha + 338 + nOffset, nColuna + 425, CLR_BLACK ) // Divisor de Coluna
+
+
+
+	// LINHA 04 - DADOS DO PAGADOR
+
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna +  5, STR0027,   oFont10 ) // Pagador
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 45, SubStr(aDados[6],1,40), oFont10)
+
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 290, STR0028,   oFont10 ) // CPF/CNPJ
+	oPrint:Say  ( nLinha + 279 + nOffset, nColuna + 335, aDados[7], oFont10)
+
+	// LINHA 05 - ENDEREÇO DO PAGADOR
+
+	oPrint:Say  ( nLinha + 289 + nOffset, nColuna +  5, STR0029,   oFont10 ) // Endereço
+	oPrint:Say  ( nLinha + 289 + nOffset, nColuna + 45, SubStr(aDados[8],1,nLimPag), oFont10)
+	oPrint:Say  ( nLinha + 299 + nOffset, nColuna + 45, SubStr(aDados[9],1,nLimPag), oFont10)
+	oPrint:Say  ( nLinha + 309 + nOffset, nColuna + 45, SubStr(aDados[36],1,nLimPag), oFont10)
+
+	// // LINHA 06 - DADOS DO AVALISTA
+
+	oPrint:Say  ( nLinha + 330 + nOffset, nColuna +  5, STR0030,   oFont10 ) // Beneficiário Final
+	oPrint:Say  ( nLinha + 330 + nOffset, nColuna + 75, SubStr(aDados[3],1,nLimBen), oFont10)
+
+	oPrint:Say  ( nLinha + 330 + nOffset, nColuna + 350, STR0031,   oFont10 ) // Código de Baixa	
+
+	oPrint:Say  ( nLinha + 348 + nOffset, nColuna + 380, STR0034,   oFont10 ) // Autenticação Mecânica - Ficha de Compensação
+
+	// CÓDIGO DE BARRAS
+	oPrint:FWMsBar("INT25", (61 + (nOffset * (43/500))), 2,aDados[13],oPrint,.F.,CLR_BLACK,.T.,0.025,0.8,.F.,,,.F.,,,.F.)
+	oPrint:EndPage()
+
+	FreeObj(oData)
+	FreeObj(oFont8)
+	FreeObj(oFont10)
+	FreeObj(oFont11)
+	FreeObj(oFont15)
+	FreeObj(oFont14n)
+	FwFreeArray(aDados)
+
+Return
+
+/*/{Protheus.doc} frtEmailSantander
+    Carrega as informações no objeto do e-mail
+    @type function
+    @version 12.1.33
+    @author francisco.oliveira
+    @since 07/10/2021
+    @param oAPIMSG, Json, boleto transmitido ao banco
+    @return Object, objeto com as informações do layout do boleto
+/*/
+Function frtEmailSantander(oAPIMSG As JSON)
+
+	Local oDataEMail    As Object
+	Local oResulXML     As Object
+	Local oQRCode       As Object
+	Local aFilAtu       := {} As Array
+	Local cBanco        := '' As Character
+	Local cErroXmlBd	:= '' As Character
+	Local cWarnXmlBd	:= '' As Character
+	Local cErroXmlRe	:= '' As Character
+	Local cWarnXmlRe	:= '' As Character
+	Local cBaseXML      := '' As Character
+	Local cNomepag      := '' As Character
+	Local cCPFCNPJ      := '' As Character
+	Local cLogradour    := '' As Character
+	Local cEndereco     := '' As Character
+	Local cBairro	    := '' As Character
+	Local cCodBenefi    := '' As Character
+	Local cCompEnd      := '' As Character
+	Local cTipoRazao    := '' As Character
+	Local cFilBen       := '' As Character
+	Local cTypeCGC		:= '' As Character
+	Local cAbatementMsg := '' As Character
+
+	If oAPIMSG:Hasproperty('beneficiarioFilial')
+		aFilAtu   	:= FWArrFilAtu(cEmpAnt, oAPIMSG['beneficiarioFilial'])
+		cFilBen     := oAPIMSG['beneficiarioFilial']
+	Else
+		aFilAtu		:= FWArrFilAtu()
+		cFilBen		:= cFilAnt
+	EndIf
+
+	cBanco    := oAPIMSG['banco']
+	oDataEMail                          := JsonObject():new()
+
+	oResulXML := XMLPARSER(oAPIMSG['response'], "_", @cErroXmlRe, @cWarnXmlRe)
+	cBaseXML  := getBaseNode(oResulXML)
+
+	If !Empty(cBaseXML)
+		cBaseXML := "oResulXML" + cBaseXML
+		cTipoRazao := &(cBaseXML + "_PAGADOR:_TPDOC:TEXT")
+
+		If oResulXML <> Nil .And. Empty(cErroXmlBd) .And. Empty(cWarnXmlBd)
+
+			cNomepag   	:= Alltrim(&(cBaseXML + "_PAGADOR:_NOME:TEXT"))
+			cLogradour 	:= Alltrim(&(cBaseXML + "_PAGADOR:_ENDER:TEXT"))
+			cBairro 	:= Alltrim(&(cBaseXML + "_PAGADOR:_BAIRRO:TEXT"))
+			cEndereco 	:= Alltrim(&(cBaseXML + "_PAGADOR:_CEP:TEXT")) + ' '
+			cEndereco 	+= Alltrim(&(cBaseXML + "_PAGADOR:_CIDADE:TEXT")) + " - "
+			cEndereco 	+= Alltrim(&(cBaseXML + "_PAGADOR:_UF:TEXT"))
+
+
+			cCodBenefi := &(cBaseXML + "_CODCEDE:TEXT")
+
+			cTypeCGC := 'CNPJ'
+			If cTipoRazao == "01"
+				cTypeCGC := 'CPF'
+			EndIf
+
+			cCPFCNPJ := printCpfCnpj(&(cBaseXML + "_PAGADOR:_NUMDOC:TEXT"), cTypeCGC)
+
+		Endif
+
+		oDataEMail['beneficiario']          := JsonObject():new()
+		oDataEMail['boleto']                := JsonObject():new()
+		oDataEMail['banco']                 := cBanco
+		oDataEMail['pagador']               := JsonObject():new()
+		oDataEMail['pagador']['endereco']   := JsonObject():new()
+
+		oDataEMail['pagador']['nome']                   := cNomepag
+		oDataEMail['pagador']['cnpj/cpf']               := cCPFCNPJ
+		oDataEMail['pagador']['logradouro']				:= cLogradour
+		oDataEMail['pagador']['bairro']					:= cBairro
+		oDataEMail['pagador']['endereco']				:= cEndereco
+
+		oDataEMail['beneficiario']['banco']     := oAPIMSG['banco'] + "-7" // Banco e digito
+		oDataEMail['beneficiario']['agencia']   := oAPIMSG['boleto']['agencia']
+		oDataEMail['beneficiario']['agencia']   += " / " + SubStr(cCodBenefi, Len(cCodBenefi) - 6, 7)
+		oDataEMail['beneficiario']['cnpj']      := printCpfCnpj(aFilAtu[18], 'CNPJ')
+		oDataEMail['beneficiario']['nome']      := AllTrim(aFilAtu[17])
+
+		cCompEnd := Iif(!Empty((Alltrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_COMPENT'})[1][2]))), ' - ' + (Alltrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_COMPENT'})[1][2])), ' - ')
+
+		oDataEMail['beneficiario']['logradouro']  := Alltrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_ENDENT'})[1][2])
+		oDataEMail['beneficiario']['logradouro']  += cCompEnd
+		oDataEMail['beneficiario']['bairro']  	:= Alltrim(Alltrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_BAIRENT'})[1][2]))
+		oDataEMail['beneficiario']['endereco']  := Alltrim(Transform(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_CEPENT'})[1][2], "@R 99999-999" ))
+		oDataEMail['beneficiario']['endereco']  += ' ' 	 + Alltrim(Alltrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_CIDENT'})[1][2] ))
+		oDataEMail['beneficiario']['endereco'] 	+= ' - ' + Alltrim(Alltrim(FWSM0Util():GetSM0Data(cEmpAnt, cFilBen , {'M0_ESTENT'})[1][2] ))
+
+
+		oDataEMail['boleto']['nossoNumero']     := AllTrim(Transform(&(cBaseXML + "_TITULO:_NOSSONUMERO:TEXT"), "@R 999999999999 9"))
+		oDataEMail['boleto']['numeroDocumento'] := &(cBaseXML + "_TITULO:_SEUNUMERO:TEXT")
+
+		oDataEMail['boleto']['linhaDigitavel']  := AllTrim(Transform(&(cBaseXML + "_TITULO:_LINDIG:TEXT") , "@R 99999.99999 99999.999999 99999.999999 9 99999999999999"))
+		oDataEMail['boleto']['codigoBarras']    := Alltrim(&(cBaseXML + "_TITULO:_CDBARRA:TEXT") )
+		oDataEMail['boleto']['localPagamento']  := STR0003
+		oDataEMail['boleto']['usoBanco']        := ""
+
+		oDataEMail['boleto']['vencimento']      := SubStr(&(cBaseXML + "_TITULO:_DTVENCTO:TEXT"), 1,2) + "/" + SubStr(&(cBaseXML + "_TITULO:_DTVENCTO:TEXT"), 3,2) + "/" + SubStr(&(cBaseXML + "_TITULO:_DTVENCTO:TEXT"), 5,4)
+		oDataEMail['boleto']['emissao']         := SubStr(&(cBaseXML + "_TITULO:_DTEMISSAO:TEXT"), 1,2) + "/" + SubStr(&(cBaseXML + "_TITULO:_DTEMISSAO:TEXT"), 3,2) + "/" + SubStr(&(cBaseXML + "_TITULO:_DTEMISSAO:TEXT"), 5,4)
+		oDataEMail['boleto']['especie']         := "R$"
+
+		oDataEMail['boleto']['processamento']   := SubStr(&(cBaseXML + "_DTNSU:TEXT"), 1,2) + "/" + SubStr(&(cBaseXML + "_DTNSU:TEXT"), 3,2) + "/" + SubStr(&(cBaseXML + "_DTNSU:TEXT"), 5,4)
+		oDataEMail['boleto']['especieDoc']      := Alltrim(Posicione("F77", 1, xFilial("F77") + "033" + &(cBaseXML + "_TITULO:_ESPECIE:TEXT"), "F77_SIGLA" ))
+		oDataEMail['boleto']['aceite']          := 'Não'
+		oDataEMail['boleto']['carteira']        := GetAdvFVal("SEE", "EE_CODCART" , xFilial("SEE", cFilAnt) + SEA->EA_PORTADO + SEA->EA_AGEDEP + SEA->EA_NUMCON + SEA->EA_SUBCTA ,1,"",.T.)
+
+		oDataEMail['boleto']['mensagem']        := ''
+
+		If XmlChildEx(&(cBaseXML + "_TITULO"), "_MENSAGEM" ) <> Nil
+			oDataEMail['boleto']['mensagem']        := &(cBaseXML + "_TITULO:_MENSAGEM:TEXT")
+		EndIf
+		oDataEMail['boleto']['mensagem2']       := ''
+
+		oDataEMail['boleto']['valor']           := AllTrim(Transform(Val(&(cBaseXML + "_TITULO:_VLNOMINAL:TEXT")) / 100, "@E 9,999,999,999,999.99"))
+		oDataEMail['boleto']['desconto']        := &(cBaseXML + "_TITULO:_TPDESC:TEXT")
+		oDataEMail['boleto']['juroMulta']       := &(cBaseXML + "_TITULO:_PCMULTA:TEXT") // pcmulta
+		
+		oDataEMail['boleto']['totalCobrado']    := ""
+		oDataEMail['boleto']['acao']            := &(cBaseXML + "_TITULO:_TPPROTESTO:TEXT") // Se irá para Protesto ou  Não
+		oDataEMail['boleto']['acaodias']        := &(cBaseXML + "_TITULO:_QTDIASPROTESTO:TEXT") // Qtde de dias para Protesto
+		oDataEMail['boleto']['devolver']        := &(cBaseXML + "_TITULO:_QTDIASBAIXA:TEXT") // Qtde de dias para Protesto
+		oDataEMail['boleto']['pcjuro']          := &(cBaseXML + "_TITULO:_PCJURO:TEXT") // Percentual de Juros apos vencimento
+		oDataEMail['boleto']['vlrdesconto']     := &(cBaseXML + "_TITULO:_VLDESC:TEXT") // Valor utilizado para desconto
+		oDataEMail['boleto']['dtadesconto']     := &(cBaseXML + "_TITULO:_DTLIMIDESC:TEXT") // Data limite para desconto
+
+		If FindFunction('abatementMsg')
+			cAbatementMsg  := abatementMsg(&(cBaseXML + "_TITULO:_VLABATIMENTO:TEXT"))
+		EndIf
+		oDataEMail['boleto']['msgAbatimento'] := cAbatementMsg // Valor de abatimento
+		oQRCode := XmlChildEx(&(cBaseXML + "_TITULO"), "_CODQRCODE" )
+		If oQRCode <> Nil .And. !Empty(oQRCode:TEXT)
+			oDataEMail['boleto']['qrCode'] := oQRCode:TEXT
+		Else
+			oDataEMail['boleto']['qrCode'] := ''
+		EndIf
+
+	EndIf
+	FwFreeArray(aFilAtu)
+
+Return oDataEmail
+
+/*/{Protheus.doc} NGFConvLin
+    Carrega as informações no objeto do e-mail
+    @type function
+    @version 12.1.33
+    @author francisco.oliveira
+    @since 07/10/2021
+    @param oAPIMSG, Json, boleto transmitido ao banco
+    @return Object, objeto com as informações do layout do boleto
+/*/
+
+Static Function NGFConvLin(cConteudo As Character) As Character
+
+	If  !ISSRVUNIX()
+		cConteudo := StrTran(cConteudo,"/","\")
+	Else
+		cConteudo := StrTran(cConteudo,"\","/")
+	EndIf
+	cConteudo := lower(cConteudo)
+
+Return cConteudo
+
+/*/{Protheus.doc} getBaseNode
+	retorna o nó base do XML de resposta do Santander
+	@type function
+	@author Squad SIGAFIN
+	@since 12/18/2025
+	@param oXML, object, xml parseado
+	@return character, nó base do XML
+/*/
+Function getBaseNode(oXML As Object) As Character
+	Local cBaseXML := "" as Character
+
+	If XmlChildEx(oXML,'_SOAPENV_ENVELOPE')  != NIL
+		cBaseXML := ":_SOAPENV_ENVELOPE:_SOAPENV_BODY:_NS2_REGISTRATITULORESPONSE:_RETURN:"
+	ElseIf XmlChildEx(oXML,'_SOAP_ENV_ENVELOPE')  != NIL
+		cBaseXML := ":_SOAP_ENV_ENVELOPE:_SOAP_ENV_BODY:_NS3_REGISTRATITULORESPONSE:_RETURN:"
+	EndIf
+
+Return cBaseXML

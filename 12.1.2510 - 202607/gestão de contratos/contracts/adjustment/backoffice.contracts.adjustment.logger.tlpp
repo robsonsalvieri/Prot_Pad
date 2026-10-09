@@ -1,0 +1,577 @@
+#include "totvs.ch"
+#include "msobject.ch"
+#include "tlpp-core.th"
+#include "fwmvcdef.ch"
+
+namespace totvs.protheus.backoffice.contracts.adjustment
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ContractAdjustmentLogger
+	@description Centraliza a gravacao inicial do log de reajuste nas tabelas CXK e CXL usando o modelo CNTA311.
+	@type class
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+*/
+//-------------------------------------------------------------------
+class ContractAdjustmentLogger
+	private data oModel as object
+
+	public method new() as object
+	public method startFromAlias(cWorkloadAlias as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as json
+	public method commit() as logical
+	public method loadFromAdjustmentNumber(cAdjustmentNumber as character) as json
+	public method finishContractResult(cAdjustmentNumber as character, oResult as object) as logical
+	public method setFail(cAdjustmentNumber as character, oResult as object)
+
+	public method initializeAdjustmentWithInternalModel(dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character, cWorkloadAlias as character) as json
+
+	private method resetState() as object
+	private method activateModel() as object
+	private method initializeHeader(dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as character
+	private method appendItemsFromAlias(cWorkloadAlias as character, cAdjustmentNumber as character, dReferenceDate as date) as json
+	private method addDetailLine(cWorkloadAlias as character, cAdjustmentNumber as character, cItem as character, dReferenceDate as date) as object
+	private method applyLogEntries(oModelCXL as object, aEntries as array) as logical
+	private method applyLogEntry(oModelCXL as object, jEntry as json) as logical
+	private method resolveIndexCode(cWorkloadAlias as character) as character
+	private method buildContractEntry(cWorkloadAlias as character) as json
+	private method buildStartResult(cAdjustmentNumber as character, nContractCount as numeric, nItemCount as numeric, aContracts as array) as json
+	//TODO Criar método para gravar status da CXK conforme CXL. No cenário em que o PE CN310VAL está compilado e a validação falha em todos os itens, a CXK não fica com status correto.
+
+endClass
+
+/*/{Protheus.doc} new
+	@description Inicializa o logger de reajuste com o estado interno limpo.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method new() as object class ContractAdjustmentLogger
+	self:resetState()
+return self
+
+/*/{Protheus.doc} startFromAlias
+	@description Ativa o modelo CNTA311 e grava o inicio do processo de reajuste a partir do alias de carga de trabalho.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method startFromAlias(cWorkloadAlias as character, dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as json class ContractAdjustmentLogger
+	// local aArea := {} as array
+	// local cAdjustmentNumber := "" as character
+	local jStartResult := JsonObject():New() as json
+
+	// aArea := FWGetArea()
+	// self:activateModel()
+	// cAdjustmentNumber := self:initializeHeader(dReferenceDate, dAdjustmentDate, cRevisionType)
+	// jStartResult := self:appendItemsFromAlias(cWorkloadAlias, cAdjustmentNumber, dReferenceDate)
+	// FWRestArea(aArea)
+
+	jStartResult := self:initializeAdjustmentWithInternalModel(dReferenceDate, dAdjustmentDate, cRevisionType, cWorkloadAlias)
+return jStartResult
+
+/*/{Protheus.doc} commit
+	@description Valida e persiste no banco de dados o modelo CNTA311 com as atualizacoes do logger.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method commit() as logical class ContractAdjustmentLogger
+	local lCommitted := .T. as logical
+
+	if self:oModel != NIL
+		if self:oModel:VldData()
+			self:oModel:CommitData()
+		else
+			lCommitted := .F.
+		endIf
+	
+		self:oModel:DeActivate()
+		FwFreeObj(self:oModel)
+		self:oModel := NIL
+	endIf
+return lCommitted
+
+/*/{Protheus.doc} loadFromAdjustmentNumber
+	@description Carrega dados consolidados do reajuste nas tabelas CXK e CXL a partir do numero informado.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method loadFromAdjustmentNumber(cAdjustmentNumber as character) as json class ContractAdjustmentLogger
+	local aArea := {} as array
+	local aContracts := {} as array
+	local oExecStatement := NIL as object
+	local cAliasCXL := GetNextAlias() as character
+	local cQuery := "" as character
+	local jAdjustment := JsonObject():New() as json
+	local jContract := JsonObject():New() as json
+
+	aArea := FWGetArea()
+	jAdjustment["adjustmentNumber"] := cAdjustmentNumber
+	jAdjustment["referenceDate"] := CToD(" ")
+	jAdjustment["adjustmentDate"] := CToD(" ")
+	jAdjustment["revisionType"] := ""
+	jAdjustment["contracts"] := aContracts
+
+	if Empty(cAdjustmentNumber)
+		FWRestArea(aArea)
+		return jAdjustment
+	endIf
+
+	DbSelectArea("CXK")
+	DbSetOrder(1)
+	if CXK->(DbSeek(xFilial("CXK") + cAdjustmentNumber))
+		jAdjustment["referenceDate"] := CXK->CXK_DTREF
+		jAdjustment["adjustmentDate"] := CXK->CXK_DTAPL
+		jAdjustment["revisionType"] := CXK->CXK_TPREV
+	endIf
+
+	cQuery := " SELECT CXL_CONTRA, CXL_REVISA "
+	cQuery += " FROM " + RetSqlName("CXL") + " CXL "
+	cQuery += " WHERE CXL.CXL_FILIAL = ? "
+	cQuery += "   AND CXL.CXL_NUMRJ = ? "
+	cQuery += "   AND CXL.D_E_L_E_T_ = ? "
+	cQuery += " GROUP BY CXL_CONTRA, CXL_REVISA "
+	cQuery := ChangeQuery(cQuery)
+
+	oExecStatement := FWExecStatement():New(cQuery)
+	oExecStatement:setString(1, xFilial("CXL"))
+	oExecStatement:setString(2, cAdjustmentNumber)
+	oExecStatement:setString(3, Space(1))
+	cAliasCXL := oExecStatement:OpenAlias()
+	while !(cAliasCXL)->(Eof())
+		jContract := JsonObject():New()
+		jContract["contract"] := (cAliasCXL)->CXL_CONTRA
+		jContract["revision"] := (cAliasCXL)->CXL_REVISA
+		aAdd(aContracts, jContract)
+		(cAliasCXL)->(DbSkip())
+	endDo
+	(cAliasCXL)->(DbCloseArea())
+	FwFreeObj(oExecStatement)
+
+	FWRestArea(aArea)
+return jAdjustment
+
+/*/{Protheus.doc} finishContractResult
+	@description Atualiza CXK e CXL com o resultado consolidado retornado pelo worker para um contrato processado.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method finishContractResult(cAdjustmentNumber as character, oResult as object) as logical class ContractAdjustmentLogger
+	local aArea := {} as array
+	local aEntries := {} as array
+	local oModel := NIL as object
+	local oModelCXK := NIL as object
+	local oModelCXL := NIL as object
+	local lUpdated := .T. as logical
+	local cProcessStatus := "C" as character
+
+	if oResult == NIL
+		return .F.
+	endIf
+
+	//TODO O modelo não está gravando corretamente CXL_MSG em cenário de falha, então foi criado o método setFail para contornar esse problema paliativamente
+	if !oResult:lSuccess
+		self:setFail(cAdjustmentNumber, oResult)
+	endIf
+
+	if !oResult:lSuccess
+		cProcessStatus := "F"
+	endIf
+
+	aArea := FWGetArea()
+
+	if oResult:jDetails != NIL .and. oResult:jDetails:hasProperty("logEntries")
+		aEntries := oResult:jDetails["logEntries"]
+	endIf
+
+	CXK->(DbSetOrder(1))
+	if !CXK->(MsSeek(xFilial("CXK") + cAdjustmentNumber))
+		FWRestArea(aArea)
+		return .F.
+	endIf
+
+	oModel := FWLoadModel("totvs.protheus.backoffice.contracts.adjustment.CNTA311")
+	if oModel == NIL
+		FWRestArea(aArea)
+		return .F.
+	endIf
+
+	oModel:SetOperation(MODEL_OPERATION_UPDATE)
+	if !oModel:Activate()
+		oModel:DeActivate()
+		FwFreeObj(oModel)
+		FWRestArea(aArea)
+		return .F.
+	endIf
+
+	oModelCXK := oModel:GetModel("CXKMASTER")
+	oModelCXL := oModel:GetModel("CXLDETAIL")	
+
+	if Len(aEntries) > 0
+		lUpdated := self:applyLogEntries(oModelCXL, aEntries)
+	endIf
+
+	if lUpdated
+		oModelCXK:SetValue("CXK_DATFIM", Date())
+		oModelCXK:SetValue("CXK_HORFIM", Time())
+
+		if cProcessStatus == "F" .or. oModelCXK:GetValue("CXK_SITUAC") == "CF"
+			oModelCXK:SetValue("CXK_SITUAC", "CF")
+		else
+			oModelCXK:SetValue("CXK_SITUAC", "C")
+		endIf
+
+		if oModel:VldData()
+			oModel:CommitData()
+		endIf
+	endIf
+
+	oModel:DeActivate()
+	FwFreeObj(oModel)
+	FWRestArea(aArea)
+return lUpdated
+
+/*/{Protheus.doc} applyLogEntries
+	@description Aplica ao modelo CXL a lista estruturada de atualizacoes retornadas pelo worker.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method applyLogEntries(oModelCXL as object, aEntries as array) as logical class ContractAdjustmentLogger
+	local nIndex := 0 as numeric
+
+	for nIndex := 1 to Len(aEntries)
+		if !self:applyLogEntry(oModelCXL, aEntries[nIndex])
+			return .F.
+		endIf
+	next
+return .T.
+
+/*/{Protheus.doc} applyLogEntry
+	@description Aplica uma atualizacao individual em CXL conforme a chave e os valores retornados pelo worker.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method applyLogEntry(oModelCXL as object, jEntry as json) as logical class ContractAdjustmentLogger
+	local aFilter := {} as array
+	local nLine := 0 as numeric
+	local nAppliedValue := 0 as numeric
+
+	aAdd(aFilter, {"CXL_CONTRA", jEntry["contract"]})
+	aAdd(aFilter, {"CXL_REVISA", jEntry["revision"]})
+	aAdd(aFilter, {"CXL_PLAN", jEntry["plan"]})
+
+	if jEntry:hasProperty("item") .and. !Empty(jEntry["item"])
+		aAdd(aFilter, {"CXL_ITEMPL", jEntry["item"]})
+	endIf
+
+	nLine := MTFindMVC(oModelCXL, aFilter)
+	if nLine <= 0
+		return .T.
+	endIf
+
+	oModelCXL:GoLine(nLine)
+
+	if jEntry:hasProperty("newItem") .and. !Empty(jEntry["newItem"])
+		oModelCXL:SetValue("CXL_ITEMPL", jEntry["newItem"])
+	endIf
+
+	if jEntry:hasProperty("adjustmentDate")
+		oModelCXL:SetValue("CXL_DTREAJ", jEntry["adjustmentDate"])
+	endIf
+
+	if jEntry:hasProperty("nextDate")
+		oModelCXL:SetValue("CXL_DTPROX", jEntry["nextDate"])
+	endIf
+
+	if jEntry:hasProperty("currentValue")
+		oModelCXL:SetValue("CXL_VLATU", jEntry["currentValue"])
+	endIf
+
+	if jEntry:hasProperty("appliedValue")
+		oModelCXL:SetValue("CXL_VLAPL", jEntry["appliedValue"])
+	elseif jEntry:hasProperty("currentValue") .and. oModelCXL:GetValue("CXL_VLANT") > 0
+		nAppliedValue := Round((((jEntry["currentValue"] / oModelCXL:GetValue("CXL_VLANT")) - 1) * 100), TamSx3("CXL_VLAPL")[2])
+		oModelCXL:SetValue("CXL_VLAPL", nAppliedValue)
+	endIf
+
+	if jEntry:hasProperty("status")
+		oModelCXL:SetValue("CXL_SITUAC", jEntry["status"])
+	endIf
+return .T.
+
+/*/{Protheus.doc} resetState
+	@description Reinicializa as referencias internas de modelo usadas na gravacao inicial do log.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method resetState() as object class ContractAdjustmentLogger
+	self:oModel := NIL
+return self
+
+/*/{Protheus.doc} activateModel
+	@description Carrega e ativa o modelo CNTA311 para inclusao do log de reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method activateModel() as object class ContractAdjustmentLogger
+	self:oModel := FWLoadModel("totvs.protheus.backoffice.contracts.adjustment.CNTA311")
+	self:oModel:SetOperation(MODEL_OPERATION_INSERT)
+	self:oModel:Activate()
+return self
+
+/*/{Protheus.doc} initializeHeader
+	@description Preenche os dados iniciais do cabecalho CXK, incluindo datas de aplicacao e tipo de revisao, e retorna o numero do reajuste gerado.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+*/
+method initializeHeader(dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character) as character class ContractAdjustmentLogger
+	local oModelCXK := self:oModel:GetModel("CXKMASTER")
+	
+	oModelCXK:SetValue("CXK_DATINI", Date())
+	oModelCXK:SetValue("CXK_HORINI", Time())
+	oModelCXK:SetValue("CXK_DATFIM", Date())
+	oModelCXK:SetValue("CXK_HORFIM", Time())
+	oModelCXK:SetValue("CXK_SITUAC", "P")
+	oModelCXK:SetValue("CXK_DTREF", dReferenceDate)
+	oModelCXK:SetValue("CXK_DTAPL", dAdjustmentDate)
+	oModelCXK:SetValue("CXK_TPREV", cRevisionType)
+return oModelCXK:GetValue("CXK_NUMERO")
+
+/*/{Protheus.doc} appendItemsFromAlias
+	@description Percorre o alias da carga de trabalho e grava os itens iniciais do log em CXL, retornando um resumo estruturado do processo.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method appendItemsFromAlias(cWorkloadAlias as character, cAdjustmentNumber as character, dReferenceDate as date) as json class ContractAdjustmentLogger
+	local aContracts := {} as array
+	local cCurrentContract := "" as character
+	local cItem := Replicate("0", TamSx3("CXL_ITEM")[1]) as character
+	local nContractCount := 0 as numeric
+	local nItemCount := 0 as numeric
+
+	local oModelCXL := self:oModel:GetModel("CXLDETAIL")
+
+	while !(cWorkloadAlias)->(Eof())
+		oModelCXL:AddLine()
+		nItemCount++
+
+		if cCurrentContract <> (cWorkloadAlias)->CN9_NUMERO
+			cCurrentContract := (cWorkloadAlias)->CN9_NUMERO
+			aAdd(aContracts, self:buildContractEntry(cWorkloadAlias))
+			nContractCount++
+		endIf
+
+		cItem := Soma1(cItem)
+		self:addDetailLine(cWorkloadAlias, cAdjustmentNumber, cItem, dReferenceDate)
+		(cWorkloadAlias)->(DbSkip())
+	endDo
+
+	oModelCXK:SetValue("CXK_QTDCT", nContractCount)
+	oModelCXK:SetValue("CXK_QTDIT", nItemCount)
+return self:buildStartResult(cAdjustmentNumber, nContractCount, nItemCount, aContracts)
+
+/*/{Protheus.doc} addDetailLine
+	@description Preenche uma linha CXL com os dados do item corrente da carga de trabalho.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method addDetailLine(cWorkloadAlias as character, cAdjustmentNumber as character, cItem as character, dReferenceDate as date) as object class ContractAdjustmentLogger
+	local cIndexCode := self:resolveIndexCode(cWorkloadAlias) as character
+	
+	local oModelCXL := self:oModel:GetModel("CXLDETAIL")
+
+	oModelCXL:SetValue("CXL_NUMRJ", cAdjustmentNumber)
+	oModelCXL:SetValue("CXL_ITEM", cItem)
+	oModelCXL:SetValue("CXL_CONTRA", (cWorkloadAlias)->CN9_NUMERO)
+	oModelCXL:SetValue("CXL_REVISA", (cWorkloadAlias)->CN9_REVISA)
+	oModelCXL:SetValue("CXL_PLAN", (cWorkloadAlias)->CNA_NUMERO)
+	oModelCXL:SetValue("CXL_ITEMPL", (cWorkloadAlias)->CNB_ITEM)
+	oModelCXL:SetValue("CXL_VLANT", (cWorkloadAlias)->VLANT)
+	oModelCXL:SetValue("CXL_DTANT", (cWorkloadAlias)->DTREAJ)
+	oModelCXL:SetValue("CXL_DTPREV", (cWorkloadAlias)->PROXRJ)
+	oModelCXL:SetValue("CXL_DTREAJ", CToD(" "))
+	oModelCXL:SetValue("CXL_DTPROX", CToD(" "))
+	oModelCXL:SetValue("CXL_VLATU", 0)
+	oModelCXL:SetValue("CXL_INDICE", cIndexCode)
+	oModelCXL:SetValue("CXL_VLIND", ((A300VlrInd(cIndexCode, dReferenceDate) - 1) * 100))
+	oModelCXL:SetValue("CXL_VLAPL", 0)
+	oModelCXL:SetValue("CXL_SITUAC", "F")
+return self
+
+/*/{Protheus.doc} resolveIndexCode
+	@description Resolve o indice efetivo do item conforme a prioridade item, planilha e contrato.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method resolveIndexCode(cWorkloadAlias as character) as character class ContractAdjustmentLogger
+	if !Empty((cWorkloadAlias)->CNB_INDICE)
+		return (cWorkloadAlias)->CNB_INDICE
+	endIf
+
+	if !Empty((cWorkloadAlias)->CNA_INDICE)
+		return (cWorkloadAlias)->CNA_INDICE
+	endIf
+return (cWorkloadAlias)->CN9_INDICE
+
+/*/{Protheus.doc} buildContractEntry
+	@description Monta um item estruturado de contrato e revisao para o processamento posterior do reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method buildContractEntry(cWorkloadAlias as character) as json class ContractAdjustmentLogger
+	local jContract := JsonObject():New() as json
+
+	jContract["contract"] := (cWorkloadAlias)->CN9_NUMERO
+	jContract["revision"] := (cWorkloadAlias)->CN9_REVISA
+return jContract
+
+/*/{Protheus.doc} buildStartResult
+	@description Monta o resumo estruturado da gravacao inicial do log de reajuste.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method buildStartResult(cAdjustmentNumber as character, nContractCount as numeric, nItemCount as numeric, aContracts as array) as json class ContractAdjustmentLogger
+	local jStartResult := JsonObject():New() as json
+
+	jStartResult["adjustmentNumber"] := cAdjustmentNumber
+	jStartResult["contractCount"] := nContractCount
+	jStartResult["itemCount"] := nItemCount
+	jStartResult["contracts"] := aContracts
+return jStartResult
+
+/*/{Protheus.doc} initializeAdjustmentWithInternalModel
+	@description Inicializa o reajuste carregando, ativando e populando o modelo CNTA311 no escopo deste metodo.
+	            Este metodo foi criado porque o Protheus esta gerando error.log quando um modelo e criado e
+	            ativado em um metodo e utilizado em outro metodo diferente. Estamos investigando esse
+	            comportamento junto ao time de framework para uma solucao permanente.
+	@author guilherme.sordi@totvs.com.br
+	@since 19/05/2026
+	@version 12.1.2510
+/*/
+method initializeAdjustmentWithInternalModel(dReferenceDate as date, dAdjustmentDate as date, cRevisionType as character, cWorkloadAlias as character) as json class ContractAdjustmentLogger
+	local oModel := NIL as object
+	local oModelCXK := NIL as object
+	local oModelCXL := NIL as object	
+
+	local aContracts := {} as array
+	local cCurrentContract := "" as character
+	local cItem := Replicate("0", TamSx3("CXL_ITEM")[1]) as character
+	local nContractCount := 0 as numeric
+	local nItemCount := 0 as numeric
+	local cAdjustmentNumber := "" as character
+	
+	local cIndexCode as character
+
+	oModel := FWLoadModel("totvs.protheus.backoffice.contracts.adjustment.CNTA311")
+	oModel:SetOperation(MODEL_OPERATION_INSERT)
+	oModel:Activate()
+	oModelCXK := oModel:GetModel("CXKMASTER")
+	oModelCXL := oModel:GetModel("CXLDETAIL")
+
+
+	oModelCXK:SetValue("CXK_DATINI", Date())
+	oModelCXK:SetValue("CXK_HORINI", Time())
+	oModelCXK:SetValue("CXK_DATFIM", Date())
+	oModelCXK:SetValue("CXK_HORFIM", Time())
+	oModelCXK:SetValue("CXK_SITUAC", "P")
+	oModelCXK:SetValue("CXK_DTREF", dReferenceDate)
+	oModelCXK:SetValue("CXK_DTAPL", dAdjustmentDate)
+	oModelCXK:SetValue("CXK_TPREV", cRevisionType)
+
+	cAdjustmentNumber := oModelCXK:GetValue("CXK_NUMERO")
+
+	while !(cWorkloadAlias)->(Eof())
+		oModelCXL:AddLine()
+		nItemCount++
+
+		if cCurrentContract <> (cWorkloadAlias)->CN9_NUMERO
+			cCurrentContract := (cWorkloadAlias)->CN9_NUMERO
+			aAdd(aContracts, self:buildContractEntry(cWorkloadAlias))
+			nContractCount++
+		endIf
+
+		cItem := Soma1(cItem)
+
+		cIndexCode := self:resolveIndexCode(cWorkloadAlias)
+
+		oModelCXL:SetValue("CXL_NUMRJ", cAdjustmentNumber)
+		oModelCXL:SetValue("CXL_ITEM", cItem)
+		oModelCXL:SetValue("CXL_CONTRA", (cWorkloadAlias)->CN9_NUMERO)
+		oModelCXL:SetValue("CXL_REVISA", (cWorkloadAlias)->CN9_REVISA)
+		oModelCXL:SetValue("CXL_PLAN", (cWorkloadAlias)->CNA_NUMERO)
+		oModelCXL:SetValue("CXL_ITEMPL", (cWorkloadAlias)->CNB_ITEM)
+		oModelCXL:SetValue("CXL_VLANT", (cWorkloadAlias)->VLANT)
+		oModelCXL:SetValue("CXL_DTANT", (cWorkloadAlias)->DTREAJ)
+		oModelCXL:SetValue("CXL_DTPREV", (cWorkloadAlias)->PROXRJ)
+		oModelCXL:SetValue("CXL_DTREAJ", CToD(" "))
+		oModelCXL:SetValue("CXL_DTPROX", CToD(" "))
+		oModelCXL:SetValue("CXL_VLATU", 0)
+		oModelCXL:SetValue("CXL_INDICE", cIndexCode)
+		oModelCXL:SetValue("CXL_VLIND", ((A300VlrInd(cIndexCode, dReferenceDate) - 1) * 100))
+		oModelCXL:SetValue("CXL_VLAPL", 0)
+		oModelCXL:SetValue("CXL_SITUAC", "P")
+
+		(cWorkloadAlias)->(DbSkip())
+	endDo
+
+	oModelCXK:SetValue("CXK_QTDCT", nContractCount)
+	oModelCXK:SetValue("CXK_QTDIT", nItemCount)
+
+	self:oModel := oModel
+return self:buildStartResult(cAdjustmentNumber, nContractCount, nItemCount, aContracts)
+
+
+/*/{Protheus.doc} setFail
+    @description Registra falha da execução do reajuste para o número informado.
+    @author guilherme.sordi@totvs.com.br
+    @since 08/06/2026
+    @version 12.1.2510
+/*/
+
+method setFail(cAdjustmentNumber as character, oResult as object) class ContractAdjustmentLogger
+    local cKey as character
+    local oExec as object
+    local cAlias as character
+
+    oExec := FWExecStatement():new("SELECT CXL_FILIAL, CXL_NUMRJ, CXL_ITEM FROM "+retSqlName("CXL")+" CXL WHERE CXL_FILIAL = ? AND CXL_NUMRJ = ? AND CXL_CONTRA = ? AND D_E_L_E_T_ = ?")
+    oExec:setString(1, xFilial("CXL", oResult:cBranch))
+    oExec:setString(2, oResult:cAdjustmentNumber)
+    oExec:setString(3, oResult:cContract)
+    oExec:setString(4, space(1))
+    cAlias := oExec:openAlias()
+
+    while !(cAlias)->(eof())        
+
+        cKey := (cAlias)->CXL_FILIAL + (cAlias)->CXL_NUMRJ + (cAlias)->CXL_ITEM
+        CXL->(dbSetOrder(1))
+        if CXL->(dbSeek(cKey))
+            while CXL->(CXL_FILIAL+CXL_NUMRJ+CXL_ITEM) == cKey
+                recLock("CXL", .F.)
+                CXL->CXL_SITUAC := if(oResult:lSuccess, "C", "F")
+                if !empty(oResult:cErrorMessage)
+                    CXL->CXL_MSG := oResult:cErrorMessage
+                endIf
+                CXL->(msUnlock())
+                CXL->(dbSkip())
+            endDo
+        endIf
+    
+        (cAlias)->(dbSkip())
+    endDo
+
+    (cAlias)->(DBCLoseArea())
+    fwFreeObj(oExec)
+return

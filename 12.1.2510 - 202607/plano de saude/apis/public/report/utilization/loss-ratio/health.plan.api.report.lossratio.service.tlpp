@@ -1,0 +1,255 @@
+#include "tlpp-core.th"
+#include "health.plan.api.report.lossratio.service.ch"
+
+#define TYPE_INDIVIDUAL "1"
+#define TYPE_CORPORATE "2"
+#define REPORT_FORMAT_SYNTHETIC "1"
+#define REPORT_FORMAT_ANALYTICAL "2"
+#define YES_OPTION "1"
+#define NO_OPTION "2"
+#define TRUE_OPTION "true"
+#define FALSE_OPTION "false"
+#define STATUS_CODE_OK 200
+#define STATUS_CODE_ACCEPTED 202
+#define STATUS_CODE_BAD_REQUEST 400
+
+namespace totvs.protheus.health.plan.api.report
+
+using namespace totvs.protheus.health.plans.api.util
+
+/*/{Protheus.doc} LossRatioService
+Service responsável por validar os filtros recebidos, montar os parâmetros do relatório de sinistralidade e gerar o arquivo de retorno.
+@type class
+@version 12.1.2610
+@author vinicius.queiros
+@since 05/06/2026
+/*/
+class LossRatioService from BaseService
+
+    public data cFileName as character
+    public data cFilePdf as character
+    public data lBase64 as logical
+    public data lIsSynchronous as logical
+
+    public method new() constructor
+    public method destroy()
+    public method lossRatioReport() as logical
+    public method loadLossRatioPdfBinary(cFileName as character) as logical
+
+    private method buildFilter() as array
+    private method validatePeriod() as logical
+
+endclass
+
+/*/{Protheus.doc} new
+Executa o construtor da classe `LossRatioService` e inicializa a herança da `BaseService`.
+@type method
+@version 12.1.2610
+@author vinicius.queiros
+@since 05/06/2026
+@return object, instância da classe `LossRatioService`
+/*/
+method new() class LossRatioService
+
+	_Super:new()
+
+return self
+
+/*/{Protheus.doc} destroy
+Libera os recursos utilizados pela instância da classe `LossRatioService`.
+@type method
+@version 12.1.2610
+@author vinicius.queiros
+@since 05/06/2026
+/*/
+method destroy() class LossRatioService
+
+	_Super:destroy()
+
+return
+
+/*/{Protheus.doc} lossRatioReport
+Valida o período informado, monta os parâmetros do relatório de sinistralidade, executa a rotina de geração e carrega o arquivo PDF para resposta da API.
+@type method
+@version 12.1.2610
+@author vinicius.queiros
+@since 05/06/2026
+@return logical, indica se o relatório foi gerado e carregado com sucesso
+/*/
+method lossRatioReport() as logical class LossRatioService
+
+    local lSuccess := .F. as logical
+    local aFilter  := {} as array
+    local lIsSynthetic as logical
+    local lHasFamilyFilter as logical
+
+    lIsSynthetic := self:getRequestValue(self:jBody, "reportFormat", REPORT_FORMAT_SYNTHETIC) == REPORT_FORMAT_SYNTHETIC
+    lHasFamilyFilter := !empty(self:getRequestValue(self:jBody, "familyCodeFrom"))
+
+    if self:validatePeriod()
+        self:lIsSynchronous := lIsSynthetic .or. lHasFamilyFilter
+        self:cFileName := "sin" + criaTrab(nil, .F.)
+        aFilter := self:buildFilter()
+
+        if self:lIsSynchronous
+            lSuccess := self:loadLossRatioPdfBinary(PLSR996(aFilter, .T., self:cFileName))
+        else
+            startJob("totvs.protheus.health.plan.api.report.processLossRatioJob", getEnvServer(), .F., cEmpAnt, cFilAnt, self:cFileName, aClone(aFilter))
+            self:nCodeStatus := STATUS_CODE_ACCEPTED
+			lSuccess := .T.
+        endif
+    endif
+
+    fwFreeArray(aFilter)
+
+return lSuccess
+
+/*/{Protheus.doc} loadLossRatioPdfBinary
+Abre o arquivo PDF gerado para o relatório de sinistralidade, carrega o conteúdo binário para retorno na API e remove o arquivo temporário após a leitura.
+@type method
+@version 12.1.2610
+@author vinicius.queiros
+@since 08/06/2026
+@param cFileName, character, nome do arquivo PDF gerado pela rotina do relatório
+@return logical, indica se o arquivo foi lido com sucesso
+/*/
+method loadLossRatioPdfBinary(cFileName as character) as logical class LossRatioService
+
+    local oFile as object
+    local cDirectory := lower(superGetMv("MV_RELT", .F., "")) as character
+    local lSuccess := .F. as logical
+
+    self:cFileName := cFileName
+    self:lBase64 := self:getRequestValue(self:jBody, "base64", FALSE_OPTION) == TRUE_OPTION
+
+    oFile := FwFileReader():New(cDirectory + self:cFileName + ".pdf")
+
+    if oFile:open()
+        self:cFilePdf := oFile:fullRead()
+
+        if self:lBase64
+            self:setAttributeJson({"attribute": "fileName", "value": lower(self:cFileName) + ".pdf", "type": "C"})
+			self:setAttributeJson({"attribute": "file", "value": encode64(Self:cFilePdf), "type" : "C"})
+        endif
+
+        oFile:close()
+    
+        self:nCodeStatus := STATUS_CODE_OK
+        lSuccess := .T.
+
+        FErase(cDirectory + self:cFileName + ".pdf")
+        FErase(cDirectory + self:cFileName + "-status.json")
+        FErase(cDirectory + self:cFileName + ".tmp.rel")
+    else
+        self:setError("", STR0006, STR0007 + cDirectory + self:cFileName + ".pdf').", STATUS_CODE_BAD_REQUEST) // "Não foi possível gerar o relatório no momento. Tente novamente em alguns instantes." / "Não foi possível abrir o arquivo gerado ('";
+    endif
+
+    fwFreeObj(oFile)
+
+return lSuccess
+
+/*/{Protheus.doc} validatePeriod
+Valida o intervalo entre período inicial e final informado no body, garantindo ordem cronológica e limite máximo de um ano.
+@type method
+@version 12.1.2610
+@author vinicius.queiros
+@since 05/06/2026
+@return logical, indica se o período informado é válido
+/*/
+method validatePeriod() as logical class LossRatioService
+
+    local lValid := .T. as logical
+    local cStartYearMonth := self:jBody["startYearMonth"] as character
+    local cEndYearMonth := self:jBody["endYearMonth"] as character
+    local nStartYear := val(subStr(cStartYearMonth, 1, 4)) as numeric
+    local nEndYear := val(subStr(cEndYearMonth, 1, 4)) as numeric
+
+    do case
+        case cStartYearMonth > cEndYearMonth
+            self:setError("", STR0001, STR0002 + cStartYearMonth + STR0003 + cEndYearMonth + "').", STATUS_CODE_BAD_REQUEST) // "Período informado inválido. Verifique as datas inicial e final." / "Validação de período reprovada: startYearMonth ('"; "') não pode ser maior que endYearMonth ('"; "')."
+            lValid := .F.
+
+        // A rotina limita a consulta a no máximo um ano de diferença entre início e fim.
+        case (nEndYear - nStartYear) > 1
+            self:setError("", STR0004, STR0005 + cValToChar(nStartYear) + ", endYear=" + cValToChar(nEndYear) + ").", STATUS_CODE_BAD_REQUEST) // "Intervalo de período inválido. Use no máximo 1 ano entre início e fim." / "Validação de intervalo reprovada: diferença entre anos maior que 1 (startYear="
+            lValid := .F. 
+    endcase
+
+return lValid
+
+/*/{Protheus.doc} buildFilter
+Monta o array de parâmetros utilizado pela rotina `PLSR996` a partir dos dados recebidos no body da requisição.
+@type method
+@version 12.1.2610
+@author vinicius.queiros
+@since 05/06/2026
+@return array, array de filtros no formato esperado pela rotina do relatório
+/*/
+method buildFilter() as array class LossRatioService
+
+    local aFilter := array(22) as array
+    local jBody := self:jBody as json
+    local cYearFrom as character
+    local cMonthFrom as character
+    local cYearTo as character
+    local cMonthTo as character
+
+    // Quebra o período recebido no body para o formato utilizado pela rotina legado.
+    cYearFrom := subStr(jBody["startYearMonth"], 1, 4)
+    cMonthFrom := subStr(jBody["startYearMonth"], 6, 2)
+    cYearTo := subStr(jBody["endYearMonth"], 1, 4)
+    cMonthTo := subStr(jBody["endYearMonth"], 6, 2)
+
+    // Posições 1 a 13: filtros de operadora, empresa, contrato, subcontrato e família.
+    aFilter[1] := self:getRequestValue(self:jBody, "healthInsurerCode")
+    aFilter[2] := self:getRequestValue(self:jBody, "companyCodeFrom")
+    aFilter[3] := self:getRequestValue(self:jBody, "companyCodeTo")
+    aFilter[4] := self:getRequestValue(self:jBody, "contractCodeFrom")
+    aFilter[5] := self:getRequestValue(self:jBody, "contractCodeTo", iif(empty(aFilter[4]), replicate("Z", tamSX3("BA3_CONEMP")[1]), aFilter[4]))
+    aFilter[6] := self:getRequestValue(self:jBody, "contractVersionFrom")
+    aFilter[7] := self:getRequestValue(self:jBody, "contractVersionTo", iif(empty(aFilter[6]), replicate("Z", tamSX3("BA3_VERCON")[1]), aFilter[6]))
+    aFilter[8] := self:getRequestValue(self:jBody, "subcontractCodeFrom")
+    aFilter[9] := self:getRequestValue(self:jBody, "subcontractCodeTo", iif(empty(aFilter[8]), replicate("Z", tamSX3("BA3_SUBCON")[1]), aFilter[8]))
+    aFilter[10] := self:getRequestValue(self:jBody, "subcontractVersionFrom")
+    aFilter[11] := self:getRequestValue(self:jBody, "subcontractVersionTo", iif(empty(aFilter[10]), replicate("Z", tamSX3("BA3_VERSUB")[1]), aFilter[10]))
+    aFilter[12] := self:getRequestValue(self:jBody, "familyCodeFrom")
+    aFilter[13] := self:getRequestValue(self:jBody, "familyCodeTo", iif(empty(aFilter[12]), replicate("Z", tamSX3("BA3_MATRIC")[1]), aFilter[12]))
+
+    // Posições 14 e 15 reservadas para filtro de usuário, não utilizado nesta API.
+    aFilter[14] := space(2) // Usuário De (sem filtro de tipo)
+    aFilter[15] := space(2) // Usuário Até (sem filtro de tipo)
+
+    // Posições 16 a 22: período, tipo de pessoa, formato do relatório e indicador RN309.
+    aFilter[16] := cYearFrom
+    aFilter[17] := cYearTo
+    aFilter[18] := cMonthFrom
+    aFilter[19] := cMonthTo
+    aFilter[20] := val(self:getRequestValue(self:jBody, "type", TYPE_INDIVIDUAL))
+    aFilter[21] := val(self:getRequestValue(self:jBody, "reportFormat", REPORT_FORMAT_SYNTHETIC))
+    aFilter[22] := val(self:getRequestValue(self:jBody, "rn309", NO_OPTION))
+
+return aFilter
+
+/*/{Protheus.doc} processLossRatioJob
+Processa a geração do relatório de sinistralidade em execução assíncrona via Job, preparando ambiente RPC e acionando a rotina padrão de relatório.
+@type function
+@version 12.1.2610
+@author vinicius.queiros
+@since 07/06/2026
+@param cCompany, character, código da empresa utilizada para abertura do ambiente RPC
+@param cBranch, character, código da filial utilizada para abertura do ambiente RPC
+@param cFileName, character, nome base do arquivo de saída a ser utilizado na geração do relatório
+@param aFilter, array, array de filtros no formato esperado pela rotina `PLSR996`
+@return nil, não há retorno; o processamento é executado no Job
+/*/
+function processLossRatioJob(cCompany as character, cBranch as character, cFileName as character, aFilter as array)
+
+    rpcSetType(3)
+    rpcSetEnv(cCompany, cBranch, nil, nil, "PLS")
+    
+    PLSR996(aFilter, .T., cFileName)
+
+    fwFreeArray(aFilter)
+
+return
+

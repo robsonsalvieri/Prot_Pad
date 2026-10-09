@@ -1,0 +1,568 @@
+#INCLUDE 'tlpp-core.th'
+#include 'backoffice.fin.banks.statement.ch'
+
+NAMESPACE totvs.protheus.backoffice.fin.banks
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} BanksStatement
+	Classe responsavel por orquestar a integração com os bancos.
+
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@version 1.0
+/*/
+//-------------------------------------------------------------------
+Class BanksStatement
+	Private  Data jErrors      		as Json     	// Erros ocorridos no processo de transmissao.
+	Private  Data lImpedingError 	as Logical 		// Erros impeditivos para o processo.
+	Private  Data cScopeToken 		as Character 	// Escopo necessario para operacao.
+	Private  Data oBankData    		as Object   	// Classe de transmissao de cada banco.
+	Private  Data jResponse    		as Json   		// Json contendo o resultado da operacao.
+	Private	 Data jConfigBanks		as Json			// Configurações por banco
+	Private	 Data cFebraban			as Character	// Armazena o codigo febraban do banco
+	Private  Data jLayStatement		as Json 		// Layout contendo as configuracoes para transmissão do extrato bancario.
+	Private  Data nRecnoSA6			as Numeric		// Recno da SA6 que representa o banco que esta configurado na classe
+	Private  Data nRecnoSEE			as Numeric		// Recno da SEE que irá representar o parametro de banco que esta configurado na classe
+	Private  Data cOperation		as Character	// Operação que esta sendo configurada na classe
+	Private  Data jBody 			as Json			// Body que será enviado ao banco, definido atraves do metodo setBody
+
+	// Métodos principais e obrigatorios para utilização da classe
+	Public  Method new() CONSTRUCTOR                     		 			// Construtor da classe.
+	Public  Method setConfig(nRecnoSA6 as Numeric, nRecnoSEE as Numeric)	// Configura o banco.
+	Public  Method setOperation(cOperation as Character)  					// Configura a operação.
+	Public  Method toTransmit() as Json    									// Realiza a transmissao.
+	
+	// Métodos opcionais
+	Public  Method setBody(jBody as Json)									// Deve ser utilizado quando a comunicação do banco não for com base nos campos de layout
+
+	// Métodos auxiliares
+	Public  Method getConfigByBanks()										// Retorna as configurações que estão habilitadas para os bancos
+	
+	// Métodos de operações opcionais
+	Public  Method recordsBanksStatement(	cIdProcess as Character,; 		// Grava os movimentos do extrato bancário.
+											cIdBank as Character,;
+											cIdAgency as Character,;
+											cIdAccount as Character,;
+											cIdSubAccount as Character) as Json
+
+	// Métodos para testes
+	Public  Method setMockAPIData() 						// Realiza o mock dos dados para testes.
+
+	// Métodos internos
+	Private  Method reset() 					  							// Reseta as variáveis da classe.
+	Private  Method getErros() as Array 									// Erros ocorridos durante a transmissão.
+	Private  Method setErros(cError as Character, cDetail as Character) 	// Adiciona erros ocorridos durante a transmissão.
+	Private  Method getToken() as Logical									// Obtém e válida o Token.
+	Public  Method verifyCertificate() as Logical							// Verifica validade do certificado
+
+	// Métodos staticos
+	Public  Method getStatementType() as Character							// Ocorrência do protheus de acordo com o codigo do banco.
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+	Metodo para criacao da instancia da classe.
+
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method new() Class BanksStatement
+	::reset()
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setConfig
+	Metodo de definição do banco utilizado nas integrações.
+
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@param nRecnoSA6, Numeric, Recno do banco cadastrado na SA6
+/*/
+//-------------------------------------------------------------------
+Method setConfig(nRecnoSA6 as Numeric, nRecnoSEE as Numeric) Class BanksStatement
+	::reset()
+	SA6->(DbGoto(nRecnoSA6))
+	SEE->(DbGoto(nRecnoSEE))
+
+	::nRecnoSEE := nRecnoSEE
+
+	If SA6->(!Eof()) .and. SEE->(!Eof())
+		if  ::nRecnoSA6 <> nRecnoSA6
+			::nRecnoSA6 := nRecnoSA6
+			::cFebraban := SA6->A6_BCOOFI
+			If SA6->(FieldPos("A6_CFGBOLP")) > 0
+				::jLayStatement:FromJson(SA6->A6_CFGBOLP)
+			Endif
+
+			If FindClass('totvs.protheus.backoffice.fin.banks.Bank' + ::cFebraban + 'Statement')
+				::oBankData := &('totvs.protheus.backoffice.fin.banks.Bank' + ::cFebraban + 'Statement():getInstance()')
+				self:setMockAPIData()
+			Else
+				::setErros('Error Config', STR0001) // Nenhum banco disponível para o código febraban informado
+				::lImpedingError := .T.
+				::nRecnoSA6 := 0
+			EndIf
+		Endif	
+	Else
+		::setErros('Error Config',STR0009 ) // Não foi possivel encontrar o banco, por favor selecione um banco válido
+		::lImpedingError := .T.
+	Endif
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setOperation
+	Metodo que define qual operacao será realizada.
+
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@param cOperation: Character - Operacao a ser realizada.
+/*/
+//-------------------------------------------------------------------
+Method setOperation(cOperation as Character) Class BanksStatement
+	Local jA6CFG := JsonObject():new()	as Json
+	
+	::cOperation := cOperation
+
+	If !::lImpedingError
+		::getConfigByBanks()
+
+		//Verifica se a operação esta ativa para o banco configurado
+		If 	::jConfigBanks:hasProperty(::cOperation);
+			.And. ::jConfigBanks[::cOperation]:hasProperty("banks");
+			.And. ::jConfigBanks[::cOperation]["banks"][::cFebraban]["active"]
+			
+			::cScopeToken := ::oBankData:setOperation(::cOperation)
+
+			jA6CFG:FromJson(::jLayStatement:toJson())
+
+			If jA6CFG:hasProperty("credentials") .and. !::oBankData:setCredentials(jA6CFG["credentials"]:toJson())
+				::setErros('Error Credentials', STR0010 + SA6->A6_FILIAL + STR0011 + SA6->A6_COD + STR0012 + SA6->A6_AGENCIA + STR0013 + SA6->A6_NUMCON + ") ") // Não foi possivel obter as credenciais da conta ( Filial: ... Codigo ...  Agencia ... Conta).
+				::lImpedingError := .T.
+			Endif
+			
+			//Verifica validade do certificado
+			If !::lImpedingError .and. jA6CFG:hasProperty("credentials") .and. !::verifyCertificate(jA6CFG["credentials"])
+				::setErros('Error Credentials', STR0014)	// Certificado digital expirado, por favor verifique a validade do certificado digital e tente novamente.
+				::lImpedingError := .T.
+			Endif
+
+			//Se não existir a propriedade layout, cria sem conteudo
+			If !jA6CFG:hasProperty("layout")
+				jA6CFG["layout"] := JsonObject():new()
+			Endif
+
+			//Caso tenha sido informado um body, deve sobrepor respeitando a regra do chamador
+			//(Função que esta utilizando a classe)
+			If Len(::jBody:getNames()) > 0
+				jA6CFG["layout"] := ::jBody
+			Endif
+
+			If !::oBankData:setBody(jA6CFG["layout"])
+				::setErros('Error body', ::oBankData:getError())
+				::lImpedingError := .T.
+			EndIf
+
+		Else
+			::setErros('Error Operation', STR0002) // Operação não diponível para o banco informado
+			::lImpedingError :=.T.
+		EndIf
+	EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} toTransmit
+	Realiza a trnsmissão para o banco conforme configurado.
+		
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@return jResponse: Json - Json contendo o resultado da requisição.
+/*/
+//-------------------------------------------------------------------
+Method toTransmit() as Json Class BanksStatement
+	Local jResponse 	:= JsonObject():New() as Json
+	Local nTokenTries 	:= 1 as Numeric
+	Local lContinue 	:= .T. as Logical
+	
+	If Len(::getErros()) > 0
+		::jResponse['transmitted'] := .F.
+		::jResponse['statusCode']  := 0
+		::jResponse := ::jErrors
+		lContinue := .F.
+	EndIF
+
+	While lContinue
+		lContinue := .F.
+		If ::getToken()
+			jResponse := ::oBankData:send()
+
+			If jResponse:hasProperty("transmitted") .And. jResponse["transmitted"]
+				::jResponse := jResponse
+			Else
+				If jResponse:hasProperty("statusCode") .And. jResponse["statusCode"] == 401 .And. nTokenTries < 4
+					nTokenTries++
+					lContinue := .T.
+				Else
+					::setErros(jResponse['errors']['erro'], jResponse['errors']['message'])
+				EndIf
+			EndIf
+		EndIf
+
+		If Len(::getErros()) > 0
+			::jResponse['errors'] 		:= aClone(::jErrors['errors'])
+			::jResponse['transmitted'] 	:= IIF(jResponse:hasProperty("transmitted"), jResponse["transmitted"], .F.)
+			::jResponse['statusCode'] 	:= IIF(jResponse:hasProperty("statusCode"), jResponse["statusCode"], 0)
+		EndIf
+	EndDo
+Return ::jResponse
+
+/*/{Protheus.doc} setBody
+	Define o body quando a comunicação com o banco não utilizar os campos de layout da SA6
+	A6_CFGBOL e A6_CFGBOLP
+	@author Vitor Duca
+	@since 18/12/2023
+	@version 1.0
+	@param jBody, Json, Body que será enviado ao banco
+/*/
+Method setBody(jBody as json) Class BanksStatement
+	::jBody := jBody
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} reset
+	Reseta as variaveis da classe.
+	
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+/*/
+//-------------------------------------------------------------------
+Method reset() Class BanksStatement
+	::jErrors := JsonObject():New()
+	::jResponse := JsonObject():New()
+	::jLayStatement := JsonObject():new()
+	::jBody := JsonObject():new()
+	::jErrors['errors'] := {}
+	::cScopeToken := ""
+	::cOperation := "" 
+	::lImpedingError := .F.
+	::oBankData := Nil
+	::nRecnoSA6 := 0
+	::nRecnoSEE := 0
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getErros
+	Erros ocorridos durante a transmissão.
+	
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+    @return aErrors: Json - Json contendo os erros ocorridos.
+/*/
+//-------------------------------------------------------------------
+Method getErros() as Array Class BanksStatement
+	Local aErrors := {} as Array
+
+	If ::jErrors:hasProperty('errors') .And. !Empty(::jErrors['errors'])
+		aErrors := ::jErrors['errors']
+	EndIf
+
+Return aErrors
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setErros
+	Setta erros ocorridos durante a transmissão.
+	
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@param cError: Character - Descrição do erro ocorrido.
+	@param cDetail: Character - Detalhe do erro ocorrido.
+/*/
+//-------------------------------------------------------------------
+Method setErros(cError as Character, cDetail as Character) Class BanksStatement
+	Local jErro := JsonObject():New() as Json
+
+	jErro['error'] := cError
+	jErro['message'] := cDetail
+
+	aAdd(::jErrors['errors'], jErro)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} recordsBanksStatement
+	Grava os movimentos do extrato bancario (SIF/SIG).
+	
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@param cIdProcess:  Character - NÚmero de indeificação do processamento.
+	@param cIdBank:   Character - Codigo do banco (SA6).
+	@param cIdAgency: Character - Codigo da agencia (SA6).
+	@param cIdAccount:   Character - Codigo da conta (SA6).
+	@param cIdSubAccount:  Character - Codigo da sub-conta (SEE).
+	@return jResponse: Json - Json contendo o resultado da requisição.
+/*/
+//-------------------------------------------------------------------
+Method recordsBanksStatement(cIdProcess as Character, cIdBank as Character, cIdAgency as Character, cIdAccount as Character, cIdSubAccount as Character) as Json Class BanksStatement
+	Local dDateMov       := MsDate() as Date
+	Local nMovValue      := 0        as Numeric
+	Local nCount         := 1        as Numeric
+	Local nMovimentsSize := 1        as Numeric
+	Local aMoviments     := {}       as Array
+	Local aPropSIF       := {}       as Array
+	Local dDateLanc      := ''       as Character
+	Local cMovNumber     := ''       as Character
+	Local cMovCode       := ''       as Character
+	Local cMovCart       := ''       as Character
+	Local cMovDesc       := ''       as Character
+	Local cMovFailDesc   := ''       as Character
+	Local cItem          := ''       as Character
+	Local cStatus        := '1'      as Character
+	Local lRet           := .F.      as Logical
+	Local lEfetTrf       := .F.      as Logical
+
+	cItem := Replicate("0",TamSx3("IG_ITEM")[1])
+	lEfetTrf 	 := SEE->(ColumnPos("EE_EFTTRF")) > 0
+
+	::toTransmit()
+
+	If !::jResponse:hasProperty('errors') .And. ::jResponse:hasProperty('data')
+		/*
+			JSON que será formatado deve voltar nesse formato
+
+			data: {
+				listaLancamento: [
+					{
+						tipoLancamentoExtrato: Define se o lançamento é futuro ou efetivo
+						carteiraExtrato: Define se é credito ou debito
+						codTipoExtrato: Codigo do movimento (IG_TIPEXT)
+						documentoExtrato: Numero do documento vinculado ao movimento no extrato
+						valorExtrato: Valor do movimento no extrato
+						historicoExtrato: Historico que sera gravado no historico
+						dataMovExtrato: Data de movimentação no extrato
+					}
+				]
+			}
+		*/
+		If ::oBankData:formatBankStatement(::jResponse, @aMoviments)
+			nMovimentsSize := Len(aMoviments)
+
+			If nMovimentsSize > 0 .and. FindFunction("FA474VlBC") .and. FindFunction("F474GRVSIF") .and. FindFunction("F474GRVSIG")
+				BEGIN TRANSACTION
+					aPropSIF := { cIdProcess, cIdBank, cIdAgency, cIdAccount, cIdSubAccount, "Conciliacao API - " + cIdProcess }
+					lRet := FA474VlBC(aPropSIF)
+					F474GRVSIF(aPropSIF, { "", "" } , dDateMov , '1')
+
+					If lRet
+						For nCount := 1 To nMovimentsSize
+							If aMoviments[nCount]['tipoLancamentoExtrato'] == '1' .And.;
+								aMoviments[nCount]['carteiraExtrato'] $ 'C|D' .And.;
+								Val(aMoviments[nCount]['codTipoExtrato']) > 0
+								
+								cItem 		 := Soma1(cItem)
+								cMovNumber 	 := aMoviments[nCount]['documentoExtrato']
+								nMovValue 	 := aMoviments[nCount]['valorExtrato']
+								cMovCode 	 := aMoviments[nCount]['codTipoExtrato']
+								cMovCart 	 := aMoviments[nCount]['carteiraExtrato']
+								cMovDesc 	 := aMoviments[nCount]['historicoExtrato']
+								cMovFailDesc := ""
+								dDateLanc 	 := GetDtoDate(aMoviments[nCount]['dataMovExtrato'])
+
+								//Apenas movimentos relacionados a cheques gravam o número contido na documentoExtrato
+								cMovCodeType := ::oBankData:getStatementType(Val(cMovCode))
+								If cMovCodeType != 'CHQ'
+									cMovNumber := ""
+								EndIF
+
+								F474GRVSIG(cIdProcess, cItem, cStatus, dDateLanc, cMovNumber, nMovValue, cMovCode,;
+								cMovCart, cIdBank, cIdAgency, cIdAccount, cMovDesc, cMovFailDesc, aMoviments[nCount])
+
+								//Verifica se o tipo
+								If lEfetTrf .and. SEE->EE_EFTTRF == '1' .and. cMovCodeType == 'ENC' 
+									F475GrDes(,,.T.)
+								Endif
+							EndIf
+						Next nCount
+					EndIf
+				END TRANSACTION
+			EndIf
+		EndIf
+	EndIf
+Return ::jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} setMockAPIData
+	Mocka os dados de token e response para testes.
+	Exemplo:
+	{
+		token: {},
+		api_extrato_bancario: {}
+	}
+
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@version 1.0
+	@param jMockData: Json - Json contendo os objetos para teste.
+	@param jResultAPI: Json - Json contendo a resposta da API.
+/*/
+//-------------------------------------------------------------------
+Method setMockAPIData() Class BanksStatement
+
+	Local oMockData		as object
+
+	oMockData := totvs.protheus.backoffice.fin.general.MockData():getInstance()
+	if oMockData:hasMockData()
+		::oBankData:setMockData(oMockData:getMockData())
+	endIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getToken
+	Obtém o token e valida as informações geradas.
+	
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@return lRet: Logical - Informa se foi possivel obter um token válido.
+/*/
+//-------------------------------------------------------------------
+Method getToken() as Logical Class BanksStatement
+	Local jTokenValid := JsonObject():New() as Json
+	Local lRet := .T. as Logical
+
+	jTokenValid := ::oBankData:setToken()
+
+	If !jTokenValid:hasProperty('scope') .Or. !jTokenValid:hasProperty('access_token')
+		::setErros('Error Token', STR0006) // Não foi possível obter o token de autênticação
+		lRet := .F.
+	EndIf
+
+	If lRet .And. !::cScopeToken $ jTokenValid['scope']
+		::setErros('Error Token', STR0007 + ::cScopeToken + " " + STR0008) // As credências não possuem o escopo ... habilitado
+		lRet := .F.
+	EndIf
+Return lRet
+
+/*/{Protheus.doc} getConfigByBanks
+	Retorna as operações disponiveis por banco
+	
+	Operações disponiveis:
+	- api_extrato_bancario (Extrato bancario - Consulta)
+	- api_extrato_bancario_conciliacao (Extrato bancario - Consulta e conciliacao)
+
+	o JSON de configuração será conforme o exemplo abaixo
+	{
+		"operação": {
+			"banks": {
+				"Codigo febraban": {
+					"active": .T. (Define se o banco está configurado para a operação desejada)
+				}
+			}
+			"method": "Metodo padrão para implementação da operação nos bancos"
+		}
+	}
+	@author Vitor Duca
+	@since 15/12/2023
+	@version 1.0
+	@see https://tdn.totvs.com/display/tec/TGetData+e+TGetMethods
+/*/
+Method getConfigByBanks() Class BanksStatement
+	Local nX := 0	As Numeric
+	Local aProperty	As Array
+
+	If ::oBankData <> NIL
+		If ::jConfigBanks == NIL
+			::jConfigBanks := JsonObject():new()
+
+			//Extrato bancario
+			::jConfigBanks["api_extrato_bancario"] := JsonObject():new()
+			::jConfigBanks["api_extrato_bancario"]["banks"] := JsonObject():new()
+			::jConfigBanks["api_extrato_bancario"]["method"] := "getBanksStatement"
+
+			//Extrato bancario - Conciliação
+			::jConfigBanks["api_extrato_bancario_conciliacao"] := JsonObject():new()
+			::jConfigBanks["api_extrato_bancario_conciliacao"]["banks"] := JsonObject():new()
+			::jConfigBanks["api_extrato_bancario_conciliacao"]["method"] := "bankStatementReconciliation"
+		Endif
+
+		//É verificado qualquer operação para ver se o banco já foi configurado
+		If !::jConfigBanks["api_extrato_bancario"]["banks"]:hasProperty(::cFebraban)
+			aProperty := ::jConfigBanks:GetNames()
+			
+			For nX := 1 to Len(aProperty)
+				::jConfigBanks[aProperty[nX]]["banks"][::cFebraban] := JsonObject():new()
+				::jConfigBanks[aProperty[nX]]["banks"][::cFebraban]["active"] := MethIsMemberOf( ::oBankData, ::jConfigBanks[aProperty[nX]]["method"])
+			Next nX
+		Endif
+	Endif
+Return
+
+/*/{Protheus.doc} verifyCertificate
+	Verifica validade do certificado que será enviado na transmissão com o banco
+	@author Vitor Duca
+	@since 19/12/2023
+	@version 1.0
+	@param jCredential, Json, Json contendo as credenciais do banco
+	@return lRet, Logical, Define se o certificado é valido
+/*/
+Method verifyCertificate(jCredential as Json) as Logical Class BanksStatement
+	Local lValid := .T.			as Logical
+	Local aCertificate := {}	as Array
+
+	If jCredential["environment"] == "1" .and.  jCredential:hasProperty("certificate") .and. jCredential["certificate"]:hasProperty("cert")
+		aCertificate := PEMInfo( jCredential["certificate"]["cert"] )
+
+		//Automação da validade do certificado
+		If jCredential["certificate"]:hasProperty("valid")
+			aCertificate:= {{,,,,jCredential["certificate"]["valid"]}}
+		Endif
+
+		lValid := dDataBase <= Stod("20" + SubStr(aCertificate[1][5], 1, 6))
+	Endif
+
+Return lValid
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getStatementType
+	Retorna a ocorrência do protheus de acordo com o codigo do banco.
+	
+	@author Vinicius do Prado
+	@since Dez | 2023
+	@type method
+	@version 1.0
+	@param cFebraban: Character - Código do banco (Febraban).
+	@param nCodeTipe: Numeric - Codigo da ocorrencia retornado pelo banco.
+	@return cCodeStatement: Character - Código da ocorrência do protheus.
+/*/
+//-------------------------------------------------------------------
+Method getStatementType(cFebraban as Character, nCodeTipe as Numeric) as Character Class BanksStatement
+	Local cCodeStatement := "" as Character
+	Local oBank := Nil
+
+	If FindClass('totvs.protheus.backoffice.fin.banks.Bank' + cFebraban + 'Statement')
+		oBank := &('totvs.protheus.backoffice.fin.banks.Bank' + cFebraban + 'Statement():getInstance()')
+		If MethIsMemberOf(oBank,'getStatementType')
+			cCodeStatement := oBank:getStatementType(nCodeTipe)
+		EndIf
+	EndIf
+	
+Return cCodeStatement

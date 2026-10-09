@@ -1,0 +1,2112 @@
+#include 'tlpp-core.th'
+#include 'gfin.ordersBalance.ch'
+
+namespace gfin.job
+using namespace gfin.util
+
+Static __struct    As Array
+Static __customerArea As Array
+Static __hashCache as Object
+Static __oHashChv  As Object
+Static __oHashDtVld As Object
+Static __typeDb    As Character
+Static __lF76FILORI := F76->(FieldPos("F76_FILORI")) > 0 As Logical
+Static __lF76BLQLIB := F76->(FieldPos("F76_BLQLIB")) > 0 As Logical
+Static __lNGFJOBQR  := ExistBlock("NGFJOBQR") As Logical
+Static __cFilSC6    := "" As Character
+Static __cFilSC5    := "" As Character
+Static __cFilSE4    := "" As Character
+Static __cFilSB1    := "" As Character
+Static __cFilSA2    := "" As Character
+Static __cFilSC7    := "" As Character
+Static __cFilSD1    := "" As Character
+Static __cFilSA1    := "" As Character
+Static __cFilSA4    := "" As Character
+Static __cFilSF4    := "" As Character
+Static __cFilF76    := "" As Character
+Static __cPictE1    := "" As Character
+Static __cTpDpInd   := "" As Character
+Static __nTmPRCVEN  := 0  As Numeric
+Static __oTaxesClass := Nil As Object
+
+//--------------------------------------------------------------------
+/*/
+{Protheus.doc } OrdersBalance
+Classe para acesso aos dados do Protheus
+
+@author Alison Kaique
+@since feb|2021
+/*/
+//--------------------------------------------------------------------
+Class OrdersBalance
+  Data inserts              As Numeric // número de inserções
+  Data deletions            As Numeric // número de deleções
+  Data isOK                 As Logical // controle de processamento
+  Data errorMessage         As Character // mensagem de erro
+  Data lastDateTime         As Character // última execução do JOB
+  Data currentDateTime      As Character // data e hora atual da execução do JOB
+  
+  Public Method new() // construtor da classe
+  Public Method destroy() // destroy da classe
+  Public Method processOrders() // recupera os saldos
+  
+  Public Method isOK() // verifica se o processo ocorreu com sucesso
+  Public Method getInserts() // recupera número de inserts
+  Public Method getErrorMessage() // recupera a mensagem de erro
+  Public Method setLastDateTime() // set de última execução do JOB
+  Public Method setCurrentDateTime() // set de data e hora atual da execução do JOB
+  Public Method setInserts() // set do número de inserts
+EndClass
+
+//-------------------------------------------------------------------
+/*/
+{Protheus.doc } OrdersBalance:new
+Método Construtor da Classe
+
+@author Alison Kaique
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method new() Class OrdersBalance
+  ::inserts               := 0
+  ::deletions             := 0
+  ::isOK                  := .T.
+  ::errorMessage          := ""
+  ::lastDateTime          := ""
+  ::currentDateTime       := ""
+  __hashCache             := FwHashMap():New()
+  __typeDb                := Upper(TcGetDb())
+  __oHashChv              := THashMap():New()
+  createTempTable()
+  createPurchaseTemp()
+Return
+
+//-------------------------------------------------------------------
+/*/
+{Protheus.doc } OrdersBalance:destroy
+Método Destroy da Classe
+
+@author Alison Kaique
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method destroy() Class OrdersBalance
+  Local tempTable    As Object
+  Local purchaseTemp As Object
+
+  // fechando temporária
+  If (__hashCache:containsKey('tempTable'))
+    tempTable := __hashCache:get('tempTable')
+    tempTable:Delete()
+    FreeObj(tempTable)
+  EndIf
+
+  If (__hashCache:containsKey('purchaseTemp'))
+    purchaseTemp := __hashCache:get('purchaseTemp')
+    purchaseTemp:Delete()
+    FreeObj(purchaseTemp)
+  EndIf
+Return
+
+//-------------------------------------------------------------------
+/*/
+{Protheus.doc } OrdersBalance:processOrders
+Método para recuperar Saldos de Pedidos
+
+@author Alison Kaique
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method processOrders() Class OrdersBalance
+  Local saleQuery     As Character // query para consulta SQL dos Saldos de Pedidos de Venda
+  Local purchaseAlias As Character // alias dos Saldos de Pedidos de Compra
+  Local saleAlias     As Character // alias dos Saldos de Pedidos de Venda
+  Local cAlsTmp       As Character
+  Local tempTable     As Object // temporária dos Saldos de Pedidos
+  Local instance      As Object // instância da classe
+  Local fndbulkfun    As Logical
+  Local lprocIns      As Logical
+  Local nTotRecs      As Numeric
+  Local cFil          As Character
+
+  // verifica se a tabela de Saldos de Pedidos existe
+  If (AliasInDic('F76'))
+    // selecionando a tabela
+    DbSelectArea('F76')
+    // recupera a instância da classe
+    instance      := Self
+    fndbulkfun    := FindFunction("FinBulkFun")
+    lprocIns      := .F.
+
+    //Inicializa as variaveis que contem as filiais (XFilial())
+    InitXFilial()
+
+    // prepara as queries para compra e venda
+    saleQuery     := getSaleQuery(::lastDateTime)
+
+    If __oHashDtVld == Nil 
+      __oHashDtVld  := THashMap():New()
+    EndIf
+  
+    // cria alias para compra e venda
+    purchaseAlias := purchasesFlow(::lastDateTime)
+    saleAlias     := MpSysOpenQuery(saleQuery)
+
+    // cria temporária para compra e venda
+    tempTable := __hashCache:get('tempTable')
+
+    // atualizando tabela temporária de Saldos para Pedidos
+    ordersCalculation(saleAlias    , '1', tempTable)
+    ordersCalculation(purchaseAlias, '2', tempTable)
+
+    If fndbulkfun
+      cAlsTmp := MpSysOpenQuery(GetUnicIns(tempTable:GetRealName()))
+
+      If __lF76FILORI
+        cFil := 'F76_FILORI'
+      EndIf
+      If !FinBulkFun('F76', 900, cAlsTmp, aClone(__struct), @nTotRecs, cFil)
+        lprocIns := .T.
+      Else
+        instance:setInserts(nTotRecs)
+      EndIf
+      (cAlsTmp)->(DbCloseArea())
+    EndIf
+
+    If !fndbulkfun .Or. lprocIns
+      // atualizando tabela F76 de Saldos para Pedidos
+      ordersInsert(tempTable, instance)
+    EndIf
+
+    // atualizando registros com a cotação da moeda
+    checkCurrencyQuote()
+
+    // excluindo registros indisponíveis
+    checkUnavailable()
+
+    // atualizo o BLQLIB
+    If __lF76BLQLIB
+      checkUpdateBlqLib()
+    EndIf
+    __oHashDtVld:Clean()
+    FreeObj(__oHashDtVld)
+  Else
+    ::errorMessage := STR0001 // "Tabela de Saldos de Pedidos inexistente no dicionário de dados"
+  EndIf
+
+  // fechando temporária
+  If (__hashCache:containsKey('tempTable'))
+    tempTable := __hashCache:get('tempTable')
+    tempTable:Delete()
+    FreeObj(tempTable)
+  EndIf
+
+  If (__hashCache:containsKey('purchaseTemp'))
+    purchaseTemp := __hashCache:get('purchaseTemp')
+    purchaseTemp:Delete()
+    FreeObj(purchaseTemp)
+  EndIf
+  
+  FreeObj(__hashCache)
+  FreeObj(__oHashChv)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } OrdersBalance:isOK
+Método que verifica se o processo ocorreu corretamente
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method isOK() class OrdersBalance
+Return ::isOK
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } OrdersBalance:getInserts
+Método que recupera número de inserts
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method getInserts() class OrdersBalance
+Return ::inserts
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } OrdersBalance:getErrorMessage
+Método que recupera a mensagem de Erro
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method getErrorMessage() class OrdersBalance
+Return ::errorMessage
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } OrdersBalance:setLastDateTime
+Método set de última execução do JOB
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method setLastDateTime(lastDateTime As Character) class OrdersBalance
+  ::lastDateTime := lastDateTime
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } OrdersBalance:setCurrentDateTime
+Método set de última execução do JOB
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method setCurrentDateTime(currentDateTime As Character) class OrdersBalance
+  ::currentDateTime := currentDateTime
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } OrdersBalance:setInserts
+Método set do número de inserts
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Method setInserts(inserts As Numeric) class OrdersBalance
+  Default inserts := 01
+
+  ::inserts += inserts
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } getSaleQuery
+recupera a query para consulta no banco de Dados dos Saldos dos Pedidos de Venda
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Static Function getSaleQuery(lastDateTime As Character)
+  Local query     As Character // query para consulta SQL dos Saldos de Pedidos de Venda
+  Local cWherePE  As Character
+
+  cWherePE  := ""
+  If __lNGFJOBQR
+    cWherePE := ExecBlock("NGFJOBQR", .F., .F., {"SC5"})
+    If !EMPTY( cWherePE )
+        cWherePE := " AND " + cWherePE
+    EndIf
+  EndIf
+
+  query := " SELECT"
+  query += "  C6_FILIAL AS FILIAL, C6_NUM AS PEDIDO, C6_CLI AS CLIFOR, C6_LOJA AS LOJA, C5_MOEDA AS MOEDA,"
+  query += "  C5_TXMOEDA AS TXMOEDA, C5_CONDPAG AS CONDPAG, ISNULL(C9_PEDIDO, '') AS CODSC9"
+  query += " FROM"
+  query += "  " + RetSQLName('SC6') + " SC6"
+  query += " INNER JOIN " + RetSQLName('SC5') + " SC5 ON"
+  query += "  SC5.C5_FILIAL = SC6.C6_FILIAL AND"
+  query += "  SC5.C5_NUM = SC6.C6_NUM AND"
+  query += "  SC5.C5_CLIENTE = SC6.C6_CLI AND"
+  query += "  SC5.C5_LOJACLI = SC6.C6_LOJA AND"
+  query += "  SC5.D_E_L_E_T_ = ' '"
+  query += " LEFT JOIN " + RetSQLName('SC9') + " SC9 ON"
+  query += "  SC9.C9_FILIAL = SC6.C6_FILIAL AND"
+  query += "  SC9.C9_PEDIDO = SC6.C6_NUM AND"
+  query += "  SC9.C9_PRODUTO = SC6.C6_PRODUTO AND"
+  query += "  SC9.C9_ITEM = SC6.C6_ITEM AND"
+  query += "  SC9.C9_CLIENTE = SC6.C6_CLI AND"
+  query += "  SC9.C9_LOJA = SC6.C6_LOJA AND"
+  query += "  SC9.C9_BLEST = ' ' AND"
+  query += "  SC9.C9_BLCRED = ' ' AND"
+  query += "  SC9.D_E_L_E_T_ = ' '"
+  query += " WHERE"
+  If !(Empty(lastDateTime))
+    query += " ( SC6.S_T_A_M_P_ >= " + convertToTimestamp(lastDateTime) + " OR "
+    query += " SC9.S_T_A_M_P_ >= " + convertToTimestamp(lastDateTime) + " OR "
+    query += " SC5.S_T_A_M_P_ >= " + convertToTimestamp(lastDateTime) + ") AND"
+  Else
+    query += "  SC6.C6_QTDENT < SC6.C6_QTDVEN AND"
+  EndIf
+  query += "  SC6.D_E_L_E_T_ = ' ' "
+  query += cWherePE
+  query += " GROUP BY"
+  query += "  C6_FILIAL,"
+  query += "  C6_NUM,"
+  query += "  C6_CLI,"
+  query += "  C6_LOJA,"
+  query += "  C5_MOEDA,"
+  query += "  C5_TXMOEDA,"
+  query += "  C5_CONDPAG,"
+  query += "  C9_PEDIDO"
+  query += " UNION"
+  query += " SELECT"
+  query += "  C6_FILIAL AS FILIAL,"
+  query += "  C6_NUM AS PEDIDO,"
+  query += "  C6_CLI AS CLIFOR,"
+  query += "  C6_LOJA AS LOJA,"
+  query += "  C5_MOEDA AS MOEDA,"
+  query += "  C5_TXMOEDA AS TXMOEDA,"
+  query += "  C5_CONDPAG AS CONDPAG," 
+  query += "  ISNULL(C9_PEDIDO, '') AS CODSC9"
+  query += " FROM"
+  query += "  " + RetSQLName('SC6') + " SC6"
+  query += " INNER JOIN " + RetSQLName('SC5') + " SC5 ON"
+  query += "  SC5.C5_FILIAL = SC6.C6_FILIAL"
+  query += "  AND SC5.C5_NUM = SC6.C6_NUM"
+  query += "  AND SC5.C5_CLIENTE = SC6.C6_CLI"
+  query += "  AND SC5.C5_LOJACLI = SC6.C6_LOJA"
+  query += "  AND SC5.D_E_L_E_T_ = ' '"
+  query += " LEFT JOIN " + RetSQLName('SC9') + " SC9 ON"
+  query += "  SC9.C9_FILIAL = SC6.C6_FILIAL AND"
+  query += "  SC9.C9_PEDIDO = SC6.C6_NUM AND"
+  query += "  SC9.C9_PRODUTO = SC6.C6_PRODUTO AND"
+  query += "  SC9.C9_ITEM = SC6.C6_ITEM AND"
+  query += "  SC9.C9_CLIENTE = SC6.C6_CLI AND"
+  query += "  SC9.C9_LOJA = SC6.C6_LOJA AND""
+  query += "  SC9.C9_BLEST = ' ' AND"
+  query += "  SC9.C9_BLCRED = ' ' AND"
+  query += "  SC9.D_E_L_E_T_ = ' '"
+  query += " INNER JOIN " + RetSQLName('F76') + " F76 ON "
+  
+  If __lF76FILORI
+    query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC6","C6_FILIAL","SC6"} )
+  Else
+    query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC6","C6_FILIAL","SC6"} )
+  EndIf
+
+  query += "  AND F76.F76_PEDIDO = SC6.C6_NUM"
+  query += "  AND F76.F76_ITEM = SC6.C6_ITEM"
+  query += "  AND F76.F76_CLIFOR = SC6.C6_CLI"
+  query += "  AND F76.F76_LOJA = SC6.C6_LOJA"
+  query += "  AND F76.F76_TIPO = '1'"
+  query += "  AND F76.D_E_L_E_T_ = ' '"
+  query += " WHERE"
+  query += "  F76.F76_DTJOBT < '" + DToS(dDatabase) + "'"
+  query += "  AND SC6.C6_ENTREG < '" + DToS(dDatabase) + "'"
+  query += "  AND SC6.D_E_L_E_T_ = ' '"
+  query += cWherePE
+  query += " GROUP BY"
+  query += "  C6_FILIAL,"
+  query += "  C6_NUM,"
+  query += "  C6_CLI,"
+  query += "  C6_LOJA,"
+  query += "  C5_MOEDA,"
+  query += "  C5_TXMOEDA,"
+  query += "  C5_CONDPAG,"
+  query += "  C9_PEDIDO"
+
+  query := ChangeQuery(query)
+Return query
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createTempTable
+Criação de Tabela Temporária para Pedidos
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Static Function createTempTable()
+  Local tempTable As Object
+
+  setStruct()
+
+  tempTable := FWTemporaryTable():new()
+  tempTable:SetFields(__struct)
+  If __lF76FILORI
+    tempTable:AddIndex("1", {"F76_FILIAL", "F76_FILORI", "F76_PEDIDO", "F76_ITEM", "F76_CLIFOR", "F76_LOJA", "F76_TIPO", "F76_SEQ"})
+  Else
+    tempTable:AddIndex("1", {"F76_FILIAL", "F76_PEDIDO", "F76_ITEM", "F76_CLIFOR", "F76_LOJA", "F76_TIPO", "F76_SEQ"})
+  EndIf
+  tempTable:Create()
+  
+  __hashCache:put('tempTable', tempTable)
+Return tempTable
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } createPurchaseTemp
+Criação de Tabela Temporária para Pedidos de Compra
+
+@author Alison Lemes
+@since mar|2021
+/*/
+//-------------------------------------------------------------------
+Static Function createPurchaseTemp()
+  Local tempTable        As Object
+  Local struct           As Array
+  Local currencyQuote    As Array
+  Local salesBalance     As Array
+  Local purchasesBalance As Array
+
+  currencyQuote     := TamSX3('C7_TXMOEDA')
+  salesBalance      := TamSX3('E1_SALDO')
+  purchasesBalance  := TamSX3('E2_SALDO')
+
+  struct := {}
+  AAdd( struct, { "FILIAL", "C", TamSX3('F76_FILIAL')[01], 0 } )
+  AAdd( struct, { "DATAX"  , "D", 08, 0} )
+  AAdd( struct, { "PEDIDO" , "C", TamSx3("C7_NUM")[1], 0 } )
+  AAdd( struct, { "EMISSAO", "D",  8, 0 } )
+  AAdd( struct, { "CLIFOR" , "C", TamSx3("A2_COD")[1], 0 } )
+  AAdd( struct, { "LOJA"   , "C", TamSx3("A2_LOJA")[1], 0 } )
+  AAdd( struct, { "TIPO"   , "N", TamSx3("C7_TIPO")[1], 0 } )
+  AAdd( struct, { "ITEM"   , "C", TamSx3("C7_ITEM")[1], 0 } )
+  AAdd( struct, { "SEQ"    , "C", TamSx3("F76_SEQ")[1], 0 } )
+  AAdd( struct, { "NomCliFor", "C", TamSx3("A1_NOME")[1], 0 } )
+  AAdd( struct, { "PRODUTO", "C", TamSx3("C7_PRODUTO")[1], 0 } )
+  AAdd( struct, { "MOEDA"  , "N", TamSx3("C7_MOEDA")[1], 0 } )
+  AAdd( struct, { "CONDPAG", "C", TamSx3("C7_COND")[1], 0 } )
+  AAdd( struct, { "CONAPRO", "C", TamSx3("C7_CONAPRO")[1], 0 } )
+  AAdd( struct, { "TXMOEDA", "N", currencyQuote[1], currencyQuote[2] } )
+  AAdd( struct, { "VALOR"  , "N", Max(salesBalance[1]  ,;
+                                purchasesBalance[1]) , salesBalance[2] } )
+  AAdd( struct, { "VLORIG" , "N", Max(salesBalance[1]  ,;
+                                purchasesBalance[1]) , salesBalance[2] } )
+  AAdd( struct, { "CHAVE"  , "C", 40, 0 } )
+  AAdd( struct, { "Apelido", "C", 10, 0 } )
+  AAdd( struct, { "CampoNulo", "C", 1, 0 } )
+  AAdd( struct, { "Flag"     , "L", 1, 0 } )
+
+  tempTable := FWTemporaryTable():new()
+  tempTable:SetFields(struct)
+  tempTable:AddIndex("1", {"DATAX", "PEDIDO"})
+  tempTable:AddIndex("2", {"FILIAL", "PEDIDO", "ITEM", "DATAX"})
+  tempTable:AddIndex("3", {"FILIAL", "PEDIDO", "ITEM", "SEQ"})
+  tempTable:Create()
+  __hashCache:put('purchaseTemp', tempTable)
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } ordersCalculation
+Cálculo de Saldos para Pedidos
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Static Function ordersCalculation(orderAlias As Character, type as Character, tempTable As Object)
+  Local paymentCondition As Character // condição de pagamento
+  Local parcels          As Array // parcelas geradas a partir da condição de pagamento
+  Local index            As Numeric // controle de índice
+  Local parcelsCount     As Numeric // quantidade de parcelas
+  Local quote            As Numeric // cotação da moeda
+  Local tempAlias        As Character // alias da tabela temporária
+  Local isInsert         As Logical // verifica se é inclusão
+  Local cFilProc         := "" As Character
+  Local orderItem        := "" As Character // item do pedido
+  Local brancheShared    As Logical // filial compartilhada
+  Local brancheBackup    As Character // backup de filial
+  Local tamF76Seq        As Numeric
+  Local tamF76Item       As Numeric
+  Local nTamC6Item       As Numeric
+  Local nIndexAux        As Numeric
+  Local aAuxSC6          As Array
+  Local aAuxSC5          As Array
+  Local aFisGetSC6       := MaFisRelImp("MATA461",{"SC6"}) As Array
+  Local aFisGetSC5       := MaFisRelImp("MATA461",{"SC5"}) As Array
+  Local dHshDate         As Date
+
+  tempAlias := tempTable:GetAlias()
+  brancheShared := Empty(xFilial('SC5'))
+  brancheBackup := cFilAnt
+  tamF76Seq  := TamSX3('F76_SEQ')[01]
+  tamF76Item := TamSX3('F76_ITEM')[01]
+  nTamC6Item := TamSX3('C6_ITEM')[01]
+  nIndexAux := 0
+  aSort(aFisGetSC6,,,{|x,y| x[3] < y[3]})
+  aSort(aFisGetSC5,,,{|x,y| x[3] < y[3]})
+
+  (tempAlias)->(DbSetOrder(01)) // F76_FILORI+F76_PEDIDO+F76_ITEM+F76_CLIFOR+F76_LOJA+F76_TIPO+F76_SEQ
+
+  aAuxSC6 := AClone(aFisGetSC6)
+  aAuxSC5 := AClone(aFisGetSC5)
+
+  While !(orderAlias)->(EOF())
+    quote := (orderAlias)->TXMOEDA
+    paymentCondition := (orderAlias)->CONDPAG
+    cFilProc := (orderAlias)->FILIAL
+    
+    // Se for exclusiva precisa mudar o cFilAnt
+    If !brancheShared .And. Len(cFilAnt) > Len(Alltrim((orderAlias)->FILIAL))
+      cFilProc := FXRetFil('SC5', (orderAlias)->FILIAL, .T.)
+    EndIf
+
+    If !brancheShared  .And. cFilAnt <> cFilProc
+      cFilAnt := cFilProc
+      InitXFilial()
+    EndIf
+
+    If (type == '1') // pedido de Venda
+        orderItem := StrZero(1, nTamC6Item)
+        parcels := salesFlow((orderAlias)->PEDIDO,, aAuxSC6, aAuxSC5)
+        parcelsCount := Len(parcels)
+        nIndexAux := 0
+        
+        // incluindo na tabela temporária
+        For index := 01 To parcelsCount
+          dHshDate         := CTOD("  /  /  ")
+          nIndexAux += 1
+          If parcels[index, 03] != orderItem
+            nIndexAux := 1
+          Endif
+          
+          orderItem := parcels[index, 03]
+          cF76Seq   := StrZero(nIndexAux, tamF76Seq)
+          isInsert  := !(tempAlias)->(DbSeek((orderAlias)->(FILIAL + PEDIDO + orderItem + CLIFOR + LOJA + type + cF76Seq)))
+          __oHashDtVld:Get(parcels[index, 01], @dHshDate)
+          If Empty(dHshDate)
+            dHshDate  := DataValida(parcels[index, 01])
+            __oHashDtVld:Set(parcels[index, 01], dHshDate)
+          EndIf
+          If (RecLock(tempAlias, isInsert))
+	          (tempAlias)->F76_FILIAL := __cFilF76
+	
+	          If __lF76FILORI
+	            (tempAlias)->F76_FILORI := (orderAlias)->FILIAL
+	          Else
+	            (tempAlias)->F76_FILIAL := (orderAlias)->FILIAL
+	          EndIf
+	          
+	          (tempAlias)->F76_PEDIDO := (orderAlias)->PEDIDO
+	          (tempAlias)->F76_ITEM   := orderItem
+	          (tempAlias)->F76_CLIFOR := (orderAlias)->CLIFOR
+	          (tempAlias)->F76_LOJA   := (orderAlias)->LOJA
+	          (tempAlias)->F76_TIPO   := type
+	          (tempAlias)->F76_VALOR  := IIf(quote > 0, (parcels[index, 02] * quote), parcels[index, 02])
+	          (tempAlias)->F76_VLORIG := parcels[index, 02]
+	          (tempAlias)->F76_SEQ    := StrZero(nIndexAux, tamF76Seq)
+	          (tempAlias)->F76_COND   := paymentCondition
+	          (tempAlias)->F76_DATA   := dHshDate
+	          (tempAlias)->F76_MOEDA  := IIf((orderAlias)->MOEDA == 0, 1, (orderAlias)->MOEDA)
+	          (tempAlias)->F76_TXMOED := quote
+	          (tempAlias)->F76_DTJOBT := dDataBase
+	
+	          If __lF76BLQLIB
+	            (tempAlias)->F76_BLQLIB := IIF(!Empty((orderAlias)->CODSC9),1,2) // 1=LIBERADO. 2=BLOQUEADO
+	          EndIf
+	
+	          (tempAlias)->(MsUnlock())
+	        
+	          // verifica se mudou a condição de pagamento e se existem parcelas a mais
+	          checkPaymentCondition((orderAlias)->FILIAL, (orderAlias)->PEDIDO, orderItem, (orderAlias)->CLIFOR, (orderAlias)->LOJA, type)
+          EndIf
+        Next index
+    Else // pedido de compra
+        orderItem := PADR((orderAlias)->ITEM , tamF76Item)
+        isInsert  := !(tempAlias)->(DbSeek((orderAlias)->(FILIAL + PEDIDO + orderItem + CLIFOR + LOJA + type + SEQ)))
+
+        If (RecLock(tempAlias, isInsert))
+            If (isInsert)
+                (tempAlias)->F76_FILIAL := __cFilF76
+                If __lF76FILORI
+                  (tempAlias)->F76_FILORI := (orderAlias)->FILIAL
+                Else
+                  (tempAlias)->F76_FILIAL := (orderAlias)->FILIAL
+                EndIf
+                (tempAlias)->F76_PEDIDO := (orderAlias)->PEDIDO
+                (tempAlias)->F76_ITEM   := orderItem
+                (tempAlias)->F76_CLIFOR := (orderAlias)->CLIFOR
+                (tempAlias)->F76_LOJA   := (orderAlias)->LOJA
+                (tempAlias)->F76_TIPO   := type
+                (tempAlias)->F76_VALOR  := (orderAlias)->VALOR
+                (tempAlias)->F76_VLORIG := (orderAlias)->VLORIG
+                (tempAlias)->F76_SEQ    := (orderAlias)->SEQ
+            Else
+                (tempAlias)->F76_VALOR  += (orderAlias)->VALOR
+                (tempAlias)->F76_VLORIG += (orderAlias)->VLORIG
+            EndIf
+
+            (tempAlias)->F76_COND       := paymentCondition
+            (tempAlias)->F76_DATA       := (orderAlias)->DATAX
+            (tempAlias)->F76_MOEDA      := (orderAlias)->MOEDA
+            (tempAlias)->F76_TXMOED     := quote
+            (tempAlias)->F76_DTJOBT     := dDataBase
+
+            If __lF76BLQLIB
+              (tempAlias)->F76_BLQLIB   := IIF((orderAlias)->CONAPRO == "L",1,2) // 1=LIBERADO. 2=BLOQUEADO
+            EndIf
+
+            (tempAlias)->(MsUnlock())
+            // verifica se mudou a condição de pagamento e se existem parcelas a mais
+            checkPaymentCondition((orderAlias)->FILIAL, (orderAlias)->PEDIDO, orderItem, (orderAlias)->CLIFOR, (orderAlias)->LOJA, type)
+        EndIf
+    EndIf
+
+    (orderAlias)->(DbSkip())
+  EndDo
+
+  cFilAnt := brancheBackup
+  InitXFilial()
+  
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } checkPaymentCondition
+Deleta os items existentes na F76 daquele pedido, pois o mesmo sera
+reprocessado pelo job
+
+@author Alison Lemes
+@since mar|2021
+/*/
+//-------------------------------------------------------------------
+Static Function checkPaymentCondition(branche As Character, orderNumber As Character, orderItem As Character, customerVendor As Character, unitID As Character, type As Character)
+    Local statement    As Object // instância da classe FwPreparedStatement()
+    Local paymentAlias As Character // alias da temporária
+
+    // prepara a query principal
+    If (!__hashCache:containsKey('paymentStatement'))
+        statement := preparePaymentStatement()
+        __hashCache:put('paymentStatement', statement)
+    Else
+        statement := __hashCache:get('paymentStatement')
+    EndIf
+
+    // bind de parâmetros
+    statement:SetString(1, branche)
+    statement:SetString(2, orderNumber)
+    statement:SetString(3, customerVendor)
+    statement:SetString(4, unitID)
+    statement:SetString(5, type)
+    statement:SetString(6, orderItem)
+
+    // cria uma tabela temporária com o resultado da query
+    paymentAlias :=  statement:OpenAlias()
+
+    // percorrendo temporária e excluindo registros
+    While !(paymentAlias)->(EOF())
+        // posicionando no Recno
+        F76->(DbGoTo((paymentAlias)->NUMREC))
+        // excluindo registro
+        If (RecLock('F76', .F.))
+            F76->(DbDelete())
+            F76->(MsUnlock())
+        EndIf
+
+        (paymentAlias)->(DbSkip())
+    EndDo
+
+    (paymentAlias)->(DbCloseArea())
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } checkUnavailable
+verifica se existem registros indisponíveis (Pedidos Faturados ou Excluídos)
+
+@author Alison Lemes
+@since mar|2021
+/*/
+//-------------------------------------------------------------------
+Static Function checkUnavailable()
+    Local query            As Character // consulta SQL
+    Local unavailableAlias As Character // alias da temporária
+
+    query := " SELECT"
+    query +=  " F76.R_E_C_N_O_ NUMREC"
+    query += " FROM"
+    query +=  " " + RetSQLName('F76') + " F76"
+    query += " WHERE"
+    query +=  " (( F76.F76_TIPO = '1' AND NOT EXISTS ("
+    query +=    " SELECT"
+    query +=      " SC6.C6_NUM"
+    query +=    " FROM"
+    query +=     " " + RetSQLName('SC6') + " SC6"
+    query +=    " INNER JOIN " + RetSQLName('SC5') + " SC5 ON"
+    query +=      " SC5.C5_FILIAL = SC6.C6_FILIAL"
+    query +=      " AND SC5.C5_NUM = SC6.C6_NUM"
+    query +=      " AND SC5.C5_CLIENTE = SC6.C6_CLI"
+    query +=      " AND SC5.C5_LOJACLI = SC6.C6_LOJA"
+    query +=      " AND SC5.D_E_L_E_T_ = ' '"
+    query +=    " WHERE "
+    If __lF76FILORI      
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC6","C6_FILIAL","SC6"} )  + " AND"
+    Else
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC6","C6_FILIAL","SC6"} )  + " AND"
+    EndIf
+    query +=      " SC6.C6_NUM = F76.F76_PEDIDO AND"
+    query +=      " SC6.C6_ITEM = F76.F76_ITEM AND"
+    query +=      " SC6.C6_CLI = F76.F76_CLIFOR AND"
+    query +=      " SC6.C6_LOJA = F76.F76_LOJA AND"
+    query +=      " SC6.C6_QTDENT < SC6.C6_QTDVEN AND"
+    query +=      " SC6.C6_BLQ   <> 'R' AND "
+    query +=      " SC6.D_E_L_E_T_ = ' '"
+    query +=  " )) OR (F76.F76_TIPO = '2' AND NOT EXISTS ("
+    query +=    " SELECT"
+    query +=      " SC7.C7_NUM"
+    query +=    " FROM"
+    query +=     " " + RetSQLName('SC7') + " SC7"
+    query +=    " WHERE"
+    If __lF76FILORI
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC7","C7_FILIAL","SC7"} )  + " AND"
+    Else
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC7","C7_FILIAL","SC7"} )  + " AND"
+    EndIf
+    query +=      " SC7.C7_NUM = F76.F76_PEDIDO AND"
+    query +=      " SC7.C7_ITEM = F76.F76_ITEM AND"
+    query +=      " SC7.C7_FORNECE = F76.F76_CLIFOR AND"
+    query +=      " SC7.C7_LOJA = F76.F76_LOJA AND"
+    query +=      " SC7.C7_RESIDUO <> 'S' AND"
+    query +=      " SC7.C7_FLUXO   <> 'N' AND"
+    query +=      " SC7.C7_QUJE < SC7.C7_QUANT AND"
+    query +=      " SC7.D_E_L_E_T_ = ' '  "
+    query +=  " ))) AND"
+    query +=  " F76.D_E_L_E_T_ = ' '"
+    query := ChangeQuery(query)
+
+    // cria uma tabela temporária com o resultado da query
+    unavailableAlias :=  MpSysOpenQuery(query)
+
+    // percorrendo temporária e excluindo registros
+    While !(unavailableAlias)->(EOF())
+        // posicionando no Recno
+        F76->(DbGoTo((unavailableAlias)->NUMREC))
+        // excluindo registro
+        If (RecLock('F76', .F.))
+            F76->(DbDelete())
+            F76->(MsUnlock())
+        EndIf
+
+        (unavailableAlias)->(DbSkip())
+    EndDo
+
+    (unavailableAlias)->(DbCloseArea())
+Return
+
+/*/{Protheus.doc} preparePaymentStatement
+  Prepara o statement que será utilizada na limpeza dos pedidos de venda/compra
+  @type  Static Function
+  @author Vitor Duca
+  @since 09/11/2023
+  @version 1.0
+  @return statement, Object, Objeto da classe FwPreparedStatement
+/*/
+Static Function preparePaymentStatement() As Object
+    Local statement As Object // instância da classe FwPreparedStatement()
+    Local query     As Character // consulta SQL
+
+    query := " SELECT"
+    query += " R_E_C_N_O_ NUMREC"
+    query += " FROM"
+    query += " " + RetSQLName('F76')
+    query += " WHERE"
+    If __lF76FILORI
+      query += " F76_FILORI = ? AND"
+    Else
+      query += " F76_FILIAL = ? AND"
+    EndIf
+    query += " F76_PEDIDO = ? AND"
+    query += " F76_CLIFOR = ? AND"
+    query += " F76_LOJA = ? AND"
+    query += " F76_TIPO = ? AND"
+    query += " F76_ITEM = ? AND"
+    query += " D_E_L_E_T_ = ' '"
+    query := ChangeQuery(query)
+
+    statement := FWExecStatement():New(query)
+Return statement
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } checkCurrencyQuote
+verifica se mudou possui Pedidos com Moeda > 1 e os recalcula
+
+@author Alison Lemes
+@since mar|2021
+/*/
+//-------------------------------------------------------------------
+Static Function checkCurrencyQuote()
+    Local query         As Character // consulta SQL
+    Local currencyAlias As Character // alias da temporária
+    Local quote         As Numeric // cotação da moeda
+
+    query := " SELECT"
+    query +=  " SC5.C5_TXMOEDA AS TXMOEDA, F76.F76_VLORIG AS VLORIG, F76.F76_MOEDA AS MOEDA, F76.R_E_C_N_O_ AS NUMREC"
+    query += " FROM"
+    query +=  " " + RetSQLName('F76') + " F76"
+    query += " INNER JOIN " + RetSQLName('SC5') + " SC5 ON "
+    If __lF76FILORI
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC5","C5_FILIAL","SC5"} )  + " AND"
+    Else
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC5","C5_FILIAL","SC5"} )  + " AND"
+    EndIf
+    query +=  " SC5.C5_NUM = F76.F76_PEDIDO AND"
+    query +=  " SC5.C5_CLIENTE = F76.F76_CLIFOR AND"
+    query +=  " SC5.C5_LOJACLI = F76.F76_LOJA AND"
+    query +=  " SC5.D_E_L_E_T_ = ' '"
+    query += " WHERE"
+    query +=  " F76.F76_TIPO = '1' AND"
+    query +=  " F76.F76_MOEDA > 1 AND"
+    query +=  " F76.F76_DTJOBT < '" + DToS(dDataBase) + "' AND"
+    query +=  " F76.D_E_L_E_T_ = ' '"
+    query += " UNION"
+    query += " SELECT"
+    query +=  " SC7.C7_TXMOEDA AS TXMOEDA, F76.F76_VLORIG AS VLORIG, F76.F76_MOEDA AS MOEDA, F76.R_E_C_N_O_ AS NUMREC"
+    query += " FROM"
+    query +=  " " + RetSQLName('F76') + " F76"
+    query += " INNER JOIN " + RetSQLName('SC7') + " SC7 ON "
+    If __lF76FILORI
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC7","C7_FILIAL","SC7"} )  + " AND"
+    Else
+      query += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC7","C7_FILIAL","SC7"} )  + " AND"
+    EndIf
+    query +=  " SC7.C7_NUM = F76.F76_PEDIDO AND"
+    query +=  " SC7.C7_FORNECE = F76.F76_CLIFOR AND"
+    query +=  " SC7.C7_LOJA = F76.F76_LOJA AND"
+    query +=  " SC7.C7_ITEM = F76.F76_ITEM AND"
+    query +=  " SC7.D_E_L_E_T_ = ' '"
+    query += " WHERE"
+    query +=  " F76.F76_TIPO = '2' AND"
+    query +=  " F76.F76_MOEDA > 1 AND"
+    query +=  " F76.F76_DTJOBT < '" + DToS(dDataBase) + "' AND"
+    query +=  " F76.D_E_L_E_T_ = ' '"
+    query := ChangeQuery(query)
+
+    // cria uma tabela temporária com o resultado da query
+    currencyAlias :=  MpSysOpenQuery(query)
+
+    // percorrendo temporária e excluindo registros
+    While !(currencyAlias)->(EOF())
+        // cotação da moeda
+        quote := getCurrencyQuote((currencyAlias)->TXMOEDA, (currencyAlias)->MOEDA, dDataBase)
+        // posicionando no Recno
+        F76->(DbGoTo((currencyAlias)->NUMREC))
+        // excluindo registro
+        If (RecLock('F76', .F.))
+            F76->F76_VALOR  := F76->F76_VLORIG * quote
+            F76->F76_TXMOED := quote
+            F76->F76_DTJOBT := dDataBase
+            F76->(MsUnlock())
+        EndIf
+
+        (currencyAlias)->(DbSkip())
+    EndDo
+
+    (currencyAlias)->(DbCloseArea())
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } ordersInsert
+inserir na tabela F76
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Static Function ordersInsert(tempTable As Object, instance As Object)
+    Local tempAlias As Character
+
+    tempAlias := tempTable:GetAlias()
+
+    //inserir na tabela F76
+    F76->(DbSetOrder(01)) // F76_FILORI+F76_PEDIDO+F76_ITEM+F76_CLIFOR+F76_LOJA+F76_TIPO+F76_SEQ
+    (tempAlias)->(DbGoTop())
+    While !(tempAlias)->(EOF())
+        If __lF76FILORI
+          isInsert := !F76->(DbSeek((tempAlias)->(F76_FILORI + F76_PEDIDO + F76_ITEM + F76_CLIFOR + F76_LOJA + F76_TIPO + F76_SEQ)))
+        Else
+          isInsert := !F76->(DbSeek((tempAlias)->(F76_FILIAL + F76_PEDIDO + F76_ITEM + F76_CLIFOR + F76_LOJA + F76_TIPO + F76_SEQ)))
+        EndIf
+        If (RecLock('F76', isInsert))
+            If (isInsert)
+                F76->F76_FILIAL := (tempAlias)->F76_FILIAL
+                If __lF76FILORI
+                  F76->F76_FILORI := (tempAlias)->F76_FILORI
+                EndIf
+                F76->F76_PEDIDO := (tempAlias)->F76_PEDIDO
+                F76->F76_ITEM   := (tempAlias)->F76_ITEM
+                F76->F76_CLIFOR := (tempAlias)->F76_CLIFOR
+                F76->F76_LOJA   := (tempAlias)->F76_LOJA
+                F76->F76_TIPO   := (tempAlias)->F76_TIPO
+                F76->F76_VALOR  := (tempAlias)->F76_VALOR
+                F76->F76_VLORIG := (tempAlias)->F76_VLORIG
+                F76->F76_SEQ    := (tempAlias)->F76_SEQ
+            Else
+                F76->F76_VALOR  := (tempAlias)->F76_VALOR
+                F76->F76_VLORIG := (tempAlias)->F76_VLORIG
+            EndIf
+
+            F76->F76_COND       := (tempAlias)->F76_COND
+            F76->F76_DATA       := (tempAlias)->F76_DATA
+            F76->F76_MOEDA      := (tempAlias)->F76_MOEDA
+            F76->F76_TXMOED     := (tempAlias)->F76_TXMOED
+            F76->F76_DTJOBT     := (tempAlias)->F76_DTJOBT
+
+            If __lF76BLQLIB
+              F76->F76_BLQLIB   := (tempAlias)->F76_BLQLIB
+            EndIf
+
+            F76->(MsUnlock())
+            instance:setInserts()
+        EndIf
+
+        (tempAlias)->(DbSkip())
+    EndDo
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } setStruct
+set de Estrutura dos Campos da Tabela Temporária
+
+@author Alison Lemes
+@since feb|2021
+/*/
+//-------------------------------------------------------------------
+Static Function setStruct()
+    Local fields As Array // campos da tabela
+    Local index  As Numeric // controle de índice
+
+    // recupera os campos da tabela
+    fields := FWSX3Util():GetAllFields('F76')
+
+    // monta a estrutura
+    __struct := {}
+    For index := 01 To Len(fields)
+        AAdd(__struct, FWSX3Util():GetFieldStruct(fields[index]))
+    Next index
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} convertToTimestamp
+Converte string de data/hora para formato timestamp específico do banco
+
+@param dateTimeStr as Character, string de data/hora no formato 'YYYY-MM-DD HH24:MI:SS'
+@return timestamp as Character, comando timestamp específico do banco
+@author TOTVS
+@since 16/10/2025
+/*/
+//-------------------------------------------------------------------
+Static Function convertToTimestamp(dateTimeStr as Character) as Character
+  Local cTimestamp as Character
+
+  cTimestamp := " TO_TIMESTAMP('" + dateTimeStr + "', 'YYYY-MM-DD HH24:MI:SS') "
+  
+  If "MSSQL" $ __typeDb
+    cTimestamp := " CONVERT(DATETIME2(0), '" + dateTimeStr + "', 121) "
+  EndIf
+  
+Return cTimestamp
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getCurrencyQuote
+  retorno a cotação da moeda para a data de referência
+
+  @param currentQuote , character, Taxa Contratada
+  @param currency     , numeric  , Código da Moeda
+  @param referenceDate, date     , Data de Referência
+
+  @return quote, numeric, Cotação da Moeda
+
+  @author Alison Kaique
+  @since mar|2021
+/*/
+Static Function getCurrencyQuote(currentQuote As Numeric, currency As Numeric, referenceDate As Date) As Numeric
+    Local quote      As Numeric
+    Local dateString As Character
+
+    dateString := cValToChar(currency) + DToS(referenceDate)
+
+    If (currentQuote > 1)   // taxa contratada
+        quote := currentQuote
+    Else  // taxa do dia
+        If __hashCache:containsKey(dateString)
+            quote := __hashCache:get(dateString)
+        Else
+            quote := gfin.util.currencyLastQuote(cValToChar(currency), DToS(referenceDate))
+            __hashCache:put(dateString, quote)
+        EndIf
+    EndIf
+Return quote
+
+/*/{Protheus.doc} salesFlow
+  retorna o saldo do Pedido de Venda para o Fluxo de Caixa
+
+  @param orderNumber, character, número do Pedido de Venda
+  @param sumValue   , logical  , soma valor de itens?
+
+  @return flow, array, fluxo de caixa para o pedido
+
+  @author Alison Kaique
+  @since mar|2021
+/*/
+Static Function salesFlow(orderNumber As Character, sumValue As Logical, aFisGet As Array, aFisGetSC5 As Array)
+  Local generalArea  := FWGetArea() As Array
+  Local flow         := {}          As Array
+  Local flowTmp      := {}          As Array
+  Local aEntr        := {}          As Array
+  Local nX           := 0           As Numeric
+  Local nY           := 0           As Numeric
+  Local nZ           := 0           As Numeric
+  Local nAcerto      := 0           As Numeric
+  Local nPrcLista    := 0           As Numeric
+  Local nValMerc     := 0           As Numeric
+  Local nDesconto    := 0           As Numeric
+  Local nAcresFin    := 0           As Numeric
+  Local nQtdPeso     := 0           As Numeric
+  Local nRecOri      := 0           As Numeric
+  Local nPosEntr     := 0           As Numeric
+  Local nItem        := 0           As Numeric
+  Local cAliasSC6    := "SC6"       As Character
+  Local nTotDesc     := 0           As Numeric
+  Local dData        := dDataBase   As Date
+  Local dHshDate                    As Date
+  Local aTransp      := {"",""}     As Array
+  Local cQuery       := ""          As Character
+  Local nAcresUnit   := 0           As Numeric // Valor do acrescimo financeiro do valor unitario
+  Local nAcresTot    := 0           As Numeric // Somatoria dos Valores dos acrescimos financeiros dos itens
+  Local nlValor      := 0           As Numeric
+  Local cImpRet      := ""          As Character
+  Local nValRetImp   := 0           As Numeric
+  Local cDocOri      := ""          As Character
+  Local cSerOri      := ""          As Character
+  Local cMD5         := ""          As Character
+  Local statement    := Nil         As Object
+  Local lIncIss      := .F.         As Logical
+
+  Default aFisGet     := {}
+  Default aFisGetSC5  := {}
+
+  If cPaisLoc != "BRA"
+    __customerArea := SA1->(FWGetArea())
+  EndIf
+  If Empty(__cPictE1)
+    __cPictE1   := PesqPict("SE1","E1_VALOR")
+    __cTpDpInd  := SuperGetMV("MV_TPDPIND", .F., "1")
+  EndIf
+  If __nTmPRCVEN == 0
+    __nTmPRCVEN   := TamSX3("C6_PRCVEN")[2]
+  EndIf
+  //Posiciona o Pedido de Venda
+  SA4->(dbSetOrder(1))
+  dbSelectArea("SC5")
+  dbSetOrder(1)
+  
+  If Empty(flow) .And. MsSeek(__cFilSC5 + orderNumber) .And. !SC5->C5_TIPO $ "DB"
+
+    //Posiciona a trasnportadora
+    If !Empty(SC5->C5_TRANSP)
+      If SA4->(dbSeek(__cFilSA4 + SC5->C5_TRANSP))
+        aTransp[01] := SA4->A4_EST
+        If cPaisLoc == "BRA"
+          aTransp[02] := SA4->A4_TPTRANS
+        EndIf
+      EndIf
+    EndIf
+
+    //Inicializa a funcao fiscal
+    MaFisIni(Iif(Empty(SC5->C5_CLIENT),SC5->C5_CLIENTE,SC5->C5_CLIENT),;
+      SC5->C5_LOJAENT,;
+      IIf(SC5->C5_TIPO $ 'DB',"F","C"),;
+      SC5->C5_TIPO,;
+      SC5->C5_TIPOCLI,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      "MATA461",;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      aTransp,,,,SC5->C5_CLIENTE,SC5->C5_LOJACLI,,,SC5->C5_TPFRETE,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      Nil,;
+      IIf(FindFunction("ChkTrbGen"), ChkTrbGen("SD2","D2_IDTRIB"), .F.))
+
+    //ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+    //³Realiza alteracoes de referencias do SC5         ³
+    //ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+    If Len(aFisGetSC5) > 0
+      dbSelectArea("SC5")
+      For nX := 1 to Len(aFisGetSC5)
+        If !Empty(&(aFisGetSC5[nX][2]))
+          MaFisAlt(aFisGetSC5[nX][1],&(aFisGetSC5[nX][2]),nItem,.T.)
+        EndIf
+      Next nX
+    EndIf
+
+    If cPaisLoc == 'ARG'
+      SA1->(DbSetOrder(1))
+      SA1->(MsSeek(xFilial("SA1")+IIf(!Empty(SC5->C5_CLIENT),SC5->C5_CLIENT,SC5->C5_CLIENTE)+SC5->C5_LOJAENT))
+      MaFisAlt('NF_SERIENF',LocXTipSer('SA1',MVNOTAFIS))
+    EndIf
+
+    cAliasSC6 := "salesFlow"
+
+    cQuery    := " SELECT SC6.R_E_C_N_O_ RECNOC6, SB1.R_E_C_N_O_ RECNOB1, SF4.R_E_C_N_O_ RECNOF4 "
+    cQuery    += " FROM ? SC6 "
+    cQuery    += " INNER JOIN ? SB1 ON "
+    cQuery    += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SC6","C6_FILIAL","SC6"}, {"SB1","B1_FILIAL","SB1"} )
+    cQuery    += " AND SB1.B1_COD = SC6.C6_PRODUTO "
+    cQuery    += " AND SB1.D_E_L_E_T_ = ' ' "
+    cQuery    += " INNER JOIN ? SF4 ON "
+    cQuery    += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SC6","C6_FILIAL","SC6"}, {"SF4","F4_FILIAL","SF4"} )
+    cQuery    += " AND SF4.F4_CODIGO = SC6.C6_TES "
+    cQuery    += " AND SF4.D_E_L_E_T_ = ' ' "
+    cQuery    += " WHERE SC6.C6_FILIAL = ? AND "
+    cQuery    += " SC6.C6_NUM = ? AND "
+    cQuery    += " SC6.C6_BLQ NOT IN('R ','S ') AND "
+    cQuery    += " SC6.D_E_L_E_T_ = ' ' "
+    cMD5      := MD5(cQuery)
+
+    If (!__hashCache:containsKey(cMD5))
+        statement := FwExecStatement():New(cQuery)
+        __hashCache:put(cMD5, statement)
+    Else
+        statement := __hashCache:get(cMD5)
+    EndIf
+
+    statement:SetUnsafe(1, RetSqlName("SC6"))
+    statement:SetUnsafe(2, RetSqlName("SB1"))
+    statement:SetUnsafe(3, RetSqlName("SF4"))
+    statement:SetString(4, __cFilSC6)
+    statement:SetString(5, orderNumber)
+
+    statement:OpenAlias(cAliasSC6)
+
+    While (cAliasSC6)->(!Eof())
+      SC6->(DbGoto((cAliasSC6)->RECNOC6))
+
+      If !Substr(SC6->C6_BLQ,1,1) $ "RS" .And. Empty(SC6->C6_BLOQUEI)
+        dHshDate     := CTOD("  /  /  ")
+        nItem ++
+        If !Empty(SC6->C6_NFORI) .And. !Empty(SC6->C6_ITEMORI)
+          SD1->(dbSetOrder(1))
+          If SD1->(MSSeek(__cFilSD1 + SC6->C6_NFORI+SC6->C6_SERIORI+SC5->C5_CLIENTE+SC5->C5_LOJACLI+SC6->C6_PRODUTO+SC6->C6_ITEMORI))
+            nRecOri := SD1->(Recno())
+            cDocOri := SD1->D1_DOC
+            cSerOri  := SD1->D1_SERIE
+          Endif
+        Endif
+
+        //Calcula o preco de lista                     
+        nValMerc  := IIf(SC6->C6_QTDVEN == 0,SC6->C6_VALOR,(SC6->C6_QTDVEN-SC6->C6_QTDENT)*SC6->C6_PRCVEN)
+        nPrcLista := SC6->C6_PRUNIT
+        If ( nPrcLista == 0 )
+          nPrcLista := NoRound(nValMerc/IIf(SC6->C6_QTDVEN==0,SC6->C6_VALOR,(SC6->C6_QTDVEN-SC6->C6_QTDENT)),__nTmPRCVEN)
+        EndIf
+
+        If cPaisLoc == "ARG"
+          nDesconto := a410Arred(nPrcLista*(SC6->C6_QTDVEN-SC6->C6_QTDENT),"D2_DESCON")-nValMerc
+          nDesconto := IIf(nDesconto==0,SC6->C6_VALDESC,nDesconto)
+          nDesconto := Max(0,nDesconto)
+          nAcresUnit:= A410Arred(SC6->C6_PRCVEN*SC5->C5_ACRSFIN/100,"D2_PRCVEN")
+          nAcresFin := A410Arred((SC6->C6_QTDVEN-SC6->C6_QTDENT)*nAcresUnit,"D2_TOTAL")
+          nAcresTot += nAcresFin
+          nValMerc  += nAcresFin
+        Else
+          nAcresUnit:= A410Arred(SC6->C6_PRCVEN*SC5->C5_ACRSFIN/100,"D2_PRCVEN")
+          nAcresFin := A410Arred((SC6->C6_QTDVEN-SC6->C6_QTDENT)*nAcresUnit,"D2_TOTAL")
+          nAcresTot += nAcresFin
+          nValMerc  += nAcresFin
+          nDesconto := a410Arred(nPrcLista*(SC6->C6_QTDVEN-SC6->C6_QTDENT),"D2_DESCON")-nValMerc
+          nDesconto := IIf(nDesconto==0,SC6->C6_VALDESC,nDesconto)
+          nDesconto := Max(0,nDesconto)
+        EndIf
+
+        nPrcLista += nAcresUnit
+
+        If cPaisLoc=="BRA" .Or. (cPaisLoc == "ARG" .And. SuperGetMV("MV_DESCSAI", .F., "1") == "2")
+          nValMerc  += nDesconto
+        EndIf
+        //Agrega os itens para a funcao fiscal         
+        SB1->(DbGoto((cAliasSC6)->RECNOB1))
+        SF4->(DbGoto((cAliasSC6)->RECNOF4))
+
+        MaFisIniLoad(nItem,{  SC6->C6_PRODUTO,;                    //IT_PRODUTO
+                    SC6->C6_TES,;                      //IT_TES
+                    "",;                               //IT_CODISS
+                    SC6->C6_QTDENT,;                    //IT_QUANT
+                    cDocOri,;                             //IT_NFORI
+                    cSerOri,;                             //IT_SERIORI
+                    SB1->(RecNo()),;                        //IT_RECNOSB1
+                    SF4->(RecNo()),;                        //IT_RECNOSF4
+                    nRecOri ,;                             //IT_RECORI
+                    SC6->C6_LOTECTL,;                    //IT_LOTE
+                    SC6->C6_NUMLOTE,;                    //IT_SUBLOTE
+                    "",;                                      //IT_PRDFIS
+                    0})                                       //IT_RECPRDF
+
+        If nDesconto > 0
+          MaFisLoad("IT_DESCONTO" , nDesconto, nItem)
+        EndIf
+        nQtdPeso := (SC6->C6_QTDVEN-SC6->C6_QTDENT)*SB1->B1_PESO
+
+        If nQtdPeso > 0
+          MaFisLoad("IT_PESO",nQtdPeso,nItem)
+        EndIf
+        If nPrcLista > 0
+          MaFisLoad("IT_PRCUNI",nPrcLista,nItem)
+        EndIf
+        MaFisLoad("IT_VALMERC",nValMerc,nItem)
+
+        //Forca os valores de impostos que foram informados no SC6.              
+        dbSelectArea("SC6")
+        For nX := 1 to Len(aFisGet)
+          If !Empty(&(aFisGet[nX][2]))
+            MaFisLoad(aFisGet[nX][3],&(aFisGet[nX][2]),nItem)
+          EndIf
+        Next nX
+
+        lIncIss := ( SC5->C5_INCISS == "N" .And. SC5->C5_TIPO == "N") .AND. ( SF4->F4_ISS=="S" )
+        If !lIncIss
+          MaFisRecal("",nItem)
+        EndIf
+        //Verifica a data de entrega para as duplicatas
+        If SC6->C6_ENTREG < dDataBase
+          dData   := dDataBase
+        Else
+          __oHashDtVld:Get(SC6->C6_ENTREG, @dHshDate)
+          If Empty(dHshDate)
+            dHshDate := DataValida(SC6->C6_ENTREG)
+            __oHashDtVld:Set(SC6->C6_ENTREG, dHshDate) 
+          EndIf
+          dData := dHshDate
+        EndIf
+        AAdd(flowTmp,{dData,nItem,SC6->C6_ITEM})
+
+        If SF4->F4_DUPLIC == "S"
+          nTotDesc += MaFisRet(nItem,"IT_DESCONTO")
+        Else
+          If __cTpDpInd == "1"
+            nTotDesc += MaFisRet(nItem,"IT_DESCONTO")
+          EndIf
+        EndIf
+
+        //Código do Servico                            
+        If cPaisLoc == "BRA"
+          If !Empty(SC6->C6_CODISS) .And. MaFisRet(nItem,"IT_CODISS") <> SC6->C6_CODISS
+            MaFisAlt("IT_CODISS",SC6->C6_CODISS,nItem,.T.)
+          EndIf
+        EndIf
+
+        If lIncIss
+          nPrcLista := a410Arred(nPrcLista/(1-(MaAliqISS(nItem)/100)),"D2_PRCVEN")
+          nValMerc  := a410Arred(nValMerc/(1-(MaAliqISS(nItem)/100)),"D2_PRCVEN")
+
+          MaFisLoad("IT_PRCUNI",nPrcLista,nItem)
+          MaFisLoad("IT_VALMERC",nValMerc,nItem)
+          
+          MafisRecal('',nItem)
+        EndIf
+
+        MaFisEndLoad(nItem,2)
+
+      EndIf
+
+      (cAliasSC6)->(dbSkip())
+    EndDo
+
+    (cAliasSC6)->(dbCloseArea())
+    dbSelectArea("SC6")
+
+    //Indica os valores do cabecalho
+    If SC5->C5_FRETE > 0
+      MaFisAlt("NF_FRETE",SC5->C5_FRETE)
+    EndIf
+    If SC5->C5_VLR_FRT > 0
+      MaFisAlt("NF_VLR_FRT",SC5->C5_VLR_FRT)
+    EndIf
+    If SC5->C5_SEGURO > 0
+      MaFisAlt("NF_SEGURO",SC5->C5_SEGURO)
+    EndIf
+    If SC5->C5_FRETAUT > 0
+      MaFisAlt("NF_AUTONOMO",SC5->C5_FRETAUT)
+    EndIf
+    If SC5->C5_DESPESA > 0
+      MaFisAlt("NF_DESPESA",SC5->C5_DESPESA)
+    EndIf
+
+    If cPaisLoc == "PTG"
+      MaFisAlt("NF_DESNTRB",SC5->C5_DESNTRB)
+      MaFisAlt("NF_TARA",SC5->C5_TARA)
+    Endif
+
+    If SC5->C5_DESCONT > 0
+      MaFisAlt("NF_DESCONTO",Min(MaFisRet(,"NF_VALMERC")-0.01,nTotDesc+SC5->C5_DESCONT),/*nItem*/,/*lNoCabec*/,/*nItemNao*/,__cTpDpInd == "2" )
+    EndIf
+
+    If SC5->C5_PDESCAB > 0
+      MaFisAlt("NF_DESCONTO",A410Arred(MaFisRet(,"NF_VALMERC")*SC5->C5_PDESCAB/100,"C6_VALOR")+MaFisRet(,"NF_DESCONTO"))
+    EndIf
+
+    //Obtem os valores da funcao fiscal                
+    For nX := 1 To Len(flowTmp)
+      nPosEntr := Ascan(aEntr,{|x| x[1]==flowTmp[nX][1]})
+      AAdd(aEntr,;
+                {;
+                    flowTmp[nX][1],;
+                    MaFisRet(flowTmp[nX][2],"IT_BASEDUP"),;
+                    MaFisRet(flowTmp[nX][2],"IT_VALIPI"),;
+                    MaFisRet(flowTmp[nX][2],"IT_VALSOL"),;
+                    flowTmp[nX][3];
+                };
+            )
+
+    Next nX
+
+    //Calcula os venctos conforme a condicao de pagto  
+    dbSelectarea("SE4")
+    dbSetOrder(1)
+    If MsSeek(__cFilSE4 + SC5->C5_CONDPAG)
+      For nY := 1 to Len(aEntr)
+        nAcerto  := 0
+
+        If cPaisLoc == 'COL' .AND. SFB->FB_JNS == 'J'
+          dbSelectArea("SFC")
+          dbSetOrder(2)
+          If dbSeek(xFilial("SFC") + SF4->F4_CODIGO + "RV0" )
+            nValRetImp   := MaFisRet(,"NF_VALIV2")
+            Do Case
+              Case FC_INCDUPL == '1'
+                nlValor := aEntr[nY][2] - nValRetImp
+              Case FC_INCDUPL == '2'
+                nlValor :=aEntr[nY][2] + nValRetImp
+              Otherwise
+                nlValor :=aEntr[nY][2]
+            EndCase
+          Elseif dbSeek(xFilial("SFC") + SF4->F4_CODIGO + "RF0" )
+            nValRetImp   := MaFisRet(,"NF_VALIV4")
+            Do Case
+              Case FC_INCDUPL == '1'
+                nlValor := aEntr[nY][2] - nValRetImp
+              Case FC_INCDUPL == '2'
+                nlValor :=aEntr[nY][2] + nValRetImp
+              Otherwise
+                nlValor :=aEntr[nY][2]
+            EndCase
+          Elseif dbSeek(xFilial("SFC") + SF4->F4_CODIGO + "RC0" )
+            nValRetImp   := MaFisRet(,"NF_VALIV7")
+            Do Case
+              Case FC_INCDUPL == '1'
+                nlValor := aEntr[nY][2] - nValRetImp
+              Case FC_INCDUPL == '2'
+                nlValor :=aEntr[nY][2] + nValRetImp
+              Otherwise
+                nlValor :=aEntr[nY][2]
+            EndCase
+          Endif
+        ElseIf cPaisLoc=="EQU"
+          nlValor := aEntr[nY][2]
+          SA1->(DbSetOrder(1))
+          SA1->(MsSeek(xFilial("SA1")+IIf(!Empty(SC5->C5_CLIENT),SC5->C5_CLIENT,SC5->C5_CLIENTE)+SC5->C5_LOJAENT))
+          cNatureza:=SA1->A1_NATUREZ
+          lPParc:=Posicione("SED",1,xFilial("SED")+cNatureza,"ED_RATRET")=="1"
+          If lPParc
+            DbSelectArea("SFC")
+            SFC->(dbSetOrder(2))
+            If DbSeek(xFilial("SFC") + SF4->F4_CODIGO + "RIR") //Retenção IVA
+              cImpRet    := SFC->FC_IMPOSTO
+              DbSelectArea("SFB")
+              SFB->(dbSetOrder(1))
+              If SFB->(DbSeek(xFilial("SFB")+AvKey(cImpRet,"FB_CODIGO")))
+                nValRetImp   := MaFisRet(,"NF_VALIV"+SFB->FB_CPOLVRO)
+              Endif
+              DbSelectArea("SFC")
+              If SFC->FC_INCDUPL == '1'
+                nlValor  :=aEntr[nY][2] - nValRetImp
+              ElseIf SFC->FC_INCDUPL == '2'
+                nlValor :=aEntr[nY][2] + nValRetImp
+              EndIf
+            EndIf
+          Endif
+        Else
+          nlValor := aEntr[nY][2]
+        EndIf
+
+        flowTmp := Condicao(nlValor,SC5->C5_CONDPAG,aEntr[nY][3],aEntr[nY][1],aEntr[nY][4],,,nAcresTot)
+        If !Empty(flowTmp)
+          If cPaisLoc=="EQU"
+            For nX := 1 To Len(flowTmp)
+              If nX==1
+                If SFC->FC_INCDUPL == '1'
+                  flowTmp[nX][2]+= nValRetImp
+                ElseIf SFC->FC_INCDUPL == '2'
+                  flowTmp[nX][2]-= nValRetImp
+                Endif
+              Endif
+            Next nX
+          Else
+            For nX := 1 To Len(flowTmp)
+              nAcerto += flowTmp[nX][2]
+            Next nX
+            flowTmp[Len(flowTmp)][2] += aEntr[nY][2] - nAcerto
+          Endif
+          For nX := 1 To Len(flowTmp)
+            nZ := aScan(flow,{|x| DToS(x[1]) + x[3] == DToS(flowTmp[nX][1]) + aEntr[nY][5]})
+            If nZ == 0
+              AAdd(flow,{flowTmp[nX][1],0, aEntr[nY][5]})
+              nZ := Len(flow)
+            EndIf
+            flow[nZ][2] += flowTmp[nX][2]
+          Next nX
+        EndIf
+      Next nY
+    EndIf
+
+    If Len(flow) == 0
+      aDupl := {{dDataBase,MaFisRet(,"NF_BASEDUP"), __cPictE1}}
+    EndIf
+
+    MaFisEnd()
+
+    SC5->(MsUnLockAll())
+  EndIf
+
+  If sumValue
+    flowTmp := aClone(flow)
+    flow := {{dDataBase,0}}
+    For nX := 1 To Len(flowTMP)
+      flow[1][2] += flowTMP[nX][2]
+    Next nX
+  EndIf
+
+  If cPaisLoc != "BRA"
+    FWRestArea(__customerArea)
+    FreeObj(__customerArea)
+  EndIf
+  
+  FWRestArea(generalArea)
+
+  FreeObj(generalArea)
+  FreeObj(flowTmp)
+  FreeObj(aEntr)
+  FreeObj(aTransp)
+Return(flow)
+
+/*/{Protheus.doc} purchasesFlow
+  gera Tabela Temporária com os dados de fluxo do Pedido de Compra
+
+  @return purchaseAlias, character, alias da Temporária do Pedido de Compra
+
+  @author Alison Kaique
+  @since mar|2021
+/*/
+Static Function purchasesFlow(lastDateTime As Character)
+    Local purchaseAlias   As Character
+    Local tempTable       As Object
+    Local currency        As Numeric
+    Local brancheLen      As Numeric
+    Local brancheFrom     As Character
+    Local brancheTo       As Character
+    Local orderType       As Character
+    Local considerDate    As Logical
+    Local analytical      As Logical
+    Local success         As Logical
+    Local selectedBranch  As Array
+
+    tempTable       := __hashCache:get('purchaseTemp')
+    purchaseAlias   := tempTable:GetAlias()
+    currency        := 01
+    brancheLen      := TamSX3('F76_FILIAL')[01]
+    brancheFrom     := Space(brancheLen)
+    brancheTo       := Replicate('Z', brancheLen)
+    orderType       := '1' // liberados
+    considerDate    := .T.
+    analytical      := .T.
+    selectedBranch  := {cFilAnt}
+
+    // variáveis da função interna
+    MV_PAR02  := currency
+    MV_PAR03  := 02
+    aCompras  := {}
+    adCompras := {}
+
+  If (Select(purchaseAlias) > 0)
+    // gerando temporária com dados dos Pedidos de Compra
+    success := calcPurchasesFlow(purchaseAlias, currency, brancheFrom, brancheTo, orderType, considerDate, , selectedBranch, analytical, lastDateTime)
+
+    (purchaseAlias)->(DbSetOrder(02)) // FILIAL + PEDIDO + ITEM + DATAX
+    (purchaseAlias)->(DbGoTop())
+  EndIf
+Return purchaseAlias
+
+//-----------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} calcPurchasesFlow
+  cálculo de valores para Pedidos de Compra
+
+@Author  Alison Kaique
+@since  mar|2021
+/*/
+//-----------------------------------------------------------------------------------------------------
+Static Function calcPurchasesFlow(cAliasPc, nMoeda, cFilIni, cFilFin, cPedidos, lConsDtBase, aCCustos, aSelFil, lAnalitic, lastDateTime)
+  Local cNumPed             := "" As Character
+  Local cCond               := "" As Character
+  Local cWherePE            := "" As Character
+  Local i                   := 0  As Numeric
+  Local nPrcCompra          := 0  As Numeric
+  Local nPrcOrig            := 0  As Numeric
+  Local dData               As Date
+  Local dHshDate            As Date
+  Local nValIPILiq          := 0  As Numeric
+  Local nTotDesc            := 0  As Numeric
+  Local nTotDescOrig        := 0  As Numeric
+  Local cFilPed             := "" As Character
+  Local cSaveFil            := cFilAnt As Character
+  Local dDataFluxo          As Date
+  Local aDataAux            := {} As Array
+  Local nPosData            := 0  As Numeric
+  Local nValTot             := 0  As Numeric
+  Local nValTotOrig         := 0  As Numeric
+  Local nValIpi             := 0  As Numeric
+  Local aVenc               := {} As Array
+  Local aVencOrig           := {} As Array
+  Local nDespFrete          := 0  As Numeric
+  Local nDespFreteOrig      := 0  As Numeric
+  Local nDecimais           := TamSx3("C7_PRECO")[2] As Array
+  Local nTaxaMoed           := 0  As Numeric
+  Local cQuery              := "" As Character
+  Local cFilProc            := "" As Character
+  Local aData               := {} As Array
+  Local aSA2                := {} As Array
+  Local nPos                := 0  As Numeric
+  Local nMoedaSC7           := 0  As Numeric
+  Local nValPagAnt          := 0  As Numeric
+  Local cAlsTmp             := "" As Character
+  Local sequential          := '' As Character
+  Local filCompart          := Empty(xFilial('SC7')) As Logical
+  Local nTamSeq             := TamSX3('F76_SEQ')[01] As Numeric
+  Local jTaxesConfig        := JsonObject():New()    As Json
+  Local lIPIGenTrib         := .F.                   As Logical
+  Local lICMGenTrib         := .F.                   As Logical
+  Local lTrbGen             := .F.                   As Logical
+
+  Default nMoeda      := 1
+  Default cFilIni     := "  "
+  Default cFilFin     := "zz"
+  Default cPedidos    := "3" // Todos os pedidos
+  Default aCCustos    := {}
+  Default aSelFil     := {}
+  Default lAnalitic   := .F.
+
+  aSA2      := {}
+  cWherePE  := ""
+  cAlsTmp   := "purchaseflow"
+  lTrbGen   := IIf(FindFunction("ChkTrbGen"), ChkTrbGen("SC7","C7_IDTRIB"), .F.)
+
+  If __lNGFJOBQR
+    cWherePE := ExecBlock("NGFJOBQR", .F., .F., {"SC7"})
+    If !EMPTY( cWherePE )
+      cWherePE := " AND " + cWherePE
+    EndIf
+  EndIf
+
+  dbSelectArea("SC7")
+  SC7->(dbSetOrder(1))
+
+  cQuery := "SELECT SC7.C7_FILIAL, SC7.C7_NUM, SC7.C7_ITEM, SC7.C7_SEQUEN, SC7.R_E_C_N_O_ RECNOC7 "
+  cQuery += " FROM " + RetSqlName("SC7") + " SC7 "
+  cQuery += " LEFT JOIN " + RetSqlName("SF4") + " SF4 ON "
+  cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SF4","F4_FILIAL","SF4"}, {"SC7","C7_FILIAL","SC7"} )
+  cQuery += " AND F4_CODIGO = C7_TES "
+  cQuery += " AND SF4.D_E_L_E_T_ = ' ' "
+  cQuery += " LEFT JOIN " + RetSqlName("SB1") + " SB1 ON "
+  cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SB1","B1_FILIAL","SB1"}, {"SC7","C7_FILIAL","SC7"} )
+  cQuery += " AND B1_COD = C7_PRODUTO "
+  cQuery += " LEFT JOIN " + RetSqlName("SF4") + " SF4B1 ON "
+  cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SF4","F4_FILIAL","SF4B1"}, {"SB1","B1_FILIAL","SB1"} )
+  cQuery += " AND B1_COD = C7_PRODUTO "
+  cQuery += " AND SF4B1.F4_CODIGO = B1_TE "
+  cQuery += " AND SF4B1.D_E_L_E_T_ = ' ' "
+  cQuery += " AND SB1.D_E_L_E_T_ = ' ' "
+
+  cQuery += " WHERE "
+  cQuery += " SC7.D_E_L_E_T_ = ' ' "
+  cQuery += " AND SC7.C7_QUJE < SC7.C7_QUANT "
+  cQuery += " AND SC7.C7_RESIDUO <> 'S' "
+  cQuery += " AND SC7.C7_FLUXO   <> 'N' "
+  cQuery += " AND ( (C7_TES = ' ' OR ( C7_TES != ' ' AND SF4.F4_DUPLIC = 'S')) OR (SF4B1.F4_DUPLIC = 'S')) "  
+  cQuery += " AND SB1.D_E_L_E_T_ = ' ' "
+
+  If !(Empty(lastDateTime))
+    cQuery += " AND SC7.S_T_A_M_P_ >= " + convertToTimestamp(lastDateTime)
+  EndIf
+  cQuery += cWherePE
+
+  // pedidos vencidos para recálculo
+  cQuery +=  "UNION "
+
+  cQuery += "SELECT SC7.C7_FILIAL, SC7.C7_NUM, SC7.C7_ITEM, SC7.C7_SEQUEN, SC7.R_E_C_N_O_ RECNOC7 "
+  cQuery += " FROM "+  RetSQLTab("SC7") + " "
+
+  cQuery += "INNER JOIN " + RetSqlName("F76") + " F76 ON "
+  If __lF76FILORI
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC7","C7_FILIAL","SC7"} ) 
+  Else
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC7","C7_FILIAL","SC7"} ) 
+  EndIf
+  cQuery +=  " AND F76.F76_PEDIDO = SC7.C7_NUM"
+  cQuery +=  " AND F76.F76_ITEM = SC7.C7_ITEM"
+  cQuery +=  " AND F76.F76_CLIFOR = SC7.C7_FORNECE"
+  cQuery +=  " AND F76.F76_LOJA = SC7.C7_LOJA"
+  cQuery +=  " AND F76.F76_TIPO = '2'"
+  cQuery +=  " AND F76.D_E_L_E_T_ = ' '"
+  cQuery +=  " LEFT JOIN " + RetSqlName("SF4") + " SF4 ON "
+  cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SF4","F4_FILIAL","SF4"}, {"SC7","C7_FILIAL","SC7"} )
+  cQuery +=  " AND F4_CODIGO = C7_TES "
+  cQuery +=  " AND SF4.D_E_L_E_T_ = ' ' "
+  cQuery +=  " LEFT JOIN " + RetSqlName("SB1") + " SB1 ON "
+  cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SB1","B1_FILIAL","SB1"}, {"SC7","C7_FILIAL","SC7"} )
+  cQuery +=  " AND B1_COD = C7_PRODUTO "
+  cQuery +=  " LEFT JOIN " + RetSqlName("SF4") + " SF4B1 ON "
+  cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"SF4","F4_FILIAL","SF4B1"}, {"SB1","B1_FILIAL","SB1"} )
+  cQuery +=  " AND B1_COD = C7_PRODUTO "
+  cQuery +=  " AND SF4B1.F4_CODIGO = B1_TE "
+  cQuery +=  " AND SF4B1.D_E_L_E_T_ = ' ' "
+  cQuery +=  " AND SB1.D_E_L_E_T_ = ' ' "
+
+  cQuery += " WHERE"
+  cQuery +=  " F76.F76_DTJOBT < '" + DToS(dDatabase) + "'"
+  cQuery +=  " AND SC7.C7_DATPRF < '" + DToS(dDatabase) + "'"
+  cQuery +=  " AND SC7.C7_QUJE < SC7.C7_QUANT "
+  cQuery +=  " AND SC7.C7_RESIDUO <> 'S' "
+  cQuery +=  " AND SC7.C7_FLUXO   <> 'N' "
+  cQuery +=  " AND ( (C7_TES = ' ' OR (C7_TES != ' ' AND SF4.F4_DUPLIC = 'S')) OR (SF4B1.F4_DUPLIC = 'S')) "
+  cQuery +=  " AND SB1.D_E_L_E_T_ = ' ' "
+  cQuery +=  " AND SC7.D_E_L_E_T_ = ' ' "
+  cQuery += cWherePE
+  cQuery += " ORDER BY C7_FILIAL, C7_NUM, C7_ITEM, C7_SEQUEN "
+
+  cQuery := ChangeQuery(cQuery)
+  dbUseArea(.T., "TOPCONN", TCGenQry(,,cQuery), cAlsTmp, .F., .T.)
+
+  While (cAlsTmp)->(!Eof())
+    SC7->(DbGoto((cAlsTmp)->RECNOC7))
+    cFilProc := SC7->C7_FILIAL
+    dHshDate            := CTOD("  /  /  ")
+
+    // Se for exclusiva precisa mudar o cFilAnt
+    If !filCompart .And. Len(cFilAnt) > Len(Alltrim(SC7->C7_FILIAL))
+      cFilProc := FXRetFil('SC7', SC7->C7_FILIAL, .T.)
+    EndIf
+
+    If !filCompart  .And. cFilAnt <> cFilProc
+      cFilAnt := cFilProc
+      InitXFilial()
+    EndIf
+
+    cFilPed     := SC7->C7_FILIAL
+    cNumPed     := SC7->C7_NUM
+    nMoedaSC7   := Iif(SC7->C7_MOEDA == 0, 1, SC7->C7_MOEDA) 
+    nValTot     := 0
+    nTaxaMoed   := 0
+    nValTotOrig := 0
+    nValIpi     := 0
+    aVenc       := {}
+    aVencOrig   := {}
+    cCond       := SC7->C7_COND
+    nTotDesc    := SC7->C7_VLDESC
+    nTotDescOrig := SC7->C7_VLDESC
+    nDespFrete  := 0
+    nDespFreteOrig := 0
+    lIPIGenTrib := .F.
+    lICMGenTrib := .F.
+  
+    //------------------------------------------
+    // Calcula o reajuste do pedido de compra
+    //------------------------------------------
+    dData := SC7->C7_DATPRF
+    nPos := Ascan(aData, { |x| x[1] == SC7->C7_DATPRF } )
+    If nPos == 0
+      __oHashDtVld:Get(SC7->C7_DATPRF, @dHshDate)
+      If Empty(dHshDate)
+        dHshDate := DataValida(SC7->C7_DATPRF)
+        __oHashDtVld:Set(SC7->C7_DATPRF, dHshDate)
+      EndIf
+      dData := dHshDate
+      aadd(aData, {SC7->C7_DATPRF, dData})
+    Else
+      dData := aData[nPos, 2]
+    EndIf
+
+    If lConsDtBase
+      dData := Iif(SC7->C7_DATPRF < dDataBase, dDataBase, dData)
+    Endif
+
+    If nMoedaSC7 != nMoeda .or. nMoedaSC7 > 1
+      nTaxaMoed := getCurrencyQuote(SC7->C7_TXMOEDA, nMoedaSC7, dData)
+    EndIf
+
+    nPrcCompra := SC7->C7_PRECO
+    nPrcOrig   := SC7->C7_PRECO
+    
+    If nMoedaSC7 != nMoeda
+      nPrcCompra := xMoeda(SC7->C7_PRECO,nMoedaSC7,nMoeda,dData,nDecimais, nTaxaMoed)
+    EndIf
+
+    If !Empty(SC7->C7_REAJUST)
+      nPrcCompra := fc020Form(SC7->C7_REAJUST, dData)
+      nPrcOrig   := nPrcCompra
+    Endif
+
+    nDespFrete := SC7->C7_VALFRE + SC7->C7_SEGURO + SC7->C7_DESPESA
+    nDespFreteOrig := SC7->C7_VALFRE + SC7->C7_SEGURO + SC7->C7_DESPESA
+    If nMoedaSC7 != nMoeda
+      nDespFrete := xMoeda(SC7->C7_VALFRE + SC7->C7_SEGURO + SC7->C7_DESPESA,nMoedaSC7,nMoeda,dData,nDecimais, nTaxaMoed)
+    EndIf
+
+    //Reiniciando variaveis
+    nValTot     := ((SC7->C7_QUANT-SC7->C7_QUJE) * nPrcCompra ) + nDespFrete
+    nValTotOrig := ((SC7->C7_QUANT-SC7->C7_QUJE) * nPrcOrig ) + nDespFreteOrig
+    nValIPILiq  := nValTot
+    nValIPI     := SC7->C7_VALIPI
+    nTotDesc    := SC7->C7_VLDESC
+
+    If nTotDesc == 0
+      nTotDesc := CalcDesc(nValTot,SC7->C7_DESC1,SC7->C7_DESC2,SC7->C7_DESC3)
+      nTotDescOrig := nTotDesc
+    Else
+
+      //-----------------------------------------------------------
+      // Consulta o desconto de pedidos com entrega parcial
+      //-----------------------------------------------------------
+      nTotDesc := ((SC7->C7_VLDESC * (nValTot - nDespFrete))/SC7->C7_TOTAL)
+      nTotDescOrig := ((SC7->C7_VLDESC * (nValTotOrig - nDespFreteOrig))/SC7->C7_TOTAL)
+
+    EndIf
+
+    nValTot     := nValTot - nTotDesc
+    nValTotOrig := nValTotOrig - nTotDescOrig
+
+    If lTrbGen .And. !Empty(SC7->C7_IDTRIB)
+      jTaxesConfig  := getPurchaseOrderTaxesByConfigurator(SC7->C7_IDTRIB)
+      lIPIGenTrib   := jTaxesConfig['hasIPI']
+      lICMGenTrib   := jTaxesConfig['hasICMS']
+      nValTot       += jTaxesConfig["calculatedValue"]
+      nValTotOrig   += jTaxesConfig["calculatedValue"]
+    EndIf
+
+    IF !lIPIGenTrib .And. SC7->C7_IPI > 0
+      nValTot  += nValIPI
+      nValTotOrig += nValIPI
+    Endif
+
+    //Adiciona o ICMS retido no valor do pedido
+    If cPaisLoc == "BRA" .And. !lIPIGenTrib .And. SC7->C7_ICMSRET > 0 
+        nValTot  += SC7->C7_ICMSRET
+        nValTotOrig += SC7->C7_ICMSRET
+    EndIf
+
+    dbSelectArea("SE4")
+    dbSeek(__cFilSE4 + SC7->C7_COND)
+    nValTot  *= (SE4->E4_ACRSFIN/100)+1
+    nValTotOrig  *= (SE4->E4_ACRSFIN/100)+1
+    dbSelectArea("SC7")
+
+    aVenc     := Condicao(nValTot,cCond,nValIpi,dData)
+    aVencOrig := AClone(aVenc)
+
+    If nValTot <> nValTotOrig
+      aVencOrig := Condicao(nValTotOrig, cCond, nValIpi, dData)
+    Endif  
+
+    If Len(aVenc) > 0
+      // Posiciona no fornecedor para buscar a natureza
+      aSA2  := GetAdvFVal( "SA2", {"A2_NATUREZ", "A2_NOME"}, __cFilSA2 + SC7->C7_FORNECE+SC7->C7_LOJA, 1, {'', ''} )
+      cNatureza := PAd(If(Empty(aSA2[1]), "PC", aSA2[1] ), Len(SED->ED_CODIGO))
+
+      For i:=1 To Len(aVenc)
+        dHshDate            := CTOD("  /  /  ")
+        nPosData := Ascan(aDataAux, {|e| e[1] == aVenc[i][1]})
+        If nPosData == 0
+          __oHashDtVld:Get(aVenc[i][1], @dHshDate)
+          If Empty(dHshDate)
+            dHshDate  := DataValida(aVenc[i][1])
+            __oHashDtVld:Set(aVenc[i][1], dHshDate)
+          EndIf
+          dDataFluxo := dHshDate
+          AADD(aDataAux, {aVenc[i][1], dDataFluxo})
+        Else
+          dDataFluxo := aDataAux[nPosData][2]
+        Endif
+
+        // Verifico se a data já foi validada
+        If lAnalitic
+          nL := Ascan(aCompras, {|e| e[1] == dDataFluxo .And. e[3] == cNatureza .And. e[5] == cNumPed .And. e[6] == cFilPed})
+        Else
+          nL := Ascan(aCompras, {|e| e[1] == dDataFluxo .And. e[3] == cNatureza } )
+        Endif
+
+        IF nL != 0
+          aCompras[nL][2] += aVenc[i][2]
+          aCompras[nL][4] += nValPagAnt
+        Else
+          AADD(aCompras, {dDataFluxo, aVenc[i][2], cNatureza, nValPagAnt, cNumPed, cFilPed})
+          AADD(adCompras, dDataFluxo)
+        Endif
+
+        // Se foi enviado o arquivo temporario para geracao do fluxo
+        // de caixa analitico, gera o pedido de compra neste arquivo
+        If cAliasPc != Nil
+          sequential := StrZero(i, nTamSeq)
+          DbSelectArea(cAliasPc)
+          (cAliasPc)->(DbSetOrder(03)) // FILIAL + PEDIDO + ITEM + SEQ
+          If !dbSeek(SC7->(C7_FILIAL + C7_NUM + C7_ITEM) + dTos(dDataFluxo))
+            RecLock(cAliasPc,.T.)
+            (cAliasPc)->DATAX  := dDataFluxo
+            (cAliasPc)->FILIAL := SC7->C7_FILIAL
+            (cAliasPc)->PEDIDO := SC7->C7_NUM
+            (cAliasPc)->EMISSAO:= SC7->C7_EMISSAO
+            (cAliasPc)->CLIFOR := SC7->C7_FORNECE
+            (cAliasPc)->LOJA   := SC7->C7_LOJA
+            (cAliasPc)->TIPO   := SC7->C7_TIPO
+            (cAliasPc)->ITEM   := SC7->C7_ITEM
+            (cAliasPc)->CONDPAG := SC7->C7_COND
+            (cAliasPc)->SEQ     := sequential
+            (cAliasPc)->CONAPRO := SC7->C7_CONAPRO
+
+            DbSelectArea(cAliasPc)
+            (cAliasPc)->NOMCLIFOR:= aSA2[2]
+            (cAliasPc)->PRODUTO:= SC7->C7_PRODUTO
+            (cAliasPc)->CHAVE  := __cFilSC7 + SC7->C7_NUM+SC7->C7_ITEM+SC7->C7_SEQUEN
+          Else
+            RecLock(cAliasPc,.F.)
+          Endif
+          (cAliasPc)->VALOR   += aVenc[i][2]
+          (cAliasPc)->VLORIG  += aVencOrig[i][2]
+          (cAliasPc)->MOEDA   := nMoedaSC7
+          (cAliasPc)->TXMOEDA := nTaxaMoed
+        Endif
+      Next i
+    Endif
+
+    (cAlsTmp)->(DbSkip())
+  EndDo
+
+  (cAlsTmp)->(DbCloseArea())
+  cFilAnt := cSaveFil // recupera variavel cFilAnt
+  InitXFilial()
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } checkUpdateBlqLib
+verifica se existem registros na tabela F76 com o campo F76_BLQLIB pendente.
+
+@author Vincius do Prado
+@since Ago|2022
+/*/
+//-------------------------------------------------------------------
+Static Function checkUpdateBlqLib()
+  Local cQuery    := "" As Character
+  Local cAliasTmp := "" As Character
+
+  /*
+    Verificar se existe algum F76 de pedido de venda na base
+    Se não tem pedido nenhum na base (antes trazia apenas liberados) - considerar o parametro zerado para fazer carga full
+  */
+
+  cQuery := "SELECT F76.R_E_C_N_O_ F76REC, ISNULL(C7_CONAPRO, ' ') C7_CONAPRO,"
+  cQuery += " F76_BLQLIB"
+  cQuery += " FROM " + RetSqlName('F76') + " F76"
+  cQuery += " LEFT JOIN " + RetSqlName('SC7') + " SC7 ON "
+	If __lF76FILORI
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC7","C7_FILIAL","SC7"} )  + " AND"
+  Else
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC7","C7_FILIAL","SC7"} )  + " AND"
+  EndIf
+  cQuery += " SC7.C7_NUM = F76.F76_PEDIDO AND"
+  cQuery += " SC7.C7_FORNECE = F76.F76_CLIFOR AND"
+  cQuery += " SC7.C7_LOJA = F76.F76_LOJA AND"
+  cQuery += " SC7.C7_ITEM = F76.F76_ITEM AND"
+  cQuery += " SC7.D_E_L_E_T_ = ' '"
+  cQuery += " WHERE F76.D_E_L_E_T_ = ' ' AND F76.F76_TIPO = '2'"
+  cQuery += " AND ( F76_BLQLIB NOT IN (1, 2)"
+  cQuery += " OR ( (F76.F76_BLQLIB = 1 AND SC7.C7_CONAPRO <> 'L')" 
+  cQuery += " OR ( F76.F76_BLQLIB = 2 And SC7.C7_CONAPRO = 'L') ))"
+  cQuery += " GROUP BY F76.R_E_C_N_O_, C7_CONAPRO, F76_BLQLIB"
+
+  cQuery  := ChangeQuery(cQuery)
+  cAliasTmp :=  MpSysOpenQuery(cQuery)
+
+  // percorrendo temporária e atualizando registros
+  While !(cAliasTmp)->(EOF())
+      F76->(DbGoTo((cAliasTmp)->F76REC))
+      Reclock("F76", .F.)
+      F76->F76_BLQLIB   := IIF((cAliasTmp)->C7_CONAPRO == "L",1,2) // 1=LIBERADO. 2=BLOQUEADO
+      F76->(MsUnLock())
+      (cAliasTmp)->(DbSkip())
+  EndDo
+
+  (cAliasTmp)->(DbCloseArea())
+
+  cAliasTmp  := ""
+
+  cQuery := "SELECT F76.R_E_C_N_O_ F76REC, ISNULL(C9_PEDIDO, ' ') C9_PEDIDO, "
+  cQuery += " F76.F76_BLQLIB"
+  cQuery += " FROM " + RetSqlName('F76') + " F76"
+  cQuery += " INNER JOIN " + RetSqlName('SC6') + " SC6 ON "
+  If __lF76FILORI
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILORI","F76"}, {"SC6","C6_FILIAL","SC6"} )  + " AND"
+  Else
+    cQuery += totvs.protheus.backoffice.ngf.util.BranchRelation( {"F76","F76_FILIAL","F76"}, {"SC6","C6_FILIAL","SC6"} )  + " AND"
+  EndIf    
+  cQuery += " SC6.C6_NUM = F76.F76_PEDIDO AND"
+  cQuery += " SC6.C6_ITEM = F76_ITEM AND"
+  cQuery += " SC6.C6_CLI = F76.F76_CLIFOR AND"
+  cQuery += " SC6.C6_LOJA = F76.F76_LOJA AND"
+  cQuery += " SC6.D_E_L_E_T_ = ' '"
+  cQuery += " LEFT JOIN " + RetSqlName('SC9') + " SC9 ON"
+  cQuery += " SC9.C9_FILIAL = SC6.C6_FILIAL AND"
+  cQuery += " SC9.C9_PEDIDO = SC6.C6_NUM AND"
+  cQuery += " SC9.C9_ITEM = SC6.C6_ITEM AND"
+  cQuery += " SC9.C9_CLIENTE = SC6.C6_CLI AND"
+  cQuery += " SC9.C9_LOJA = SC6.C6_LOJA AND"
+  cQuery += " SC9.C9_BLEST = ' ' AND"
+  cQuery += " SC9.C9_BLCRED = ' ' AND"
+  cQuery += " SC9.D_E_L_E_T_ = ' '"
+    
+  cQuery += " WHERE F76.D_E_L_E_T_ = ' ' AND F76.F76_TIPO = '1' "
+
+  cQuery += " AND ( F76_BLQLIB NOT IN (1, 2)"
+  cQuery += " OR ( (F76.F76_BLQLIB = 1 AND SC9.C9_PEDIDO = ' ') "
+  cQuery += " OR ( F76.F76_BLQLIB = 2 AND SC9.C9_PEDIDO != ' ')) )"
+  cQuery += " GROUP BY F76.R_E_C_N_O_, C9_PEDIDO, F76_BLQLIB"
+
+  cQuery  := ChangeQuery(cQuery)
+  cAliasTmp :=  MpSysOpenQuery(cQuery)
+
+  // percorrendo temporária e atualizando registros
+  While !(cAliasTmp)->(EOF())
+      F76->(DbGoTo((cAliasTmp)->F76REC))
+      Reclock("F76", .F.)
+      F76->F76_BLQLIB   := IIF(!Empty((cAliasTmp)->C9_PEDIDO),1,2) // 1=LIBERADO. 2=BLOQUEADO
+      F76->(MsUnLock())
+      (cAliasTmp)->(DbSkip())
+  EndDo
+
+  (cAliasTmp)->(DbCloseArea())
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } GetUnicIns
+Ajuste na temporaria, eliminando registros duplicados para a inserção
+
+@author Rodrigo Oliveira
+@since jun|2024
+/*/
+//-------------------------------------------------------------------
+Static Function GetUnicIns(cSqlName As Character)
+  Local cQry  As Character
+
+  cQry  := "Select F76.* From ( Select "
+  If __lF76FILORI
+    cQry += "F76_FILORI"
+  Else
+    cQry += "F76_FILIAL" 
+  EndIf
+  cQry  += ", F76_PEDIDO, F76_ITEM, F76_CLIFOR, F76_LOJA, F76_TIPO, F76_SEQ "
+  cQry  += ", MAX(R_E_C_N_O_) REC"
+  cQry  += " From " + cSqlName
+  cQry  += " Group By "
+  If __lF76FILORI
+    cQry += "F76_FILORI"
+  Else
+    cQry += "F76_FILIAL" 
+  EndIf
+  cQry  += ", F76_PEDIDO, F76_ITEM, F76_CLIFOR, F76_LOJA, F76_TIPO, F76_SEQ ) A "
+  cQry  += " Inner Join " + cSqlName + " F76 "
+  cQry  += " On F76.R_E_C_N_O_ = A.REC"
+  
+Return cQry
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } getPurchaseOrderTaxesByConfigurator 
+  Obtem os valores dos impostos calculados pelo configurador para os pedidos de compra.
+
+  @author Vinicius do Prado
+  @since Ago|2025
+
+  @param cIDTribSC7 As Character - Id do tributo da tabela SC7 - C7_IDTRIB
+  @return jResponse as Json - {
+    hasIPI: Indica se existe IPI nos valores calculados,
+    hasICMS: Indica se existe ICMS nos valores calculados,
+    calculatedValue: Valor final dos impostos calculados pelo configurador
+  }
+/*/
+//-------------------------------------------------------------------
+Static Function getPurchaseOrderTaxesByConfigurator(cIDTribSC7 As Character) AS Json
+  Local jDataTaxes  := JsonObject():New() As Json
+  Local jRulesTaxes := JsonObject():New() As Json
+  Local jRuleData   := JsonObject():New() As Json
+  Local jResponse   := JsonObject():New() As Json
+  Local aRulesNames := {} As Array
+  Local nCount      := 1 As Numeric
+
+  jResponse['hasIPI'] := .F.
+  jResponse['hasICMS'] := .F.
+  jResponse['calculatedValue'] := 0
+
+  If FindClass("totvs.protheus.backoffice.fiscal.tciclass.TCIWritten")
+    If __oTaxesClass == Nil
+      __oTaxesClass := totvs.protheus.backoffice.fiscal.tciclass.TCIWritten():New()
+    EndIf
+
+    __oTaxesClass:setId({cIDTribSC7})
+    __oTaxesClass:setDataItems({"regras_escrituracao"})
+    jDataTaxes:FromJson(__oTaxesClass:GetDataId())
+
+    If jDataTaxes:HasProperty('dados_Id') .And. jDataTaxes['dados_Id']:HasProperty(cIDTribSC7)
+      jRulesTaxes := jDataTaxes['dados_Id'][cIDTribSC7]
+
+      If !jRulesTaxes:HasProperty("Aviso")
+        aRulesNames := jRulesTaxes:GetNames()
+
+        For nCount := 1 to len(aRulesNames)
+          jRuleData := jRulesTaxes[aRulesNames[nCount]]
+
+          If jRuleData:HasProperty('tributo') .And. jRuleData:HasProperty('valor_tributo') .And.;
+             jRuleData:HasProperty('regras_escrituracao') .And. Valtype(jRuleData['regras_escrituracao']) $ "J|O" .And.;
+             jRuleData['regras_escrituracao']:HasProperty('acao_total_nf')
+
+            If jRuleData['tributo'] == "IPI"
+              jResponse['hasIPI'] := .T.
+            EndIf
+
+            If jRuleData['tributo'] == "ICMS"
+              jResponse['hasICMS'] := .T.
+            EndIf
+
+            If jRuleData['regras_escrituracao']['acao_total_nf'] $ "3|4"
+              jResponse['calculatedValue'] -= jRuleData["valor_tributo"]
+            EndIf
+
+            If jRuleData['regras_escrituracao']['acao_total_nf'] $ "6|7"
+              jResponse['calculatedValue'] += jRuleData["valor_tributo"]
+            EndIf
+          EndIf
+        Next nCount
+      EndIf
+    EndIf
+  EndIf
+Return jResponse
+
+/*/{Protheus.doc} InitXFilial
+  Inicializa as variaveis xFilial das tabelas envolvidas
+  @type  Static Function
+  @author Vitor Duca
+  @since 03/11/2023
+  @version 1.0
+/*/
+Static Function InitXFilial()
+  __cFilSC6    := FWxFilial("SC6")
+  __cFilSC5    := FWxFilial("SC5")
+  __cFilSE4    := FWxFilial("SE4")
+  __cFilSB1    := FWxFilial("SB1")
+  __cFilSA2    := FWxFilial("SA2")
+  __cFilSC7    := FWxFilial("SC7")
+  __cFilSD1    := FWxFilial("SD1")
+  __cFilSA1    := FWxFilial("SA1")
+  __cFilSA4    := FWxFilial("SA4")
+  __cFilSF4    := FWxFilial("SF4")
+  __cFilF76    := FWxFilial("F76")
+Return 

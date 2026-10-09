@@ -1,0 +1,432 @@
+﻿#Include "PROTHEUS.CH"
+#Include "TOTVS.CH"
+#Include 'tlpp-core.th'
+#Include 'tlpp-rest.th'
+
+#define __aCdCri158 {"087","Bloqueio de pagamento e cobranca, evento nao Autorizado."}
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlsBatchReportGet
+Endpoint GET da API REST de relatorio batch de prestadores de saude.
+Instancia a requisicao, valida os parametros e dispara o processamento.
+
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+@Get("/totvshealthplans/v1/batchReport")
+function PlsBatchReportGet()
+    local oRequest := PlsBatchReportRequest():new(oRest)
+
+    oRequest:jRequest := oRequest:oRest:getQueryRequest()
+
+    If oRequest:validate()
+        oRequest:get()
+    EndIf
+
+    oRequest:endRequest()
+
+    FreeObj(oRequest)
+    oRequest := Nil
+
+    delClassIntf()
+
+return
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlsBatchReportRequest
+Classe responsavel por validar, processar e retornar os dados do
+relatorio batch: prestador de saude, protocolo e procedimentos autorizados.
+
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Class PlsBatchReportRequest from CenRequest
+
+    Public Data oError
+    Public Data oResult
+    Public Data lSuccess As Logical
+    Public Data nStatus  As Numeric
+    Public Data aTabDup  As Array
+
+    Public Method New(oRest)
+    Public Method SetError(nStatus, cCode, cMessage, cDetailedMessage)
+    Public Method Get()
+    Public Method GetResult()
+    Public Method GetStatusCode()
+    Public Method Process()
+    Public Method validate()
+    Public Method getHealthProvider()
+    Public Method getProtocol()
+    Public Method getProcedures()
+    Public Method getGlosses()
+    Public Method existExpand()
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Metodo construtor da classe PlsBatchReportRequest.
+
+@param   oRest - Objeto contendo os parametros da requisicao REST
+@return  self  - Referencia para o objeto criado
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method New(oRest) Class PlsBatchReportRequest
+    _Super:New(oRest,'PlsBatchReportRequest',.T.)
+    self:aTabDup := {}
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} get
+Metodo principal que orquestra o processamento da requisicao,
+chamando a busca do prestador e dos protocolos.
+
+@return  Logical - .T. se o processamento ocorreu com sucesso, .F. caso contrario
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method get() Class PlsBatchReportRequest
+    self:aTabDup   := PlsBusTerDup(SuperGetMv("MV_TISSCAB", .F. ,"87"))
+    self:getHealthProvider()
+    self:getProtocol()
+    if self:lSuccess
+        self:cResponse := self:oRespBody:toJson()
+    endif
+Return self:lSuccess
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} validate
+Valida os parametros obrigatorios da requisicao: 'protocols' e 'healthProviderCode'.
+
+@return  Logical - .T. se todos os parametros sao validos, .F. caso contrario
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method validate() Class PlsBatchReportRequest
+    self:lSuccess := .T.
+
+    If self:lSuccess .And. Empty(cValToChar(self:jRequest['protocols']))
+        self:lSuccess := .F.
+        self:SetError(400, "0001", "Atributo 'protocols' nao informado", "Entre em contato com o Suporte")
+    EndIf
+
+    If self:lSuccess .And. Empty(cValToChar(self:jRequest['healthProviderCode']))
+        self:lSuccess := .F.
+        self:SetError(400, "0002", "Atributo 'healthProviderCode' nao informado", "Entre em contato com o Suporte")
+    EndIf
+
+Return self:lSuccess
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getHealthProvider
+Busca e monta os dados cadastrais do prestador de saude (BAU)
+incluindo cidade a partir da tabela de municipios (BID).
+
+@return  Logical - .T. se o prestador foi encontrado, .F. caso contrario
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method getHealthProvider() Class PlsBatchReportRequest
+    Local lSuccess  := .T.
+    Local oProvider := Nil
+
+    If self:lSuccess 
+        self:oRespBody["healthProvider"] := {}
+
+        BAU->(DbSetOrder(1))
+        If BAU->(MsSeek(xFilial("BAU") + self:jRequest['healthProviderCode']))
+            oProvider := JsonObject():New()
+
+            oProvider['name']          := AllTrim(BAU->BAU_NOME)
+            oProvider['documentNumber']:= AllTrim(BAU->BAU_CPFCGC)
+            oProvider['code']          := AllTrim(BAU->BAU_CODIGO)
+            oProvider['fantasyName']   := AllTrim(BAU->BAU_NFANTA)
+            oProvider['zipCode']       := AllTrim(BAU->BAU_CEP)
+            oProvider['address']       := AllTrim(BAU->BAU_END)
+            oProvider['addressNumber'] := AllTrim(BAU->BAU_NUMERO)
+            oProvider['neighborhood']  := AllTrim(BAU->BAU_BAIRRO)
+            oProvider['state']         := AllTrim(BAU->BAU_EST)
+
+            BID->(DbSetOrder(1))
+            If BID->(MsSeek(xFilial("BID") + AllTrim(BAU->BAU_MUN)))
+                oProvider['city'] := AllTrim(BID->BID_DESCRI)
+            EndIf
+
+            aAdd(self:oRespBody["healthProvider"], oProvider)
+        Else
+            lSuccess := .F.
+            self:SetError(400, "0003", "HealthProviderCode nao encontrado", "Entre em contato com o Suporte")
+        EndIf
+    EndIf
+
+Return lSuccess
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getProtocol
+Itera sobre os protocolos informados na requisicao, busca os dados
+na tabela BCI e aciona getProcedures para cada protocolo encontrado.
+
+@return  Logical - .T. se ao menos um protocolo foi processado, .F. caso contrario
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method getProtocol() Class PlsBatchReportRequest
+    local lSuccess      := .T.
+    local oProtocol     := Nil
+    local aProtocols    := Strtokarr2(self:jRequest['protocols'],',')
+    local nX            := 1
+    If self:lSuccess
+        self:oRespBody["protocol"] := {}
+
+        for nX := 1 to len(aProtocols)
+            BCI->(DbSetOrder(14))
+            If BCI->(MsSeek(xFilial("BCI") + AllTrim(aProtocols[nX]))) .and. BCI->BCI_CODRDA == self:jRequest['healthProviderCode']
+                oProtocol := JsonObject():New()
+
+                oProtocol['competence']         := AllTrim(BCI->BCI_MES) + "/" + AllTrim(BCI->BCI_ANO)
+                oProtocol['creationDate']       := FormataData(BCI->BCI_DTDIGI, 4)
+                oProtocol['protocol']           := AllTrim(BCI->BCI_CODPEG)
+                oProtocol['type']               := AllTrim(BCI->BCI_TIPGUI)
+                oProtocol['amount']             := BCI->BCI_QTDDIG
+                oProtocol['status']             := BCI->BCI_STTISS
+                oProtocol['statusDescription']  := X3COMBO('BCI_STTISS',BCI->BCI_STTISS)
+                oProtocol['paidValue']          := BCI->BCI_VLRGUI
+                oProtocol['disallowanceValue']  := BCI->BCI_VLRGLO
+                oProtocol['value']              := BCI->BCI_VLRGUI + BCI->BCI_VLRGLO
+                oProtocol['authorizations']     := {}
+                self:getProcedures(oProtocol)
+                aAdd(self:oRespBody["protocol"], oProtocol)
+            EndIf
+        next        
+    EndIf
+
+Return lSuccess
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getProcedures
+Consulta via SQL as guias e procedimentos autorizados vinculados ao protocolo,
+agrupando os procedimentos por guia e adicionando ao objeto oProtocol.
+
+@param   oProtocol - Objeto JSON do protocolo que recebera as autorizacoes
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method getProcedures(oProtocol) Class PlsBatchReportRequest
+    Local cSql          := ""
+    Local cAlias        := GetNextAlias()
+    Local aQryBind      := {}
+    Local oProcedure    := Nil
+    Local oAuth         := Nil
+    Local cNumGui       := ""
+    Local cCurrentNumGui:= ""
+    
+    If self:lSuccess
+
+        cSql := " SELECT BD6_VLRAPR, BD6_VLRPAG, BD6_VLRGLO, BD6_SEQUEN, "
+        cSql += " BD6_CODPEG + BD6_NUMERO AS NUMEROGUIA, BD6_CODPEG, BD6_NUMERO, "
+        cSql += " BD6_CODOPE, BD6_CODLDP, BD6_BLOPAG, BD6_MOTBPG, "
+        cSql += " BD6_OPEUSR + BD6_CODEMP + BD6_MATRIC + BD6_TIPREG + BD6_DIGITO AS MATRICULA, "
+        cSql += " BD6_NOMUSR, BD6_NOMSOL, BD6_CODPAD, BD6_CODPRO, BD6_DESPRO, BD6_QTDPRO, BD6_TIPGUI, BD6_DATPRO, "
+        cSql += " CASE WHEN BD6_TIPGUI = '05' THEN BE4.BE4_NUMIMP ELSE BD5.BD5_NUMIMP END AS NUMIMP "
+        cSql += " FROM " + RetSQLName("BD6") + " BD6 "
+        cSql += " LEFT JOIN " + RetSQLName("BD5") + " BD5 ON "
+        cSql += " BD5.BD5_FILIAL = '" + xFilial("BD5") + "' "
+        cSql += " AND BD5.BD5_CODRDA = BD6.BD6_CODRDA "
+        cSql += " AND BD5.BD5_CODPEG = BD6.BD6_CODPEG "
+        cSql += " AND BD5.BD5_NUMERO = BD6.BD6_NUMERO "
+        cSql += " AND BD5.D_E_L_E_T_ = ' ' "
+        cSql += " AND BD6.BD6_TIPGUI <> '05' "
+        cSql += " LEFT JOIN " + RetSQLName("BE4") + " BE4 ON "
+        cSql += " BE4.BE4_FILIAL = '" + xFilial("BE4") + "' "
+        cSql += " AND BE4.BE4_CODRDA = BD6.BD6_CODRDA "
+        cSql += " AND BE4.BE4_CODPEG = BD6.BD6_CODPEG "
+        cSql += " AND BE4.BE4_NUMERO = BD6.BD6_NUMERO "
+        cSql += " AND BE4.D_E_L_E_T_ = ' ' "
+        cSql += " AND BD6.BD6_TIPGUI = '05' "
+        cSql += " WHERE BD6.BD6_FILIAL = '" + xFilial("BD6") + "' "
+        cSql += " AND BD6.BD6_CODRDA = ? "
+        cSql += " AND BD6.BD6_CODPEG = ? "
+        cSql += " AND BD6.D_E_L_E_T_ = ' ' "
+        cSql += " ORDER BY NUMEROGUIA "
+
+        aAdd(aQryBind, cValToChar(self:jRequest['healthProviderCode']))
+        aAdd(aQryBind, oProtocol['protocol'])
+
+        dbUseArea(.T., "TOPCONN", TCGenQry2(NIL, NIL, PLSConSQL(cSql), aQryBind), cAlias, .F., .T.)
+
+        If !(cAlias)->(Eof())
+            cCurrentNumGui := AllTrim((cAlias)->NUMEROGUIA)
+
+            oAuth := JsonObject():New()
+            oAuth['idOnHealthInsurer'] := iif(!empty(AllTrim((cAlias)->NUMIMP)), AllTrim((cAlias)->NUMIMP), AllTrim((cAlias)->NUMEROGUIA))
+            oAuth['authorizationDate'] := SubStr((cAlias)->BD6_DATPRO, 7, 2) + "/" + SubStr((cAlias)->BD6_DATPRO, 5, 2) + "/" + SubStr((cAlias)->BD6_DATPRO, 1, 4)
+            oAuth['beneficiaryName']   := AllTrim((cAlias)->BD6_NOMUSR)
+            oAuth['subscriberId']      := AllTrim((cAlias)->MATRICULA)
+            oAuth['professional']      := AllTrim((cAlias)->BD6_NOMSOL)
+            oAuth['procedures']        := {}
+
+            Do While !(cAlias)->(Eof())
+                cNumGui := AllTrim((cAlias)->NUMEROGUIA)
+
+                If cNumGui != cCurrentNumGui
+                    aAdd(oProtocol["authorizations"], oAuth)
+
+                    oAuth := JsonObject():New()
+                    oAuth['idOnHealthInsurer'] := iif(!empty(AllTrim((cAlias)->NUMIMP)), AllTrim((cAlias)->NUMIMP), AllTrim((cAlias)->NUMEROGUIA))
+                    oAuth['authorizationDate'] := SubStr((cAlias)->BD6_DATPRO, 7, 2) + "/" + SubStr((cAlias)->BD6_DATPRO, 5, 2) + "/" + SubStr((cAlias)->BD6_DATPRO, 1, 4)
+                    oAuth['beneficiaryName']   := AllTrim((cAlias)->BD6_NOMUSR)
+                    oAuth['subscriberId']      := AllTrim((cAlias)->MATRICULA)
+                    oAuth['professional']      := AllTrim((cAlias)->BD6_NOMSOL)
+                    oAuth['procedures']        := {}
+
+                    cCurrentNumGui := cNumGui
+                EndIf
+
+                oProcedure := JsonObject():New()
+                oProcedure['sequential']            := AllTrim((cAlias)->BD6_SEQUEN)
+                cCodTabela 	                        := PLSGETVINC("BTU_CDTERM", "BR4", .F., "87",  AllTrim((cAlias)->BD6_CODPAD),.T.)
+                cCodProc 	                        := PLSGETVINC("BTU_CDTERM", "BR8", .F., AllTrim((cAlias)->BD6_CODPAD), AllTrim((cAlias)->BD6_CODPAD)+AllTrim((cAlias)->BD6_CODPRO), .F. ,self:aTabDup, @cCodTabela, .t.)
+                oProcedure['tableCode']             := cCodTabela
+                oProcedure['procedureCode']         := cCodProc
+                oProcedure['procedureDescription']  := AllTrim((cAlias)->BD6_DESPRO)
+                oProcedure['quantity']              := (cAlias)->BD6_QTDPRO
+                oProcedure['paidValue']             := (cAlias)->BD6_VLRPAG
+                oProcedure['glossedValue']          := (cAlias)->BD6_VLRGLO
+                oProcedure['glosses']               := {}
+
+                If (cAlias)->BD6_VLRGLO > 0
+                    self:getGlosses(cAlias, oProcedure)
+                EndIf
+
+                aAdd(oAuth['procedures'], oProcedure)
+
+                (cAlias)->(DbSkip())
+            EndDo
+
+            aAdd(oProtocol["authorizations"], oAuth)
+        EndIf
+
+        (cAlias)->(DbCloseArea())
+    EndIf
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getGlosses
+Consulta os codigos de glosa vinculados a um procedimento (BDX) e
+preenche o array 'glosses' do objeto oProcedure. Trata tambem o caso
+de bloqueio de pagamento sem registro em BDX (BD6_BLOPAG = '1').
+
+@param   cAliasEV   - Alias da query de procedimentos (BD6)
+@param   oProcedure - Objeto JSON do procedimento que recebera as glosas
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method getGlosses(cAliasEV, oProcedure) Class PlsBatchReportRequest
+    Local cAliasBDX := GetNextAlias()
+    Local aQryBind  := {}
+    Local cSql      := ""
+    Local oGloss    := Nil
+    Local cCode     := ""
+    Local cDesc     := ""
+
+    cSql := " SELECT BDX_CODGLO, BDX_RESPAL, BDX_CODOPE FROM " + RetSQLName("BDX") + " BDX "
+    cSql += " WHERE BDX_FILIAL = '" + xFilial("BDX") + "' "
+    cSql += " AND BDX_CODOPE = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_CODOPE))
+    cSql += " AND BDX_CODLDP = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_CODLDP))
+    cSql += " AND BDX_CODPEG = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_CODPEG))
+    cSql += " AND BDX_NUMERO = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_NUMERO))
+    cSql += " AND BDX_CODPAD = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_CODPAD))
+    cSql += " AND BDX_CODPRO = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_CODPRO))
+    cSql += " AND BDX_SEQUEN = ? "
+    aAdd(aQryBind, AllTrim((cAliasEV)->BD6_SEQUEN))
+    cSql += " AND BDX_TIPREG = '1' "
+    cSql += " AND BDX_ACAO <> '2' "
+    cSql += " AND BDX.D_E_L_E_T_ = ' ' "
+
+    dbUseArea(.T., "TOPCONN", TCGenQry2(NIL, NIL, PLSConSQL(cSql), aQryBind), cAliasBDX, .F., .T.)
+
+    If (cAliasBDX)->(Eof()) .And. AllTrim((cAliasEV)->BD6_BLOPAG) == '1'
+        oGloss := JsonObject():New()
+        cCode  := deParaSimpl("38", ifPls(AllTrim((cAliasEV)->BD6_MOTBPG), __aCdCri158[1]), "BCT", Nil, Nil, Nil, AllTrim((cAliasEV)->BD6_CODOPE))
+        cDesc  := descTissSp("38", cCode)
+        oGloss['code']        := cCode
+        oGloss['description'] := cDesc
+        oGloss['observation'] := ""
+        If aScan(oProcedure['glosses'], {|o| o['code'] == cCode}) == 0
+            aAdd(oProcedure['glosses'], oGloss)
+        EndIf
+    EndIf
+
+    While !(cAliasBDX)->(Eof())
+        oGloss := JsonObject():New()
+        cCode  := deParaSimpl("38", AllTrim((cAliasBDX)->BDX_CODGLO), "BCT", Nil, Nil, Nil, AllTrim((cAliasBDX)->BDX_CODOPE))
+        cDesc  := descTissSp("38", cCode)
+        oGloss['code']        := cCode
+        oGloss['description'] := cDesc
+        oGloss['observation'] := AllTrim((cAliasBDX)->BDX_RESPAL)
+        If aScan(oProcedure['glosses'], {|o| o['code'] == cCode}) == 0
+            aAdd(oProcedure['glosses'], oGloss)
+        EndIf
+        (cAliasBDX)->(DbSkip())
+    EndDo
+
+    (cAliasBDX)->(DbCloseArea())
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SetError
+Define o erro da requisicao, preenchendo o objeto oError e marcando lSuccess como .F.
+
+@param   nStatus          - Codigo de status HTTP (ex: 400, 404, 500)
+@param   cCode            - Codigo interno de erro
+@param   cMessage         - Mensagem resumida do erro
+@param   cDetailedMessage - Mensagem detalhada para suporte
+@author  Lucas Nonato
+@version P12
+@since   17/03/2026
+/*/
+//-------------------------------------------------------------------
+Method SetError(nStatus, cCode, cMessage, cDetailedMessage) Class PlsBatchReportRequest
+
+    Default nStatus          := 400
+    Default cCode            := '0000'
+    Default cMessage         := 'Bad Request'
+    Default cDetailedMessage := 'O servidor nao foi capaz de entender a solicitacao'
+
+    self:nStatus        := nStatus
+    self:nFault         := nStatus
+    self:cFaultDesc     :=  cCode + '-' + cMessage
+    self:cFaultDetail   := cDetailedMessage
+
+    self:lSuccess := .F.
+
+Return

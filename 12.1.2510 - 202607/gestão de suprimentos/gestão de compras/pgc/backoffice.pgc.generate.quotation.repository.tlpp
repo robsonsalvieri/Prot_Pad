@@ -1,0 +1,1475 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "FWMVCDEF.CH"
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#include 'BACKOFFICE.PGC.GENERATE.QUOTATION.REPOSITORY.CH'
+
+namespace pgc.generateQuotationRepository
+using namespace pgc.utils
+using namespace pgc.utilsRepository
+using namespace pgc.workflowRepository
+
+/*/{Protheus.doc} pgcGenerateQuotationRepository
+	Classe repository para o serviço de geração da cotação
+@author juan.felipe
+@since 26/04/2022
+/*/
+Class pgcGenerateQuotationRepository FROM FWAdapterBaseV2
+    public Data lOk As Logical
+    public Data oJsonRequest As Object
+    
+    public Method New()
+    public Method Get()
+    public Method postAgglutinateQuotation()
+    public Method postGenerateQuotation()
+    public Method postCentralizedRequestMigration()
+    public Method postExecAuto()
+    private Method supplierBinding()
+    private Method addRequestsRecno()
+    private Method validadePropertiesExecAuto()
+    private Method validateProposals()
+    private Method loadDataExecAuto()
+    private Method countSuppliers()
+    private Method validateDuplicatedRequests()
+    private Method agglutinateProposals()
+    private Method getSuppliersExecAuto()
+EndClass
+
+
+/*/{Protheus.doc} New
+	Método construtor
+@author juan.felipe
+@since 26/04/2022
+/*/
+Method New(cVerb) Class pgcGenerateQuotationRepository
+    Default cVerb := "GET"
+
+    Self:lOk := .F.
+
+    _Super:New(cVerb, .T.)
+Return Self
+
+/*/{Protheus.doc} postAgglutinateQuotation
+	Aglutina itens da cotação.
+@author juan.felipe
+@since 22/08/2022
+@param cQuotationCode, character, código da cotação.
+@param cSelfor, character, indica se o MV_SELFOR está ativado.
+@return oJsonRet, object, Json de resposta.
+/*/
+Method postAgglutinateQuotation(cQuotationCode, cSelfor) Class pgcGenerateQuotationRepository
+    Local aAreas As Array
+    Local aItems As Array
+    Local aItemsRequest As Array
+    Local aInvalidItems As Array
+    Local aNamesJson As Array
+    Local aPurchaseRequests As Array
+    Local aSuppliers As Array
+    Local bBreaking As CodeBlock
+    Local cBreaking As Character
+    Local cItem As Character
+    Local cProduct As Character 
+    Local cGridItem As Character
+    Local cRequestCode As Character
+    Local cNameJson As Character
+    Local cErrorMessage As Character
+    Local cObsAux As Character
+    Local cObservation As Character
+    Local lBreaking As Logical
+    Local lOk As Logical
+	Local lSelFor As Logical
+    Local lBinding As Logical
+    Local nAux As Numeric
+    Local nLen As Numeric
+    Local nX As Numeric
+    Local nY AS Numeric
+    Local nQuantity As Numeric
+    Local nQuantitySecond As Numeric
+    Local nBindingType As Numeric
+    Local oJsonRet As Object
+    Local oUtils As Object
+	local cBranch as character
+    Local cNoteSupplier As Character
+    local lCentralized as logical
+    local lExsBeAggroup as logical
+    local lHasNoteSupplier as logical
+    Local lA131QSc As Logical
+    local bBreakingPE As CodeBlock
+    Default cQuotationCode := ''
+	Default cSelfor := ''
+
+	Private lMsErroAuto := .F.
+    Private lMsHelpAuto := .T.
+    Private lAutoErrNoFile := .T.
+    
+    A131SetPGC(.T., Nil)
+
+    aAreas := {SC1->(GetArea()), GetArea()}
+    aItems := {}
+    aNamesJson := {}
+    aItemsRequest := Self:oJsonRequest['items']
+    aInvalidItems := {}
+    aPurchaseRequests := {}
+    aSuppliers := {}
+    bBreaking := A131Quebra() //-- Retorna bloco de código para realização da quebra do item
+    cBreaking := ''
+    cErrorMessage := ''
+    cObservation := ''
+    cObsAux := ''
+    lOk := !Empty(cQuotationCode)
+    lSelFor  := SuperGetMv("MV_SELFOR",.F.,"N") == "S"
+    lA131QSc := ExistBlock("MA131QSC")
+
+    If !Empty(cSelfor)
+        lSelFor := cSelfor == "true"
+    EndIf
+
+    lBinding := .F.
+    nAux := 0
+    nQuantity := 0
+    nQuantitySecond := 0
+    nBindingType := 1
+    oJsonRet := JsonObject():New()
+    oUtils := pgcUtils():New()
+    Self:oJsonRequest['mv_selfor'] := lSelFor //-- Adiciona propriedade mv_selfor
+	cBranch := ""
+    lExsBeAggroup := .f.
+
+    If Self:oJsonRequest:HasProperty('bindingtype')
+        nBindingType := Val(Self:oJsonRequest['bindingtype'])
+    EndIf
+
+    aSort(aItemsRequest,,,; //-- Ordena array dos itens da SC para que caso haja itens para aglutinação a mesma seja executada corretamente
+        {|x,y|;
+            x['c1_produto'] + x['c1_datprf'] + x['c1_cc'] + x['c1_conta'] + x['c1_itemcta'] + x['c1_clvl'];
+            < y['c1_produto'] + y['c1_datprf'] + y['c1_cc'] + y['c1_conta'] + y['c1_itemcta'] + y['c1_clvl'];
+        }) 
+
+    aNamesJson := Self:oJsonRequest:GetNames()
+
+    For nX := 1 To Len(aNamesJson) //-- Copia cabeçalho do JSON da requisição para o novo JSON formatado
+        cNameJson := aNamesJson[nX]
+        oJsonRet[cNameJson] := Self:oJsonRequest[cNameJson]
+    Next nX
+
+    dbSelectArea('SC1')
+    SC1->(dbSetOrder(1)) //-- C1_FILIAL+C1_NUM+C1_ITEM+C1_ITEMGRD
+
+    For nX := 1 To Len(aItemsRequest)
+        cRequestCode := PadR(aItemsRequest[nX]['c1_num'], Len(SC1->C1_NUM), ' ')
+        cItem := PadR(aItemsRequest[nX]['c1_item'], Len(SC1->C1_ITEM), ' ')
+        cProduct  := PadR(aItemsRequest[nX]['c1_produto'], Len(SC1->C1_PRODUTO), ' ')
+        cGridItem := PadR(aItemsRequest[nX]['c1_itemgrd'], Len(SC1->C1_ITEMGRD), ' ')
+        cBranch := PadR(iif( aItemsRequest[nX]:hasproperty('centralizedpurchase'), xFilial("SC1", aItemsRequest[nX]['c1_filial']),  xFilial("SC1")), Len(SC1->C1_FILIAL), ' ')
+        lExsBeAggroup := iif( aItemsRequest[nX]:hasproperty('beaggroup'), .t., .f.) //se existe a propriedade beaggroup, indicando que veio da centralização NFC
+        lCentralized := iif(lExsBeAggroup, .f., .t.) //Sempre que vier da centralização NFC, não vai agrupar aqui, usado apenas para validar. Agrupar é depois.
+
+        If SC1->(MsSeek(cBranch + cRequestCode + cItem + cGridItem))
+            aItemsRequest[nX]['requestrecno'] := SC1->(Recno()) //-- Adiciona RECNO na solicitação de compra
+            bBreaking := A131Quebra(lCentralized)
+
+            If lA131QSc
+                bBreakingPE := ExecBlock("MA131QSC",.F.,.F.,{bBreaking})
+
+                If ValType(bBreakingPE) == "B"
+                    bBreaking := bBreakingPE
+                Endif
+            Endif
+
+            lBreaking := cBreaking <> Eval(bBreaking) //-- Avalia quebra do item
+
+            //Se vier da centralização, vai existir a propriedade beaggroup, indicando que não deve agrupar, mesmo que filial, produto e etc sejam iguais.
+            if lExsBeAggroup .and. !lBreaking
+                lBreaking := .t.
+            endif
+
+            If lOk .And. lBreaking .And. nAux >= 1 .And. !aItems[nAux]:HasProperty("purchaserequests") //-- Adiciona solicitações de compra referentes ao item da cotação
+                aItems[nAux]['purchaserequests'] := aClone(aPurchaseRequests)
+                aSort(aItems[nAux]['purchaserequests'],,,{|x,y| x['c1_num'] < y['c1_num']})
+                aPurchaseRequests := {}
+            EndIf
+
+            If Empty(cQuotationCode)
+                MSExecAuto({|| A131VlItCot()}) //-- Executa função de validação com ExecAuto para ser possível obeter as mensagens de help
+                lOk := !lMsErroAuto
+            EndIf
+
+            aSuppliers := {}
+            lBinding := .F.
+
+            If !lSelFor .And. lOk
+                If lOk := A131Binding(nBindingType, SC1->(Recno()), @aSuppliers, @cErrorMessage) .And. Len(aSuppliers) > 0 //-- Valida e retorna os fornecedores da amarração
+                    lBinding := .T.
+                EndIf
+            ElseIf !lOk
+                cErrorMessage := oUtils:getMessageExecAuto()
+            EndIf
+
+            If lOk //-- Valida se o item vai ser incluso na cotação
+                If lBreaking //-- Quebra linha do item
+                    nAux ++
+                    aNamesJson := aItemsRequest[nX]:GetNames()
+                    Aadd(aItems, JsonObject():New())
+
+                    //-- Preenche cabeçalho do item
+                    For nY := 1 To Len(aNamesJson) //-- Copia o Json de solicitações de compra para o novo array de items
+                        cNameJson := aNamesJson[nY]
+                        aItems[nAux][cNameJson] := aItemsRequest[nX][cNameJson]
+                    Next nY
+                    
+                    If !aItems[nAux]:HasProperty('notesupplier')
+					    aItems[nAux]['notesupplier'] := ""
+                    EndIf
+					aItems[nAux]['hasinvaliditem'] := .F.
+					aItems[nAux]['suppliers'] := {}
+					nQuantity := 0
+                    nQuantitySecond := 0
+
+                    If lBinding
+                        Self:supplierBinding(aItems[nAux], aSuppliers, cQuotationCode, cProduct) //-- Adiciona fornecedores da amarração no item da SC
+                    EndIf
+                EndIf
+
+                //-- Preenche quantidades
+                If Empty(SC1->C1_ITEMGRD)
+                    nQuantity       += (aItemsRequest[nX]['c1_quant'] - SC1->C1_QUJE)
+                    nQuantitySecond += aItemsRequest[nX]['c1_qtsegum']
+                Else
+                    nQuantity       := SC1->C1_QUANT - SC1->C1_QUJE
+                    nQuantitySecond := SC1->C1_QTSEGUM
+                EndIf
+
+                aItems[nAux]['c1_quant'] := nQuantity
+                aItems[nAux]['c1_qtsegum'] := nQuantitySecond
+
+                If aItemsRequest[nX]:HasProperty('proposals')
+                    aItems[nAux]['proposals'] := aItemsRequest[nX]['proposals']
+                EndIf
+
+                Aadd(aPurchaseRequests, JsonObject():New())
+
+                nLen := Len(aPurchaseRequests)
+				aNamesJson := aItemsRequest[nX]:GetNames()
+
+                For nY := 1 To Len(aNamesJson) //-- Copia o Json de solicitações de compra para adicionar na propriedade purchaserequests
+                    cNameJson := aNamesJson[nY]
+                    aPurchaseRequests[nLen][cNameJson] := aItemsRequest[nX][cNameJson]
+                Next nY
+            
+                If nX == Len(aItemsRequest) .And. !aItems[nAux]:HasProperty("purchaserequests") //-- Adiciona solicitações de compra referentes ao item da cotação
+                    aItems[nAux]['purchaserequests'] := aClone(aPurchaseRequests)
+                    aSort(aItems[nAux]['purchaserequests'],,,{|x,y| x['c1_num'] < y['c1_num']})
+                EndIf
+            Else
+                Aadd(aInvalidItems, JsonObject():New())
+                nLen := Len(aInvalidItems)
+
+                aInvalidItems[nLen] := aItemsRequest[nX]
+                aInvalidItems[nLen]['errormessage'] := cErrorMessage
+
+                lMsErroAuto := .F.
+            EndIf
+
+            dbSelectArea('SC1') //-- Define area novamente para evitar error.log no bloco de código
+            cBreaking := Eval(bBreaking)
+        EndIf
+    Next nX
+
+    For nX := 1 To Len(aItems) //-- Aglutina obervações das SCs
+        cObservation := ''
+
+        For nY := 1 To Len(aItems[nX]['purchaserequests'])
+            cObsAux := AllTrim(aItems[nX]['purchaserequests'][nY]['c1_obs'])
+            lHasNoteSupplier := aItems[nX]['purchaserequests'][nY]:HasProperty('notesupplier')
+
+            If Len(aItems[nX]['purchaserequests']) > 1
+                If !Empty(cObsAux)
+                    cRequestCode := AllTrim(aItems[nX]['purchaserequests'][nY]['c1_num'])
+                    cItem := AllTrim(aItems[nX]['purchaserequests'][nY]['c1_item'])
+                    
+                    cObsAux := cRequestCode + '-' + cItem + ': ' + cObsAux
+
+                    If !Empty(cObservation)
+                        cObservation += CRLF + cObsAux
+                    Else
+                        cObservation := cObsAux
+                    EndIf
+                Else
+                    cObservation := cObsAux
+                EndIf
+
+                If lHasNoteSupplier
+                    If !Empty(cNoteSupplier)
+                        cNoteSupplier += CRLF + AllTrim(aItems[nX]['purchaserequests'][nY]['notesupplier'])
+                    Else
+                        cNoteSupplier := AllTrim(aItems[nX]['purchaserequests'][nY]['notesupplier']) + ' '
+                    EndIf
+                EndIf
+
+                If aItems[nX]:HasProperty('proposals')
+                    Self:agglutinateProposals(aItems[nX])
+                EndIf
+			Else
+				cObservation := cObsAux
+            EndIf
+        Next nY
+
+        aItems[nX]['c1_obs'] := cObservation
+
+        If aItems[nX]:HasProperty('notesupplier') .And. !Empty(cNoteSupplier)
+            aItems[nX]['notesupplier'] := cNoteSupplier
+        EndIf
+    Next nX
+
+    oJsonRet['items'] := aItems
+    oJsonRet['invaliditems'] := aInvalidItems
+    
+    FwFreeArray(aSuppliers)
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FreeObj(oUtils)
+Return oJsonRet
+
+/*/{Protheus.doc} postGenerateQuotation
+	Gera cotação.
+@author juan.felipe
+@since 26/04/2022
+@param cQuotationCode, character, código da cotação.
+@param cSelfor, character, indica se o MV_SELFOR está ativado.
+@return oJsonRet, object, Json de resposta.
+/*/
+Method postGenerateQuotation(cQuotationCode, cSelfor) Class pgcGenerateQuotationRepository
+    Local aAreas As Array
+    Local aError As Array
+    Local aItems As Array
+    Local aProposals As Array
+    Local aItemsRequest As Array
+    Local aInvalidSuppliers As Array
+    Local cItem As Character
+    Local cGridError As Character
+    Local cRoutine As Character
+    Local cIdMetricItems As Character
+    Local cIdMetricSuppliers As Character
+    Local cBindingType As Character
+    Local cMessage As Character
+    Local cSupplier As Character
+    Local cStore As Character
+    Local cCompanyName As Character
+    Local lNoValidItems As Logical
+    Local lSelFor As Logical
+    Local lNewSupplierBinding As Logical
+    Local lNotFound As Logical
+    Local nX As Numeric
+    Local nY As Numeric
+    Local nLenItems As Numeric
+    Local nLenProposals As Numeric
+    Local nLenSuppliers As Numeric
+    Local nLenInvalid As Numeric
+    Local nOperation As Numeric
+    Local nCode As Numeric
+    Local nNumberSuppliersAux As Numeric
+    Local oModel As Object
+    Local oModelDHU As Object
+    Local oModelDHV As Object
+    Local oJsonRet As Object
+    Local oUtils As Object
+	local cBranch as character
+    Default cQuotationCode := ''
+    Default cSelfor := ''
+
+    PRIVATE aRotina   := {} //-- Variáveis privadas da rotina MATA131
+    PRIVATE aRecMark  := {}
+    PRIVATE cQuerySC1 := ""
+    PRIVATE cCadastro := ""
+    PRIVATE cMarca    := ""
+    PRIVATE lInverte  := .F.
+    PRIVATE lMultCot  := .F.
+
+    aAreas             := {DHU->(GetArea()), DHV->(GetArea()), SC1->(GetArea()), SC8->(GetArea()), GetArea()}
+    aError             := {}
+    aInvalidSuppliers  := {}
+    cGridError         := ""
+    cItem              := PadL("1", Len(DHV->DHV_ITEM),"0")
+    cRoutine           := 'backoffice.pgc.generate.quotation.repository'
+    cSubRoutine        := 'postGenerateQuotation'
+    cIdMetricItems     := 'compras-protheus_media-de-itens-de-cotacao_average'
+    cIdMetricSuppliers := 'compras-protheus_media-de-fornecedores-da-cotacao_average'
+    cBindingType       := '1'
+    lNoValidItems      := .F.
+    lSelFor            := SuperGetMv('MV_SELFOR',.F.,'N') == 'S'
+    lNewSupplierBinding:= !Empty(cQuotationCode)
+    nX                 := 1
+    nLenInvalid        := 0
+    oJsonRet           := JsonObject():New()
+    oUtils             := pgcUtils():New()
+    Self:lOk           := .T.
+	cBranch            := ""
+    lNotFound          := .F.
+    nNumberSuppliersAux:= Self:oJsonRequest:numberSuppliers
+
+    If AttIsMemberOf(Self:oJsonRequest, 'newSupplierBinding')
+        Self:oJsonRequest:newSupplierBinding := lNewSupplierBinding
+    EndIf
+
+    If !Empty(cSelfor)
+        lSelFor := cSelfor == "true"
+    EndIf
+
+    If lNewSupplierBinding
+        DHU->(dbSetOrder(1)) //-- DHU_FILIAL+DHU_NUM
+        
+        nOperation := MODEL_OPERATION_UPDATE
+        Self:lOk := DHU->(MsSeek(FWxFilial('DHU') + cQuotationCode))
+        Self:oJsonRequest:numberSuppliers += NFCQtSuppliers(cQuotationCode)
+        lNotFound := !Self:lOk
+        PG020SetOp(12)
+    Else
+        nOperation := MODEL_OPERATION_INSERT
+        PG020SetOp(nOperation)
+    EndIf
+
+    oModel := FWLoadModel("PGCA020")
+    oModel:SetOperation(nOperation)
+    oModel:Activate()
+
+    oModelDHU := oModel:GetModel("DHUMASTER")
+    oModelDHV := oModel:GetModel("DHVDETAIL")
+
+    aItems := Self:oJsonRequest:items
+    if ( len(aItems) > 0 )
+        //Se diferente, veio da Compra Centralizada
+        if (aItems[1]['c1_filial'] != aItems[nX]['c1_filent'])
+            cBranch := aItems[nX]['c1_filial']
+        endif
+    endif
+
+    If !lNewSupplierBinding
+		dbSelectArea('DHU')
+
+        // DHU_NUM é preenchido pelo inicializador padrão
+        oModelDHU:SetValue("DHU_AGPCOT", FwCutOff(Upper(Self:oJsonRequest:quoteGroupNickname),.T.)) //-- Grava sem acentos e deixa em maiúsculo
+        oModelDHU:SetValue("DHU_TPDOC" , Self:oJsonRequest:documentType)
+        oModelDHU:SetValue("DHU_AVAVEN", Self:oJsonRequest:evaluatesUnsuccessfulProposal)
+        oModelDHU:SetValue("DHU_STATUS", Self:oJsonRequest:status)
+        oModelDHU:SetValue("DHU_DTEMIS", SToD(Self:oJsonRequest:emissionDate))
+        oModelDHU:SetValue("DHU_DTRCOT", SToD(Self:oJsonRequest:receiptQuote))
+        oModelDHU:SetValue("DHU_QTDPRO", Self:oJsonRequest:numberProducts)
+
+		if DHU->(FieldPos('DHU_ENTREG')) > 0 .and. AttIsMemberOf(Self:oJsonRequest, 'fisicalplacedelivery')
+			oModelDHU:SetValue("DHU_ENTREG", Self:oJsonRequest:fisicalplacedelivery)
+		endif
+
+		If DHU->(FieldPos('DHU_TPAMR')) > 0
+			If !lSelFor
+				If AttIsMemberOf(Self:oJsonRequest, 'bindingtype')
+					cBindingType := Self:oJsonRequest:bindingtype
+				EndIf
+			Else
+				cBindingType := '4'
+			EndIf
+
+			oModelDHU:SetValue("DHU_TPAMR" , cBindingType)
+		EndIf
+
+		if DHU->(FieldPos('DHU_COMPRA')) > 0
+			oModelDHU:SetValue("DHU_COMPRA", upper(Self:oJsonRequest:purchaser))
+		endif
+
+		if DHU->(FieldPos('DHU_CODCOM')) > 0
+			oModelDHU:SetValue("DHU_CODCOM", Self:oJsonRequest:purchaserCode)
+		endif
+
+		Self:lOk := !oModel:HasErrorMessage()
+    EndIf
+
+    If Self:lOk
+        SC1->(dbSetOrder(1)) //-- C1_FILIAL+C1_NUM+C1_ITEM+C1_ITEMGRD
+        aItems := Self:oJsonRequest:items
+        nLenItems := Len(aItems)
+        Self:addRequestsRecno(cBranch)
+        
+        While nX <= nLenItems .And. !lNewSupplierBinding
+            aItemsRequest := aItems[nX]:purchaserequests
+
+            If nX == 1 //-- Obtém quantidades de fornecedores para envio das métricas
+                nLenSuppliers := Len(aItems[nX]:proposals)
+            EndIf
+
+            If !aItems[nX]:hasinvaliditem //-- Verifica se possui itens inválidos
+                If oModelDHV:IsUpdated()
+                    oModelDHV:AddLine()
+                    cItem := Soma1(cItem)
+                EndIf
+
+                oModelDHV:SetValue("DHV_NUM"   , oModelDHU:GetValue('DHU_NUM'))
+                oModelDHV:SetValue("DHV_ITEM"  , cItem)
+                oModelDHV:SetValue("DHV_CODPRO", aItems[nX]:c1_produto)
+                oModelDHV:SetValue("DHV_QUANT" , aItems[nX]:c1_quant)
+                oModelDHV:SetValue("DHV_SALDO" , aItems[nX]:c1_quant)
+                oModelDHV:SetValue("DHV_UM"    , aItems[nX]:c1_um)
+                oModelDHV:SetValue("DHV_GRADE" , aItems[nX]:c1_grade)
+                oModelDHV:SetValue("DHV_ITGRD" , aItems[nX]:c1_itemgrd)
+                oModelDHV:SetValue("DHV_SEGUM" , aItems[nX]:c1_segum)
+                oModelDHV:SetValue("DHV_QSEGUM", aItems[nX]:c1_qtsegum)
+                oModelDHV:SetValue("DHV_DATPRF", SToD(aItems[nX]:c1_datprf))
+
+                Self:lOk := !oModel:HasErrorMessage()
+
+                If !Self:lOk
+                    cGridError := STR0002 + AllTrim(aItems[nX]:c1_produto) //-- Erro no produto XXX.
+                    Self:lOk := .F.
+                    Exit
+                EndIf
+
+                nX ++
+            Else
+                aDel(aItems, nX) //-- Remove item inválido para que não seja processado
+                aSize(aItems, Len(aItems)-1)
+                nLenItems := Len(aItems)
+
+                If nLenItems == 0
+                    Self:lOk := .F.
+                    lNoValidItems := .T.
+                EndIf
+            EndIf
+        EndDo
+
+        If lNewSupplierBinding
+            SC8->(DbSetOrder(3)) //-- C8_FILIAL+C8_NUM+C8_PRODUTO+C8_FORNECE+C8_LOJA
+            
+            nLenItems := Len(aItems)
+            nX := 1
+
+            While nX <= nLenItems //-- Validação de fornecedores já utilizados na cotação
+                If AttIsMemberOf(aItems[nX], 'proposals')
+                    aProposals := aItems[nX]:proposals
+                    nLenProposals := Len(aProposals)
+                    cProduct := aItems[nX]:C1_PRODUTO
+
+                    nY := 1
+
+                    While nY <= nLenProposals
+                        cSupplier    := aProposals[nY]:suppliercode
+                        cStore       := aProposals[nY]:store
+                        cCompanyName := aProposals[nY]:companyname
+                        
+                        If SC8->(MsSeek(FWxFilial('SC8') + cQuotationCode + PadR(cProduct, TamSX3("C8_PRODUTO")[1]) + cSupplier + cStore))
+                            If nLenInvalid == 0 .Or. aScan(aInvalidSuppliers, {|x| cProduct + x['suppliercode'] + x['store'] + x['companyname'] == cProduct + cSupplier + cStore + cCompanyName}) == 0 //-- Não deve repetir fornecedor no array
+                                aAdd(aInvalidSuppliers, JsonObject():New())
+
+                                nLenInvalid := Len(aInvalidSuppliers)
+                                aInvalidSuppliers[nLenInvalid]['suppliercode'] := cSupplier
+                                aInvalidSuppliers[nLenInvalid]['store']        := cStore
+                                aInvalidSuppliers[nLenInvalid]['companyname']  := cCompanyName
+                                Self:oJsonRequest:numberSuppliers -= 1
+                            EndIf
+
+                            aDel(aProposals, nY) //-- Remove item inválido para que não seja processado
+                            aSize(aProposals, Len(aProposals)-1)
+                            nLenProposals := Len(aProposals)
+                        Else
+                            nY ++
+                        EndIf
+                    EndDo
+                    nX ++
+                Else
+                    aDel(aItems, nX) //-- Remove item inválido para que não seja processado
+                    aSize(aItems, Len(aItems)-1)
+                    nLenItems := Len(aItems)
+                EndIf
+            EndDo
+
+
+            If nNumberSuppliersAux == Len(aInvalidSuppliers)
+                cMessage := STR0006 //-- Os fornecedores selecionados já foram utilizados na cotação.
+                Self:lOk := .F.
+            EndIf
+        EndIf
+        
+		If Self:lOk
+            oModelDHU:SetValue("DHU_QTDFOR", Self:oJsonRequest:numberSuppliers)
+
+			A131SetPGC(.T., Self:oJsonRequest)
+			A131Proces()
+
+			If Self:lOk := Self:lOk .And. oModel:VldData() .And. !oModel:HasErrorMessage()
+				Self:lOk := oModel:CommitData()
+
+                If Self:lOk .And. !lNewSupplierBinding//-- Realiza envio de métricas
+                    oUtils:addMetric(cRoutine, cSubRoutine, cIdMetricItems, nLenItems)
+                    oUtils:addMetric(cRoutine, cSubRoutine, cIdMetricSuppliers, nLenSuppliers)
+                EndIf
+			EndIf
+		EndIf
+    EndIf
+
+    If Self:lOk
+        cQuotationCode := AllTrim(oModelDHU:GetValue('DHU_NUM'))
+        
+        If !lNewSupplierBinding
+           cMessage := STR0003 + cQuotationCode + STR0004 //-- Cotação XXX gravada com sucesso.
+        Else
+            cMessage := STR0007 //-- Novos participantes gravados com sucesso.
+        EndIf
+    ElseIf !Self:lOk .And. lNoValidItems
+        cMessage := STR0005 //-- Não há itens válidos para geração da cotação.
+    ElseIf lNewSupplierBinding .And. lNotFound
+        cMessage := STR0008 + cQuotationCode + STR0009 //-- A cotação XXX não foi localizada na base de dados.
+    EndIf
+
+    nCode := Iif(Self:lOk, 200, 400)
+    oJsonRet := oUtils:setClassResponse(nCode, cMessage, oModel) //-- Retorna mensagem da classe no formato json.
+
+    If Self:lOk
+        oJsonRet['quotationCode'] := cQuotationCode
+    Else
+        oModel:CancelData() //-- Cancela inclusão de dados no modelo
+    EndIf
+
+    oJsonRet['warningMessage'] := ''
+
+    If Len(aInvalidSuppliers) > 0
+        oJsonRet['warningMessage'] := STR0011 //-- Existem participantes já inclusos nesta cotação, apenas os novos participantes foram considerados na gravação.
+    EndIf
+
+    oModel:DeActivate()
+    FreeObj(oUtils)
+
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FwFreeArray(aInvalidSuppliers)
+Return oJsonRet
+
+/*/{Protheus.doc} supplierBinding
+	Consulta fornecedores da amarração Produto/Grupo x Fornecedores e adiciona.
+@author juan.felipe
+@since 23/11/2023
+@param oJsonRequests, object, objeto json com os dados das solicitações.
+@param aSuppliers, array, fornecedores da amarração de Produto/Grupo x Fornecedores.
+@param cQuotationCode, character, código da cotação.
+@return Nil, nulo.
+/*/
+Method supplierBinding(oJsonRequest, aSuppliers, cQuotationCode, cProduct) Class pgcGenerateQuotationRepository
+    Local aAreas As Array
+    Local aSupAux As Array
+    Local cRet As Character
+    Local cAliasSA2 As Character
+    Local cQuery As Character
+    Local cSupplier As Character
+    Local cStore As Character
+    Local lOracle As Logical
+    Local nX As Numeric
+    Local nPosSupCode As Numeric
+    Local nPosStore As Numeric
+    Local nLenSup AS Numeric
+    Local nLoop AS Numeric
+    Local oQuery As Object
+    Default oJsonRequest := JsonObject():New()
+    Default aSuppliers := {}
+    Default cQuotationCode := ''
+    Default cProduct := ''
+
+    aAreas := {SC8->(GetArea()), GetArea()}
+    aSupAux := {}
+    cRet := ''
+    nLoop := 1
+    nPosSupCode := 1
+    nPosStore := 2
+    nLenSup := Len(aSuppliers)
+    lOracle := Upper(Alltrim(TcGetDb())) == "ORACLE"
+    cSupplier := ''
+    cStore := ''
+
+    A131SetPGC(.T., Nil)
+
+    cQuery := "SELECT "
+    cQuery += "     A2_FILIAL,"
+    cQuery += "     A2_COD,"
+    cQuery += "     A2_LOJA,"
+    cQuery += "     A2_NOME,"
+    cQuery += "     A2_NREDUZ,"
+    cQuery += "     A2_END,"
+    cQuery += "     A2_BAIRRO,"
+    cQuery += "     A2_EST,"
+    cQuery += "     A2_MUN,"
+    cQuery += "     A2_CEP,"
+    cQuery += "     A2_TIPO,"
+    cQuery += "     A2_CGC,"
+    cQuery += "     A2_DDI,"
+    cQuery += "     A2_DDD,"
+    cQuery += "     A2_TEL,"
+    cQuery += "     A2_EMAIL "
+    cQuery += "FROM "+ RetSQLName("SA2") +" SA2 "
+    cQuery += "WHERE "
+    cQuery += "     SA2.A2_FILIAL = '" + FWxFilial('SA2') + "' "
+    cQuery += IIf(lOracle, "AND SA2.A2_COD || SA2.A2_LOJA IN (?) ", "AND CONCAT(SA2.A2_COD,SA2.A2_LOJA) IN (?) ")
+    cQuery += "     AND SA2.D_E_L_E_T_ = ' '"
+    
+    oQuery := FWPreparedStatement():New(cQuery)
+
+    If nLenSup > 0
+        SC8->(DbSetOrder(3))
+
+        For nX := 1 To Len(aSuppliers) //-- Monta string para filtragem da query através dos campos A2_COD e A2_LOJA
+            cSupplier := aSuppliers[nX][nPosSupCode]
+            cStore    := aSuppliers[nX][nPosStore]
+
+            If Empty(cQuotationCode) .Or. !SC8->(MsSeek(FWxFilial('SC8')+ cQuotationCode + PadR(cProduct, TamSX3("C8_PRODUTO")[1]) + cSupplier + cStore)) //-- Não deve adicioanr fornecedores que já existem na cotação
+                cRet += "'" + cSupplier + cStore + "',"
+            EndIf
+        Next nX
+
+        If !Empty(cRet)
+            cRet := SubStr(cRet, 1, Len(cRet) - 1) //-- Remove último caracter "vírgula"
+
+            oQuery:SetUnsafe(1, cRet)
+            cAliasSA2 := MpSysOpenQuery(oQuery:getFixQuery())
+
+            While (cAliasSA2)->(!Eof()) //-- Carrega fornecedores
+                aAdd(aSupAux, JsonObject():New())
+
+                aSupAux[nLoop]['branch'      ] := (cAliasSA2)->A2_FILIAL
+                aSupAux[nLoop]['suppliercode'] := (cAliasSA2)->A2_COD
+                aSupAux[nLoop]['store'       ] := (cAliasSA2)->A2_LOJA
+                aSupAux[nLoop]['companyname' ] := (cAliasSA2)->A2_NOME
+                aSupAux[nLoop]['fantasyname' ] := (cAliasSA2)->A2_NREDUZ
+                aSupAux[nLoop]['address'     ] := (cAliasSA2)->A2_END
+                aSupAux[nLoop]['district'    ] := (cAliasSA2)->A2_BAIRRO
+                aSupAux[nLoop]['state'       ] := (cAliasSA2)->A2_EST
+                aSupAux[nLoop]['county'      ] := (cAliasSA2)->A2_MUN
+                aSupAux[nLoop]['zipCode'     ] := (cAliasSA2)->A2_CEP
+                aSupAux[nLoop]['type'        ] := (cAliasSA2)->A2_TIPO
+                aSupAux[nLoop]['cnpj'        ] := (cAliasSA2)->A2_CGC
+                aSupAux[nLoop]['countrycode' ] := (cAliasSA2)->A2_DDI
+                aSupAux[nLoop]['areacode'    ] := (cAliasSA2)->A2_DDD
+                aSupAux[nLoop]['telephone'   ] := (cAliasSA2)->A2_TEL
+                aSupAux[nLoop]['email'       ] := (cAliasSA2)->A2_EMAIL
+
+                (cAliasSA2)->(dbSkip())
+                nLoop++
+            EndDo
+            
+            oJsonRequest['suppliers'] := aClone(aSupAux)
+            NFCSetContactList(oJsonRequest, 3)
+
+            (cAliasSA2)->(DbCloseArea())
+        Else
+           oJsonRequest['errormessage'] := STR0010 //-- Todos os fornecedores disponíveis para este produto já foram utilizados nesta cotação.
+        EndIf
+    EndIf
+
+    oQuery:Destroy()
+    FreeObj(oQuery)
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FwFreeArray(aSupAux)
+Return Nil
+
+
+/*/{Protheus.doc} postCentralizedRequestMigration
+	Aglutina itens da cotação.
+@author renan.martins
+@since 03/2024
+@return oJsonRet, object, Json de resposta.
+/*/
+Method postCentralizedRequestMigration() Class pgcGenerateQuotationRepository
+    Local aAreas        As Array
+    Local aItemsRequest As Array
+    Local aInvalidItems As Array
+    local aSlvRec       as array
+    local aDados        as Array
+    Local nX            As Numeric
+    local nSize         as numeric
+    Local oJsonRet      As Object
+    Local oUtils        As Object
+    local cBranch       as character
+    
+    oJsonRet        := JsonObject():New()
+    //oJsonRet        := Self:oJsonRequest
+    aItemsRequest   := Self:oJsonRequest['items']
+    aInvalidItems   := {}
+    aAreas          := {SC1->(GetArea()), GetArea()}
+    aDados          := {}
+    cBranch         := ""
+    
+    oUtils := pgcUtils():New()
+
+    //Monto o array esperado para a função MAPComCent, que faz o serviço de criar a nova SC, após centralização
+    nSize := Len(aItemsRequest)
+    For nX := 1 To nSize
+        cBranch := Self:oJsonRequest['selectedBranch'] //Branch centralizadora
+        SC1->( DbGoTo(aItemsRequest[nX]["requestrecno"]) ) //Posiciono no registro, visto que no array Json falta alguns dados
+        aadd(aDados, {.t., SC1->C1_FILIAL, SC1->C1_NUM, SC1->C1_SOLICIT, SC1->C1_EMISSAO, SC1->C1_ITEM, SC1->C1_PRODUTO,;
+                    Transform(SC1->C1_QUANT,PesqPict("SC1","C1_QUANT")), SC1->C1_DATPRF, aItemsRequest[nX]["requestrecno"]})
+    next
+    
+    //Chama a função de processamento e recupera RECNO dos registros gerados, para remontar o aItemsRequest com os dados das novas SCs
+    if len(aDados) > 0
+        aSlvRec := MAPComCent(cBranch,aDados, {})
+
+        nSize := Len(aSlvRec)
+        for nX := 1 to nSize
+            SC1->( DbGoTo(aSlvRec[nX]) )
+            aItemsRequest[nX]['c1_filial']      := SC1->C1_FILIAL
+            aItemsRequest[nX]['c1_num']         := SC1->C1_NUM
+            aItemsRequest[nX]['c1_quant']       := SC1->C1_QUANT
+            aItemsRequest[nX]['c1_item']        := SC1->C1_ITEM
+            aItemsRequest[nX]['requestrecno']   := aSlvRec[nX]
+            
+            aItemsRequest[nX]['purchaserequests'][1]['c1_filial']   := SC1->C1_FILIAL
+            aItemsRequest[nX]['purchaserequests'][1]['c1_num']      := SC1->C1_NUM
+            aItemsRequest[nX]['purchaserequests'][1]['c1_quant']    := SC1->C1_QUANT
+            aItemsRequest[nX]['purchaserequests'][1]['c1_item']     := SC1->C1_ITEM
+            aItemsRequest[nX]['purchaserequests'][1]['requestrecno']:= aSlvRec[nX]
+
+        next
+
+        Self:oJsonRequest['items'] := aClone(aItemsRequest)
+        aNamesJson := Self:oJsonRequest:GetNames()
+
+        For nX := 1 To Len(aNamesJson) //-- Copia cabeçalho do JSON da requisição para o novo JSON formatado
+            cNameJson := aNamesJson[nX]
+            oJsonRet[cNameJson] := Self:oJsonRequest[cNameJson]
+        Next nX
+    endif
+        
+    aEval(aAreas, {|x| RestArea(x), FwFreeArray(x)})
+    FreeObj(oUtils)
+Return oJsonRet
+
+/*/{Protheus.doc} addRequestsRecno
+	Adiciona recnos nas SCs.
+@author juan.felipe
+@since 10/07/2024
+@return Nil, nulo
+/*/
+Method addRequestsRecno(cBranch) Class pgcGenerateQuotationRepository
+    Local aItems As Array
+    Local aItemsRequest As Array
+    Local nX As Numeric
+    Local nY As Numeric
+    Local cRequestCode As Character
+    Local cItemRequest As Character
+    Local cGridItem As Character
+    Default cBranch := ''
+
+    aItems := Self:oJsonRequest:items
+
+    For nX := 1 To Len(aItems)
+        aItemsRequest := aItems[nX]:purchaserequests
+
+        For nY := 1 To Len(aItemsRequest) //-- Adiciona RECNO nas SCs
+            cRequestCode := aItemsRequest[nY]:c1_num
+            cItemRequest := aItemsRequest[nY]:c1_item
+            cGridItem := aItemsRequest[nY]:c1_itemgrd
+
+            If aItemsRequest[nY]:requestrecno == 0
+                If SC1->(MsSeek(iif(!empty(cBranch), cBranch, xFilial("SC1")) + cRequestCode + cItemRequest + cGridItem))
+                    aItemsRequest[nY]:requestrecno := SC1->(Recno())
+                EndIf
+            EndIf
+        Next nY
+    Next nX
+Return Nil
+
+/*/{Protheus.doc} execAuto
+	Realiza geração da cotação via execAuto
+@author juan.felipe
+@since 01/2025
+@param jBody, json, json com o body que deve ser processado no execAuto.
+@return oJsonRet, object, Json de resposta.
+/*/
+Method postExecAuto(jBody) Class pgcGenerateQuotationRepository
+    Local aInvalidItems As Array
+    Local oJsonBody As Object
+    Local oJsonRet As Object
+    Local oJsonRetAux As Object
+    Local oJsonWF As Object
+    Local oUtils As Object
+    Local oWorkflow As Object
+    Local cMessage As Character
+    Local lWorkflowError As Logical
+    Local lRequestError As Logical
+    Local cSelfor As Character
+    Default jBody := Nil
+
+    aInvalidItems := {}
+    lWorkflowError := .F.
+    lRequestError := .F.
+    cSelfor := ''
+    oUtils := pgcUtils():New()
+    oJsonWF := JsonObject():New()
+    oWorkflow := pgcWorkflowRepository():New()
+
+    If jBody <> Nil
+        If Self:lOk := ValType(jBody) == 'J'
+            Self:oJsonRequest := jBody
+        Else
+            cMessage := STR0012 //-- O parâmetro <jBody> deve ser do tipo Json.
+        EndIf
+    EndIf
+
+    If Self:lOk := Self:lOk .And. Self:validadePropertiesExecAuto(@cMessage) //-- Valida propriedades do Json
+        If Self:lOk := Self:loadDataExecAuto(Self:oJsonRequest, @cMessage) //-- Carrega dados do execAuto
+
+            If Self:oJsonRequest:HasProperty('selfor')
+                cSelfor := Self:oJsonRequest['selfor']
+            EndIf
+
+            oJsonRet := Self:postAgglutinateQuotation(, cSelfor) //-- Realiza aglutinação de itens
+
+            If oJsonRet:HasProperty('invaliditems')
+                aInvalidItems := oJsonRet['invaliditems']
+
+                If Len(aInvalidItems) > 0 //-- Valida se existe itens com erro
+                    oJsonRet := oUtils:setClassResponse(400, STR0013) //-- Existem solicitações de compra inválidas, verifique os itens listados.
+                    oJsonRet['items'] := aInvalidItems
+                    lRequestError := .T.
+                    Self:lOk := .F.
+                EndIf
+            EndIf
+
+            If Self:lOk
+                If Self:lOk := Self:validateProposals(oJsonRet, @cMessage, cSelfor) //-- Valida propostas
+                    oJsonBody := JsonObject():New()
+
+                    FWJsonDeserialize(oJsonRet:toJson(), @oJsonBody) //-- Converte de JsonObject para FWJsonDeserialize
+
+                    Self:oJsonRequest := oJsonBody
+
+                    If Self:oJsonRequest['sendWorkflow']
+                        FWJsonDeserialize(oJsonWF:ToJson(), @oJsonBody)
+                        oWorkflow:oJsonRequest := oJsonBody
+
+                        Self:lOk := oWorkflow:checkConfigurations(@cMessage) //-- Valida configurações do workflow
+                        Self:lOk := Self:lOk .And. oWorkflow:validatePaymentConditions(@cMessage) //-- Valida condições de pagamento
+                    EndIf
+
+                    If Self:lOk
+                        oJsonRet := Self:postGenerateQuotation(, cSelfor) // Gera cotação
+                        cMessage := oJsonRet['message']
+
+                        If Self:lOk .And. Self:oJsonRequest['sendWorkflow']
+                            oJsonWF['quotation'] := oJsonRet['quotationCode']
+                            oJsonWF['message'] := ''
+                            oJsonWF['sendAttachment'] := .F.
+                            oJsonWF['suppliers'] := Self:getSuppliersExecAuto(Self:oJsonRequest)
+
+                            FWJsonDeserialize(oJsonWF:toJson(), @oJsonBody)
+                            oWorkflow:oJsonRequest := oJsonBody
+
+                            oJsonRetAux := oWorkflow:postWorkflow('000000') //-- Envia processo de workflow
+
+                            If oWorkflow:lOk
+                                oJsonRet['message'] :=  oJsonRet['message'] + ' ' + STR0014 //-- Processo de workflow enviado.
+                            EndIf
+                        EndIf
+                    EndIf
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+
+    If !lRequestError .And. !Self:lOk
+        oJsonRet := oUtils:setClassResponse(400, cMessage) //-- Retorna mensagem da classe no formato json.
+    EndIf
+
+    FreeObj(oJsonWF)
+    FreeObj(oJsonBody)
+    FreeObj(oUtils)
+    FreeObj(oWorkflow)
+Return oJsonRet
+
+/*/{Protheus.doc} execAuto
+	Valida integridade do Json enviado para o ExecAuto.
+@author juan.felipe
+@since 01/2025
+@param @cMessage, character, mensagem de erro retornada por referência.
+@return oJsonRet, object, Json de resposta.
+/*/
+Method validadePropertiesExecAuto(cMessage) Class pgcGenerateQuotationRepository
+    Local lRet As Logical
+    Local aModelHeader As Array
+    Local aModelItems As Array
+    Local aModelProposals As Array
+    Local aProposals As Array
+    Local nY As Numeric
+    Default cMessage := ''
+
+    lRet := .T.
+
+    aModelHeader := {;
+                        {'quoteGroupNickname', 'C'},;
+                        {'receiptQuote'      , 'C'},;
+                        {'sendWorkflow'      , 'L'},;
+                        {'items'             , 'A'};
+                    }
+
+    aModelItems := {;
+                        {'c1_filial'   ,'C'},;
+                        {'c1_num'      ,'C'},;
+                        {'c1_item'     ,'C'},;
+                        {'c1_produto'  ,'C'},;
+                        {'c1_itemgrd'  ,'C'},;
+                        {'notesupplier','C'},;
+                        {'proposals'   ,'A'};
+                   }
+
+    aModelProposals := {;
+                            {'suppliercode', 'C'},;
+                            {'store'       , 'C'},;
+                            {'companyname' , 'C'},;
+                            {'email'       , 'C'};
+                       }
+    
+    If !ValidateProperties(Self:oJsonRequest, aModelHeader, @cMessage) //-- Valida o cabeçalho
+        lRet := .F.
+    EndIf
+
+    If !ValidateNestedProperties(Self:oJsonRequest['items'], aModelItems, 'items', @cMessage) //-- Valida os itens
+        lRet := .F.
+    EndIf
+
+    For nY := 1 To Len(Self:oJsonRequest['items']) //-- Valida as propostas dentro dos itens
+        aProposals := Self:oJsonRequest['items'][nY]['proposals']
+
+        If !ValidateNestedProperties(aProposals, aModelProposals, "'proposals'"+ ' ' + STR0015 + AllTrim(Str(nY)), @cMessage) //-- 'porposals' do item
+            lRet := .F.
+            Exit
+        EndIf
+    Next nY
+
+    If Self:validateDuplicatedRequests(Self:oJsonRequest, @cMessage) //-- Valida itens duplicados
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ValidateProperties
+	Função para validar propriedades do cabeçalho do Json
+@author juan.felipe
+@since 01/2025
+@return lRet, logical, indica se possui todas as propriedades.
+/*/
+Static Function ValidateProperties(oJson, aModel, cMessage)
+    Local lRet As Logical
+    Local nX As Numeric
+    Local cProperty As Character
+    Local cType As Character
+    Default oJson := JsonObject():New()
+    Default aModel := {}
+    Default cMessage := ''
+
+    lRet := .T.
+
+    For nX := 1 To Len(aModel)
+        cProperty := aModel[nX][1]
+        cType := aModel[nX][2]
+
+        If !oJson:HasProperty(cProperty) 
+            cMessage := STR0016 + " '" + cProperty + "'. "+ STR0017 //-- O cabeçalho do Json enviado não possui a propriedade XXXXX. Verifique na documentação as propriedades necessárias para o funcionamento correto do ExecAuto.
+            lRet := .F.
+            Exit
+        ElseIf ValType(oJson[cProperty]) != cType 
+            cMessage := STR0018 + " '" + cProperty + "'" + " "+ STR0019 + "'" + cType +  "'. " + STR0020 //-- O tipo da propriedade XXXX não é do tipo XXXX. Verifique na documentação os tipos das propriedades para o funcionamento correto do ExecAuto.
+            lRet := .F.
+            Exit
+        EndIf
+    Next nX
+Return lRet
+
+
+/*/{Protheus.doc} ValidateProperties
+	Função para validar propriedades aninhadas (arrays de objetos)
+@author juan.felipe
+@since 01/2025
+@param, aItems, array, array de itens.
+@param, aModel, array, array com as propriedades que devem ser validadas.
+@param, @cMessage, character, mensagem de erro retornada por referência.
+@return lRet, logical, indica se possui todas as propriedades.
+/*/
+Static Function ValidateNestedProperties(aItems, aModel, cContext, cMessage)
+    Local nX As Numeric
+    Local nY As Numeric
+    Local cProperty As Character
+    Local cType As Character
+    Default aItems := {}
+    Default aModel := {}
+    Default cContext := ''
+    Default cMessage := ''
+
+    For nX := 1 To Len(aItems)
+        For nY := 1 To Len(aModel)
+            cProperty := aModel[nY][1]
+            cType := aModel[nY][2]
+
+            If !aItems[nX]:HasProperty(cProperty) 
+                cMessage := STR0022 + " " + cContext + STR0021 + AllTrim(Str(nX)) + " " + STR0023 + "'" + cProperty + "'. " + STR0017 //-- A propriedade XXXXX no no índice XX não possui a propriedade XXXX. Verifique na documentação as propriedades necessárias para o funcionamento correto do ExecAuto.
+                Return .F.
+            ElseIf ValType(aItems[nX][cProperty]) != cType 
+                cMessage := STR0018 + " '" + cProperty + "' " + STR0019 + " '" + cType +  "'. " + STR0021 + " " + AllTrim(Str(nX)) + STR0020 //-- O tipo da propriedade XXXX não é do tipo XXXX no índice XX. Verifique na documentação os tipos das propriedades para o funcionamento correto do ExecAuto.
+                Return .F.
+            EndIf
+        Next nY
+    Next nX
+Return .T.
+
+/*/{Protheus.doc} validateProposals
+	Função para validar integridade das propostas que serão enviadas para geração da cotação.
+@author juan.felipe
+@since 01/2025
+@param oJson, object, dados da requisição.
+@param @cMessage, character, mensagem de erro retornada por referência.
+@param cSelfor, character, indica se o MV_SELFOR está ativado.
+@return lRet, logical, indica se todas as propostas são válidas.
+/*/
+Method validateProposals(oJson, cMessage, cSelfor) Class pgcGenerateQuotationRepository
+    Local lRet As Logical
+    Local oJson As Object
+    Local aItems As Array
+    Local aSupplierCodes As Array
+    Local aCurrentSuppliers As Array
+    Local aProposals As Array
+    Local aSuppliers As Array
+    Local cSupplierCode As Character
+    Local cStore As Character
+    Local cSupplierCode2 As Character
+    Local cStore2 As Character
+    Local cCompanyName As Character
+    Local cCompanyName2 As Character
+    Local cSupplier
+    Local nX As Numeric
+    Local nY As Numeric
+    Local nZ As Numeric
+    Local lSelFor As Logical
+    Local lFound As Logical
+    Local lParticipant As Logical
+    Default cSelfor := ''
+
+    lRet := .T.
+    aItems := oJson["items"]
+    lSelFor := SuperGetMv("MV_SELFOR",.F.,"N") == "S"
+
+    If !Empty(cSelfor)
+        lSelFor := cSelfor == "true"
+    EndIf
+
+    If lSelFor
+        //-- Inicializa os códigos de fornecedores com os valores do primeiro item
+        If Len(aItems) > 0
+            aSupplierCodes := {}
+
+            If Len(aItems[1]['proposals']) > 0
+                For nX := 1 To Len(aItems[1]['proposals'])
+                    cSupplierCode := AllTrim(aItems[1]['proposals'][nX]['suppliercode'])
+                    cStore := AllTrim(aItems[1]['proposals'][nX]['store'])
+                    cCompanyName := AllTrim(aItems[1]['proposals'][nX]['companyname'])
+
+                    AAdd(aSupplierCodes, cSupplierCode + cStore + cCompanyName)
+                Next nX
+            Else
+                cMessage := STR0024 //-- Não foram informadas propostas para o item 1.
+                lRet := .F.
+            EndIf
+        Else
+            cMessage := STR0025 //-- Nenhum item encontrado no JSON, informe itens válidos para que a cotação possa ser gerada.
+            lRet := .F.
+        EndIf
+
+        If lRet .And. Len(aItems) > 1 //-- Verifica os fornecedores de cada item e compara com os iniciais
+            For nX := 2 To Len(aItems) //-- Inicia no segundo item
+                aCurrentSuppliers := {}
+
+                For nY := 1 To Len(aItems[nX]['proposals'])
+                    cSupplierCode := AllTrim(aItems[nX]['proposals'][nY]['suppliercode'])
+                    cStore := AllTrim(aItems[nX]['proposals'][nY]['store'])
+                    cCompanyName := AllTrim(aItems[nX]['proposals'][nY]['companyname'])
+
+                    AAdd(aCurrentSuppliers, cSupplierCode + cStore + cCompanyName)
+                Next
+                
+                If !ArrayCompare(aSupplierCodes, aCurrentSuppliers) //-- Compara arrays
+                    cMessage := STR0027 + ' ' + AllTrim(Str(nX)) + '.' //-- Os fornecedores de todas as propostas devem ser iguais, verifique o item
+                    lRet := .F.
+                    Exit
+                EndIf
+            Next
+        EndIf
+    ElseIf lRet
+        For nX := 1 To Len(aItems)
+            aProposals := aItems[nX]["proposals"]
+            aSuppliers := aItems[nX]["suppliers"]
+
+            For nY := 1 To Len(aProposals) // Valida cada fornecedor de proposals
+                cSupplierCode := AllTrim(aProposals[nY]["suppliercode"])
+                cStore := AllTrim(aProposals[nY]["store"])
+                cCompanyName := AllTrim(aProposals[nY]['companyname'])
+                lFound := .F.
+
+                For nZ := 1 To Len(aSuppliers)
+                    cSupplierCode2 := AllTrim(aSuppliers[nZ]["suppliercode"])
+                    cStore2 := AllTrim(aSuppliers[nZ]["store"])
+                    cCompanyName2 := AllTrim(aSuppliers[nZ]["companyname"])
+
+                    If cSupplierCode == cSupplierCode2 .And. cStore == cStore2 .And. cCompanyName == cCompanyName2
+                        lFound := .T.
+                        Exit
+                    EndIf
+                Next nZ
+               
+                If !lFound // Se não encontrou o fornecedor em suppliers, reporta erro
+                    lParticipant := Empty(cSupplierCode) .And. Empty(aItems[nX]['store'])
+                    cSupplier := Iif(lParticipant,  Upper(cCompanyName), AllTrim(cSupplierCode) + "-" + AllTrim(cStore))
+
+                    cMessage := STR0028 + ' ' + cSupplier + ' ' + STR0029 + ' ' + AllTrim(aItems[nX]["c1_produto"]) + '.' //-- O fornecedor XXXX não percente a amarração de Produtos x Fornecedores do produto XXXXX
+                    lRet := .F.
+                    Exit
+                EndIf
+            Next nY
+        Next nX
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} loadDataExecAuto
+	Carrega dados do execAuto para o Json da requisição.
+@author juan.felipe
+@since 01/2025
+@param, oJson, object, dados da requisição.
+@param, @cMessage, character, mensagem de erro retornada por referência.
+@return lRet, logical, indica se carregou corretamente os dados.
+/*/
+Method loadDataExecAuto(oJson, cMessage) Class pgcGenerateQuotationRepository
+    Local lRet As Logical
+    Local nX As Numeric
+    Local cBranch As Character
+    Local cRequestCode As Character
+    Local cItem As Character
+    Local cProduct As Character
+    Local cGridItem As Character
+    Local cMessage As Character
+    Local oJsonInfo As Object
+    Local oUtilsRepository As Object
+    Default oJson := JsonObject():New()
+    Default cMessage := ''
+
+    oUtilsRepository := pgcUtilsRepository():New()
+    oJsonInfo := oUtilsRepository:companyInfo(cEmpAnt, cFilAnt) //-- Obtém de entrega
+    lRet := .T.
+    cMessage := ''
+
+    oJson['numberProducts'] := Len(oJson['items']) //-- Quantidade de produtos
+    oJson['numberSuppliers'] := Self:countSuppliers(oJson) //-- Quantidade de fornecedores
+    oJson['status'] := '1'
+    oJson['evaluatesUnsuccessfulProposal'] := ''
+    oJson['documentType'] := ''
+    oJson['emissionDate'] := DToS(dDataBase)
+    oJson['bindingtype'] := '1'
+    oJson['purchaser'] := UsrRetName(__cUserID)
+    oJson['purchaserCode'] := __cUserID
+    oJson['fisicalplacedelivery'] := ''
+
+    If Len(oJsonInfo['items']) > 0 .And. Len(oJsonInfo['items'][1]:GetNames()) > 0
+        oJson['fisicalplacedelivery'] := oJsonInfo['items'][1]['m0_endent'] + ' - ' + oJsonInfo['items'][1]['m0_bairent'] + ' - ' + oJsonInfo['items'][1]['m0_cident'] + '/' + oJsonInfo['items'][1]['m0_estent']
+    EndIf
+
+    For nX := 1 To Len(oJson['items'])
+        cBranch := PadR(oJson['items'][nX]['c1_filial'], Len(SC1->C1_FILIAL), " ")
+        cRequestCode := PadR(oJson['items'][nX]['c1_num'], Len(SC1->C1_NUM), " ")
+        cItem :=  PadR(oJson['items'][nX]['c1_item'], Len(SC1->C1_ITEM), " ")
+        cProduct  := PadR(oJson['items'][nX]['c1_produto'], Len(SC1->C1_PRODUTO), " ")
+        cGridItem := PadR(oJson['items'][nX]['c1_itemgrd'], Len(SC1->C1_ITEMGRD), " ")
+
+        oJson['items'][nX]['requestrecno'] := 0
+
+        If SC1->(MsSeek(cBranch + cRequestCode + cItem + cGridItem))
+            oJson['items'][nX]['c1_datprf'          ] := DToS(SC1->C1_DATPRF)
+            oJson['items'][nX]['c1_um'              ] := SC1->C1_UM
+            oJson['items'][nX]['c1_quant'           ] := SC1->C1_QUANT
+            oJson['items'][nX]['c1_filent'          ] := SC1->C1_FILENT
+            oJson['items'][nX]['c1_cc'              ] := SC1->C1_CC
+            oJson['items'][nX]['c1_conta'           ] := SC1->C1_CONTA
+            oJson['items'][nX]['c1_itemcta'         ] := SC1->C1_ITEMCTA
+            oJson['items'][nX]['c1_clvl'            ] := SC1->C1_CLVL
+            oJson['items'][nX]['c1_grade'           ] := SC1->C1_GRADE
+            oJson['items'][nX]['c1_segum'           ] := SC1->C1_SEGUM
+            oJson['items'][nX]['c1_qtsegum'         ] := SC1->C1_QTSEGUM
+            oJson['items'][nX]['c1_ident'           ] := SC1->C1_IDENT
+            oJson['items'][nX]['c1_quje'            ] := SC1->C1_QUJE
+            oJson['items'][nX]['requestrecno'       ] := SC1->(Recno())
+            oJson['items'][nX]['sendWorkflow'       ] := oJson['sendWorkflow']
+
+            NFCSetContactList(oJson['items'][nX], 4, @cMessage) //-- Adiciona as propriedades email nas propostas
+
+            If !Empty(cMessage)
+                lRet := .F.
+                Exit
+            EndIf
+        Else
+            cMessage := STR0030 + ' ' + AllTrim(cRequestCode) + '-' + cItem + ' ' + STR0031 //-- A solicitação de compra XXXX não foi localizada na base de dados.
+            lRet := .F.
+            Exit
+        EndIf
+    Next nX
+Return lRet
+
+/*/{Protheus.doc} countSuppliers
+	Conta quantidade de fornecedores da cotação.
+@author juan.felipe
+@since 01/2025
+@param, oJson, object, dados da requisição.
+@return nRet, numeric, retorna quantidade de fornecedores.
+/*/
+Method countSuppliers(oJson) Class pgcGenerateQuotationRepository
+    Local aItems As Array
+    Local aUniqueKeys As Array
+    Local aProposals As Array
+    Local nX As Numeric
+    Local nY As Numeric
+    Local nRet As Numeric
+    Local cProposalKey As Character
+    Default oJson := JsonObject():New()
+
+    aItems := oJson["items"]
+    aUniqueKeys := {}
+
+    For nX := 1 To Len(aItems)
+        aProposals := aItems[nX]["proposals"]
+
+        For nY := 1 To Len(aProposals)
+            cProposalKey := AllTrim(aProposals[nY]["suppliercode"]) + ;
+                            AllTrim(aProposals[nY]["store"]) + ;
+                            AllTrim(aProposals[nY]["companyname"])
+
+            If AScan(aUniqueKeys, {|x| x == cProposalKey }) == 0 //-- Verifica se a chave já está no array de chaves únicas
+                AAdd(aUniqueKeys, cProposalKey)
+            EndIf
+        Next
+    Next
+
+    nRet := Len(aUniqueKeys)
+Return nRet
+
+/*/{Protheus.doc} validateDuplicatedRequests
+	Valida se existem solicitações de compras duplicadas.
+@author juan.felipe
+@since 01/2025
+@param, oJson, object, dados da requisição.
+@param, @cMessage, character, mensagem de erro retornada por referência.
+@return lRet, logical, indica se possui todas as propriedades.
+/*/
+Method validateDuplicatedRequests(oJson, cMessage) Class pgcGenerateQuotationRepository
+    Local lRet As Logical
+    Local oJson As Object
+    Local aItems As Array
+    Local aSeenItems As Array
+    Local nItem As Numeric
+    Local cKey As Character
+    Local nPosition As Numeric
+    Default oJson := JsonObject():New()
+    Default cMessage := ''
+
+    aSeenItems := {}
+    aItems := oJson["items"]
+    lRet := .F.
+
+    For nItem := 1 To Len(aItems) // Verificar itens duplicados
+        cKey := AllTrim(aItems[nItem]["c1_filial"]) + ;
+                AllTrim(aItems[nItem]["c1_num"]) + ;
+                AllTrim(aItems[nItem]["c1_produto"]) + ;
+                AllTrim(aItems[nItem]["c1_item"]) + ;
+                AllTrim(aItems[nItem]["c1_itemgrd"])
+
+        nPosition := AScan(aSeenItems, cKey)
+        
+        If nPosition > 0 //-- Valida se tem algum item repetido
+            cMessage := STR0032 + ' ' + AllTrim(aItems[nPosition]['c1_num']) + '-' + AllTrim(aItems[nPosition]['c1_item']) //-- Não é permitido itens duplicados na geração da cotação, verifique a solicitação de compra XXXX
+            lRet := .T.
+            Exit
+        Else
+            AAdd(aSeenItems, cKey)
+        EndIf
+    Next
+Return lRet
+
+/*/{Protheus.doc} agglutinateProposals
+	Aglutina propostas de itens que sofreram aglutinação.
+@author juan.felipe
+@since 01/2025
+@param, oJson, object, dados da requisição.
+@return Nil, nulo.
+/*/
+Method agglutinateProposals(oJson) Class pgcGenerateQuotationRepository
+    Local aProposals As Array
+    Local aProposals2 As Array
+    Local aPurchaseRequests As Array
+    Local nX As Numeric
+    Local nY As Numeric
+    Local cSupplierCode As Character
+    Local cStore As Character
+    Local cCompanyName As Character
+    Default oJson := JsonObject():New()
+
+    aProposals := oJson['proposals']
+    aPurchaseRequests := oJson['purchaserequests']
+
+    For nX := 1 To Len(aPurchaseRequests)
+        aProposals2 := aPurchaseRequests[nX]['proposals']
+        
+        For nY := 1 To Len(aProposals2)
+            cSupplierCode := aProposals2[nY]['suppliercode']
+            cStore := aProposals2[nY]['store']
+            cCompanyName := aProposals2[nY]['companyname']
+
+            If aScan(aProposals,{;
+                |x| x['suppliercode'] == cSupplierCode .And.;
+                    x['store'] == cStore .And.;
+                    x['companyname'] == cCompanyName;
+                } ) == 0 
+                Aadd(aProposals, aProposals2[nY])
+            EndIf
+        Next nY
+    Next nX
+Return Nil
+
+/*/{Protheus.doc} getSuppliersExecAuto
+	Obtém todos os fornecedores informados no ExecAuto para envio do workflow.
+@author juan.felipe
+@since 01/2025
+@param, oJson, object, dados da requisição.
+@return aSuppliers, array, fornecedores da cotação.
+/*/
+Method getSuppliersExecAuto(oJson) Class pgcGenerateQuotationRepository
+    Local aItems As Array
+    Local aKeys As Array
+    Local aProposals As Array
+    Local aSuppliers As Array
+    Local cSupplierKey As Character
+    Local nX As Numeric
+    Local nY As Numeric
+    Local nLen As Numeric
+    Default oJson := JsonObject():New()
+
+    aItems := oJson["items"]
+    aSuppliers := {}
+    aKeys := {}
+
+    For nX := 1 To Len(aItems)
+        aProposals := aItems[nX]["proposals"]
+
+        If Len(aProposals) > 0
+            For nY := 1 To Len(aProposals)
+                cSupplierKey := AllTrim(aProposals[nY]["suppliercode"]) + ;
+                                AllTrim(aProposals[nY]["store"]) + ;
+                                AllTrim(Upper(PGCCarEsp(aProposals[nY]["companyname"])))
+
+                If AScan(aKeys, {|x| x == cSupplierKey }) == 0 // Verifica se a chave do fornecedor já está no array
+                    AAdd(aKeys, cSupplierKey)
+                    AAdd(aSuppliers, JsonObject():New())
+                    
+                    nLen := Len(aSuppliers)
+                    aSuppliers[nLen]['supplier'] := aProposals[nY]['suppliercode']
+                    aSuppliers[nLen]['store'] := aProposals[nY]['store']
+                    aSuppliers[nLen]['corporatename'] := Upper(PGCCarEsp(aProposals[nY]['companyname']))
+                    aSuppliers[nLen]['email'] := aProposals[nY]['email']
+                EndIf
+            Next nY
+        EndIf
+    Next nX
+
+Return aSuppliers

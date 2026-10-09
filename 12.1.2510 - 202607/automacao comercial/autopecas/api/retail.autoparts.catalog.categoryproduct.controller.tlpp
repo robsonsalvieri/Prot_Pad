@@ -1,0 +1,846 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "fwmvcdef.ch"
+#include "retail.autoparts.catalog.categoryproduct.controller.ch"
+
+//              Nome JSON           Campo ACV      Tipo
+Static aFields := {;
+    {"categoryCode"   , "ACV_CATEGO", "C"},;
+    {"productCode"    , "ACV_CODPRO", "C"},;
+    {"groupCode"      , "ACV_GRUPO" , "C"},;
+    {"referenceCode"  , "ACV_REFGRD", "C"},;
+    {"salesSuggestion", "ACV_SUVEND", "C"};
+} as Array
+
+namespace totvs.protheus.retail.autoparts.catalog.categoryproduct.controller
+
+/*/{Protheus.doc} RetailAutopartsCatalogCategoryProductController
+    API relacionada ao cadastro de Categorias x Grupos/Produtos (ACV)
+
+    Observacao sobre o DELETE:
+    O modelo MVC FATA150A opera no nivel de categoria (carrega todos os registros
+    de uma categoria no ACVDETAIL). O DELETE usa MODEL_OPERATION_UPDATE com DeleteLine()
+    no grid ACVDETAIL para garantir exclusao de linha unica, precedida de validacao
+    de movimentacoes vinculadas na tabela D4X.
+
+    @type    class
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+/*/
+Class RetailAutopartsCatalogCategoryProductController
+
+    public Method New()
+
+    private Method PositionACVByKey(cBranch as Character, cCategoryCode as Character, cGroupCode as Character, cProductCode as Character, cReferenceCode as Character) as Logical
+    private Method FindCategoryProduct(cCategoryCode as Character, cProductCode as Character, cGroupCode as Character, cReferenceCode as Character) as Array
+    private Method FindACVLineIndex(oModelACV as Object, cGroupCode as Character, cProductCode as Character, cReferenceCode as Character) as Numeric
+    private Method ValidatePositioningParams(cProductCode as Character, cGroupCode as Character, cReferenceCode as Character) as Array
+    private Method IsDeleteAllowed() as Array
+    private Method ValidateUpdateParams(cProductCode as Character, cGroupCode as Character, cReferenceCode as Character) as Array
+
+    @Get("/api/retail/v1/retailAutopartsCatalogCategoryProduct/getDataForCategoryProduct", description="Consulta vinculos Categoria x Grupo/Produto. Filtros: categoryCode, productCode, groupCode, referenceCode")
+    public Method getDataForCategoryProduct()
+
+    @Post("/api/retail/v1/retailAutopartsCatalogCategoryProduct/postDataForCategoryProduct", description="Cadastra novo vinculo Categoria x Grupo/Produto na tabela ACV")
+    public Method postDataForCategoryProduct()
+
+    @Put("/api/retail/v1/retailAutopartsCatalogCategoryProduct/putDataForCategoryProduct/:categoryCode", description="Altera vinculo Categoria x Grupo/Produto. Path param: categoryCode. Query params: exatamente um de productCode, groupCode ou referenceCode")
+    public Method putDataForCategoryProduct()
+
+    @Delete("/api/retail/v1/retailAutopartsCatalogCategoryProduct/deleteDataForCategoryProduct/:categoryCode", description="Exclui vinculo Categoria x Grupo/Produto via modelo. Path param: categoryCode. Query params: exatamente um de productCode, groupCode ou referenceCode")
+    public Method deleteDataForCategoryProduct()
+
+EndClass
+
+/*/{Protheus.doc} New
+    Metodo construtor
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+    @return  Object, Objeto da classe
+/*/
+Method New() Class RetailAutopartsCatalogCategoryProductController
+Return Self
+
+/*/{Protheus.doc} getDataForCategoryProduct
+    Consulta vinculos Categoria x Grupo/Produto com filtros opcionais
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+/*/
+Method getDataForCategoryProduct() Class RetailAutopartsCatalogCategoryProductController
+    Local oJsonRespo     := JsonObject():New() as Object
+    Local oJParametr     := oRest:getQueryRequest() as Object
+    Local aItens         := {} as Array
+    Local cCategoryCode  := "" as Character
+    Local cProductCode   := "" as Character
+    Local cGroupCode     := "" as Character
+    Local cReferenceCode := "" as Character
+
+    oRest:setKeyHeaderResponse("Content-Type", "application/json")
+
+    If oJParametr:hasProperty('categoryCode')
+        cCategoryCode := oJParametr['categoryCode']
+    EndIf
+    If oJParametr:hasProperty('productCode')
+        cProductCode := oJParametr['productCode']
+    EndIf
+    If oJParametr:hasProperty('groupCode')
+        cGroupCode := oJParametr['groupCode']
+    EndIf
+    If oJParametr:hasProperty('referenceCode')
+        cReferenceCode := oJParametr['referenceCode']
+    EndIf
+
+    aItens := Self:FindCategoryProduct(cCategoryCode, cProductCode, cGroupCode, cReferenceCode)
+
+    If Len(aItens) > 0
+        oJsonRespo['items'] := aItens
+        oRest:setStatusCode(200)
+    Else
+        oJsonRespo['items']   := {}
+        oJsonRespo['message'] := STR0001 //"Dados não encontrados para o filtro informado"
+        oRest:setStatusCode(404)
+    EndIf
+
+    oRest:SetResponse(oJsonRespo:toJson())
+
+    FreeObj(oJsonRespo)
+    FreeObj(oJParametr)
+
+Return .T.
+
+/*/{Protheus.doc} postDataForCategoryProduct
+    Cadastra novo vinculo Categoria x Grupo/Produto na tabela ACV via modelo FATA150A
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+/*/
+Method postDataForCategoryProduct() Class RetailAutopartsCatalogCategoryProductController
+    Local oJsBody        := JsonObject():New() as Object
+    Local oJsonRespo     := JsonObject():New() as Object
+    Local oModel         := Nil as Object
+    Local oModelACV      := Nil as Object
+    Local aErros         := {} as Array
+    Local lGravouOK      := .F. as Logical
+    Local lDadosOK       := .T. as Logical
+    Local cParamName     := "" as Character
+    Local cFieldName     := "" as Character
+    Local cCategoryCode  := "" as Character
+    Local cProductCode   := "" as Character
+    Local cGroupCode     := "" as Character
+    Local cReferenceCode := "" as Character
+    Local aValPos        := {} as Array
+    Local nX             := 0 as Numeric
+
+    oRest:setKeyHeaderResponse("Content-Type", "application/json")
+    oJsBody:fromJson(oRest:GetBodyRequest())
+
+    cCategoryCode  := IIf(oJsBody['categoryCode']  != Nil, AllTrim(oJsBody['categoryCode']),  "")
+    cProductCode   := IIf(oJsBody['productCode']   != Nil, AllTrim(oJsBody['productCode']),   "")
+    cGroupCode     := IIf(oJsBody['groupCode']     != Nil, AllTrim(oJsBody['groupCode']),     "")
+    cReferenceCode := IIf(oJsBody['referenceCode'] != Nil, AllTrim(oJsBody['referenceCode']), "")
+
+    // Validacao: categoryCode obrigatorio
+    If Empty(cCategoryCode)
+        oRest:setStatusCode(422)
+        oJsonRespo['success'] := .F.
+        oJsonRespo['message'] := STR0002 //"O campo categoryCode é obrigatório"
+        lDadosOK := .F.
+    EndIf
+
+    // Validacao: exatamente um de productCode, groupCode ou referenceCode deve ser informado
+    If lDadosOK
+        aValPos := Self:ValidatePositioningParams(cProductCode, cGroupCode, cReferenceCode)
+        If !aValPos[1]
+            oRest:setStatusCode(422)
+            oJsonRespo['success'] := .F.
+            oJsonRespo['message'] := aValPos[2]
+            lDadosOK := .F.
+        EndIf
+    EndIf
+
+    // Validacoes de existencia FK (antes de acionar o modelo MVC)
+    If lDadosOK .And. !ExistCpo("ACU", cCategoryCode)
+        oRest:setStatusCode(422)
+        oJsonRespo['success'] := .F.
+        oJsonRespo['message'] := STR0003 //"Categoria não encontrada na tabela ACU"
+        lDadosOK := .F.
+    EndIf
+
+    If lDadosOK
+        oModel := FWLoadModel('FATA150A')
+        oModel:SetOperation(MODEL_OPERATION_INSERT)
+        oModel:Activate()
+
+        oModelACV := oModel:GetModel('ACVDETAIL')
+        oModelACV:AddLine() // Adiciona linha vazia no grid para o INSERT
+
+        For nX := 1 To Len(aFields)
+            cParamName := aFields[nX][1]
+            cFieldName := aFields[nX][2]
+            If oJsBody[cParamName] != Nil
+                oModelACV:SetValue(cFieldName, oJsBody[cParamName])
+            EndIf
+        Next nX
+
+        If oModel:VldData()
+            lGravouOK := oModel:CommitData()
+        EndIf
+
+        If lGravouOK
+            oRest:setStatusCode(201)
+            oJsonRespo['success']       := .T.
+            oJsonRespo['message']       := STR0006 //"Vínculo Categoria x Produto cadastrado com sucesso"
+            oJsonRespo['branch']        := AllTrim(ACV->ACV_FILIAL)
+            oJsonRespo['categoryCode']  := AllTrim(ACV->ACV_CATEGO)
+            oJsonRespo['productCode']   := AllTrim(ACV->ACV_CODPRO)
+            oJsonRespo['groupCode']     := AllTrim(ACV->ACV_GRUPO)
+            oJsonRespo['referenceCode'] := AllTrim(ACV->ACV_REFGRD)
+        Else
+            aErros := oModel:GetErrorMessage()
+            oRest:setStatusCode(400)
+            oJsonRespo['success']  := .F.
+            oJsonRespo['message']  := IIf(!Empty(aErros[6]), aErros[6], STR0007) //"Erro ao cadastrar vínculo Categoria x Produto"
+            oJsonRespo['field']    := IIf(!Empty(aErros[4]), aErros[4], "")
+            oJsonRespo['errorId']  := IIf(!Empty(aErros[5]), aErros[5], "")
+            oJsonRespo['solution'] := IIf(!Empty(aErros[7]), aErros[7], "")
+        EndIf
+    EndIf
+
+    oRest:SetResponse(oJsonRespo:toJson())
+
+    If ValType(oModel) <> 'U'
+        oModel:DeActivate()
+        FreeObj(oModel)
+    EndIf
+
+    FreeObj(oJsBody)
+    FreeObj(oJsonRespo)
+
+Return .T.
+
+/*/{Protheus.doc} putDataForCategoryProduct
+    Altera vinculo Categoria x Grupo/Produto existente na tabela ACV via modelo FATA150A.
+    O modelo carrega todas as linhas da categoria; SetUseOldGrid(.T.) garante que
+    apenas a linha alterada sera persistida no CommitData.
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+/*/
+Method putDataForCategoryProduct() Class RetailAutopartsCatalogCategoryProductController
+    Local oJsonRespo     := JsonObject():New() as Object
+    Local oJsBody        := JsonObject():New() as Object
+    Local oJPath         := oRest:getPathParamsRequest() as Object
+    Local oJParametr     := oRest:getQueryRequest() as Object
+    Local aArea          := GetArea() as Array
+    Local aValPos        := {} as Array
+    Local oModel         := Nil as Object
+    Local oModelACV      := Nil as Object
+    Local aErros         := {} as Array
+    Local lFound         := .F. as Logical
+    Local lGravouOK      := .F. as Logical
+    Local lDadosOK       := .T. as Logical
+    Local lAnyParInf     := .F. as Logical
+    Local cBranch        := "" as Character
+    Local cReferenceCode := "" as Character
+    Local cProductCode   := "" as Character
+    Local cGroupCode     := "" as Character
+    Local cParamName     := "" as Character
+    Local cFieldName     := "" as Character
+    Local nLine          := 0 as Numeric
+    Local nX             := 0 as Numeric
+    Local cKeyCatego     := "" as Character
+    Local cKeyGrupo      := "" as Character
+    Local cKeyCodPro     := "" as Character
+    Local cKeyRefCod     := "" as Character
+
+    DbSelectArea('ACV')
+
+    oRest:setKeyHeaderResponse("Content-Type", "application/json")
+    oJsBody:fromJson(oRest:GetBodyRequest())
+
+    cBranch := xFilial('ACV')
+
+    // Path param obrigatorio: categoryCode (enforced pela rota)
+    cKeyCatego := AllTrim(oJPath['categoryCode'])
+
+    // Query params: exatamente um de productCode, groupCode ou referenceCode deve ser informado
+    If oJParametr:hasProperty('productCode')
+        cKeyCodPro := AllTrim(oJParametr['productCode'])
+    EndIf
+    If oJParametr:hasProperty('groupCode')
+        cKeyGrupo := AllTrim(oJParametr['groupCode'])
+    EndIf
+    If oJParametr:hasProperty('referenceCode')
+        cKeyRefCod := AllTrim(oJParametr['referenceCode'])
+    EndIf
+
+    // Validacao: exatamente um de productCode, groupCode ou referenceCode deve ser informado
+    aValPos := Self:ValidatePositioningParams(cKeyCodPro, cKeyGrupo, cKeyRefCod)
+    If !aValPos[1]
+        oRest:setStatusCode(422)
+        oJsonRespo['success'] := .F.
+        oJsonRespo['message'] := aValPos[2]
+        lDadosOK := .F.
+    EndIf
+
+    If lDadosOK
+        cProductCode  := IIf(oJsBody['productCode']  != Nil, AllTrim(oJsBody['productCode']),  "")
+        cGroupCode    := IIf(oJsBody['groupCode']     != Nil, AllTrim(oJsBody['groupCode']),    "")
+        cReferenceCode    := IIf(oJsBody['referenceCode'] != Nil, AllTrim(oJsBody['referenceCode']), "")
+        aValPos := Self:ValidateUpdateParams(cProductCode, cGroupCode, cReferenceCode)
+         If !aValPos[1]
+            oRest:setStatusCode(422)
+            oJsonRespo['success'] := .F.
+            oJsonRespo['message'] := aValPos[2]
+            lDadosOK := .F.
+        EndIf
+    EndIf
+    // Posiciona ACV pelo referenceCode via SQL (nao ha indice direto por ACV_REFGRD)
+    If lDadosOK
+        lFound := Self:PositionACVByKey(cBranch, cKeyCatego, cKeyGrupo, cKeyCodPro, cKeyRefCod)
+
+        If !lFound
+            oRest:setStatusCode(404)
+            oJsonRespo['success'] := .F.
+            oJsonRespo['message'] := STR0009 //"Registro não encontrado para os parâmetros informados"
+            lDadosOK := .F.
+        EndIf
+    EndIf
+
+    If lDadosOK
+        oModel := FWLoadModel('FATA150A')
+        oModel:SetOperation(MODEL_OPERATION_UPDATE)
+        oModel:Activate()
+        // OnActivate seta ACVMASTER CATEGORIA = ACV->ACV_CATEGO
+        // LoadGrid carrega todas as linhas da categoria; SetUseOldGrid(.T.) rastreia alteracoes
+
+        oModelACV := oModel:GetModel('ACVDETAIL')
+
+        // Localiza o numero da linha no grid que corresponde a chave composta
+        nLine := Self:FindACVLineIndex(oModelACV, cKeyGrupo, cKeyCodPro, cKeyRefCod)
+
+        oModelACV:GoLine(nLine) // Posiciona na linha correta antes de SetValue
+
+        For nX := 2 To Len(aFields)// Inicia em 2 para ignorar categoryCode, que nao pode ser alterado
+            cParamName := aFields[nX][1]
+            cFieldName := aFields[nX][2]
+            If oJsBody[cParamName] != Nil
+                oModelACV:SetValue(cFieldName, oJsBody[cParamName])
+                lAnyParInf := .T.
+            EndIf
+        Next nX
+
+        If !lAnyParInf
+            oRest:setStatusCode(422)
+            oJsonRespo['success'] := .F.
+            oJsonRespo['message'] := STR0010 //"Nenhum parâmetro informado para alteração"
+            lDadosOK := .F.
+        EndIf
+    EndIf
+
+    If lDadosOK
+        If oModel:VldData()
+            lGravouOK := oModel:CommitData()
+        EndIf
+
+        If lGravouOK
+            oRest:setStatusCode(200)
+            oJsonRespo['success']       := .T.
+            oJsonRespo['message']       := STR0011 //"Vínculo Categoria x Produto atualizado com sucesso"
+            oJsonRespo['branch']        := AllTrim(ACV->ACV_FILIAL)
+            oJsonRespo['categoryCode']  := AllTrim(ACV->ACV_CATEGO)
+            oJsonRespo['productCode']   := AllTrim(ACV->ACV_CODPRO)
+            oJsonRespo['groupCode']     := AllTrim(ACV->ACV_GRUPO)
+            oJsonRespo['referenceCode'] := AllTrim(ACV->ACV_REFGRD)
+        Else
+            aErros := oModel:GetErrorMessage()
+            oRest:setStatusCode(400)
+            oJsonRespo['success']  := .F.
+            oJsonRespo['message']  := IIf(!Empty(aErros[6]), aErros[6], STR0012) //"Erro ao atualizar vínculo Categoria x Produto"
+            oJsonRespo['field']    := IIf(!Empty(aErros[4]), aErros[4], "")
+            oJsonRespo['solution'] := IIf(!Empty(aErros[7]), aErros[7], "")
+        EndIf
+    EndIf
+
+    oRest:SetResponse(oJsonRespo:toJson())
+
+    If ValType(oModel) <> 'U'
+        oModel:DeActivate()
+        FreeObj(oModel)
+    EndIf
+
+    FreeObj(oJsonRespo)
+    FreeObj(oJsBody)
+    FreeObj(oJPath)
+    FreeObj(oJParametr)
+
+    RestArea(aArea)
+
+Return .T.
+
+/*/{Protheus.doc} deleteDataForCategoryProduct
+    Exclui logicamente um vínculo Categoria x Grupo/Produto via modelo FATA150A.
+    Utiliza MODEL_OPERATION_UPDATE com DeleteLine() no grid ACVDETAIL para garantir
+    exclusao de linha unica. Valida movimentacoes na tabela D4X antes de excluir.
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+/*/
+Method deleteDataForCategoryProduct() Class RetailAutopartsCatalogCategoryProductController
+    Local oJsonRespo     := JsonObject():New() as Object
+    Local oJPath         := oRest:getPathParamsRequest() as Object
+    Local oJParametr     := oRest:getQueryRequest() as Object
+    Local aArea          := GetArea() as Array
+    Local aValPos        := {} as Array
+    Local aDeleteRule    := {} as Array
+    Local aErros         := {} as Array
+    Local oModel         := Nil as Object
+    Local oModelACV      := Nil as Object
+    Local lFound         := .F. as Logical
+    Local lAllowed       := .T. as Logical
+    Local lGravouOK      := .F. as Logical
+    Local lDadosOK       := .T. as Logical
+    Local cBranch        := "" as Character
+    Local cKeyCatego     := "" as Character
+    Local cKeyGrupo      := "" as Character
+    Local cKeyCodPro     := "" as Character
+    Local cReferenceCode := "" as Character
+    Local cBlockMessage  := "" as Character
+    Local nLine          := 0 as Numeric
+
+    DbSelectArea('ACV')
+
+    oRest:setKeyHeaderResponse("Content-Type", "application/json")
+
+    cBranch := xFilial('ACV')
+
+    // Path param obrigatorio: categoryCode (enforced pela rota)
+    cKeyCatego := AllTrim(oJPath['categoryCode'])
+
+    // Query params: exatamente um de productCode, groupCode ou referenceCode deve ser informado
+    If oJParametr:hasProperty('productCode')
+        cKeyCodPro := AllTrim(oJParametr['productCode'])
+    EndIf
+    If oJParametr:hasProperty('groupCode')
+        cKeyGrupo := AllTrim(oJParametr['groupCode'])
+    EndIf
+    If oJParametr:hasProperty('referenceCode')
+        cReferenceCode := AllTrim(oJParametr['referenceCode'])
+    EndIf
+
+    // Validacao: exatamente um de productCode, groupCode ou referenceCode deve ser informado
+    aValPos := Self:ValidatePositioningParams(cKeyCodPro, cKeyGrupo, cReferenceCode)
+    If !aValPos[1]
+        oRest:setStatusCode(422)
+        oJsonRespo['success'] := .F.
+        oJsonRespo['message'] := aValPos[2]
+        lDadosOK := .F.
+    EndIf
+
+    // Posiciona ACV pela chave composta via SQL
+    If lDadosOK
+        lFound := Self:PositionACVByKey(cBranch, cKeyCatego, cKeyGrupo, cKeyCodPro, cReferenceCode)
+        If !lFound
+            oRest:setStatusCode(404)
+            oJsonRespo['success'] := .F.
+            oJsonRespo['message'] := STR0009 //"Registro não encontrado para os parâmetros informados"
+            lDadosOK := .F.
+        EndIf
+    EndIf
+
+    // Valida D4X antes de excluir (ACV ja posicionado por PositionACVByKey)
+    If lDadosOK
+        aDeleteRule   := Self:IsDeleteAllowed()
+        lAllowed      := aDeleteRule[1]
+        cBlockMessage := aDeleteRule[2]
+
+        If !lAllowed
+            oRest:setStatusCode(409)
+            oJsonRespo['success'] := .F.
+            oJsonRespo['message'] := cBlockMessage
+            lDadosOK := .F.
+        EndIf
+    EndIf
+
+    // Exclui via modelo FATA150A usando DeleteLine() no grid ACVDETAIL
+    If lDadosOK
+        oModel := FWLoadModel('FATA150A')
+        oModel:SetOperation(MODEL_OPERATION_UPDATE)
+        oModel:Activate()
+        // OnActivate le ACV->ACV_CATEGO e carrega todas as linhas da categoria no grid
+
+        oModelACV := oModel:GetModel('ACVDETAIL')
+
+        // Localiza a linha pela chave composta e marca para exclusao
+        nLine := Self:FindACVLineIndex(oModelACV, cKeyGrupo, cKeyCodPro, cReferenceCode)
+        oModelACV:GoLine(nLine)
+        oModelACV:DeleteLine()
+
+        If oModel:VldData()
+            lGravouOK := oModel:CommitData()
+        EndIf
+        // Resposta default: erro (padrao defensivo)
+        oRest:setStatusCode(400)  // HTTP 400 = Bad Request
+        oJsonRespo['success'] := .F.
+        aErros := oModel:GetErrorMessage()
+        oJsonRespo['message']  := IIf(!Empty(aErros[6]), aErros[6], STR0005) //"Erro ao excluir código referencial"
+        oJsonRespo['field']    := IIf(!Empty(aErros[4]), aErros[4], "")
+        oJsonRespo['solution'] := IIf(!Empty(aErros[7]), aErros[7], "")
+
+        If lGravouOK
+            oRest:setStatusCode(200)
+            oJsonRespo['success'] := .T.
+            oJsonRespo['message'] := STR0013 //"Vínculo Categoria x Produto excluído com sucesso"
+            // Remove campos de erro caso tenha sucesso na delecao
+            oJsonRespo:delName("field")
+            oJsonRespo:delName("solution")
+        EndIf
+    EndIf
+
+    oRest:SetResponse(oJsonRespo:toJson())
+
+    If ValType(oModel) <> 'U'
+        oModel:DeActivate()
+        FreeObj(oModel)
+    EndIf
+
+    FreeObj(oJsonRespo)
+    FreeObj(oJPath)
+    FreeObj(oJParametr)
+
+    RestArea(aArea)
+
+Return .T.
+
+/*/{Protheus.doc} PositionACVByKey
+    Posiciona ACV pelo referenceCode via SQL (R_E_C_N_O_ + DbGoTo).
+    Nao ha indice da tabela ACV com chave iniciando por ACV_REFGRD,
+    por isso a busca e feita via FwExecStatement.
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+    @param   cBranch       , Character, Filial
+    @param   cCategoryCode , Character, Codigo da Categoria (ACV_CATEGO) - obrigatorio
+    @param   cGroupCode    , Character, Codigo do Grupo de Produto (ACV_GRUPO) - obrigatorio
+    @param   cProductCode  , Character, Codigo do Produto (ACV_CODPRO) - obrigatorio
+    @param   cReferenceCode, Character, Referencia Grade (ACV_REFGRD) - ausente tratado como vazio
+    @return  Logical, .T. se o registro foi encontrado e ACV posicionado
+/*/
+Method PositionACVByKey(cBranch as Character, cCategoryCode as Character, cGroupCode as Character, cProductCode as Character, cReferenceCode as Character) as Logical Class RetailAutopartsCatalogCategoryProductController
+    Local lFound    := .F. as Logical
+    Local oQry      := Nil as Object
+    Local cQry      := "" as Character
+    Local cAliasQry := "" as Character
+    Local nRecno    := 0 as Numeric
+    Local nSeq      := 1 as Numeric
+
+    cQry := " SELECT ACV.R_E_C_N_O_ AS RECNO "
+    cQry += " FROM " + RetSqlName('ACV') + " ACV "
+    cQry += " WHERE ACV.ACV_FILIAL = ? "
+    cQry += " AND ACV.ACV_CATEGO   = ? "
+    cQry += " AND ACV.ACV_GRUPO    = ? "
+    cQry += " AND ACV.ACV_CODPRO   = ? "
+    cQry += " AND ACV.ACV_REFGRD   = ? "
+    cQry += " AND ACV.D_E_L_E_T_ = ? "
+
+    cQry := ChangeQuery(cQry)
+    oQry := FwExecStatement():New(cQry)
+
+    oQry:SetString(nSeq++, cBranch)
+    oQry:SetString(nSeq++, PadR(cCategoryCode,  TamSx3('ACV_CATEGO')[1]))
+    oQry:SetString(nSeq++, PadR(cGroupCode,     TamSx3('ACV_GRUPO')[1]))
+    oQry:SetString(nSeq++, PadR(cProductCode,   TamSx3('ACV_CODPRO')[1]))
+    oQry:SetString(nSeq++, PadR(cReferenceCode, TamSx3('ACV_REFGRD')[1]))
+    oQry:SetString(nSeq++, Space(1))
+
+    cAliasQry := oQry:OpenAlias(GetNextAlias())
+
+    If !(cAliasQry)->(EOF())
+        nRecno := (cAliasQry)->RECNO
+        DbSelectArea('ACV')
+        ACV->(DbGoTo(nRecno))
+        lFound := !ACV->(EOF()) .And. !ACV->(Deleted())
+    EndIf
+    (cAliasQry)->(DBCloseArea())
+
+    oQry:Destroy()
+    oQry := Nil
+
+Return lFound
+
+/*/{Protheus.doc} FindCategoryProduct
+    Consulta vinculos Categoria x Grupo/Produto com filtros opcionais.
+    Realiza LEFT JOIN com ACU (descricao categoria), SB1 (descricao produto)
+    e SBM (descricao grupo).
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+    @param   cCategoryCode , Character, Filtro por categoria (opcional)
+    @param   cProductCode  , Character, Filtro por produto (opcional)
+    @param   cGroupCode    , Character, Filtro por grupo (opcional)
+    @param   cReferenceCode, Character, Filtro por referencia grade (opcional)
+    @return  Array, Array de objetos JSON com os registros encontrados
+/*/
+Method FindCategoryProduct(cCategoryCode as Character, cProductCode as Character, cGroupCode as Character, cReferenceCode as Character) as Array Class RetailAutopartsCatalogCategoryProductController
+    Local oQry      := Nil as Object
+    Local cQry      := "" as Character
+    Local cAliasQry := "" as Character
+    Local nSeq      := 1 as Numeric
+    Local aItens    := {} as Array
+    Local jItem     := Nil as Object
+    Local aArea     := GetArea() as Array
+
+    Default cCategoryCode  := ""
+    Default cProductCode   := ""
+    Default cGroupCode     := ""
+    Default cReferenceCode := ""
+
+    cQry  := " SELECT ACV.ACV_FILIAL, ACV.ACV_CATEGO, ACV.ACV_CODPRO, ACV.ACV_GRUPO, "
+    cQry  += " ACV.ACV_REFGRD, ACV.ACV_SUVEND, ACV.ACV_SEQPRD, "
+    cQry  += " ACU.ACU_DESC AS CATDESC, "
+    cQry  += " SB1.B1_DESC  AS PRDDESC, "
+    cQry  += " SBM.BM_DESC  AS GRPDESC "
+    cQry  += " FROM "  + RetSqlName('ACV') + " ACV "
+    cQry  += " LEFT JOIN " + RetSqlName('ACU') + " ACU "
+    cQry  += "   ON ACU.ACU_FILIAL = ? AND ACU.ACU_COD = ACV.ACV_CATEGO AND ACU.D_E_L_E_T_ = ? "
+    cQry  += " LEFT JOIN " + RetSqlName('SB1') + " SB1 "
+    cQry  += "   ON SB1.B1_FILIAL  = ? AND SB1.B1_COD  = ACV.ACV_CODPRO AND SB1.D_E_L_E_T_ = ? "
+    cQry  += " LEFT JOIN " + RetSqlName('SBM') + " SBM "
+    cQry  += "   ON SBM.BM_FILIAL  = ? AND SBM.BM_GRUPO = ACV.ACV_GRUPO AND SBM.D_E_L_E_T_ = ? "
+    cQry  += " WHERE ACV.ACV_FILIAL = ? "
+
+    If !Empty(cCategoryCode)
+        cQry += " AND ACV.ACV_CATEGO = ? "
+    EndIf
+    If !Empty(cProductCode)
+        cQry += " AND ACV.ACV_CODPRO = ? "
+    EndIf
+    If !Empty(cGroupCode)
+        cQry += " AND ACV.ACV_GRUPO = ? "
+    EndIf
+    If !Empty(cReferenceCode)
+        cQry += " AND ACV.ACV_REFGRD = ? "
+    EndIf
+
+    cQry += " AND ACV.D_E_L_E_T_ = ? "
+    cQry += " ORDER BY ACV.ACV_CATEGO, ACV.ACV_CODPRO, ACV.ACV_REFGRD "
+
+    cQry := ChangeQuery(cQry)
+    oQry := FwExecStatement():New(cQry)
+
+    oQry:SetString(nSeq++, xFilial('ACU'))  // ACU filial
+    oQry:SetString(nSeq++, Space(1))        // ACU D_E_L_E_T_
+    oQry:SetString(nSeq++, xFilial('SB1'))  // SB1 filial
+    oQry:SetString(nSeq++, Space(1))        // SB1 D_E_L_E_T_
+    oQry:SetString(nSeq++, xFilial('SBM'))  // SBM filial
+    oQry:SetString(nSeq++, Space(1))        // SBM D_E_L_E_T_
+    oQry:SetString(nSeq++, xFilial('ACV'))  // ACV filial
+
+    If !Empty(cCategoryCode)
+        oQry:SetString(nSeq++, PadR(cCategoryCode,  TamSx3('ACV_CATEGO')[1]))
+    EndIf
+    If !Empty(cProductCode)
+        oQry:SetString(nSeq++, PadR(cProductCode,   TamSx3('ACV_CODPRO')[1]))
+    EndIf
+    If !Empty(cGroupCode)
+        oQry:SetString(nSeq++, PadR(cGroupCode,     TamSx3('ACV_GRUPO')[1]))
+    EndIf
+    If !Empty(cReferenceCode)
+        oQry:SetString(nSeq++, PadR(cReferenceCode, TamSx3('ACV_REFGRD')[1]))
+    EndIf
+
+    oQry:SetString(nSeq++, Space(1)) // ACV D_E_L_E_T_
+
+    cAliasQry := oQry:OpenAlias(GetNextAlias())
+
+    While (cAliasQry)->(!EOF())
+        jItem := JsonObject():New()
+
+        jItem['branch']               := AllTrim((cAliasQry)->ACV_FILIAL)
+        jItem['categoryCode']         := AllTrim((cAliasQry)->ACV_CATEGO)
+        jItem['categoryDescription']  := AllTrim((cAliasQry)->CATDESC)
+        jItem['productCode']          := AllTrim((cAliasQry)->ACV_CODPRO)
+        jItem['productDescription']   := AllTrim((cAliasQry)->PRDDESC)
+        jItem['groupCode']            := AllTrim((cAliasQry)->ACV_GRUPO)
+        jItem['groupDescription']     := AllTrim((cAliasQry)->GRPDESC)
+        jItem['referenceCode']        := AllTrim((cAliasQry)->ACV_REFGRD)
+        jItem['salesSuggestion']      := AllTrim((cAliasQry)->ACV_SUVEND)
+        jItem['sequence']             := AllTrim((cAliasQry)->ACV_SEQPRD)
+
+        aAdd(aItens, jItem)
+
+        jItem := Nil
+        (cAliasQry)->(DbSkip())
+    EndDo
+
+    (cAliasQry)->(DBCloseArea())
+    oQry:Destroy()
+    oQry := Nil
+
+    RestArea(aArea)
+
+Return aItens
+
+/*/{Protheus.doc} FindACVLineIndex
+    Localiza o numero da linha no ACVDETAIL (MPGridModel) que corresponde
+    ao referenceCode informado. Retorna 1 se nao encontrado (fallback seguro).
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+    @param   oModelACV     , Object   , Modelo do grid ACVDETAIL
+    @param   cGroupCode    , Character, Codigo do Grupo (ACV_GRUPO) a localizar
+    @param   cProductCode  , Character, Codigo do Produto (ACV_CODPRO) a localizar
+    @param   cReferenceCode, Character, Referencia Grade (ACV_REFGRD) a localizar
+    @return  Numeric, Numero da linha (1-based) no grid
+/*/
+Method FindACVLineIndex(oModelACV as Object, cGroupCode as Character, cProductCode as Character, cReferenceCode as Character) as Numeric Class RetailAutopartsCatalogCategoryProductController
+    Local nLine  := 1 as Numeric
+    Local nTotal := 0 as Numeric
+    Local nX     := 0 as Numeric
+
+    nTotal := oModelACV:Length()
+
+    For nX := 1 To nTotal
+        If AllTrim(oModelACV:GetValue("ACV_GRUPO",  nX)) == AllTrim(cGroupCode)    .And. ;
+           AllTrim(oModelACV:GetValue("ACV_CODPRO", nX)) == AllTrim(cProductCode)  .And. ;
+           AllTrim(oModelACV:GetValue("ACV_REFGRD", nX)) == AllTrim(cReferenceCode)
+            nLine := nX
+            Exit
+        EndIf
+    Next nX
+
+Return nLine
+
+/*/{Protheus.doc} ValidatePositioningParams
+    Valida que exatamente um dos campos de posicionamento foi informado.
+    Utilizado por POST, PUT e DELETE para garantir exclusividade entre
+    productCode, groupCode e referenceCode.
+    @type    method
+    @author  eduardo.FLima
+    @since   19/06/2026
+    @version P12
+    @param   cProductCode  , Character, Codigo do Produto informado (pode ser vazio)
+    @param   cGroupCode    , Character, Codigo do Grupo informado (pode ser vazio)
+    @param   cReferenceCode, Character, Referencia de Grade informada (pode ser vazio)
+    @return  Array, {lValido as Logical, cMensagem as Character}
+/*/
+Method ValidatePositioningParams(cProductCode as Character, cGroupCode as Character, cReferenceCode as Character) as Array Class RetailAutopartsCatalogCategoryProductController
+    Local nCount := 0 as Numeric
+    Local aRet   := {} as Array
+
+    nCount += IIf(!Empty(cProductCode),   1, 0)
+    nCount += IIf(!Empty(cGroupCode),     1, 0)
+    nCount += IIf(!Empty(cReferenceCode), 1, 0)
+
+    If nCount == 0
+        aRet := {.F., STR0014} //"Informe ao menos um dos campos: productCode, groupCode ou referenceCode"
+    ElseIf nCount > 1
+        aRet := {.F., STR0008} //"Informe apenas um dos campos: productCode, groupCode ou referenceCode"
+    Else
+        aRet := {.T., ""}
+    EndIf
+
+Return aRet
+
+/*/{Protheus.doc} ValidateUpdateParams
+    Valida que no body da requisicao PUT apenas um dos campos de atualizacao foi informado.
+    Utilizado por PUT para garantir exclusividade entre
+    productCode, groupCode e referenceCode necessario para a atualização usa os parametros do body.
+    @type    method
+    @author  eduardo.FLima
+    @since   19/06/2026
+    @version P12
+    @param   cProductCode  , Character, Codigo do Produto informado (pode ser vazio)
+    @param   cGroupCode    , Character, Codigo do Grupo informado (pode ser vazio)
+    @param   cReferenceCode, Character, Referencia de Grade informada (pode ser vazio)
+    @return  Array, {lValido as Logical, cMensagem as Character}
+/*/
+Method ValidateUpdateParams(cProductCode as Character, cGroupCode as Character, cReferenceCode as Character) as Array Class RetailAutopartsCatalogCategoryProductController
+    Local nCount := 0 as Numeric
+    Local aRet   := {} as Array
+
+    nCount += IIf(!Empty(cProductCode),   1, 0)
+    nCount += IIf(!Empty(cGroupCode),     1, 0)
+    nCount += IIf(!Empty(cReferenceCode), 1, 0)
+
+    If nCount > 1
+        aRet := {.F., STR0004} //"Informe apenas um dos campos para a atualização: productCode, groupCode ou referenceCode"
+    Else
+        aRet := {.T., ""}
+    EndIf
+
+Return aRet
+
+
+/*/{Protheus.doc} IsDeleteAllowed
+    Verifica se a exclusao do vinculo e permitida.
+    Bloqueia a exclusao se existirem registros na tabela D4X (Produto x
+    Caracteristica por Categoria) vinculados ao produto e categoria do registro ACV.
+    ACV deve estar posicionado antes desta chamada (via PositionACVByKey).
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version P12
+    @return  Array, {lPermitido as Logical, cMensagem as Character}
+/*/
+Method IsDeleteAllowed() as Array Class RetailAutopartsCatalogCategoryProductController
+    Local lAllowed  := .T. as Logical
+    Local cMessage  := "" as Character
+    Local oQry      := Nil as Object
+    Local cQry      := "" as Character
+    Local nSeq      := 1 as Numeric
+    Local nTotal    := 0 as Numeric
+    Local aRet      := {} as Array
+    Local cCatego   := "" as Character
+    Local cCodPro   := "" as Character
+
+    Default cBranch        := ""
+    Default cReferenceCode := ""
+
+    // Le os dados do registro atual (ACV posicionado por PositionACVByKey)
+    cCatego := AllTrim(ACV->ACV_CATEGO)
+    cCodPro := AllTrim(ACV->ACV_CODPRO)
+
+    // Verifica se existem caracteristicas vinculadas ao produto/categoria na D4X
+    If lAllowed .And. !Empty(cCodPro) .And. FwAliasInDic("D4X")
+        cQry  := " SELECT COUNT(1) AS TOTAL "
+        cQry  += " FROM " + RetSqlName('D4X') + " D4X "
+        cQry  += " WHERE D4X.D4X_FILIAL = ? "
+        cQry  += " AND D4X.D4X_PROD   = ? "
+        cQry  += " AND D4X.D4X_CATEGO = ? "
+        cQry  += " AND D4X.D_E_L_E_T_ = ? "
+
+        cQry := ChangeQuery(cQry)
+        oQry := FwExecStatement():New(cQry)
+
+        oQry:SetString(nSeq++, xFilial('D4X'))
+        oQry:SetString(nSeq++, PadR(cCodPro,  TamSx3('D4X_PROD')[1]))
+        oQry:SetString(nSeq++, PadR(cCatego,  TamSx3('D4X_CATEGO')[1]))
+        oQry:SetString(nSeq++, Space(1))
+
+        nTotal := Val(cValToChar(oQry:ExecScalar('TOTAL')))
+
+        oQry:Destroy()
+        oQry := Nil
+
+        If nTotal > 0
+            lAllowed := .F.
+            cMessage := STR0015 //"Exclusão bloqueada: existem características vinculadas a este produto/categoria na tabela D4X"
+        EndIf
+    EndIf
+
+    aRet := {lAllowed, cMessage}
+
+Return aRet

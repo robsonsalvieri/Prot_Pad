@@ -1,0 +1,439 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "retail.salesconnectretail.status.obj.ch"
+
+namespace totvs.protheus.retail.salesconnectretail.obj
+
+using namespace totvs.protheus.retail.salesconnectretail.dto
+
+/*/{Protheus.doc} SalesConnectRetailStatusObj
+Objeto de processamento da API GET /api/retail/v1/SalesConnectRetail/status/.
+Executa o pipeline de autenticacao, parse e validacao da query string,
+consulta paginadas de registros na SL1 via FWPreparedStatement e montagem do envelope
+de resposta SalesConnectRetailStatusResponseDto.
+
+Pipeline executado em :Process():
+  1. Authenticate   : valida X-PASS-KEY vs token fixo da API (no fonte)
+  2. ParseQuery     : desserializa JSON de query string em SalesConnectRetailStatusQueryDto
+  3. ValidateQuery  : filtros obrigatorios e paginacao valida
+  4. QuerySL1       : consulta paginada na SL1 com placeholders (anti-injection)
+  5. BuildResponse  : monta cReturn (200)
+
+Campos publicos lidos pela Function thin SalesConnectRetailApi:
+  nHttpStatus : HTTP status final (200/400/401/500)
+  cReturn     : JSON do body de resposta (SalesConnectRetailStatusResponseDto ou ErrorDto)
+
+PREMISSA (Fase 0): o campo L1_ERGRVBT deve existir na SL1. Se o ambiente
+nao tiver esse campo customizado, ajustar o SELECT em QuerySL1 removendo-o.
+
+@author  Thalys Augusto Alves Juvenal
+@since   09/06/2026
+@version 1.0
+@type class
+/*/
+Class SalesConnectRetailStatusObj
+    Public Data cAuthToken  as Character
+    Public Data cQueryJson  as Character
+    Public Data nHttpStatus as Numeric
+    Public Data cReturn     as Character
+    Public Data cUuid       as Character
+
+    Protected Data oQueryDto as Object
+
+    Public Method New(cAuthToken as Character, cQueryJson as Character) as Object
+    Public Method Process() as Logical
+
+    Protected Method Authenticate()   as Logical
+    Protected Method ParseQuery()     as Logical
+    Protected Method ValidateQuery()  as Object
+    Protected Method QuerySL1()       as Object
+    Protected Method BuildResponse(oRespDto as Object) as Logical
+    Protected Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical
+    Protected Method ValidIsoDate(cIso as Character) as Logical
+    Protected Method FmtIsoDate(cYmd as Character) as Character
+    Protected Method BindFilters(oStmt as Object, oReq as Object, cFilSL1 as Character) as Numeric
+EndClass
+
+//------------------------------------------------------------------
+// HELPERS protegidos
+//------------------------------------------------------------------
+
+/*/{Protheus.doc} ValidIsoDate
+Valida se uma string esta no formato ISO "YYYY-MM-DD" e representa
+uma data valida via SToD.
+@param cIso, character, string a validar (ex: "2026-06-09")
+@return logical, .T. valido, .F. invalido
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method ValidIsoDate(cIso as Character) as Logical Class SalesConnectRetailStatusObj
+    Local lRet := .T. as Logical
+    Local cYmd := ""  as Character
+
+    If ValType(cIso) != "C" .Or. Len(cIso) != 10
+        lRet := .F.
+    ElseIf SubStr(cIso, 5, 1) != "-" .Or. SubStr(cIso, 8, 1) != "-"
+        lRet := .F.
+    Else
+        cYmd := SubStr(cIso, 1, 4) + SubStr(cIso, 6, 2) + SubStr(cIso, 9, 2)
+        lRet := !Empty(SToD(cYmd))
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} FmtIsoDate
+Converte string "YYYYMMDD" (formato banco SL1->L1_EMISSAO) para "YYYY-MM-DD".
+Retorna "" se o input nao tiver exatamente 8 caracteres.
+@param cYmd, character, ex: "20260609"
+@return character, ex: "2026-06-09" ou ""
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method FmtIsoDate(cYmd as Character) as Character Class SalesConnectRetailStatusObj
+    Local cRet := "" as Character
+
+    If ValType(cYmd) == "C" .And. Len(cYmd) == 8
+        cRet := SubStr(cYmd, 1, 4) + "-" + SubStr(cYmd, 5, 2) + "-" + SubStr(cYmd, 7, 2)
+    EndIf
+Return cRet
+
+/*/{Protheus.doc} BindFilters
+Faz o bind dos parametros de filtro (clausula WHERE) no FWPreparedStatement,
+na MESMA ordem dos placeholders ? do FROM/WHERE (todos via SetString).
+@param oStmt,   object,    FWPreparedStatement ja com SetQuery aplicado
+@param oReq,    object,    SalesConnectRetailStatusQueryDto com os filtros
+@param cFilSL1, character, filial (xFilial) do primeiro placeholder
+@return numeric, proximo indice de placeholder livre (apos os filtros)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method BindFilters(oStmt as Object, oReq as Object, cFilSL1 as Character) as Numeric Class SalesConnectRetailStatusObj
+    Local nP := 1 as Numeric
+
+    oStmt:SetString(nP, cFilSL1)
+    nP++
+    If !Empty(oReq:cDocumentNumber)
+        oStmt:SetString(nP, oReq:cDocumentNumber)
+        nP++
+    EndIf
+    If !Empty(oReq:cFiscalNumber)
+        oStmt:SetString(nP, oReq:cFiscalNumber)
+        nP++
+    EndIf
+    If !Empty(oReq:cAccessKey)
+        oStmt:SetString(nP, oReq:cAccessKey)
+        nP++
+    EndIf
+    // L1_EMISSAO e char(8) YYYYMMDD no banco: converte "YYYY-MM-DD" -> "YYYYMMDD"
+    If !Empty(oReq:cIssueDate)
+        oStmt:SetString(nP, SubStr(oReq:cIssueDate, 1, 4) + SubStr(oReq:cIssueDate, 6, 2) + SubStr(oReq:cIssueDate, 9, 2))
+        nP++
+    EndIf
+Return nP
+
+//------------------------------------------------------------------
+// METODOS
+//------------------------------------------------------------------
+
+/*/{Protheus.doc} New
+Construtor do SalesConnectRetailStatusObj. Recebe o token X-PASS-KEY ja extraido
+pela Function thin e o JSON da query string serializado.
+@param cAuthToken, character, valor cru do header X-PASS-KEY (sem prefixo)
+@param cQueryJson, character, query string serializada como JSON
+@return object, self
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method New(cAuthToken as Character, cQueryJson as Character) as Object Class SalesConnectRetailStatusObj
+    ::cAuthToken  := cAuthToken
+    ::cQueryJson  := cQueryJson
+    ::nHttpStatus := 200
+    ::cReturn     := ""
+    ::cUuid       := FwUUIDv4()
+    ::oQueryDto   := Nil
+Return Self
+
+/*/{Protheus.doc} Process
+Orquestra o pipeline completo do GET de status de vendas Varejo.
+Cada etapa abortada retorna .F. e preenche nHttpStatus + cReturn via BuildError.
+@return logical, .T. sucesso, .F. erro
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method Process() as Logical Class SalesConnectRetailStatusObj
+    Local oRespDto as Object
+    Local lRet     as Logical
+    Local nI       as Numeric
+
+    LjGrvLog("SalesConnectRetailStatusObj", ;
+        "[" + ::cUuid + "] inicio - ambiente ativo: empresa '" + AllTrim(cEmpAnt) + ;
+        "' filial '" + AllTrim(cFilAnt) + "'")
+
+    lRet := ::Authenticate()
+
+    If lRet
+        lRet := ::ParseQuery()
+    EndIf
+
+    If lRet
+        lRet := ::ValidateQuery():isValid
+    EndIf
+
+    If lRet
+        oRespDto := ::QuerySL1()
+        lRet     := (oRespDto != Nil)
+    EndIf
+
+    If lRet
+        ::BuildResponse(oRespDto)
+    EndIf
+
+    // Libera o envelope e seus itens (ja serializados em cReturn). Em REST com
+    // thread pool, objetos locais nao liberados acumulam memoria entre requisicoes.
+    If oRespDto != Nil
+        For nI := 1 To Len(oRespDto:aItems)
+            FWFreeObj(oRespDto:aItems[nI])
+        Next nI
+        FWFreeObj(oRespDto)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} Authenticate
+Valida o cabecalho X-PASS-KEY contra o token fixo da API (definido neste fonte).
+O header carrega APENAS o token (sem prefixo) — a autenticacao usuario/senha
+do ERP e feita pelo framework REST do Protheus ANTES desta Function ser
+invocada (autenticacao em duas camadas: ERP user/pwd + token API).
+
+@return logical, .T. autorizado, .F. caso contrario (nHttpStatus=401)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method Authenticate() as Logical Class SalesConnectRetailStatusObj
+    Local lRet        := .T. as Logical
+    Local cAuthHeader := ""  as Character
+    Local cExpected   := ""  as Character
+
+    If ValType(::cAuthToken) == "C"
+        cAuthHeader := AllTrim(::cAuthToken)
+    EndIf
+    // Token fixo da API (produto TOTVS) - DVARPV-6451 / DVARPV-6461
+    cExpected := "2lz3fw3vOvPd0TsQ1Kj8hGast77d1YKZRj6LYRwIZG3M"
+
+    If Empty(cAuthHeader) .Or. Empty(cExpected)
+        ::BuildError("0002", STR0001, 401)   // "Token X-PASS-KEY invalido ou ausente"
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 401: X-PASS-KEY ausente")
+        lRet := .F.
+    ElseIf !(cAuthHeader == cExpected)
+        ::BuildError("0002", STR0001, 401)   // "Token X-PASS-KEY invalido ou ausente"
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 401: X-PASS-KEY incorreto")
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ParseQuery
+Desserializa o JSON da query string em SalesConnectRetailStatusQueryDto.
+Erros de parse resultam em 400/0001.
+@return logical, .T. sucesso, .F. erro (nHttpStatus=400)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method ParseQuery() as Logical Class SalesConnectRetailStatusObj
+    Local lRet := .T. as Logical
+    Local oErr as Object
+
+    Try
+        ::oQueryDto := SalesConnectRetailStatusQueryDto():New()
+        ::oQueryDto:fromJson(::cQueryJson)
+    Catch oErr
+        ::BuildError("0001", STR0002, 400)   // "Query string invalida"
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 400: query string invalida | " + oErr:Description)
+        lRet := .F.
+    EndTry
+Return lRet
+
+/*/{Protheus.doc} ValidateQuery
+Valida filtros obrigatorios e parametros de paginacao. Retorna SalesConnectRetailValidationResult
+e, quando invalido, ja escreve nHttpStatus=400 e cReturn via BuildError.
+@return object, SalesConnectRetailValidationResult (isValid/code/message)
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method ValidateQuery() as Object Class SalesConnectRetailStatusObj
+    Local oResult as Object
+
+    If !::oQueryDto:hasFilter()
+        oResult := SalesConnectRetailValidationResult():New(.F., "0007", STR0003)   // "Informe ao menos um filtro: documentNumber, fiscalNumber, accessKey ou issueDate"
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 400: " + oResult:message)
+    ElseIf ::oQueryDto:nPage < 1 .Or. ::oQueryDto:nPageSize < 1 .Or. ::oQueryDto:nPageSize > 100
+        oResult := SalesConnectRetailValidationResult():New(.F., "0008", STR0004)   // "Paginacao invalida (page>=1, pageSize 1..100)"
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 400: " + oResult:message)
+    ElseIf !Empty(::oQueryDto:cIssueDate) .And. !::ValidIsoDate(::oQueryDto:cIssueDate)
+        oResult := SalesConnectRetailValidationResult():New(.F., "0009", STR0005)   // "Data de emissao invalida (use YYYY-MM-DD)"
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 400: " + oResult:message)
+    Else
+        oResult := SalesConnectRetailValidationResult():New(.T., "", "")
+    EndIf
+Return oResult
+
+/*/{Protheus.doc} QuerySL1
+Consulta a SL1 via FWPreparedStatement: os FILTROS sao placeholders ? com bind
+por SetString (anti SQL injection / CA2050 — nenhum valor concatenado).
+O total vem de um SELECT COUNT(*) proprio (FWCountRows nao existe neste build).
+A PAGINACAO e feita em ADVPL (pula nOffset linhas e le ate pageSize sobre o
+cursor), pois este build nao tem FWPreparedStatement:SetInteger nem OFFSET/FETCH
+parametrizado. Converte L1_EMISSAO "YYYYMMDD" para "YYYY-MM-DD" nos itens.
+
+PREMISSA (Fase 0): L1_ERGRVBT deve existir na SL1 como campo customizado.
+Se o ambiente nao tiver esse campo, remover do SELECT e do New() do item.
+
+@return object, SalesConnectRetailStatusResponseDto com itens paginados, ou Nil em caso de erro
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method QuerySL1() as Object Class SalesConnectRetailStatusObj
+    Local oReq       as Object
+    Local cFilSL1    as Character
+    Local cFromWhere as Character
+    Local oStmtCnt   as Object
+    Local oStmtFch   as Object
+    Local cAlias     as Character
+    Local cCntAlias  as Character
+    Local nTotal     as Numeric
+    Local aItens     as Array
+    Local oItem      as Object
+    Local cIssueDb   as Character
+    Local nSkip      as Numeric
+    Local nRead      as Numeric
+    Local oErr       as Object
+    Local oResp      := Nil as Object
+
+    oReq    := ::oQueryDto
+    cFilSL1 := xFilial("SL1")
+
+    // FROM + WHERE com placeholders (?) — apenas literais e ?, NENHUM valor de
+    // filtro/paginacao e concatenado (anti SQL injection / CA2050). O mesmo
+    // FROM/WHERE serve para o COUNT e para o SELECT da pagina.
+    cFromWhere := "FROM " + RetSqlName("SL1") + " SL1 "
+    cFromWhere += "WHERE SL1.L1_FILIAL = ? AND SL1.D_E_L_E_T_ = ' ' "
+    If !Empty(oReq:cDocumentNumber)
+        cFromWhere += "AND SL1.L1_NUM = ? "
+    EndIf
+    If !Empty(oReq:cFiscalNumber)
+        cFromWhere += "AND SL1.L1_DOC = ? "
+    EndIf
+    If !Empty(oReq:cAccessKey)
+        cFromWhere += "AND SL1.L1_KEYNFCE = ? "
+    EndIf
+    If !Empty(oReq:cIssueDate)
+        cFromWhere += "AND SL1.L1_EMISSAO = ? "
+    EndIf
+
+    Try
+        // 1) Total: SELECT COUNT(*) proprio (FWCountRows nao existe neste build).
+        oStmtCnt := FWPreparedStatement():New()
+        oStmtCnt:SetQuery("SELECT COUNT(*) AS RSTOTAL " + cFromWhere)
+        ::BindFilters(oStmtCnt, oReq, cFilSL1)
+        cCntAlias := GetNextAlias()
+        DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmtCnt:GetFixQuery()), cCntAlias, .F., .T.)
+        nTotal := (cCntAlias)->RSTOTAL
+        (cCntAlias)->(DbCloseArea())
+        FWFreeObj(oStmtCnt)
+
+        // 2) Pagina: SELECT dos campos + ORDER BY (sem OFFSET/FETCH). Este build
+        //    nao tem FWPreparedStatement:SetInteger e concatenar os inteiros de
+        //    paginacao dispararia o CA2050 — entao a paginacao e feita em ADVPL
+        //    (pula nOffset linhas e le ate pageSize) sobre o cursor.
+        oStmtFch := FWPreparedStatement():New()
+        oStmtFch:SetQuery("SELECT L1_FILIAL, L1_NUM, L1_DOC, L1_SERIE, L1_KEYNFCE, L1_EMISSAO, L1_SITUA, L1_ERGRVBT " + cFromWhere + " ORDER BY SL1.L1_EMISSAO, SL1.L1_NUM")
+        ::BindFilters(oStmtFch, oReq, cFilSL1)
+        cAlias := GetNextAlias()
+        DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmtFch:GetFixQuery()), cAlias, .F., .T.)
+
+        // pula as linhas das paginas anteriores
+        nSkip := (oReq:nPage - 1) * oReq:nPageSize
+        While nSkip > 0 .And. !(cAlias)->(Eof())
+            (cAlias)->(DbSkip())
+            nSkip--
+        EndDo
+
+        // le ate pageSize linhas da pagina atual
+        aItens := {}
+        nRead  := 0
+        While !(cAlias)->(Eof()) .And. nRead < oReq:nPageSize
+            // L1_EMISSAO no alias vem como "YYYYMMDD" — formata "YYYY-MM-DD" no item
+            cIssueDb := AllTrim((cAlias)->L1_EMISSAO)
+            oItem := SalesConnectRetailStatusItemDto():New( ;
+                AllTrim((cAlias)->L1_FILIAL), ;
+                AllTrim((cAlias)->L1_NUM), ;
+                AllTrim((cAlias)->L1_DOC), ;
+                AllTrim((cAlias)->L1_SERIE), ;
+                AllTrim((cAlias)->L1_KEYNFCE), ;
+                ::FmtIsoDate(cIssueDb), ;
+                AllTrim((cAlias)->L1_SITUA), ;
+                AllTrim((cAlias)->L1_ERGRVBT) )
+            AAdd(aItens, oItem)
+            nRead++
+            (cAlias)->(DbSkip())
+        EndDo
+        (cAlias)->(DbCloseArea())
+        FWFreeObj(oStmtFch)
+
+        // montagem do envelope tambem dentro do Try: erro de DTO vira 0099 limpo
+        oResp := SalesConnectRetailStatusResponseDto():New(aItens, nTotal, oReq:nPage, oReq:nPageSize)
+    Catch oErr
+        If !Empty(cCntAlias) .And. Select(cCntAlias) > 0
+            (cCntAlias)->(DbCloseArea())
+        EndIf
+        If !Empty(cAlias) .And. Select(cAlias) > 0
+            (cAlias)->(DbCloseArea())
+        EndIf
+        ::BuildError("0099", STR0006 + ::cUuid, 500)   // "Falha na consulta. UUID: "
+        LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] erro query/montagem: " + oErr:Description)
+        oResp := Nil
+    EndTry
+
+Return oResp
+
+/*/{Protheus.doc} BuildResponse
+Preenche nHttpStatus=200 e cReturn com o JSON do envelope de resposta.
+@param oRespDto, object, SalesConnectRetailStatusResponseDto pronto
+@return logical, sempre .T.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method BuildResponse(oRespDto as Object) as Logical Class SalesConnectRetailStatusObj
+    ::nHttpStatus := 200
+    ::cReturn     := oRespDto:toJson()
+    LjGrvLog("SalesConnectRetailStatusObj", "[" + ::cUuid + "] 200 OK")
+Return .T.
+
+/*/{Protheus.doc} BuildError
+Preenche nHttpStatus e cReturn com um ErrorDto serializado.
+@param cCode,    character, codigo de erro (0002..0009)
+@param cMessage, character, mensagem
+@param nStatus,  numeric,   HTTP status final
+@return logical, sempre .F.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  09/06/2026
+/*/
+Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical Class SalesConnectRetailStatusObj
+    Local oDto as Object
+
+    ::nHttpStatus := nStatus
+    oDto := SalesConnectRetailErrorDto():New(cCode, cMessage)
+    ::cReturn := oDto:toJson()
+    FWFreeObj(oDto)
+Return .F.

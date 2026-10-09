@@ -1,0 +1,1500 @@
+#include 'totvs.ch'
+#include "tlpp-core.th"
+#INCLUDE "FWMVCDEF.CH"
+#include 'OFPrioAtendimentoClass.ch'
+
+/*/{Protheus.doc} OFPrioAtendimentoClass
+    Classe para uso da priorização de atendimento
+    
+    @type class
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Class OFPrioAtendimentoClass
+	public data cNumide as character
+	public data cNumorc as character
+	public data cVEYCodigo as character
+	public data cVEZCodigo as character
+	public data cSenha as character
+	public data cOrdem as character
+	public data cChassiReduzido as character
+	public data cTipoContrato as character
+	public data cPlaca as character
+	public data cErroPreCadastro as character
+
+	private data jConfig as json
+	private data _oSQLHelper as object
+	private data _oArHelp as object
+	private data _lVeiculoPassante as logical
+
+	Public Method New() as object
+	Public Method buscaPlaca() as logical
+	Public Method processaChassiReduzido() as logical
+	Public Method buscaSenhas() as array
+	Public Method controleDeChamada() as logical
+	Public Method buscaHistorico() as array
+	Public Method chamaAnterior() as logical
+	Public Method chamaNovamente() as logical
+	Public Method buscaMotCancelamentos() as array
+	Public Method cancelaSenha() as logical
+	Public Method alteraDataDeEntrega() as logical
+	Public Method criaOrdemDeServico() as logical
+	Public Method buscaSX5() as array
+	Public Method buscaModelosVeiculo() as array
+	Public Method criaMotorista() as logical
+	Public Method preCadastroVeiculo() as logical
+	Public Method buscaSenhasStatusPassagemAberto() as array
+	Public Method buscaSenhasPainel() as json
+	Public Method converteTipoContratoParaCodigo() as character
+
+	Private Method identificaAgendamento() as logical
+	Private Method inclusaoAtendimento() as logical
+	Private Method criaNovaSenha() as character
+	Private Method buscaOrdemChamada() as character
+	Private Method buscaTotalPaginasSenhas() as Numeric
+	Private Method buscaHistoricoChamada() as array
+	Private Method buscaChassiReduzido() as logical
+	Private Method buscaDataResetSenha() as date
+	Private Method validaToleranciaChegada() as logical
+	Private Method validaPreCadastroVeiculo() as logical
+	Private Method localizaVeiculoPreCadastro() as logical
+	Private Method incluiVeiculoPreCadastro() as logical
+	Private Method atualizaVeiculoPreCadastro() as logical
+	Private Method atualizaSenhaVeiculo() as logical
+	Private Method montaErroModel() as character
+EndClass
+
+/*/{Protheus.doc} New
+    Construtor Simples
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method New() Class OFPrioAtendimentoClass
+	Local ofScaniaConfig := OfScaniaConfig():New("PRIOATE","OFIA551")
+	Local jConfig := ofScaniaConfig:getConfigWithNoEnviroment()
+
+	self:cVEYCodigo := ""
+	self:cErroPreCadastro := ""
+	self:_oSQLHelper := DMS_SQLHelper():New()
+	self:_oArHelp   := DMS_ArrayHelper():New()
+
+	if (ValType(jConfig) == "J")
+		self:jConfig := jConfig
+	else
+		self:jConfig := JsonObject():New()
+	endif
+Return SELF
+
+/*/{Protheus.doc} buscaPlaca
+    Faz o processo de buscar o veiculo pela placa
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method buscaPlaca(cPlaca) Class OFPrioAtendimentoClass
+	VV1->(DbSetOrder(9))
+	If !VV1->(DbSeek(xFilial("VV1")+cPlaca))
+		return .f.
+	EndIf
+	self:cTipoContrato := OA547070N_ConsultaTipoContrato(VV1->VV1_CHASSI)
+	self:cTipoContrato := self:converteTipoContratoParaCodigo(self:cTipoContrato)
+	self:identificaAgendamento(VV1->VV1_PLAVEI, VV1->VV1_CHASSI)
+	self:inclusaoAtendimento(.t.)
+Return .t.
+
+/*/{Protheus.doc} processaChassiReduzido
+    Faz o processo de crair a senha com o chassi
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method processaChassiReduzido(cChassiReduzido, cPlaca) Class OFPrioAtendimentoClass
+	Local lEncontrou := .F.
+	self:cChassiReduzido := cChassiReduzido
+	self:cPlaca := cPlaca
+
+	lEncontrou := self:buscaChassiReduzido(cChassiReduzido)
+	If !lEncontrou
+		If OFIA544(, cChassiReduzido, .T.)
+			lEncontrou := self:buscaChassiReduzido(cChassiReduzido)
+		EndIf
+	EndIf
+
+	self:cTipoContrato := OA547070N_ConsultaTipoContrato(cChassiReduzido)
+	self:cTipoContrato := self:converteTipoContratoParaCodigo(self:cTipoContrato)
+
+	If lEncontrou
+		self:identificaAgendamento(VV1->VV1_PLAVEI, VV1->VV1_CHASSI)
+		self:inclusaoAtendimento(.T.)
+	Else
+		self:inclusaoAtendimento(.F.)
+	EndIf
+Return .T.
+
+/*/{Protheus.doc} identificaAgendamento
+    Identifica se há agendamento no dia para o veiculo
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method identificaAgendamento(cPlaca, cChassi) Class OFPrioAtendimentoClass
+	local cAlias := GetNextAlias()
+	Local cQuery    := ""
+	local cFixQuery := ""
+	local oStatement := FWPreparedStatement():new()
+
+	cQuery := ""
+	cQuery += " SELECT VSO_NUMIDE, VSO_STATUS, VSO_HORAGE "
+	cQuery += " FROM " + RetSQLName("VSO") + " VSO "
+	cQuery += " WHERE VSO_FILIAL = ? "
+	cQuery += "   AND ( VSO_PLAVEI = ? "
+	cQuery += "   	OR VSO_GETKEY = ? ) "
+	cQuery += "	  AND VSO_DATAGE = ? "
+	cQuery += "	  AND VSO_STATUS IN (1, 5) "
+	cQuery += "   AND VSO.D_E_L_E_T_ = ' ' "
+
+	oStatement:setQuery(cQuery)
+	oStatement:setString(1, FWxFilial("VSO"))
+	oStatement:setString(2, cPlaca)
+	oStatement:setString(3, cChassi)
+	oStatement:setString(4, Dtos(Date()))
+
+	cFixQuery := oStatement:getFixQuery()
+	dbUseArea( .T., "TOPCONN", TcGenQry( ,, cFixQuery ), cAlias, .F. , .T. )
+	dbSelectArea(cAlias)
+
+	if !(cAlias)->(EoF())
+		self:cNumide := (cAlias)->VSO_NUMIDE
+		self:_lVeiculoPassante := !self:validaToleranciaChegada((cAlias)->VSO_HORAGE)
+	endif
+
+	(cAlias)->(DbCloseArea())
+Return .t.
+
+/*/{Protheus.doc} inclusaoAtendimento
+    inclui um novo registro na tabela Registro das Senhas Geradas
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method inclusaoAtendimento(lPossuiVeiculoCadastrado) Class OFPrioAtendimentoClass
+	local cSenhaNumerica := self:criaNovaSenha()
+	default lPossuiVeiculoCadastrado := .f.
+	self:cVEYCodigo := GETSXENUM('VEY', 'VEY_CODIGO')
+	self:cSenha := cSenhaNumerica
+	ConfirmSX8()
+
+	VEY->(RecLock("VEY", .t.))
+	VEY->VEY_FILIAL := xFilial("VEY")
+	VEY->VEY_CODIGO := self:cVEYCodigo
+	VEY->VEY_CHASSI := iif(lPossuiVeiculoCadastrado, VV1->VV1_CHASSI, self:cChassiReduzido)
+	VEY->VEY_DTGESE := Date()
+	VEY->VEY_HRGESE := StrTran(Time(), ":", "")
+	VEY->VEY_TPATEN := iif(self:_lVeiculoPassante, STR0001, STR0002) // "Agendamento", "Passante"
+	VEY->VEY_SENGER := cSenhaNumerica
+	VEY->VEY_STASEN := "1"
+	VEY->VEY_INFOGE := "1"
+	VEY->VEY_NUMAGE := self:cNumide
+	VEY->VEY_TPCONT := self:cTipoContrato
+	if lPossuiVeiculoCadastrado
+		VEY->VEY_PLAVEI := VV1->VV1_PLAVEI
+		VEY->VEY_PROVEI := VV1->VV1_PROATU
+		VEY->VEY_LOJPRO := VV1->VV1_LJPATU
+	elseif !empty(self:cPlaca)
+		VEY->VEY_PLAVEI := self:cPlaca
+	endif
+	VEY->(msUnlock())
+Return .t.
+
+/*/{Protheus.doc} criaNovaSenha
+    Faz o processo para retornar uma nova senha
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method criaNovaSenha() Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	Local oStatement := FWPreparedStatement():New()
+	Local nNovaSenha := 1
+	Local dDataInicial := self:buscaDataResetSenha()
+
+	if ValType(self:jConfig) == "J" .AND. self:jConfig:HasProperty('SESE_TEMPORESETSENHA')
+		cResetSenha := self:jConfig['SESE_TEMPORESETSENHA']
+	endif
+
+	cQuery := " SELECT MAX(VEY_SENGER) AS ULTIMA_SENHA "
+	cQuery += "   FROM " + RetSQLName("VEY") + " VEY "
+	cQuery += "  WHERE VEY_FILIAL   = ? " 
+	cQuery += "    AND VEY_DTGESE   >= ? " 
+	if self:cTipoContrato == "00000001"  .OR. self:cTipoContrato == '00000003'
+		cQuery += "    AND (VEY_TPCONT = '00000001' OR VEY_TPCONT = '00000003')"
+	else
+		cQuery += "    AND VEY_TPCONT   = ?"
+	endif
+	cQuery += "    AND VEY.D_E_L_E_T_ = ' ' "
+		
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("VEY"))
+	oStatement:SetString(2, Dtos(dDataInicial))
+	if self:cTipoContrato <> "00000001"  .AND. self:cTipoContrato <> '00000003'
+		oStatement:SetString(3, self:cTipoContrato)
+	endif
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	dbSelectArea(cAlias)
+
+	if ! (cAlias)->(EoF()) .and. ! Empty((cAlias)->ULTIMA_SENHA)
+		nNovaSenha := Val((cAlias)->ULTIMA_SENHA) + 1
+	endif
+
+	(cAlias)->(DbCloseArea())
+Return StrZero(nNovaSenha, 4)
+
+/*/{Protheus.doc} buscaSenhas
+    Metodo para buscar as senhas
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method buscaSenhas(cFiltroDataInicial, cFiltroDataFinal) Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	Local oStatement := FWPreparedStatement():New()
+	local jSenha := JsonObject():New()
+	local aSenhas := {}
+	local cDataEntrega, cHoraEntrega
+	Local nParam := 1
+	local cDataIniSQL := ""
+	local cDataFimSQL := ""
+	local cTipoContrato := "SEM"
+
+	If !Empty(cFiltroDataInicial)
+		cDataIniSQL := SubStr(cFiltroDataInicial,5,4) + ;
+					SubStr(cFiltroDataInicial,3,2) + ;
+					SubStr(cFiltroDataInicial,1,2)
+	EndIf
+
+	If !Empty(cFiltroDataFinal)
+		cDataFimSQL := SubStr(cFiltroDataFinal,5,4) + ;
+					SubStr(cFiltroDataFinal,3,2) + ;
+					SubStr(cFiltroDataFinal,1,2)
+	EndIf
+
+	cQuery := " SELECT VEY_CODIGO, VEY_PLAVEI, VEY_CHASSI, VEY_PROVEI, VOG_NOMMOT, "
+	cQuery += "        VEY_MOTORI, VEY_DTPVVE, VEY_HRPVVE, VEY_SENGER, VEY_LOJPRO, "
+	cQuery += "        VEY_STASEN, VSO_DATAGE, VSO_HORAGE, VEY_NUMEOS, VEY_TPCONT, "
+	cQuery += "        COALESCE(VV1C.VV1_CODMAR, VV1P.VV1_CODMAR) CAD_CODMAR, "
+	cQuery += "        COALESCE(VV1C.VV1_CHASSI, VV1P.VV1_CHASSI) CAD_CHASSI, COALESCE(VV1C.VV1_MODVEI, VV1P.VV1_MODVEI) CAD_MODVEI, "
+	cQuery += "        COALESCE(VV1C.VV1_SEGMOD, VV1P.VV1_SEGMOD) CAD_SEGMOD, COALESCE(VV1C.VV1_FABMOD, VV1P.VV1_FABMOD) CAD_FABMOD, "
+	cQuery += "        COALESCE(VV1C.VV1_PROATU, VV1P.VV1_PROATU) CAD_PROATU, COALESCE(VV1C.VV1_LJPATU, VV1P.VV1_LJPATU) CAD_LJPATU "
+	cQuery += "   FROM " + RetSQLName("VEY") + " VEY "
+	cQuery += "	  LEFT JOIN " + RetSQLName("VSO") + " VSO "
+	cQuery += "		   ON VEY_NUMAGE = VSO_NUMIDE"
+	cQuery += "			AND VSO_FILIAL = ? "
+	cQuery += "			AND VSO.D_E_L_E_T_ = ' ' "
+	cQuery += "	LEFT JOIN " + RetSQLName("VOG") + " VOG "
+	cQuery += "		  ON VOG_CODMOT = VEY_MOTORI "
+	cQuery += "			AND VOG_FILIAL = ? "
+	cQuery += "			AND VOG.D_E_L_E_T_ = ' ' "
+	cQuery += "	LEFT JOIN " + RetSQLName("VV1") + " VV1C "
+	cQuery += "		  ON VV1C.VV1_CHASSI = VEY_CHASSI "
+	cQuery += "			AND VV1C.VV1_FILIAL = ? "
+	cQuery += "			AND VV1C.D_E_L_E_T_ = ' ' "
+	cQuery += "	LEFT JOIN " + RetSQLName("VV1") + " VV1P "
+	cQuery += "		  ON VV1P.VV1_PLAVEI = VEY_PLAVEI "
+	cQuery += "			AND VV1C.VV1_CHASSI IS NULL "
+	cQuery += "			AND VEY_PLAVEI <> ' ' "
+	cQuery += "			AND VV1P.VV1_FILIAL = ? "
+	cQuery += "			AND VV1P.D_E_L_E_T_ = ' ' "
+	cQuery += "	  WHERE VEY_FILIAL    = ? "
+	cQuery += "		AND VEY.D_E_L_E_T_ = ' ' "
+
+	If !Empty(cDataIniSQL)
+		cQuery += " AND VEY_DTGESE >= ? "
+	EndIf
+
+	If !Empty(cDataFimSQL)
+		cQuery += " AND VEY_DTGESE <= ? "
+	EndIf
+		
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(nParam++, FWxFilial("VSO"))
+	oStatement:SetString(nParam++, FWxFilial("VOG"))
+	oStatement:SetString(nParam++, FWxFilial("VV1"))
+	oStatement:SetString(nParam++, FWxFilial("VV1"))
+	oStatement:SetString(nParam++, FWxFilial("VEY"))
+
+	If !Empty(cDataIniSQL)
+		oStatement:SetString(nParam++, cDataIniSQL)
+	EndIf
+
+	If !Empty(cDataFimSQL)
+		oStatement:SetString(nParam++, cDataFimSQL)
+	EndIf
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	While !(cAlias)->(EoF())
+		cDataEntrega := Dtos(Stod((cAlias)->VEY_DTPVVE))
+		cDataEntrega := LEFT(cDataEntrega,4)+"-"+SUBS(cDataEntrega,5,2)+"-"+Right(cDataEntrega,2)
+		cHoraEntrega := LEFT((cAlias)->VEY_HRPVVE, 2) + ":" + RIGHT((cAlias)->VEY_HRPVVE, 2)
+
+		SA1->(dbSetOrder(1))
+		SA1->(dbSeek(xFilial("SA1")+(cAlias)->VEY_PROVEI+(cAlias)->VEY_LOJPRO))
+
+		if alltrim((cAlias)->VEY_TPCONT) == 'Pro Pers'
+			cTipoContrato := "Pro Personal"
+		else
+			cTipoContrato := alltrim((cAlias)->VEY_TPCONT)
+		endif
+
+		jSenha := JsonObject():New()
+		jSenha["ID"] := alltrim((cAlias)->VEY_CODIGO)
+		jSenha["Senha"] := AllTrim((cAlias)->VEY_SENGER)
+		jSenha["Placa"] := alltrim((cAlias)->VEY_PLAVEI)
+		jSenha["Chassi"] := alltrim((cAlias)->VEY_CHASSI)
+		jSenha["Proprietario"] := alltrim(SA1->A1_NOME)
+		jSenha["Motorista"] := alltrim((cAlias)->VOG_NOMMOT)
+		jSenha["PrevisaoEntrega"] := iif(!empty(cDataEntrega), cDataEntrega + " " + cHoraEntrega, "")
+		jSenha["Agendamento"] := alltrim((cAlias)->VSO_DATAGE) + " " + alltrim((cAlias)->VSO_HORAGE)
+		jSenha["OrdemServico"] := alltrim((cAlias)->VEY_NUMEOS)
+		jSenha["Status"] := alltrim((cAlias)->VEY_STASEN)
+		jSenha["TipoContrato"] := cTipoContrato
+		jSenha["VV1_CODMAR"] := alltrim((cAlias)->CAD_CODMAR)
+		jSenha["VV1_CHASSI"] := alltrim((cAlias)->CAD_CHASSI)
+		jSenha["VV1_MODVEI"] := alltrim((cAlias)->CAD_MODVEI)
+		jSenha["VV1_SEGMOD"] := alltrim((cAlias)->CAD_SEGMOD)
+		jSenha["VV1_FABMOD"] := alltrim((cAlias)->CAD_FABMOD)
+		jSenha["VV1_PROATU"] := alltrim((cAlias)->CAD_PROATU)
+		jSenha["VV1_LJPATU"] := alltrim((cAlias)->CAD_LJPATU)
+
+		AAdd(aSenhas,jSenha)
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(DbCloseArea())
+Return aSenhas
+
+/*/{Protheus.doc} controleDeChamada
+    Metodo de controle de chamada, salvando a chamada na tabela VEZ para historico
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method controleDeChamada(cVeyID, cTpAcao) Class OFPrioAtendimentoClass
+	local cVEZCodigo := GETSXENUM('VEZ', 'VEZ_CODIGO')
+	ConfirmSX8()
+
+	VEY->(DbSetOrder(1))
+	If !VEY->(DbSeek(xFilial("VEY")+cVeyID))
+		return .f.
+	Else
+		self:cSenha := VEY->VEY_SENGER
+		self:cVEZCodigo := cVEZCodigo
+		self:cVEYCodigo := cVeyID
+		self:cTipoContrato := VEY->VEY_TPCONT
+		self:cNumide := VEY->VEY_NUMAGE
+
+		if VEY->VEY_STASEN == '1'
+			VEY->(RecLock("VEY", .f.))
+			VEY->VEY_STASEN := "2"
+			VEY->(msUnlock())
+		endif
+	Endif
+
+	VEZ->(RecLock("VEZ", .t.))
+	VEZ->VEZ_FILIAL := xFilial("VEZ")
+	VEZ->VEZ_CODIGO := cVEZCodigo
+	VEZ->VEZ_CODVEY := cVeyID
+	VEZ->VEZ_SENCHA := self:cSenha
+	VEZ->VEZ_DATCHA := Date()
+	VEZ->VEZ_HORCHA := StrTran(Time(), ":", "")
+	VEZ->VEZ_CODUSR := __cUserID
+	VEZ->VEZ_TPACAO := cTpAcao
+	VEZ->VEZ_ORDCHA := self:buscaOrdemChamada(self:cSenha)
+	VEZ->(msUnlock())
+Return .t.
+
+/*/{Protheus.doc} buscaOrdemChamada
+    Faz o controle das ordem de chamada das senhas
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method buscaOrdemChamada(cSenhaChamada) Class OFPrioAtendimentoClass
+	local cSenha := 1
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	Local oStatement := FWPreparedStatement():New()
+
+	cQuery := " SELECT MAX(VEZ_ORDCHA) AS ULTIMA_ORDEM "
+	cQuery += "   FROM " + RetSQLName("VEZ") + " VEZ "
+	cQuery += "  WHERE VEZ_FILIAL   = ? "
+	cQuery += "    AND VEZ_SENCHA   = ? "
+	cQuery += "    AND VEZ.D_E_L_E_T_ = ' ' "
+
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("VEZ"))
+	oStatement:SetString(2, cSenhaChamada)
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	dbSelectArea(cAlias)
+
+	if ! (cAlias)->(EoF()) .and. ! Empty((cAlias)->ULTIMA_ORDEM)
+		cSenha := Val((cAlias)->ULTIMA_ORDEM) + 1
+	endif
+
+	(cAlias)->(DbCloseArea())
+Return StrZero(cSenha, 3)
+
+/*/{Protheus.doc} buscaHistorico
+    Busca o historico de chamadas do dia
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method buscaHistorico() Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	Local oStatement := FWPreparedStatement():New()
+	local jChamado := JsonObject():New()
+	local aHistorico := {}
+
+	cQuery := " SELECT VEZ_CODIGO, VEY_PLAVEI, VEZ_ORDCHA, VEZ_TPACAO, VEZ_CODVEY, "
+	cQuery += "        VEY_PROVEI, VEZ_SENCHA, VEZ_HORCHA, VEY_LOJPRO, VEY_TPCONT, VEY_NUMAGE "
+	cQuery += "   FROM " + RetSQLName("VEZ") + " VEZ "
+	cQuery += "   JOIN " + RetSQLName("VEY") + " VEY "
+	cQuery += "  		ON VEZ_CODVEY =  VEY_CODIGO"
+	cQuery += "         AND VEY_FILIAL = ?"
+	cQuery += "         AND VEY.D_E_L_E_T_ = ' '"
+	cQuery += "  WHERE VEZ_FILIAL    = ? "
+	cQuery += "    AND VEZ_DATCHA   = ? " 
+	cQuery += "    AND VEZ.D_E_L_E_T_ = ' ' "
+	cQuery += "  ORDER BY VEZ_CODIGO DESC " 
+
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("VEY"))
+	oStatement:SetString(2, FWxFilial("VEZ"))
+	oStatement:SetString(3, Dtos(Date()))
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	While !(cAlias)->(EoF())
+		SA1->(dbSetOrder(1))
+		SA1->(dbSeek(xFilial("SA1")+(cAlias)->VEY_PROVEI+(cAlias)->VEY_LOJPRO))
+
+		jChamado := JsonObject():New()
+		jChamado["ID"] := alltrim((cAlias)->VEZ_CODIGO)
+		jChamado["Placa"] := alltrim((cAlias)->VEY_PLAVEI)
+		jChamado["Proprietario"] := alltrim(SA1->A1_NOME)
+		jChamado["Senha"] := alltrim((cAlias)->VEZ_SENCHA)
+		jChamado["HoraChamada"] := LEFT((cAlias)->VEZ_HORCHA, 2) + ":" + RIGHT((cAlias)->VEZ_HORCHA, 2)
+		jChamado["Ordem"] := alltrim((cAlias)->VEZ_ORDCHA)
+		jChamado["Acao"] := alltrim((cAlias)->VEZ_TPACAO)
+		jChamado["TipoContrato"] := alltrim((cAlias)->VEY_TPCONT)
+		jChamado["CodigoPai"] := alltrim((cAlias)->VEZ_CODVEY)
+		jChamado["Agendamento"] := alltrim((cAlias)->VEY_NUMAGE)
+
+		AAdd(aHistorico,jChamado)
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(DbCloseArea())
+Return aHistorico
+
+/*/{Protheus.doc} chamaAnterior
+    Chama a senha anterior da atual
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method chamaAnterior(cCodAtual, cSenhasAnteriores) Class OFPrioAtendimentoClass
+	Local cAliasAnt   := GetNextAlias()
+	Local cQuery      := ""
+	local cFixQuery	  := ""
+	Local oStatement  := FWPreparedStatement():New()
+	Local cLista :=  ""
+	local aLista := {}
+	Local nI := 0
+	default cCodAtual   := ""
+
+	if !empty(cSenhasAnteriores) .AND. "," $ cSenhasAnteriores
+		aLista := StrTokArr(cSenhasAnteriores, ",")
+
+		For nI := 1 To Len(aLista)
+			cLista += "'" + AllTrim(aLista[nI]) + "',"
+		Next
+
+		cLista := Left(cLista, Len(cLista) - 1)
+	elseif !empty(cSenhasAnteriores)
+		cLista := cSenhasAnteriores
+	endif
+
+	cQuery := " SELECT "
+	cQuery += " VEZ_CODIGO, VEZ_CODVEY "
+	cQuery += "   FROM " + RetSQLName("VEZ") + " VEZ "
+	cQuery += "  WHERE VEZ_FILIAL = ? "
+	cQuery += "    AND VEZ_DATCHA = ? "
+	cQuery += "    AND VEZ_CODIGO < ? "
+	cQuery += "    AND VEZ_TPACAO = '1' "
+	If !Empty(cLista)
+		cQuery += " AND VEZ_CODVEY NOT IN (" + cLista + ") "
+	EndIf
+	cQuery += "    AND D_E_L_E_T_ = ' ' "
+	cQuery += " ORDER BY VEZ_CODIGO DESC "
+	cQuery := ::_oSQLHelper:TopFunc(cQuery, 1)
+
+	oStatement := FWPreparedStatement():New()
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("VEZ"))
+	oStatement:SetString(2, Dtos(Date()))
+	oStatement:SetString(3, cCodAtual)
+
+	cFixQuery := oStatement:GetFixQuery()
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, cFixQuery), cAliasAnt, .F., .T.)
+	If !(cAliasAnt)->(EoF())
+
+		If !self:controleDeChamada((cAliasAnt)->VEZ_CODVEY, "2")
+			(cAliasAnt)->(DbCloseArea())
+			Return .F.
+		EndIf
+
+	Else
+		(cAliasAnt)->(DbCloseArea())
+		Return .T.
+	EndIf
+
+	(cAliasAnt)->(DbCloseArea())
+Return .T.
+
+/*/{Protheus.doc} chamaNovamente
+    Faz a chamada para a mesma senha chamada anteriormente
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method chamaNovamente(cVezID) Class OFPrioAtendimentoClass
+	VEZ->(dbSetOrder(1))
+	VEZ->(dbSeek(xFilial("VEZ")+cVezID))
+
+	if !self:controleDeChamada(VEZ->VEZ_CODVEY, "3")
+		return .f.
+	endif
+return .t.
+
+/*/{Protheus.doc} buscaMotCancelamentos
+    Busca os motivos de cancelamento de senha
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method buscaMotCancelamentos() Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	Local oStatement := FWPreparedStatement():New()
+	local jMotivo := JsonObject():New()
+	local aMotivos := {}
+
+	cQuery := " SELECT VS0.VS0_CODMOT, VS0.VS0_DESMOT "
+	cQuery += "   FROM " + RetSQLName("VS0") + " VS0 "
+	cQuery += "  WHERE VS0.VS0_FILIAL    = ? "
+	cQuery += "    AND VS0.VS0_TIPASS    = ? "
+	cQuery += "    AND VS0.D_E_L_E_T_ = ' ' "
+
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("VS0"))
+	oStatement:SetString(2, '000032')
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	while!(cAlias)->(EoF())
+		jMotivo := JsonObject():New()
+		jMotivo["chave"] := (cAlias)->VS0_CODMOT
+		jMotivo["descricao"] := EncodeUtf8((cAlias)->VS0_DESMOT)
+
+		AAdd(aMotivos,jMotivo)
+		(cAlias)->(dbSkip())
+	end
+
+	(cAlias)->(DbCloseArea())
+return aMotivos
+
+/*/{Protheus.doc} cancelaSenha
+    Faz o processo de cancelamento de senha
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method cancelaSenha(cVeyID, cMotivo) Class OFPrioAtendimentoClass
+	local aMotCancel := {}
+
+	aMotCancel := OFA210MOT("000032",,,,.F.,)
+	If Len(aMotCancel) == 0
+		Return .f.
+	EndIf
+
+	VEY->(dbSetOrder(1))
+	If VEY->(DbSeek(xFilial("VEY")+cVeyID))
+		VEY->(RecLock("VEY", .f.))
+		VEY->VEY_STASEN := "3"
+		VEY->VEY_MOTCAN := cMotivo
+		VEY->(msUnlock())
+		return .t.
+	Endif
+return .f.
+
+/*/{Protheus.doc} alteraDataDeEntrega
+    Altera a data de entrega da senha
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method alteraDataDeEntrega(cVeyId, cDataEntrega, cHoraEntrega) Class OFPrioAtendimentoClass
+	local cNumeOS := ""
+
+	VEY->(dbSetOrder(1))
+	If VEY->(DbSeek(xFilial("VEY")+cVeyId))
+		cNumeOS := VEY->VEY_NUMEOS
+
+		VEY->(RecLock("VEY", .f.))
+		VEY->VEY_DTPVVE := StoD(cDataEntrega)
+		VEY->VEY_HRPVVE := cHoraEntrega
+		VEY->(msUnlock())
+
+		VO1->(dbSetOrder(1))
+		If !empty(cNumeOS) .and. VO1->(DbSeek(xFilial("VO1")+cNumeOS))
+			VO1->(RecLock("VO1", .f.))
+			VO1->VO1_DATENT := StoD(cDataEntrega)
+			VO1->VO1_HORENT := Val(VEY->VEY_HRPVVE)
+			VO1->(msUnlock())
+		Endif
+
+		return .t.
+	Endif
+return .f.
+
+/*/{Protheus.doc} criaOrdemDeServico
+    Cria ordem de serviço e vincula com a senha
+
+    @type method
+    @author Bruno Forcato
+    @since 13/03/2026
+/*/
+Method criaOrdemDeServico(cVeyId) Class OFPrioAtendimentoClass
+	Local aCab := {}
+	Local nOpc := 3
+	local oModelVO1
+	local lRetMVCAuto := .f.
+	local cNumOSV := ''
+	local cNumAge := ''
+	local cChassi := ''
+	local aCidEst := {}
+	Private aRotina := {}
+
+	VEY->(dbSetOrder(1))
+	If !VEY->(DbSeek(xFilial("VEY")+cVeyId))
+		return .f.
+	Endif
+
+	//Monta os dados para ciração da OS
+	VV1->(DbSetOrder(2))
+	if VV1->(dbSeek(xFilial("VV1")+VEY->VEY_CHASSI))
+		AAdd(aCab, {"VO1_FILIAL" , xFilial("VEY") , Nil})
+		AAdd(aCab, {"VO1_GETKEY" , alltrim(VEY->VEY_CHASSI) , Nil})
+		AAdd(aCab, {"VO1_PLAVEI" , VV1->VV1_PLAVEI , Nil})
+		AAdd(aCab, {"VO1_CODFRO" , VV1->VV1_CODFRO , Nil})
+		AAdd(aCab, {"VO1_FABMOD" , VV1->VV1_FABMOD , Nil})
+		AAdd(aCab, {"VO1_LOJPRO" , VV1->VV1_LJPATU , Nil})
+		AAdd(aCab, {"VO1_DATENT" , VEY->VEY_DTPVVE , Nil})
+		AAdd(aCab, {"VO1_HORENT" , Val(VEY->VEY_HRPVVE) , Nil})
+	else
+		return .f.
+	endif
+
+	VSO->(DbSetOrder(1))
+	If VSO->(dbSeek(xFilial("VSO")+VEY->VEY_NUMAGE))
+		AAdd(aCab, {"VO1_NUMAGE" , VSO->VSO_NUMIDE , Nil})
+	EndIf
+
+	VE1->(dbSetOrder(1))
+	If VE1->(MsSeek(xFilial("VE1")+VV1->VV1_CODMAR))
+		AAdd(aCab, {"VO1_CODMAR" , VE1->VE1_CODMAR , Nil})
+		AAdd(aCab, {"VO1_DESMAR" , VE1->VE1_DESMAR , Nil})
+	EndIf
+
+	VV2->(dbSetOrder(1))
+	If VV2->(MsSeek(xFilial("VV2")+VV1->VV1_CODMAR+VV1->VV1_MODVEI))
+		AAdd(aCab, {"VO1_DESMOD" , VV2->VV2_DESMOD , Nil})
+	EndIf
+
+	VVC->(dbSetOrder(1))
+	If VVC->(MsSeek(xFilial("VVC")+VV1->VV1_CODMAR+VV1->VV1_CORVEI))
+		AAdd(aCab, {"VO1_DESCOR" , VVC->VVC_DESCRI , Nil})
+	EndIf
+	
+	SA1->(dbSetOrder(1))
+	If SA1->(MsSeek(xFilial("SA1")+VV1->VV1_PROATU+VV1->VV1_LJPATU))
+		aCidEst := ValidaCidadeEstado()
+		AAdd(aCab, {"VO1_PROVEI" , SA1->A1_COD , Nil})
+		AAdd(aCab, {"VO1_LOJPRO" , SA1->A1_LOJA , Nil})
+		AAdd(aCab, {"VO1_NOMPRO" , Left(SA1->A1_NOME,TamSX3("VO1_NOMPRO")[1]) , Nil})
+		AAdd(aCab, {"VO1_NOMFAT" , Left(SA1->A1_NOME,TamSX3("VO1_NOMFAT")[1]) , Nil})
+		AAdd(aCab, {"VO1_ENDPRO" , Left(SA1->A1_END,TamSX3("VO1_ENDPRO")[1]) , Nil})
+		AAdd(aCab, {"VO1_CIDPRO" , Left(aCidEst[1],TamSX3("VO1_CIDPRO")[1]) , Nil})
+		AAdd(aCab, {"VO1_ESTPRO" , Left(aCidEst[2],TamSX3("VO1_ESTPRO")[1]) , Nil})
+		AAdd(aCab, {"VO1_FONPRO" , Left(SA1->A1_TEL,TamSX3("VO1_FONPRO")[1]) , Nil})
+	EndIf
+
+	oModelVO1 := FwLoadModel("OFIA003")
+
+	//Cria a OS e vincula com a senha
+	oModelVO1:getModel('MODEL_VO1'):GetStruct():SetProperty('VO1_DATENT', MODEL_FIELD_OBRIGAT, .f.)
+	lRetMVCAuto := FwMvcRotAuto(oModelVO1, "VO1", nOpc, {{'MODEL_VO1', aCab}}, .F., .F.)
+	If !lRetMVCAuto
+		//SUbstituir pelo FWLOG
+		return .f.
+	Endif
+	cNumOSV := VO1->VO1_NUMOSV
+	oModelVO1:DeActivate()
+
+	If !empty(cNumOSV)
+		cNumAge := VEY->VEY_NUMAGE
+		cChassi := VEY->VEY_CHASSI
+
+		VEY->(RecLock("VEY", .f.))
+		VEY->VEY_STASEN := '4'
+		VEY->VEY_NUMEOS := cNumOSV
+		VEY->(msUnlock())
+
+		// Muda o stats do agendamento para OS Aberta
+		If !empty(VSO->VSO_NUMIDE) .AND. VSO->VSO_STATUS == '1'
+			OM350STATUS(cNumAge, '1', '2')
+		EndIf
+
+		If FindClass("OFSEventoControlTower") 
+			oControlTower := OFSEventoControlTower():New()
+			oControlTower:ExecutarEvento("32", cChassi, cNumOSV, "", "")
+			FreeObj(oControlTower)
+		EndIf
+		return .t.
+	Endif
+return .f.
+
+/*/{Protheus.doc} buscaSX5
+    Funcao que faz a busca na SX5 de acordo com a tabela para lookup
+
+    @type method
+    @author Bruno Forcato
+    @since 16/03/2026
+/*/
+Method buscaSX5(cTabela)  Class OFPrioAtendimentoClass
+	Local aDadosSX5 := {}
+	local aItens := {}
+	local jItem := JsonObject():New()
+	local nx := 1
+
+	aDadosSX5 := FWGetSX5(cTabela)
+	For nX := 1 To Len(aDadosSX5)
+		jItem := JsonObject():New()
+		jItem['X5_CHAVE'] := alltrim(aDadosSX5[nX][3])
+		jItem['X5_DESCRI'] := alltrim(aDadosSX5[nX][4])
+
+		AAdd(aItens, jItem)
+	Next
+Return aItens
+
+/*/{Protheus.doc} buscaModelosVeiculo
+    Busca modelos da VV2 filtrados pela marca para lookup do pre cadastro
+
+    @type method
+    @author Bruno Forcato
+    @since 03/06/2026
+/*/
+Method buscaModelosVeiculo(cMarca, cFiltro) Class OFPrioAtendimentoClass
+	local aItens := {}
+	local jItem := JsonObject():New()
+	local cCodMar := AllTrim(cValToChar(cMarca))
+	local cBusca := Upper(AllTrim(cValToChar(cFiltro)))
+	local cDesc := ""
+	local cModVei := ""
+	local aArea := GetArea()
+	local aAreaVV2 := VV2->(GetArea())
+
+	VV2->(DbSetOrder(1))
+	if VV2->(DbSeek(xFilial("VV2") + cCodMar))
+		While !VV2->(Eof()) .AND. VV2->VV2_FILIAL == xFilial("VV2") .AND. AllTrim(VV2->VV2_CODMAR) == cCodMar
+			cModVei := AllTrim(VV2->VV2_MODVEI)
+			cDesc := AllTrim(VV2->VV2_DESMOD)
+
+			if Empty(cBusca) .OR. cBusca $ Upper(cModVei) .OR. cBusca $ Upper(cDesc)
+				jItem := JsonObject():New()
+				jItem['vv2_codmar'] := AllTrim(VV2->VV2_CODMAR)
+				jItem['vv2_modvei'] := cModVei
+				jItem['vv2_desmod'] := cDesc
+				jItem['vv2_segmod'] := AllTrim(VV2->VV2_SEGMOD)
+				AAdd(aItens, jItem)
+			endif
+
+			VV2->(DbSkip())
+		EndDo
+	endif
+
+	RestArea(aAreaVV2)
+	RestArea(aArea)
+Return aItens
+
+/*/{Protheus.doc} criaMotorista
+    Funcao que cria um motorista
+
+    @type method
+    @author Bruno Forcato
+    @since 16/03/2026
+/*/
+Method criaMotorista(oReq, cVeyID) Class OFPrioAtendimentoClass
+	local cCodMot := GETSXENUM('VOG', 'VOG_CODMOT')
+	ConfirmSX8()
+
+	if (ValType(oReq) != "J") .OR. empty(oReq['VOG_DATNAS'])
+		return .f.
+	endif
+
+	VOG->(RecLock("VOG", .t.))
+	VOG->VOG_FILIAL := xFilial("VOG")
+	VOG->VOG_CODMOT := cCodMot
+	VOG->VOG_DATNAS := Ctod(oReq['VOG_DATNAS'])
+	VOG->VOG_INDAUT := oReq['VOG_INDAUT']
+	VOG->VOG_CODCLI := oReq['VOG_CODCLI']
+	VOG->VOG_LOJA := oReq['VOG_LOJA']
+	VOG->VOG_NOMMOT := oReq['VOG_NOMMOT']
+	VOG->VOG_ENDMOT := oReq['VOG_ENDMOT']
+	VOG->VOG_IBGEMO := oReq['VOG_IBGEMO']
+	VOG->VOG_CIDMOT := oReq['VOG_CIDMOT']
+	VOG->VOG_ESTMOT := oReq['VOG_ESTMOT']
+	VOG->VOG_CEPMOT := oReq['VOG_CEPMOT']
+	VOG->VOG_FONMOT := oReq['VOG_FONMOT']
+	VOG->VOG_TIPDOC := oReq['VOG_TIPDOC']
+	VOG->VOG_NUMDOC := oReq['VOG_NUMDOC']
+	VOG->(msUnlock())
+
+	VEY->(dbSetOrder(1))
+	If VEY->(DbSeek(xFilial("VEY")+cVeyId))
+		VEY->(RecLock("VEY", .f.))
+		VEY->VEY_MOTORI := cCodMot
+		VEY->(msUnlock())
+
+		return .t.
+	Endif
+Return .f.
+
+/*/{Protheus.doc} preCadastroVeiculo
+    Inclui ou complementa o cadastro do veiculo antes da OS
+
+    @type method
+    @author Bruno Forcato
+    @since 29/05/2026
+/*/
+Method preCadastroVeiculo(oReq, cVeyID) Class OFPrioAtendimentoClass
+	local lExisteVeiculo := .f.
+	local lRet := .f.
+
+	self:cErroPreCadastro := ""
+
+	if !self:validaPreCadastroVeiculo(oReq)
+		self:cErroPreCadastro := "Dados obrigatorios do veiculo nao informados."
+		return .f.
+	endif
+
+	VEY->(dbSetOrder(1))
+	If !VEY->(DbSeek(xFilial("VEY") + cVeyID))
+		self:cErroPreCadastro := "Senha nao localizada para vincular o veiculo."
+		return .f.
+	Endif
+
+	lExisteVeiculo := self:localizaVeiculoPreCadastro(alltrim(oReq['VV1_CHASSI']))
+
+	If lExisteVeiculo
+		lRet := self:atualizaVeiculoPreCadastro(oReq)
+	Else
+		lRet := self:incluiVeiculoPreCadastro(oReq)
+	EndIf
+
+	If lRet
+		lRet := self:localizaVeiculoPreCadastro(alltrim(oReq['VV1_CHASSI'])) .AND. self:atualizaSenhaVeiculo(cVeyID)
+	EndIf
+Return lRet
+
+/*/{Protheus.doc} validaPreCadastroVeiculo
+    Valida os dados obrigatorios do pre cadastro do veiculo
+
+    @type method
+    @author Bruno Forcato
+    @since 29/05/2026
+/*/
+Method validaPreCadastroVeiculo(oReq) Class OFPrioAtendimentoClass
+	local aCampos := {'VV1_CODMAR', 'VV1_CHASSI', 'VV1_MODVEI', 'VV1_FABMOD', 'VV1_PROATU', 'VV1_LJPATU'}
+	local nX := 1
+
+	For nX := 1 To Len(aCampos)
+		if !oReq:HasProperty(aCampos[nX]) .OR. Empty(AllTrim(cValToChar(oReq[aCampos[nX]])))
+			return .f.
+		endif
+	Next
+Return .t.
+
+/*/{Protheus.doc} localizaVeiculoPreCadastro
+    Posiciona o cadastro do veiculo por chassi
+
+    @type method
+    @author Bruno Forcato
+    @since 29/05/2026
+/*/
+Method localizaVeiculoPreCadastro(cChassi) Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	local cFixQuery  := ""
+	local oStatement := FWPreparedStatement():new()
+	local lRet := .f.
+
+	cQuery := " SELECT VV1_CHASSI "
+	cQuery += "   FROM " + RetSQLName("VV1") + " VV1 "
+	cQuery += "  WHERE VV1_FILIAL = ? "
+	cQuery += "    AND VV1_CHASSI = ? "
+	cQuery += "    AND VV1.D_E_L_E_T_ = ' ' "
+
+	oStatement:setQuery(cQuery)
+	oStatement:setString(1, FWxFilial("VV1"))
+	oStatement:setString(2, cChassi)
+
+	cFixQuery := oStatement:getFixQuery()
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, cFixQuery), cAlias, .F., .T.)
+	dbSelectArea(cAlias)
+
+	if !(cAlias)->(EoF())
+		VV1->(DbSetOrder(2))
+		lRet := VV1->(DbSeek(xFilial("VV1") + (cAlias)->VV1_CHASSI))
+	endif
+	(cAlias)->(DbCloseArea())
+Return lRet
+
+/*/{Protheus.doc} incluiVeiculoPreCadastro
+    Inclui o veiculo usando a rotina MVC VEIA070
+
+    @type method
+    @author Bruno Forcato
+    @since 29/05/2026
+/*/
+Method incluiVeiculoPreCadastro(oReq) Class OFPrioAtendimentoClass
+	local oModelVV1 := FwLoadModel("VEIA070")
+	local lOk := .f.
+	local cErroModel := ""
+
+	oModelVV1:setOperation(MODEL_OPERATION_INSERT)
+	oModelVV1:activate()
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_COMVEI', MODEL_FIELD_OBRIGAT, .f.)
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_PROVEI', MODEL_FIELD_OBRIGAT, .f.)
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_ESTVEI', MODEL_FIELD_OBRIGAT, .f.)
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_CORVEI', MODEL_FIELD_OBRIGAT, .f.)
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_LOCPAD', MODEL_FIELD_OBRIGAT, .f.)
+
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_FILIAL', xFilial("VV1"))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_CODMAR', alltrim(oReq['VV1_CODMAR']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_PLAVEI', alltrim(oReq['VV1_PLAVEI']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_CHASSI', alltrim(oReq['VV1_CHASSI']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_MODVEI', alltrim(oReq['VV1_MODVEI']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_SEGMOD', AllTrim(oReq['VV1_SEGMOD']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_FABMOD', alltrim(oReq['VV1_FABMOD']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_PROATU', alltrim(oReq['VV1_PROATU']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_LJPATU', alltrim(oReq['VV1_LJPATU']))
+
+	lOk := oModelVV1:VldData()
+	if lOk
+		lOk := oModelVV1:CommitData()
+	endif
+	if !lOk
+		cErroModel := self:montaErroModel(oModelVV1)
+	endif
+
+	oModelVV1:DeActivate()
+	if !lOk
+		self:cErroPreCadastro := cErroModel
+		return .f.
+	endif
+Return .t.
+
+/*/{Protheus.doc} atualizaVeiculoPreCadastro
+    Atualiza os campos obrigatorios do cadastro do veiculo
+
+    @type method
+    @author Bruno Forcato
+    @since 29/05/2026
+/*/
+Method atualizaVeiculoPreCadastro(oReq) Class OFPrioAtendimentoClass
+	local oModelVV1 := FwLoadModel("VEIA070")
+	local lOk := .f.
+	local cErroModel := ""
+
+	oModelVV1:setOperation(MODEL_OPERATION_UPDATE)
+	oModelVV1:activate()
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_COMVEI', MODEL_FIELD_OBRIGAT, .f.)
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_PROVEI', MODEL_FIELD_OBRIGAT, .f.)
+	oModelVV1:getModel('MODEL_VV1'):GetStruct():SetProperty('VV1_ESTVEI', MODEL_FIELD_OBRIGAT, .f.)
+
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_PLAVEI', alltrim(oReq['VV1_PLAVEI']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_PROATU', alltrim(oReq['VV1_PROATU']))
+	oModelVV1:getModel('MODEL_VV1'):SetValue('VV1_LJPATU', alltrim(oReq['VV1_LJPATU']))
+
+	lOk := oModelVV1:VldData()
+	if lOk
+		lOk := oModelVV1:CommitData()
+	endif
+	if !lOk
+		cErroModel := self:montaErroModel(oModelVV1)
+	endif
+
+	oModelVV1:DeActivate()
+	if !lOk
+		self:cErroPreCadastro := cErroModel
+		return .f.
+	endif
+Return .t.
+
+/*/{Protheus.doc} atualizaSenhaVeiculo
+    Atualiza o vinculo do veiculo na senha de atendimento
+
+    @type method
+    @author Bruno Forcato
+    @since 29/05/2026
+/*/
+Method atualizaSenhaVeiculo(cVeyID) Class OFPrioAtendimentoClass
+	VEY->(dbSetOrder(1))
+	VEY->(DbSeek(xFilial("VEY") + cVeyID))
+	VEY->(RecLock("VEY", .f.))
+	VEY->VEY_CHASSI := VV1->VV1_CHASSI
+	VEY->VEY_PROVEI := VV1->VV1_PROATU
+	VEY->VEY_LOJPRO := VV1->VV1_LJPATU
+	if !empty(VV1->VV1_PLAVEI)
+		VEY->VEY_PLAVEI := VV1->VV1_PLAVEI
+	endif
+	VEY->(msUnlock())
+Return .t.
+
+/*/{Protheus.doc} montaErroModel
+    Monta mensagem de erro retornada pela model MVC
+
+    @type method
+    @author Bruno Forcato
+    @since 01/06/2026
+/*/
+Method montaErroModel(oModel) Class OFPrioAtendimentoClass
+	local aErro := {}
+	local cErro := "Nao foi possivel validar os dados do veiculo."
+
+	aErro := oModel:GetErrorMessage()
+	if Len(aErro) >= 6 .AND. !empty(aErro[6])
+		cErro := cValToChar(aErro[6])
+	endif
+Return cErro
+
+/*/{Protheus.doc} buscaSenhasStatusPassagemAberto
+    Funcao que busca as senhas com status de passagem aberta
+
+    @type method
+    @author Bruno Forcato
+    @since 27/03/2026
+/*/
+Method buscaSenhasStatusPassagemAberto(nPagina, nQtdPagina) Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	Local oStatement := FWPreparedStatement():New()
+	local jSenha := JsonObject():New()
+	local aSenhas := {}
+	local cDataChegada, cHoraChegada
+	local cDataPrevista, cHoraPrevista
+	Local nOffset    := 0
+	Local cBanco     := TcGetDb()
+	local nTotalPaginas := 0
+	Local nParam := 1
+	local lUsaControlTower := .f.
+
+	Default nPagina    := 1
+	Default nQtdPagina := 3
+
+	nOffset := (nPagina - 1) * nQtdPagina
+	lUsaControlTower := FWAliasInDic("VEW") .and. VEW->(FieldPos("VEW_STAPAS")) > 0
+
+	cQuery := " SELECT VEY_CODIGO, VEY_DTGESE, VEY_HRGESE, VOG_NOMMOT, VO1_STATUS, "
+	if lUsaControlTower
+		cQuery += " VEW_STAPAS, VEW_DESUST, "
+	Endif
+	cQuery += "		VEY_MOTORI, VEY_PROVEI, VEY_SENGER, VEY_NUMEOS, "
+	cQuery += "		VEY_PLAVEI, VEY_DTPVVE, VEY_HRPVVE, VEY_STASEN, A1_NOME "
+	cQuery += "	FROM " + RetSQLName("VEY") + " VEY "
+
+	cQuery += "	LEFT JOIN " + RetSQLName("SA1") + " A1 "
+	cQuery += "		ON A1_COD = VEY_PROVEI "
+	cQuery += "     AND A1_LOJA = VEY_LOJPRO "
+	cQuery += "     AND A1_FILIAL = ? "
+	cQuery += "     AND A1.D_E_L_E_T_ = ' ' "
+
+	if lUsaControlTower
+		cQuery += " LEFT JOIN " + RetSQLName("VEW") + " VEW  "
+		cQuery += "     ON VEW_NUMEOS = VEY_NUMEOS "
+		cQuery += "     AND VEW_FILIAL = ? "
+		cQuery += "     AND VEW.D_E_L_E_T_ = ' ' "
+	Endif
+
+	cQuery += "	LEFT JOIN " + RetSQLName("VOG") + " VOG "
+	cQuery += "		ON VOG_CODMOT = VEY_MOTORI "
+	cQuery += "     AND VOG_FILIAL = ? "
+	cQuery += "     AND VOG.D_E_L_E_T_ = ' ' "
+
+	cQuery += "	LEFT JOIN " + RetSQLName("VO1") + " VO1 "
+	cQuery += "		ON VO1_NUMOSV = VEY_NUMEOS "
+	cQuery += "     AND VO1_FILIAL = ? "
+	cQuery += "     AND VO1.D_E_L_E_T_ = ' ' "
+
+	cQuery += "	WHERE VEY_FILIAL = ? "
+	cQuery += "		AND VEY.D_E_L_E_T_ = ' ' "
+
+	cQuery += "	ORDER BY VEY_DTGESE DESC, VEY_HRGESE DESC "
+	If cBanco == "POSTGRES"
+		cQuery += " LIMIT ? OFFSET ? "
+	Else
+		cQuery += " OFFSET ? ROWS FETCH NEXT ? ROWS ONLY "
+	EndIf
+
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(nParam++, FWxFilial("SA1"))
+
+	if lUsaControlTower
+		oStatement:SetString(nParam++, FWxFilial("VEW"))
+	endif
+
+	oStatement:SetString(nParam++, FWxFilial("VOG"))
+	oStatement:SetString(nParam++, FWxFilial("VO1"))
+	oStatement:SetString(nParam++, FWxFilial("VEY"))
+
+	If cBanco == "POSTGRES"
+		oStatement:SetNumeric(nParam++, nQtdPagina)
+		oStatement:SetNumeric(nParam++, nOffset)
+	Else
+		oStatement:SetNumeric(nParam++, nOffset)
+		oStatement:SetNumeric(nParam++, nQtdPagina)
+	EndIf
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	while!(cAlias)->(EoF())
+		if lUsaControlTower
+			if !empty((cAlias)->VEW_STAPAS) .and. (cAlias)->VEW_STAPAS == '1'
+				(cAlias)->(dbSkip())
+				loop
+			endif
+		endif
+
+		if (cAlias)->VEY_STASEN == '3'
+			(cAlias)->(dbSkip())
+			loop
+		endif
+
+		cDataChegada := Dtos(Stod((cAlias)->VEY_DTGESE))
+		cDataChegada := LEFT(cDataChegada,4)+"-"+SUBS(cDataChegada,5,2)+"-"+Right(cDataChegada,2)
+		cHoraChegada := LEFT((cAlias)->VEY_HRGESE, 2) + ":" + RIGHT((cAlias)->VEY_HRGESE, 2)
+		cDataPrevista := Dtos(Stod((cAlias)->VEY_DTPVVE))
+		cDataPrevista := LEFT(cDataPrevista,4)+"-"+SUBS(cDataPrevista,5,2)+"-"+Right(cDataPrevista,2)
+		cHoraPrevista := LEFT((cAlias)->VEY_HRPVVE, 2) + ":" + RIGHT((cAlias)->VEY_HRPVVE, 2)
+
+		jSenha := JsonObject():New()
+		jSenha['Senha'] := alltrim((cAlias)->VEY_SENGER)
+		jSenha['DataChegada'] := iif(!empty((cAlias)->VEY_DTGESE), cDataChegada + " " + cHoraChegada, "")
+		jSenha['Cliente'] := alltrim((cAlias)->A1_NOME)
+		jSenha['Motorista'] := alltrim((cAlias)->VOG_NOMMOT)
+		jSenha['Placa'] := alltrim((cAlias)->VEY_PLAVEI)
+		jSenha['DataPrevista'] := iif(!empty((cAlias)->VEY_DTPVVE), cDataPrevista + " " + cHoraPrevista, "")
+
+		if (cAlias)->VEY_STASEN == "1"
+			jSenha['Status'] := STR0003 // "Aguardando Atendimento"
+		elseif (cAlias)->VEY_STASEN == "2"
+			jSenha['Status'] := STR0004 // "Em Atendimento"
+		elseif (cAlias)->VEY_STASEN == "4"
+			if lUsaControlTower
+				jSenha['Status'] := EncodeUtf8((cAlias)->VEW_DESUST)
+			else
+				jSenha['Status'] := X3CBOXDESC("VO1_STATUS",(cAlias)->VO1_STATUS)
+			endif
+		else
+			jSenha['Status'] := ""
+		endif
+
+		AAdd(aSenhas, jSenha)
+		(cAlias)->(dbSkip())
+	End
+
+	If Len(aSenhas) == 0
+		jSenha := JsonObject():New()
+		jSenha['Senha'] := ""
+		AAdd(aSenhas, jSenha)
+	Endif
+
+	(cAlias)->(DbCloseArea())
+
+	nTotalPaginas := self:buscaTotalPaginasSenhas(nQtdPagina)
+Return {aSenhas, nTotalPaginas}
+
+/*/{Protheus.doc} buscaTotalPaginasSenhas
+    Funcao que busca o total de paginas com base na quantidade por pagina
+
+    @type method
+    @author Bruno Forcato
+    @since 27/03/2026
+/*/
+Method buscaTotalPaginasSenhas(nQtdPagina) Class OFPrioAtendimentoClass
+	local nTotalPaginas := 0
+	local nTotal := 0
+	Local cQuery := ""
+	Local oStatement := FWPreparedStatement():New()
+	Local cAlias := GetNextAlias()
+
+	cQuery := " SELECT COUNT(R_E_C_N_O_) TOTAL "
+	cQuery += "   FROM " + RetSQLName("VEY") + " VEY "
+	cQuery += "  WHERE VEY_FILIAL = ? "
+	cQuery += "    AND VEY.D_E_L_E_T_ = ' ' "
+
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("VEY"))
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, oStatement:GetFixQuery()), cAlias, .F., .T.)
+	nTotal := (cAlias)->TOTAL
+	nTotalPaginas := Ceiling(nTotal / nQtdPagina)
+
+	(cAlias)->(DbCloseArea())
+Return nTotalPaginas
+
+/*/{Protheus.doc} buscaSenhasPainel
+    busca as senhas para o painel do cliente
+
+    @type method
+    @author Bruno Forcato
+    @since 09/04/2026
+/*/
+Method buscaSenhasPainel() Class OFPrioAtendimentoClass
+	Local cAlias     := GetNextAlias()
+	Local cQuery     := ""
+	local cFixQuery  := ""
+	Local oStatement := FWPreparedStatement():New()
+	Local jSenha     := Nil
+	Local jAtual     := JsonObject():New()
+	Local jRetorno   := JsonObject():New()
+	Local aHistorico := {}
+	Local lPrimeiro  := .T.
+	Local cHoje := DToS(Date())
+	local nX := 0
+
+	cQuery := " SELECT "
+	cQuery += "    VEZ.VEZ_CODVEY, VEZ.VEZ_CODUSR, VEZ.VEZ_DATCHA, VEZ.VEZ_HORCHA, "
+	cQuery += "    VEY.VEY_PLAVEI, VEY.VEY_SENGER, VEY.VEY_MOTORI, "
+	cQuery += "    SA1.A1_NOME "
+	cQuery += " FROM " + RetSQLName("VEZ") + " VEZ "
+	cQuery += " INNER JOIN " + RetSQLName("VEY") + " VEY "
+	cQuery += "    ON VEY.VEY_FILIAL = VEZ.VEZ_FILIAL "
+	cQuery += "   AND VEY.VEY_CODIGO = VEZ.VEZ_CODVEY "
+	cQuery += " LEFT JOIN " + RetSQLName("SA1") + " SA1 "
+	cQuery += "    ON VEY.VEY_PROVEI = SA1.A1_COD "
+	cQuery += "   AND VEY.VEY_LOJPRO = SA1.A1_LOJA "
+	cQuery += "   AND SA1.A1_FILIAL = ? "
+	cQuery += "   AND SA1.D_E_L_E_T_ = ' ' "
+	cQuery += " WHERE VEZ.VEZ_FILIAL = ? "
+	cQuery += "   AND VEZ.VEZ_DATCHA = ? "
+	cQuery += "   AND VEZ.VEZ_TPACAO <> '3'"
+	cQuery += "   AND VEZ.D_E_L_E_T_ = ' ' "
+	cQuery += "   AND VEY.D_E_L_E_T_ = ' ' "
+	cQuery += " ORDER BY VEZ.VEZ_DATCHA DESC, VEZ.R_E_C_N_O_ DESC "
+	cQuery := ::_oSQLHelper:TopFunc(cQuery, 6)
+
+	oStatement:SetQuery(cQuery)
+	oStatement:SetString(1, FWxFilial("SA1"))
+	oStatement:SetString(2, FWxFilial("VEZ"))
+	oStatement:SetString(3, cHoje)
+	cFixQuery := oStatement:GetFixQuery()
+
+	dbUseArea(.T., "TOPCONN", TcGenQry(,, cFixQuery), cAlias, .F., .T.)
+	While !(cAlias)->(EoF())
+		jSenha := JsonObject():New()
+		jSenha["identificador"] := IIf(self:jConfig["ACCLI_IDENTPAINEL"] == "1",;
+			AllTrim((cAlias)->VEY_PLAVEI),;
+			AllTrim((cAlias)->VEY_SENGER))
+
+		If !Empty((cAlias)->VEY_MOTORI)
+			jSenha["tipo"] := "MOTORISTA"
+			jSenha["nome"] := AllTrim((cAlias)->VEY_MOTORI)
+		Else
+			jSenha["tipo"] := "CLIENTE"
+			jSenha["nome"] := AllTrim((cAlias)->A1_NOME)
+		EndIf
+
+		jSenha["consultor"] := UsrRetName((cAlias)->VEZ_CODUSR)
+		jSenha["senha"] := AllTrim((cAlias)->VEY_SENGER)
+
+		If lPrimeiro
+			jAtual := jSenha
+			lPrimeiro := .F.
+		Else
+			AAdd(aHistorico, jSenha)
+		EndIf
+
+		(cAlias)->(DbSkip())
+	EndDo
+	(cAlias)->(DbCloseArea())
+	if ValType(self:jConfig["AGENDAMENTO"]) == "A"
+		for nX := 1 to len(self:jConfig["AGENDAMENTO"])
+			if alltrim(self:jConfig["AGENDAMENTO"][nx]["AAGE_FILIAL"]) == alltrim(cFilAnt)
+				jRetorno["rodape"] := alltrim(self:jConfig["AGENDAMENTO"][nx]["AAGE_CANALAGENDA"])
+			endif
+		next
+	endif
+
+	jRetorno["atual"]     := jAtual
+	jRetorno["historico"] := aHistorico
+return jRetorno
+
+/*/{Protheus.doc} buscaChassiReduzido
+    Faz o processo de buscar o veiculo pelos 7 digitos do chassi
+
+    @type method
+    @author Bruno Forcato
+    @since 07/01/2026
+/*/
+Method buscaChassiReduzido(cChassiReduzido) Class OFPrioAtendimentoClass
+	local cAlias := GetNextAlias()
+	Local cQuery    := ""
+	local cFixQuery := ""
+	local oStatement := FWPreparedStatement():new()
+	local lRet := .f.
+
+	cQuery := ""
+	cQuery += " SELECT VV1_CHASSI "
+	cQuery += " FROM " + RetSQLName("VV1") + " VV1 "
+	cQuery += " WHERE VV1_FILIAL = ? "
+	cQuery += "   AND ( VV1_CHARED = ? "
+	cQuery += "      OR RIGHT(LTRIM(RTRIM(VV1_CHASSI)), 7) = ? ) "
+	cQuery += "   AND VV1.D_E_L_E_T_ = ' ' "
+
+	oStatement:setQuery(cQuery)
+	oStatement:setString(1, FWxFilial("VV1"))
+	oStatement:setString(2, cChassiReduzido)
+	oStatement:setString(3, cChassiReduzido)
+
+	cFixQuery := oStatement:getFixQuery()
+	dbUseArea( .T., "TOPCONN", TcGenQry( ,, cFixQuery ), cAlias, .F. , .T. )
+	dbSelectArea(cAlias)
+
+	if !(cAlias)->(EoF())
+		VV1->(DbSetOrder(2))
+		lRet := VV1->(DbSeek(xFilial("VV1")+(cAlias)->VV1_CHASSI))
+	endif
+	(cAlias)->(DbCloseArea())
+Return lRet
+
+/*/{Protheus.doc} converteTipoContratoParaCodigo
+    converte o tipo de contrato para codigo
+
+    @type method
+    @author Bruno Forcato
+    @since 24/04/2026
+/*/
+Method converteTipoContratoParaCodigo(cTipoContrato) Class OFPrioAtendimentoClass
+	local cCodigoTipoContrato := ""
+
+	Do Case
+	Case cTipoContrato == "Pro Personal"
+		cCodigoTipoContrato := "00000001"
+	Case cTipoContrato == "Scania Premium"
+		cCodigoTipoContrato := "00000002"
+	Case cTipoContrato == "Pro Premium"
+		cCodigoTipoContrato := "00000003"
+	Otherwise
+		cCodigoTipoContrato := ""
+	End Case
+return cCodigoTipoContrato
+
+/*/{Protheus.doc} buscaDataResetSenha
+    busca a data onde sera resetada a senha
+
+    @type method
+    @author Bruno Forcato
+    @since 05/05/2026
+/*/
+Method buscaDataResetSenha() Class OFPrioAtendimentoClass
+	Local cResetChamado := "3"
+	Local dDataBase   := Date()
+
+	If ValType(self:jConfig) == "J" .AND. self:jConfig:HasProperty("SESE_TEMPORESETSENHA")
+		cResetChamado := self:jConfig["SESE_TEMPORESETSENHA"]
+	EndIf
+
+	Do Case
+		Case cResetChamado == "1" // Diário
+			dDataBase := Date()
+		Case cResetChamado == "2" // Semanal
+			dDataBase := Date() - ( Dow(Date()) - 1 )
+		Case cResetChamado == "3" // Mensal
+			dDataBase := FirstDate(Date())
+		Case cResetChamado == "4" // Não resetar
+			dDataBase := Ctod("01/01/1999")
+		Otherwise // Mensal
+			dDataBase := FirstDate(Date())
+	EndCase
+Return dDataBase
+
+/*/{Protheus.doc} validaToleranciaChegada
+    valida tolerancia de chegada do agendamento
+
+    @type method
+    @author Bruno Forcato
+    @since 05/05/2026
+/*/
+Method validaToleranciaChegada(cHoraAgenda) Class OFPrioAtendimentoClass
+	Local cTempoChegada := ""
+	Local cHoraAtual    := Time()
+	Local nTolerancia   := 0
+	Local nHoraAtual    := 0
+	Local nHoraAgenda   := 0
+	Local nDiferenca    := 0
+	Local lRet          := .F.
+
+	If ValType(self:jConfig) == "J" .AND. self:jConfig:HasProperty("TTO_TEMPOCHEGADA")
+		cTempoChegada := self:jConfig["TTO_TEMPOCHEGADA"]
+	EndIf
+
+	If cTempoChegada == "5" // Período integral
+		Return .T.
+	EndIf
+
+	Do Case
+		Case cTempoChegada == "1" // 30 minutos
+			nTolerancia := 30
+		Case cTempoChegada == "2" // 1 hora
+			nTolerancia := 60
+		Case cTempoChegada == "3" // 2 horas
+			nTolerancia := 120
+		Case cTempoChegada == "4" // 4 horas
+			nTolerancia := 240
+	EndCase
+
+	nHoraAtual  := Hrs2Min(cHoraAtual)
+	nHoraAgenda := Hrs2Min(AllTrim(cHoraAgenda))
+
+	nDiferenca := Abs(nHoraAtual - nHoraAgenda)
+	lRet := nDiferenca <= nTolerancia
+Return lRet

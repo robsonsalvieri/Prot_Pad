@@ -1,0 +1,454 @@
+// ÉÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÍ»
+// º Versao º 16     º
+// ÈÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÍ¼
+#include "PROTHEUS.CH"
+#include "OFIXA015.CH"
+#include "FWMVCDEF.CH"
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³ OFIXA015 ³ Autor ³ Andre Luis Almeida / Luis Delorme ³ Data ³ 26/01/09 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descricao ³ Liberacao de Venda  do Orcamento de Pecas e Servicos                   ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ Veiculos                                                               ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function OFIXA015()
+
+	Private oBrwXA015
+
+	Private cCadastro := STR0001 // Liberação de Venda
+	//Private aRotina   := MenuDef()
+
+	If ! OXA015_VerAcesso()
+		Return .f.
+	Endif
+
+	// Instanciamento da Classe de Browse
+	oBrwXA015 := BrowseDef()
+	oBrwXA015:Activate()
+
+return .t.
+
+/*/{Protheus.doc} BrowseDef
+	Monta Browse
+	@type  Function
+	@author Rubens Takahashi
+	@since 24/03/2021
+/*/
+
+Static Function BrowseDef()
+	Local oBrowse := FWMBrowse():New()
+	Local cAuxFilter := OXA015_MontaFiltro()
+	Local aPEFilter := {}
+	Local iPECount := 0
+
+	oBrowse:SetAlias('VS6')
+	oBrowse:SetDescription( STR0001 ) // "Liberação de Venda"
+	oBrowse:SetFilterDefault(cAuxFilter)
+	oBrowse:DisableDetails()
+
+	If ExistBlock("OXA15FIL")
+		aPEFilter := ExecBlock("OXA15FIL", .F., .F.)
+	Endif
+	
+	For iPECount := 1 To Len(aPEFilter)
+		oBrowse:AddFilter(aPEFilter[iPECount][1], aPEFilter[iPECount][2], aPEFilter[iPECount][3], aPEFilter[iPECount][4])
+	Next
+Return oBrowse
+
+/*/{Protheus.doc} OXA015_MontaFiltro
+	Monta filtro para Browse
+	@type  Function
+	@author Rubens Takahashi
+	@since 24/03/2021
+/*/
+Static  Function OXA015_MontaFiltro()
+
+	Local cFilterTP := "@"
+
+	If GetNewPar("MV_GLIBVEN","N") == "N"
+		cFilterTP += "VS6_DATAUT='        '  AND VS6_DATREJ='        ' AND VS6_TIPAUT IN ('1','2') "
+	Else
+
+		cFilterTP += "VS6_DATAUT='        ' AND VS6_DATREJ='        ' "
+
+		VAI->(dbSetOrder(4))
+		VAI->(dbSeek(xFilial("VAI")+__cUserID))
+
+		// Liberacao de Venda 
+		If  VAI->VAI_APRVLV == "1" 	// Liberacao de Peca
+			cFilterTP += " AND ( VS6_TIPAUT='1' OR (VS6_TIPAUT='2' AND VS6_NUMIDE IN ( SELECT DISTINCT VS7.VS7_NUMIDE FROM " + RetSQLName("VS7") + " VS7 WHERE VS7.VS7_FILIAL=VS6_FILIAL AND VS7.VS7_NUMIDE=VS6_NUMIDE AND VS7.VS7_TIPAUT='1' AND VS7.D_E_L_E_T_=' '))) "
+		ElseIf VAI->VAI_APRVLV == "2"	// Liberacao de Servico
+			cFilterTP += " AND ( VS6_TIPAUT='2' AND VS6_NUMIDE IN ( SELECT DISTINCT VS7.VS7_NUMIDE FROM " + RetSQLName("VS7") + " VS7 WHERE VS7.VS7_FILIAL=VS6_FILIAL AND VS7.VS7_NUMIDE=VS6_NUMIDE AND VS7.VS7_TIPAUT='2' AND VS7.D_E_L_E_T_=' ')) "
+		EndIf
+		
+		// Liberacao de Margem
+		If VAI->VAI_APRVLM == "1" 		// 1=Descontos
+			cFilterTP += " AND  VS6_TIPOCO='000008' "
+		ElseIf VAI->VAI_APRVLM == "2"	// 2=Margem
+			cFilterTP += " AND  VS6_TIPOCO='000009' "
+		EndIf
+		
+	EndIf
+
+	cFilterTP += " AND " +;
+		" ( VS6_NUMORC = ' ' " +;
+			" OR " +;
+			" EXISTS(" +;
+				" SELECT VS1_NUMORC " +;
+				  " FROM " + RetSQLName("VS1") + " VS1 " +;
+				 " WHERE VS1.VS1_FILIAL = VS6_FILIAL " +;
+				 	" AND VS1.VS1_NUMORC = VS6_NUMORC " +;
+					" AND VS1.VS1_STATUS = '2' " +;
+					" AND ( VS1.VS1_DATVAL >= '" + dtos(dDatabase) + "' " +;
+							" OR " +;
+							" VS1.VS1_STARES IN ('1','2') " +;
+							") " +;
+					" AND VS1.D_E_L_E_T_=' ')" +;
+		" ) "
+Return cFilterTP
+
+/*/{Protheus.doc} OXA015_VerAcesso
+	Verifica se o usuário LOGADO possui permissão para liberar a venda
+	@type  Function
+	@author Rubens Takahashi
+	@since 24/03/2021
+/*/
+Function OXA015_VerAcesso()
+
+	VAI->(dbSetOrder(4))
+	VAI->(dbSeek(xFilial("VAI")+__cUserID))
+
+	// Liberacao de Venda 
+	If VAI->VAI_APRVLV == "0" .or. Empty(VAI->VAI_APRVLV) // usuario nao autorizado
+		MsgStop(STR0006+Alltrim(RetTitle("VAI_APRVLV"))+"(VAI_APRVLV)",STR0007)
+		Return(.f.)
+	EndIf
+	
+	// Liberacao de Margem
+	If VAI->VAI_APRVLM == "0" .or. Empty(VAI->VAI_APRVLM) // usuario nao autorizado
+		MsgStop(STR0006+Alltrim(RetTitle("VAI_APRVLM"))+"(VAI_APRVLM)",STR0007)
+		Return(.f.)
+	EndIf
+
+Return .t. 
+
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³ OXA015   ³ Autor ³ Andre Luis Almeida / Luis Delorme ³ Data ³ 26/01/09 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descricao ³ Montagem da Janela de Orcamento de Pecas e Servicos                    ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ Veiculos                                                               ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Function OXA015(cAlias,nReg,nOpc)
+Local lRet := .f.
+Local nRecVS6
+
+If ! OXA015_VerAcesso()
+	Return .f.
+EndIf
+
+If nOpc <> 2 .and. ! Empty(VS6->VS6_DATAUT) .or. ! Empty( VS6->VS6_DATREJ )
+	FMX_HELP("OXA15JALIB",STR0011) // "Solicitação de liberação de venda já foi liberada ou rejeitada."
+	Return .f.
+Endif
+
+nRecVS6 := VS6->(Recno())
+
+lRet := OFIXX003(cAlias,nReg,nOpc)
+
+VS6->(DbGoTo(nRecVS6))
+
+// Liberacao Oficina
+If nOpc <> 2 .and. ! Empty(VS6->VS6_DATAUT) .and. VS6->VS6_TIPAUT == "2" .and. ! Empty(VS6->VS6_NUMORC)
+
+	// No caso do orcamento de oficina, como nao tem separacao, quando o status cair para separacao, joga para finalizar..
+	VS1->(DBSetOrder(1))
+	If VS1->(DBSeek(xFilial("VS1")+VS6->VS6_NUMORC)) .and. VS1->VS1_STATUS == "4"
+	
+		DBSelectArea("VS1")
+		RecLock("VS1",.f.)
+		cVS1StAnt := VS1->VS1_STATUS
+		VS1->VS1_STATUS := "F"
+		MsUnlock()
+		If ExistFunc("OA3700011_Grava_DTHR_Status_Orcamento")
+			OA3700011_Grava_DTHR_Status_Orcamento( VS1->VS1_NUMORC , VS1->VS1_STATUS , STR0001 ) // Grava Data/Hora na Mudança de Status do Orçamento / Liberação de Venda
+		EndIf
+
+		//grava log das alteracoes das fases do orcamento
+		FM_GerLog("F",VS1->VS1_NUMORC," - Orcamento: " + VS6->VS6_NUMORC + " - Nro Identif.: " + VS6->VS6_NUMIDE ,VS1->VS1_FILIAL,cVS1StAnt)
+
+		DBSelectArea("VS6")
+
+	Endif
+
+Endif
+
+DBSelectArea("VS6")
+oBrwXA015:Refresh()
+
+Return .t.
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÚÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÂÄÄÄÄÄÄÂÄÄÄÄÄÄÄÄÄÄ¿±±
+±±³Funcao    ³ MenuDef  ³ Autor ³ Andre Luis Almeida / Luis Delorme ³ Data ³ 26/01/09 ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Descricao ³ Menu (AROTINA) - Orcamento de Pecas e Servicos                         ³±±
+±±ÃÄÄÄÄÄÄÄÄÄÄÅÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ´±±
+±±³Uso       ³ Veiculos                                                               ³±±
+±±ÀÄÄÄÄÄÄÄÄÄÄÁÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+Static Function MenuDef()
+
+Local aRotina := {;
+	{ STR0002, "axPesqui",    0, 1},;    // "Pesquisar"
+	{ STR0003, "OXA015"  , 0, 2},;    // "Visualizar"
+	{ STR0004, "OXA015"  , 0, 4},;    // "Liberar"
+	{ STR0008, "OXA015REJ"  , 0, 4} ;
+	}    // "Rejeitar"
+Return aRotina
+
+
+/*
+ÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜÜ
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+±±ÉÍÍÍÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍËÍÍÍÍÍÍÑÍÍÍÍÍÍÍÍÍÍÍÍÍ»±±
+±±ºPrograma  ³OFIXA015  ºAutor  ³Renato Vinicius     º Data ³  10/05/16   º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÊÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºDesc.     ³Rejeicao de Pedido de Liberacao de Venda                    º±±
+±±º          ³                                                            º±±
+±±ÌÍÍÍÍÍÍÍÍÍÍØÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¹±±
+±±ºUso       ³ AP                                                        º±±
+±±ÈÍÍÍÍÍÍÍÍÍÍÏÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍÍ¼±±
+±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±±
+ßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßßß
+*/
+
+Function OXA015REJ(cAlias,nReg,nOpc, oWsData)
+local cCodMot := ''
+local lWs := .f.
+local aMotCancel := {}
+
+default oWsData := nil
+default nReg := 0
+
+if oWsData <> nil
+	lWs := .t.
+endif
+
+If ! OXA015_VerAcesso()
+	Return .f.
+EndIf
+
+//tratamento para chamada partir da central de aprovaes
+if lWs
+	dbSelectArea("VS6")
+	dbSetOrder(1)
+	dbSeek(xFiliaL("VS6")+oWsData["VS6_NUMIDE"])
+	nReg := VS6->(RecNo())
+endif
+
+If ! Empty(VS6->VS6_DATAUT) .or. ! Empty( VS6->VS6_DATREJ )
+	FMX_HELP("OXA15JALIB",STR0011) // "Solicitação de liberação de venda já foi liberada ou rejeitada."
+	Return .f.
+Endif
+
+if !lWs
+	If !MsgNoYes(STR0009,STR0007) // "Deseja realmente rejeitar este Pedido de Liberao?"
+		Return .f.
+	EndIf
+endif
+
+VS6->(DbGoto(nReg))
+aMotCancel := OFA210MOT("000016","2","","",.f.) // Filtro da consulta do motivo
+if !lWs .and. Len(aMotCancel) > 0
+	cCodMot := aMotCancel[1]
+elseif lWs
+	cCodMot := oWsData["VDS_CODMOT"]
+endif
+
+If Len(aMotCancel) > 0 .or. lWs
+	DbSelectArea("VS6")
+	RecLock("VS6",.f.)
+		VS6->VS6_USUREJ := cUserName
+		VS6->VS6_DATREJ := dDatabase
+		VS6->VS6_HORREJ := val(substr(Time(),1,2)+substr(Time(),4,2))
+		VS6->VS6_MOTREJ := cCodMot
+	MsUnlock()
+	
+	if lWs
+		return .t. //sai da rejeio para retorno para webService (mtodo de gravao separado na classe)
+	endif
+	///////////////////////////////////
+	// Gravar Motivo de Cancelamento //
+	///////////////////////////////////
+	OFA210VDT("000016",aMotCancel[1],If(Empty(VS6->VS6_NUMORC),"2","4"),VS6->VS6_FILIAL,VS6->VS6_NUMORC,aMotCancel[4])
+Else
+	MsgInfo(STR0010,STR0007) // "Operação de Rejeição de Pedido abortada"
+EndIf
+
+Return .t.
+
+
+/*/{Protheus.doc} ModelDef
+	ModelDef
+	@author Cristiam Rossi
+	@since 14/08/2025
+	@type function
+	@return object, Model
+/*/
+static function ModelDef()
+local oModel  := MPFormModel():New('OFIXA015')
+local oStrVS6 := FWFormStruct(1, "VS6")
+local oStrVS7 := FWFormStruct(1, "VS7")
+
+   	oModel:SetCommit( {|oModel| posCommit(oModel)}, .T. )
+
+	oStrVS7:AddField("","","LEGENDA","C",11,0,,,,,{|| iif( VS7->VS7_DIVERG=="1", "BR_VERMELHO", "BR_VERDE" )},,,.T.)
+
+	oModel:AddFields('VS6MASTER',,oStrVS6)
+	oModel:AddGrid('VS7DETAIL','VS6MASTER',oStrVS7)
+
+	oModel:SetPrimaryKey( { "VS6_FILIAL", "VS6_NUMIDE" } )
+	oModel:GetModel("VS7DETAIL"):SetUniqueLine( {"VS7_SEQUEN"} )
+	oModel:SetRelation( 'VS7DETAIL', { { 'VS7_FILIAL', 'VS6_FILIAL' }, { 'VS7_NUMIDE', 'VS6_NUMIDE' } } )
+
+	oModel:SetDescription( STR0001 )	// "Liberação de Venda"
+	oModel:GetModel('VS6MASTER'):SetDescription( STR0001 )	// "Liberação de Venda"
+return oModel
+
+
+/*/{Protheus.doc} ViewDef
+    ViewDef
+	@author Cristiam Rossi
+	@since 14/08/2025
+	@type function
+	@return object, View
+/*/
+static function ViewDef()
+local oView   := FWFormView():New()
+local oModel  := FWLoadModel('OFIXA015')
+local oStrVS6 := FWFormStruct(2, "VS6")
+local oStrVS7 := FWFormStruct(2, "VS7")
+local   oSize   := FwDefSize():New(.F.)
+local   nPercRoda := 100 * 28 / oSize:aWindSize[3]
+
+	oView:SetModel(oModel)
+
+	oStrVS7:AddField("LEGENDA","01","","",{},"C","@BMP",,,.F.,,,,,,.T.)
+
+	oView:AddField('VIEW_VS6', oStrVS6, 'VS6MASTER')
+	oView:AddGrid('VIEW_VS7' , oStrVS7, 'VS7DETAIL')
+	oView:AddIncrementField("VIEW_VS7","VS7_SEQUEN")
+
+	oView:CreateHorizontalBox('VS6',40)
+	oView:CreateHorizontalBox('VS7', 60 - nPercRoda)
+	oView:CreateHorizontalBox('RODA', nPercRoda)
+
+	oView:AddOtherObject("RODAPE", {|oPanel| OA015001C_Rodape(oPanel)})
+
+	oView:SetOwnerView('VIEW_VS6','VS6')
+	oView:SetOwnerView('VIEW_VS7','VS7')
+	oView:SetOwnerView('RODAPE'  ,'RODA')
+return oView
+
+
+/*/{Protheus.doc} posCommit
+    Rotina auxiliar para gravar o campo de observações/Justificativa
+	@author Cristiam Rossi
+	@since 15/08/2025
+	@type function
+	@param oModel, object, objeto MODEL
+	@return logical, sempre .T.
+/*/
+static function posCommit(oModel)
+local aArea     := getArea()
+local aAreaVS3
+local aAreaVS7
+local oModelVS6 := oModel:GetModel('VS6MASTER')
+local cObserv   := oModelVS6:getValue("VS6_OBSERV")
+local lOXVS7DGR := ExistBlock("OXVS7DGR")
+
+	if VS6->VS6_NUMIDE == oModelVS6:getValue("VS6_NUMIDE")
+		recLock("VS6")
+		MSMM(,TamSx3("VS6_OBSERV")[1],,cObserv,1,,,"VS6","VS6_OBSMEM")
+		msUnlock()
+	endif
+
+	if lOXVS7DGR
+		aAreaVS3  := VS3->( getArea() )
+		aAreaVS7  := VS7->( getArea() )
+
+		VS3->( dbSetOrder(2) )	// VS3_FILIAL+VS3_NUMORC+VS3_GRUITE+VS3_CODITE+VS3_SEQUEN
+		VS7->( dbSetOrder(1) )	// VS7_FILIAL+VS7_NUMIDE+VS7_SEQUEN+VS7_TIPAUT
+
+		VS7->( dbSeek( VS6->( VS6_FILIAL + VS6_NUMIDE ), .T. ) )
+		while ! VS7->( eof() ) .and. VS6->( VS6_FILIAL + VS6_NUMIDE ) == VS7->( VS7_FILIAL + VS7_NUMIDE )
+			VS3->( dbSeek( xFilial("VS3") + VS6->VS6_NUMORC + VS7->( VS7_GRUITE + VS7_CODITE ) ) )
+
+			ExecBlock("OXVS7DGR",.f.,.f.) 		// Ponto de Entrada Depois da Gravacao de cada VS7
+			VS7->( dbSkip() )
+		endDo
+
+		VS3->( restArea( aAreaVS3 ) )
+		VS7->( restArea( aAreaVS7 ) )
+		restArea( aArea )
+	endif
+	restArea( aArea )
+return .T.
+
+
+/*/{Protheus.doc} OA015001C_Rodape
+    Diálogo de rodapé para mostrar as legendas
+	@author Cristiam Rossi
+	@since 18/08/2025
+	@type function
+	@param oPanel, object, objeto do tipo painel
+/*/
+function OA015001C_Rodape( oPanel )
+local oBmpLeg1
+local oBmpLeg2
+
+	oPanel:Align := CONTROL_ALIGN_ALLCLIENT
+	@ 05,01 say STR0012 of oPanel pixel		// "Legenda:"
+
+	oBmpLeg1 := TBitmap():New(05, 40, 16, 16, "BR_VERMELHO",,.T., oPanel,,,.F.,.F.,,,,,.T.,,,,)
+	@ 06,50 say STR0013 of oPanel pixel		// "Divergência"
+
+	oBmpLeg2 := TBitmap():New(05, 120, 16, 16, "BR_VERDE",,.T., oPanel,,,.F.,.F.,,,,,.T.,,,,)
+	@ 06,130 say STR0014 of oPanel pixel		// "OK"
+return nil
+
+/*/{Protheus.doc} OF015001J_RetornaQueryAdapter()
+	Realiza um tratamento na query do filtro original.
+	A query ser retornada na webservice que ser utilizada na verso PO-UI
+	@type  Function
+	@author Renan Migliaris
+	@since 26/03/2025
+	/*/
+Function OF015001J_RetornaQueryAdapter()
+	local cQuery := ''
+
+	cQuery := OXA015_MontaFiltro()
+
+	If Left(AllTrim(cQuery), 1) == "@"
+    	cQuery := SubStr(AllTrim(cQuery), 2)	
+	EndIf	
+
+	cQuery += "AND VS6_FILIAL = "+xFiliaL("VS6")
+Return cQuery

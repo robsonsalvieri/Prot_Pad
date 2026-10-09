@@ -1,0 +1,400 @@
+#include 'totvs.ch'
+#include 'protheus.ch'
+#include 'tlpp-core.th'
+#include 'totvs.protheus.backoffice.fat.event.ch'
+
+namespace totvs.protheus.backoffice.fat.event
+
+/*/{Protheus.doc} EventsFaturamento
+	Classe para envio de eventos para o TAF
+
+	@type class
+	@author Squad CRM/Faturamento
+	@since 04/2026
+/*/
+Class EventsFaturamento
+
+	public method new() as object
+	public method SendEvent(aRecnoSE1RA as array) as json
+	public method EventSent(cChvNfe as character) as logical
+	public method GetDataSF2(aRecnoSE1RA as array) as array
+	public method ValueIbsCbs(aSF2Data as array) as numeric
+	public method ListIbsCbs(cTax as character) as array
+	public method GetItemsRA(aNumPed as array) as array
+
+EndClass
+
+/*/{Protheus.doc} New
+	Metodo construtor
+
+	@type method
+	@author Squad CRM/Faturamento
+	@since 04/2026
+	@return object, Retorna a instancia da classe EventsFaturamento
+/*/
+Method New() Class EventsFaturamento
+Return self
+
+/*/{Protheus.doc} SendEvent
+	Envia o evento para o TAF
+	Evento: 112140 - Fornecimento não realizado com pagamento antecipado
+
+	@type   method
+	@param  aDataItens, array, Array contendo os dados dos itens para envio do evento {item, codigo do produto, unidade de medida, quantidade}
+	@param  aSF2Data, array, Dados da SF2 vinculados ao pedido de venda {chave de acesso da NFe, UF de origem, documento, série, cliente, loja}
+	@param  aEventData, array, Dados do evento a ser enviado {codigo do evento, rotina de origem, tabela de origem}
+	@author Squad CRM/Faturamento
+	@since  04/2026
+	@return object, Retorna a instancia da classe EventsFaturamento
+/*/
+Method SendEvent(aDataItens as array, aSF2Data as array, aEventData as array) as json Class EventsFaturamento
+
+	Local oTAFEvent	 := Nil as object
+	Local nX	     := 0   as numeric
+    Local jEvent     := Nil as Json
+    Local jItens     := Nil as Json
+	Local jResponse  := JsonObject():New() as Json
+
+	Default aDataItens  := {}
+	Default aSF2Data    := {}
+	Default aEventData  := {}
+
+	If Len(aDataItens) > 0 .And. Len(aSF2Data) > 0 .And. Len(aEventData) > 0
+
+		If !Empty(aSF2Data[1])
+
+			If !::EventSent(aSF2Data[1])
+
+				jEvent := jsonObject():New()
+				jEvent['chvnfe'] := aSF2Data[1]
+				jEvent['originTable'] := aEventData[3]
+				jEvent['originRoutine'] := aEventData[2]
+
+				jEvent['event'] := JsonObject():New()
+				jEvent['event']['event'] := aEventData[1]
+
+				jEvent['event']['fields'] := JsonObject():New()
+				jEvent['event']['items'] := {}
+
+				For nX := 1 To Len(aDataItens)
+
+					jItens := JsonObject():New()
+					jItens['authorType']  := "1"
+					jItens['stateAuthor'] := aSF2Data[2]
+					jItens['item']        := aDataItens[nX][1]
+					jItens['code']        := aDataItens[nX][2]
+					jItens['unit']        := aDataItens[nX][3]
+					jItens['quantity']    := aDataItens[nX][4]
+					jItens['taxValueCbs'] := ::ValueIbsCbs(aSF2Data, aDataItens[nX][2], aDataItens[nX][1])
+					jItens['taxValueIbs'] := ::ValueIbsCbs(aSF2Data, aDataItens[nX][2], aDataItens[nX][1])
+
+					aAdd(jEvent['event']['items'], jItens)
+
+				Next nX
+
+				oTAFEvent := totvs.protheus.fiscal.taf.event.WSEventsRepository():New("POST")
+				jResponse := oTAFEvent:postInsertEvents(jEvent)
+
+				If jResponse['code'] == 200
+					jResponse['message'] := STR0004 //Evento enviado com sucesso para a fila de processamento do TAF. Para mais informações, consulte o Monitor de Eventos do TAF
+				Else
+					jResponse['message'] := STR0005 //Erro ao enviar o evento para a fila de processamento do TAF para este Pedido de Venda. Será necessário realizar o processo manualmente por meio do Monitor de Eventos do TAF
+				EndIf
+
+				FreeObj(jEvent)
+				FreeObj(jItens)
+				FreeObj(oTAFEvent)
+
+			Else
+				jResponse['code'] := 500
+				jResponse['message'] := STR0001 //A Nota de Debito vinculada ao RA do Pedido de Venda ja possui um Evento adicionado a fila de processamento
+			EndIf
+
+		Else
+			jResponse['code'] := 500
+			jResponse['message'] := STR0002 //A Nota de Debito vinculada ao RA do Pedido de Venda ainda nao possui chave de acesso da NFe, impossibilitando o envio do Evento para o TAF
+		EndIf
+
+	Else
+		jResponse['code'] := 500
+		jResponse['message'] := STR0003 //Informacoes pendentes para o envio do Evento a fila de processamento do TAF
+	EndIf
+
+Return jResponse
+
+/*/{Protheus.doc} EventSent
+	Verifica se o evento relacionado a NFe de Debito ja foi enviado para a fila de processamento do TAF
+
+	@type   method
+    @param  cChvNfe, character, Chave de acesso da NFe
+	@author CRM/Faturamento
+	@since  04/2026
+	@return logical, Retorna se o evento ja foi enviado para a NFe vinculada ao RA do pedido de venda
+/*/
+Method EventSent(cChvNfe as character) as logical Class EventsFaturamento
+
+	Local lRetSent  := .F.
+	Local cQuery    := "" as character
+	Local cAlias	:= "" as character
+	Local nParam    := 1  as numeric
+	Local oQuery    := Nil as object
+
+	Default cChvNfe := ""
+
+	cQuery := " SELECT T7S_CHVNFE "
+	cQuery += " FROM " + RetSqlName("T7S") + " T7S "
+	cQuery += " WHERE T7S.T7S_FILIAL = ? "
+	cQuery += " AND T7S.T7S_CHVNFE = ? "
+	cQuery += " AND T7S.T7S_EVENTO = ? "
+	cQuery += " AND T7S.D_E_L_E_T_ = ? "
+
+	oQuery := FwExecStatement():New(ChangeQuery(cQuery))
+	oQuery:SetString(nParam++, FWxFilial("T7S"))
+	oQuery:SetString(nParam++, cChvNfe)
+	oQuery:SetString(nParam++, '112140')
+	oQuery:SetString(nParam++, ' ')
+
+	cAlias := oQuery:OpenAlias()
+
+	DbSelectArea(cAlias)
+	(cAlias)->(DbGoTop())
+
+	While (cAlias)->(!Eof())
+		lRetSent := .T.
+		(cAlias)->(DbSkip())
+	EndDo
+
+	(cAlias)->(DbCloseArea())
+
+	oQuery:Destroy()
+	FreeObj(oQuery)
+
+Return lRetSent
+
+/*/{Protheus.doc} GetDataSF2
+	Obtem a chave de acesso da NFe para o evento do TAF
+
+	@type   method
+    @param  aRecnoRA, array, Array contendo o Recno do RA vinculado ao pedido de venda
+	@author CRM/Faturamento
+	@since  04/2026
+	@return character, Retorna a chave de acesso da NFe
+/*/
+Method GetDataSF2(aRecnoSE1RA as array) as array Class EventsFaturamento
+
+	Local oQuery   := Nil as object
+	Local nParam   := 1  as numeric
+	Local aSF2Data := {} as array
+	Local cAlias   := "" as character
+	Local cQuery   := "" as character
+
+    Default aRecnoSE1RA := {}
+
+	cQuery := "SELECT F7Q.F7Q_DOC, F7Q.F7Q_SERIE, "
+	cQuery += "SF2.F2_CHVNFE, SF2.F2_UFORIG, SF2.F2_CLIENTE, SF2.F2_LOJA "
+	cQuery += "FROM " + RetSqlName("SE1") + " SE1 "
+	cQuery += "INNER JOIN " + RetSqlName("FK7") + " FK7 "
+	cQuery += "ON FK7.FK7_FILIAL = ? "
+	cQuery += "AND FK7.FK7_TIPO = ? "
+	cQuery += "AND FK7.FK7_CLIFOR = SE1.E1_CLIENTE "
+	cQuery += "AND FK7.FK7_LOJA = SE1.E1_LOJA "
+	cQuery += "AND FK7.FK7_PREFIX = SE1.E1_PREFIXO "
+	cQuery += "AND FK7.FK7_NUM = SE1.E1_NUM "
+	cQuery += "AND FK7.FK7_PARCEL = SE1.E1_PARCELA "
+	cQuery += "AND FK7.D_E_L_E_T_ = SE1.D_E_L_E_T_  "
+	cQuery += "INNER JOIN " + RetSqlName("F7Q") + " F7Q "
+	cQuery += "ON F7Q.F7Q_FILIAL = ? "
+	cQuery += "AND F7Q.F7Q_TABORI = ? "
+	cQuery += "AND F7Q.F7Q_IDDOC = FK7.FK7_IDDOC "
+	cQuery += "AND F7Q.D_E_L_E_T_ = FK7.D_E_L_E_T_ "
+	cQuery += "INNER JOIN " + RetSqlName("SF2") + " SF2 "
+	cQuery += "ON SF2.F2_FILIAL = ? "
+	cQuery += "AND SF2.F2_DOC = F7Q.F7Q_DOC "
+	cQuery += "AND SF2.F2_SERIE = F7Q.F7Q_SERIE "
+	cQuery += "AND SF2.F2_CLIENTE = F7Q.F7Q_CLIFOR "
+	cQuery += "AND SF2.F2_LOJA = F7Q.F7Q_LOJA "
+	cQuery += "AND SF2.D_E_L_E_T_ = F7Q.D_E_L_E_T_ "
+	cQuery += "WHERE SE1.R_E_C_N_O_ = ? "
+	cQuery += "AND SE1.D_E_L_E_T_ = ? "
+
+	oQuery := FwExecStatement():New(ChangeQuery(cQuery))
+	oQuery:SetString(nParam++, FWxFilial("FK7"))
+	oQuery:SetString(nParam++, 'RA')
+	oQuery:SetString(nParam++, FwXFilial("F7Q"))
+	oQuery:SetString(nParam++, 'SF2')
+	oQuery:SetString(nParam++, FwXFilial("SF2"))
+    oQuery:SetNumeric(nParam++, aRecnoSE1RA[1][2])
+	oQuery:SetString(nParam++, ' ')
+
+	cAlias := oQuery:OpenAlias()
+
+	DbSelectArea(cAlias)
+	(cAlias)->(DbGoTop())
+
+	While (cAlias)->(!Eof())
+		aSF2Data := { (cAlias)->F2_CHVNFE, (cAlias)->F2_UFORIG, (cAlias)->F7Q_DOC, (cAlias)->F7Q_SERIE, (cAlias)->F2_CLIENTE, (cAlias)->F2_LOJA }
+		(cAlias)->(DbSkip())
+	EndDo
+
+	(cAlias)->(DbCloseArea())
+
+	oQuery:Destroy()
+    FreeObj(oQuery)
+
+Return aSF2Data
+
+/*/{Protheus.doc} ValueIbsCbs
+	Realiza a consulta dos valores de IBS e CBS para os itens
+
+	@type   method
+	@param  aSF2Data, array, Dados da SF2 vinculados ao pedido de venda {chave de acesso da NFe, UF de origem, documento, série, cliente, loja}
+	@param  cItem, character, Número do item para consulta do ID do tributo
+	@param  cCodProd, character, Código do produto para consulta do ID do tributo
+	@author Squad CRM/Faturamento
+	@since  04/2026
+	@return numeric, Retorna o valor do IBS ou CBS para o item
+/*/
+Method ValueIbsCbs(aSF2Data as array, cCodProd as character, cItem as character) as numeric Class EventsFaturamento
+
+    Local oData 	:= Nil as object
+	Local oJson  	:= Nil as object
+	Local oTaxes 	:= Nil as object
+	Local cIdTrib 	:= ""  as character
+	Local nX 		:= 0   as numeric
+	Local nVlRet   	:= 0   as numeric
+	Local aTaxes   	:= {}  as array
+	Local aTxsIBS 	:= {}  as array
+    Local aTxsCBS 	:= {}  as array
+
+	Default aSF2Data := {}
+	Default cItem    := ""
+	Default cCodProd := ""
+
+	If Len(aSF2Data) > 0
+
+		DbSelectArea("SD2")
+		DbSetOrder(3)
+
+		// Indice: Filial + Documento + Série + Cliente + Loja + cCodProd + Item para encontrar o ID do tributo relacionado ao item
+		If MsSeek(FwXFilial("SD2") + aSF2Data[3] + aSF2Data[4] + aSF2Data[5] + aSF2Data[6] + cCodProd + cItem )
+			cIdTrib := SD2->D2_IDTRIB
+		EndIf
+
+		If !Empty(cIdTrib)
+
+			aTxsCBS := ::ListIbsCbs("CBS")
+			aTxsIBS := ::ListIbsCbs("IBS")
+
+			If FindClass("totvs.protheus.backoffice.fiscal.tciclass.TCIWritten")
+				oData := totvs.protheus.backoffice.fiscal.tciclass.TCIWritten():New()
+				oData:SetId({cIdTrib})
+				oData:setDataItems({'regras_escrituracao'})
+
+				oJson := JsonObject():New()
+				oJson:FromJson(oData:GetDataId())
+
+				If oJson:HasProperty("dados_Id") .And. oJson["dados_Id"]:HasProperty(cIdTrib)
+					aTaxes := oJson["dados_Id"][cIdTrib]:GetNames()
+
+					For nX := 1 To Len(aTaxes)
+						oTaxes := oJson["dados_Id"][cIdTrib][aTaxes[nX]]
+
+						If ValType(oTaxes) != "C"
+
+							If oTaxes:HasProperty("regras_escrituracao") .And. ValType(oTaxes["regras_escrituracao"]) == "J"
+								Do Case
+									Case aScan(aTxsIBS, {|x| x == oTaxes["codigo_tributo_relacionado"]}) > 0
+										nVlRet := oTaxes["dados_escriturados"]["valor_tributado"]
+
+									Case aScan(aTxsCBS, {|x| x == oTaxes["codigo_tributo_relacionado"]}) > 0
+										nVlRet := oTaxes["dados_escriturados"]["valor_tributado"]
+								EndCase
+							EndIf
+
+						EndIf
+
+					Next nX
+
+				EndIf
+
+				FreeObj(oData)
+				FreeObj(oJson)
+				FreeObj(oTaxes)
+
+			EndIf
+
+			aSize(aTaxes,  0)
+			aSize(aTxsIBS, 0)
+			aSize(aTxsCBS, 0)
+
+		EndIf
+
+	EndIf
+
+Return nVlRet
+
+/*/{Protheus.doc} ListIbsCbs
+	Realiza a consulta dos codigos de IBS e CBS
+
+	@type   method
+	@param  cTax, character, Tipo do tributo para consulta dos codigos (IBS ou CBS)
+	@author Squad CRM/Faturamento
+	@since  04/2026
+	@return array, Retorna um array com os codigos de IBS ou CBS
+/*/
+Method ListIbsCbs(cTax as character) as array Class EventsFaturamento
+
+	Local oQuery := Nil as object
+	Local aRet   := {} as array
+	Local nParam := 1  as numeric
+	Local cQuery := "" as character
+	Local cAlias := "" as character
+
+	Default cTax := ""
+
+	cQuery := "SELECT F2C_CODIGO "
+	cQuery += "FROM " + RetSqlName("F2C") + " F2C "
+	cQuery += "WHERE F2C.F2C_FILIAL = ? "
+	cQuery += "AND UPPER(F2C.F2C_DESC) LIKE '%?%' "
+
+	oQuery := FwExecStatement():New(ChangeQuery(cQuery))
+	oQuery:SetString(nParam++, FWxFilial("F2C"))
+    oQuery:SetUnsafe(nParam++, cTax)
+
+	cAlias := oQuery:OpenAlias()
+
+	DbSelectArea(cAlias)
+    (cAlias)->(DbGoTop())
+
+    While (cAlias)->(!Eof())
+		aAdd(aRet, (cAlias)->F2C_CODIGO)
+		(cAlias)->(DbSkip())
+	EndDo
+
+	(cAlias)->(DbCloseArea())
+
+	oQuery:Destroy()
+    FreeObj(oQuery)
+
+Return aRet
+
+/*/{Protheus.doc} GetItemsRA
+	Realiza a consulta dos codigos de IBS e CBS
+
+	@type   method
+	@param  aNumPed, array, Array contendo o número do pedido de venda para consulta dos itens do RA vinculado
+	@author Squad CRM/Faturamento
+	@since  05/2026
+	@return array, Retorna um array com os itens do RA
+/*/
+Method GetItemsRA(aNumPed as array) as array Class EventsFaturamento
+
+	Local aRecnoSE1 := {} as array
+
+	Default aNumPed := {}
+
+	If Len(aNumPed) > 0
+		aRecnoSE1 := FPedAdtPed("R", aNumPed, .F.)
+	EndIf
+
+Return aRecnoSE1
