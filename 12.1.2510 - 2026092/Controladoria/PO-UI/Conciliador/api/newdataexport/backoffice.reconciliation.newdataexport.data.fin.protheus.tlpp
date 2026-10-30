@@ -1,0 +1,324 @@
+#include "tlpp-core.th"
+
+namespace totvs.protheus.backoffice.reconciliation.newdataexport
+using namespace totvs.protheus.backoffice.reconciliation.util
+using namespace totvs.protheus.backoffice.reconciliation.matchprocessing
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NewDataExportProtheusDataFin
+    Classe responsável pela consulta de dados - Financeiro.
+
+    @author Totvs
+/*/
+//-------------------------------------------------------------------
+class NewDataExportProtheusDataFin
+    public method new()
+    public method getAll()
+    static method getData() as object
+
+    private method getQuery()
+    private method getCabecCSV()
+    private method getLineStruct()
+    private method getLineCSVArray()
+endclass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+    Metodo construtor.
+
+    @author Totvs
+/*/
+//-------------------------------------------------------------------
+method new() class NewDataExportProtheusDataFin
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NewDataExportProtheusDataFin
+    Método para obter a instancia ativa da classe.
+
+    @author Totvs
+/*/
+//-------------------------------------------------------------------
+method getData() class NewDataExportProtheusDataFin As Object
+    static __oActiveData As Object
+
+    If ValType(__oActiveData) == "U"
+        __oActiveData := NewDataExportProtheusDataFin():new()
+    EndIf
+return __oActiveData
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getAll
+    Metodo responsável pela busca dos dados de acordo com o tipo (origem ou destino).
+
+    @author Totvs
+/*/
+//-------------------------------------------------------------------
+method getAll() class NewDataExportProtheusDataFin
+    Local aArea         := GetArea() As Array
+    Local jHeaders      := JsonObject():new() As Json
+    Local jResponse     := JsonObject():new() As Json
+    Local jUnion        := JsonObject():new() As Json
+    Local cCodCfg       := tcGetQryParams("codcfg") As Character
+    Local cTabOri       := tcGetQryParams("tabori") As Character
+    Local cTabDes       := tcGetQryParams("tabdes") As Character
+    Local cType         := tcGetQryParams("type")   As Character
+    Local cAlias        := "" As Character
+    Local cHeader       := "" As Character
+    Local cCpoId        := "" As Character
+    Local cCpoUnion     := "" As Character
+    Local cHeaderCSV    := "" As Character
+    Local cTable        := "" As Character
+    Local nI            := 0 As Numeric
+    Local nJ            := 0 As Numeric
+    Local nPos          := 0 As Numeric
+    Local nReSize       := 0 As Numeric
+    Local aItemsData    := {} As Array
+    Local aItems        := {} As Array
+    Local aStruct       := {} As Array
+    Local lProgress     := .F. As Logical
+    Local oJsonAux      := NIL
+    Local oMatchProc    := MatchProcessingProtheusData():New()
+
+    QLB->(dbSetOrder(1))
+    If QLB->(dbSeek(FWxFilial("QLB") + cCodCfg))
+        lProgress := Empty(jHeaders:FromJson(AllTrim(QLB->QLB_FIELDS)))
+        
+        If cType == "origin"
+            cCpoId := QLB->QLB_CIDORI
+        Else
+            cCpoId := QLB->QLB_CIDDES
+        EndIf
+    EndIf
+
+    If lProgress
+        jUnion:FromJson(AllTrim(QLB->QLB_TABGRP))
+
+        If jUnion:hasProperty("unionori") .And. !Empty(jUnion["unionori"])
+            For nI := 1 to Len(jUnion["unionori"])
+                nReSize := 0
+                For nJ := 1 to Len(jUnion["unionori"][nI]["fields"])
+                    If Empty(jUnion["unionori"][nI]["fields"][nJ]["cpopai"])
+                        cCpoUnion := jUnion["unionori"][nI]["fields"][nJ]["cpofil"]
+                    Else
+                        cCpoUnion := jUnion["unionori"][nI]["fields"][nJ]["cpopai"]
+                    EndIf
+
+                    If (nPos := aScan(jHeaders["data_ori"],{|x| x==cCpoUnion})) > 0
+                        aDel(jHeaders["data_ori"],nPos)
+                        nReSize++
+                    EndIf
+                    cHeader += cCpoUnion+","
+                Next nJ
+            Next nI
+
+            If nReSize > 0
+                aSize(jHeaders["data_ori"],Len(jHeaders["data_ori"])-nReSize)
+            EndIf
+        EndIf
+
+        If cType == "origin"
+            cHeader += oMatchProc:tcRetSQLExpression(jHeaders["data_ori"],", ",cCpoId, nil, .T.)+", CODCON, IDMATCH"
+            cTable  := cTabOri
+        Else
+            cHeader := oMatchProc:tcRetSQLExpression(jHeaders["data_des"],", ",cCpoId, nil, .T.)+", CODCON, IDMATCH"
+            cTable  := cTabDes
+        EndIf
+
+        cAlias := self:getQuery(cTable,cHeader)
+
+        aStruct := (cAlias)->(dbStruct())
+
+        cHeaderCSV := self:getCabecCSV(aStruct)
+        jResponse['fields'] := StrToArray(cHeaderCSV,",")
+
+        aItemsData := self:getLineCSVArray(cAlias, aStruct)
+
+        (cAlias)->(dbCloseArea())
+
+        For nI := 1 to Len(aItemsData)
+            For nJ := 1 to Len(aItemsData[nI,2])
+                cLinha := aItemsData[nI,2,nJ]
+                
+                If !Empty(cLinha)
+                    oJsonAux := JsonObject():New()
+                    If Empty(oJsonAux:FromJson("{"+cLinha+"}"))
+                        aAdd(aItems, JsonObject():New())
+                        aItems[Len(aItems)] := oJsonAux
+                        oJsonAux := NIL
+                    EndIf
+                EndIf
+            Next nJ
+        Next nI
+
+        jResponse['items'] := aItems
+    EndIf
+
+    RestArea(aArea)
+    FwFreeArray(aArea)
+
+Return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getCabecCSV
+    Retorna o Cabeçalho do CSV para uma única tabela.
+
+    @author Totvs
+    @param aStruct, Array, Estrutura da tabela.
+    @return cHeaderCSV, Character, Retorna o cabeçalho do CSV.
+/*/
+//-------------------------------------------------------------------
+method getCabecCSV(aStruct) class NewDataExportProtheusDataFin
+    Local cHeaderCSV    := ""
+    Local cField        := ""
+    Local nCount        := 0 as Numeric
+
+    DEFAULT aStruct := {}
+
+    For nCount := 1 to Len(aStruct)
+        If nCount > 1
+            cHeaderCSV += ","
+        EndIf
+
+        cField := aStruct[nCount,1]
+
+        If cField == "IDMATCH" .Or. cField == "CODCON"
+            cHeaderCSV += cField
+        Else
+            cField := AllTrim(FWX3Titulo(cField))+' ('+cField+')'
+            cHeaderCSV += cField
+        EndIf
+    Next nCount
+
+Return cHeaderCSV
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getLineCSVArray
+    Retorna um array contendo as linhas de uma única tabela.
+
+    @author Totvs
+    @param cAliasQry, Character, Alias criado através da temporaria.
+    @param aStruct, Array, Estrutura da tabela.
+    @return aLinesRet, Array, Retorna as linhas do CSV.
+/*/
+//-------------------------------------------------------------------
+method getLineCSVArray(cAliasQry, aStruct) class NewDataExportProtheusDataFin
+    Local aItems    := {} as Array
+    Local aLinesRet := {} as Array
+    Local cCodConc  := "" as Character
+    Local cIdMatch  := "" as Character
+    Local cLine     := "" as Character
+    Local cField    := "" as Character
+    Local nCount    := 0  as Numeric
+    Local aTitles   := Array(Len(aStruct)) as Array
+
+    DEFAULT cAliasQry   := ""
+    DEFAULT aStruct     := {}
+
+    For nCount := 1 to Len(aStruct)
+        cField := aStruct[nCount, 1]
+        If cField == "CODCON" .Or. cField == "IDMATCH"
+            aTitles[nCount] := cField
+        Else
+            aTitles[nCount] := AllTrim(FwX3Titulo(cField)) + ' (' + cField + ')'
+        EndIf
+    Next nCount
+
+    // Processa os registros
+    (cAliasQry)->(dbGoTop())
+    While !(cAliasQry)->(Eof())
+
+        If cCodConc + cIdMatch <> (cAliasQry)->(CODCON + IDMATCH)
+            If !Empty(cIdMatch)
+                aAdd(aLinesRet,{cCodConc + cIdMatch, aItems})
+            EndIf
+            aItems := {}
+            cCodConc := (cAliasQry)->(CODCON)
+            cIdMatch := (cAliasQry)->(IDMATCH)
+        EndIf
+
+        cLine := self:getLineStruct(cAliasQry, aStruct, aTitles)
+
+        aAdd(aItems, cLine)
+        (cAliasQry)->(dbSkip())
+    EndDo
+
+    If Len(aItems) > 0
+        aAdd(aLinesRet, {cCodConc + cIdMatch, aItems})
+    EndIf
+
+Return aLinesRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getQuery
+    Realiza a query para busca de informações e cria a área temporária.
+
+    @author Totvs
+    @param cTable, Character, Nome da tabela temporaria.
+    @param cSelect, Character, Campos a serem selecionados na consulta.
+    @return cAliasQry, Character, Retorna o alias da consulta.
+/*/
+//-------------------------------------------------------------------
+method getQuery(cTable, cSelect) class NewDataExportProtheusDataFin
+    Local nParam        := 1    As Numeric
+    Local cQuery        := ""   As Character
+    Local cAliasQry     := ""   As Character
+    Local oStatement    := Nil  As Object
+
+    cQuery := " SELECT ? "
+    cQuery += " FROM ? "
+    cQuery += " WHERE IDMATCH <> ? "
+    cQuery += " ORDER BY CODCON, IDMATCH "
+    cQuery := ChangeQuery(cQuery)
+
+    oStatement := FwExecStatement():New(cQuery)
+
+    oStatement:SetUnsafe(nParam++, cSelect)
+    oStatement:SetUnsafe(nParam++, cTable)
+    oStatement:SetString(nParam++, " ")
+
+    cAliasQry := oStatement:OpenAlias()
+
+Return cAliasQry
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getLineStruct
+    Retorna a linha do CSV de acordo com a estrutura da tabela
+
+    @author Totvs
+    @param cAliasQry, Character, Alias criado através da temporaria.
+    @param aStruct, Array, Estrutura da tabela.
+    @param aTitles, Array, Títulos dos campos da tabela.
+/*/
+//-------------------------------------------------------------------
+method getLineStruct(cAliasQry, aStruct, aTitles) class NewDataExportProtheusDataFin
+    Local cLine := ""
+    Local nCount := 0
+    Local cField := ""
+
+    DEFAULT cAliasQry := ""
+    DEFAULT aStruct   := {}
+	DEFAULT aTitles   := {}
+
+    For nCount := 1 to Len(aStruct)
+        cField := aStruct[nCount,1]
+
+        If nCount > 1
+            cLine += ","
+        EndIf
+
+        If aStruct[nCount,2] == "C"
+            cLine += '"' + aTitles[nCount] + '":"'
+            If aStruct[nCount,3] == 8 .And. FWSX3Util():GetFieldType(cField) == "D"
+                cLine += DTOC(STOD(&('(cAliasQry)->('+cField+')')))
+            Else
+                cLine += &('(cAliasQry)->('+cField+')')
+            EndIf
+            cLine += '"'
+        ElseIf aStruct[nCount,2] == "N"
+            cLine += '"' + aTitles[nCount] + '":'
+            cLine += cValToChar(&('(cAliasQry)->('+cField+')'))
+        EndIf
+    Next nCount
+
+Return cLine

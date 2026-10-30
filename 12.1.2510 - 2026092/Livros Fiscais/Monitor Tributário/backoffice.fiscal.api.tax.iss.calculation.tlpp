@@ -1,0 +1,358 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+#INCLUDE "backoffice.fiscal.api.tax.iss.calculation.ch"
+
+/*------------------------------------------------------------- 
+{Protheus.doc} GET MTApurISSFilterTaxTotal
+API Total de imposto Devido e retido de terceiros - ISS.
+@author Evandro Italo
+@parâmetros de entrada do endpoint
+@since 18/03/2025
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/iss/tax-total', description='API Total de imposto Devido e retido de terceiros - ISS.') // STR0001 - API Total de imposto Devido e retido de terceiros - ISS. 
+Function MTApurISSFilterTaxTotal()
+Local oJsResponse         as json
+Local cBranches        := oRest:getQueryRequest()['branches'] as character
+Local cPeriodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cPeriodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+
+If !empty(cBranches) .and. !empty(cPeriodStart) .and. !empty(cPeriodEnd)
+    oJsResponse := ApurISSFilterTaxTotal(cBranches, cPeriodStart, cPeriodEnd)
+Endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------
+{Protheus.doc} GET MTApurISSFilterCalculation
+API de Apuração de ISS por parâmetros.
+@author Evandro Italo
+@parâmetros de entrada do endpoint
+@since 10/12/2024
+--------------------------------------------------------------*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/iss/calculation', description='API de apuração de ISS') // STR0002 - 'API de apuração de ISS'
+Function MTApurISSFilterCalculation()
+Local oJsResponse         as json
+Local cBranches        := oRest:getQueryRequest()['branches'] as character
+Local cPeriodStart     := oRest:getQueryRequest()['periodStart']  as character
+Local cPeriodEnd       := oRest:getQueryRequest()['periodEnd']  as character
+
+If !empty(cBranches) .and. !empty(cPeriodStart) .and. !empty(cPeriodEnd)
+    oJsResponse := ApurISSFilterCalculation(cBranches, cPeriodStart, cPeriodEnd)
+Endif    
+oRest:setResponse( (oJsResponse )) 
+FWFreeObj(oJsResponse)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET ApurISSFilterTaxTotal
+Função responsável por preencher o Json com a informação referentes Total de imposto ISS 
+(card total - ISS_RETIDO_DE_TERCEIROS e ISS_DEVIDO) 
+@author Evandro Italo
+@parâmetros de entrada do endpoint
+@since 18/03/2025
+-------------------------------------------------------------------*/
+Static Function ApurISSFilterTaxTotal(cBranches as character, cPeriodStart as character, cPeriodEnd as character)
+
+Local cAlias       := getNextAlias()            as character
+Local cQuery       := ''                        as character
+Local oJsonResp    := JsonObject():New()        as object
+Local oGetApurISS  := JsonObject():New()        as object
+
+cQuery := " SELECT  "                                                                               
+cQuery += "     ISNULL(SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN ISNULL(CJY_VALICM, 0) ELSE ? END),0) WITHHELDTHIRDPARTIES, "
+cQuery += "     ISNULL(SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN ISNULL(CJY_VALICM, 0) ELSE ? END),0) PAYABLE "
+cQuery += " FROM ? "
+cQuery += " WHERE D_E_L_E_T_ = ? "
+cQuery += "   AND CJY_FILIAL IN (?) "
+cQuery += "   AND CJY_ENTRAD BETWEEN ? AND ? "
+cQuery += "   AND CJY_TIPO = ?; "
+
+oGetApurISS := FwExecStatement():New()
+oGetApurISS:SetQuery(ChangeQuery(cQuery))
+
+oGetApurISS:setString(1, '2')
+oGetApurISS:setString(2, 'E')
+oGetApurISS:SetNumeric(3, 0)
+oGetApurISS:setString(4, '1')
+oGetApurISS:setString(5, 'S')
+oGetApurISS:SetNumeric(6, 0)
+oGetApurISS:SetUnsafe(7, FIS319SqlName("CJY"))
+oGetApurISS:setString(8, Space(01))
+oGetApurISS:SetIn(9, StrTokArr(cBranches, "," ))
+oGetApurISS:setString(10, StrTran(cPeriodStart, "-", ""))
+oGetApurISS:setString(11, StrTran(cPeriodEnd, "-", ""))
+oGetApurISS:setString(12, 'S')
+oGetApurISS:CBASEQUERY := oGetApurISS:GETFIXQUERY()
+cAlias := oGetApurISS:OpenAlias()
+
+// Iniciando o While
+If (cAlias)->(!Eof()) .AND. ((cAlias)->WITHHELDTHIRDPARTIES > 0 .OR. (cAlias)->PAYABLE > 0)
+    oJsonResp["payable"]                   :=   (cAlias)->PAYABLE
+    oJsonResp["withheldFromThirdParties" ] :=   (cAlias)->WITHHELDTHIRDPARTIES     
+Else
+    oJsonResp['code'] := 400
+    oJsonResp['detailMessage'] :=  STR0003//'valor não encontrado'
+    oJsonResp['message'] := STR0004 //'Dados não encontrados para o período e/ou filial informados.'
+EndIf       
+(cAlias)->(DBCloseArea())
+
+FWFreeObj(oGetApurISS)
+
+Return oJsonResp
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GET ApurISSFilterCalculation
+Função responsável por preencher o Json com com informações referentes a apuração de ISS
+@author william.palma
+@parâmetros de entrada do endpoint
+@since 10/12/2024
+-------------------------------------------------------------------*/
+Static Function ApurISSFilterCalculation(cBranches as character, cPeriodStart as character, cPeriodEnd as character)
+Local nPos         := 0                         as numeric
+Local nPageAux     := 0                         as numeric
+Local nPageSize    := 12                        as numeric
+Local lHasNext     := .f.                       as logical
+Local nPage        := 1                         as numeric
+Local oJsonResp    := JsonObject():New()        as object
+Local cAlias       := getNextAlias()            as character
+Local aRetOrig     := {}                        as array
+Local cDbMs        := ""                        as character
+
+cDbMs := TcGetDb()
+  
+If "MSSQL" $ cDbMs
+    GetApuraISSMSSQL(@cAlias,nPage,nPageSize,cBranches, cPeriodStart, cPeriodEnd)
+ElseIf "ORACLE" $ cDbMs
+    GetApuraISSORACLE(@cAlias,nPage,nPageSize,cBranches, cPeriodStart, cPeriodEnd)
+ElseIf "POSTGRES" $ cDbMs
+    GetApuraISSPOSTGRES(@cAlias,nPage,nPageSize,cBranches, cPeriodStart, cPeriodEnd)
+EndIf
+
+// Iniciando o While
+If (cAlias)->(!Eof())
+    While (cAlias)->(!Eof())
+        nPageAux++
+        If nPageAux == 1
+            oJsonResp["items"] := {}
+        Endif
+        If nPageAux <= nPageSize
+            aAdd( oJsonResp["items"], JsonObject():New() )
+            nPos++
+            oJsonResp["items"][nPos]["month"                   ] := ( cAlias)->MES + "/" + cValToChar(( cAlias)->ANO)
+            oJsonResp["items"][nPos]["payable"                 ] := ( cAlias)->ISS_DEVIDO
+            oJsonResp["items"][nPos]["withheldFromThirdParties"] := ( cAlias)->ISS_RETIDO_DE_TERCEIROS
+        Else
+            lHasNext := .t.
+            Exit
+        EndIf
+        (cAlias)->(DbSkip())
+    EndDo
+    oJsonResp["hasNext"]    := lHasNext
+Else
+    oJsonResp['code'] := 400
+    oJsonResp['detailMessage'] := STR0003 //Valor não encontrado
+    oJsonResp['message'] := STR0004 //"Dados não encontrados para o período e/ou filial informados."
+EndIf       
+(cAlias)->(DBCloseArea())
+aSize(aRetOrig,0)
+
+Return oJsonResp:toJson()
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetApuraISSMSSQL()
+Função responsável por preencher o Alias com as informações referentes a apuração de ISS no banco MSSQL
+@author Evandro Italo
+@parâmetros de entrada do endpoint: cAlias, nPage, nPageSize, cBranches, cPeriodStart, cPeriodEnd
+@since 19/03/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetApuraISSMSSQL(cAlias as character, nPage as numeric, nPageSize as numeric, cBranches as character, cPeriodStart as character, cPeriodEnd as character)
+
+Local cQuery      := ''                 as character
+Local oGetApurISS := JsonObject():New() as object
+
+cQuery := " SELECT  "
+cQuery += "     SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN CJY_VALICM ELSE ? END) ISS_RETIDO_DE_TERCEIROS, "
+cQuery += "     SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN CJY_VALICM ELSE ? END) ISS_DEVIDO, "
+cQuery += "     YEAR(CJY_ENTRAD) AS ANO, "
+cQuery += "     UPPER(LEFT(DATENAME(MONTH, CJY_ENTRAD), 3)) MES  " //-- Retorna a abreviação do mês (ex: JAN, FEV, etc.)
+cQuery += " FROM ? "
+cQuery += " WHERE D_E_L_E_T_ = ? "
+cQuery += "   AND CJY_FILIAL IN (?) "
+cQuery += "   AND CJY_ENTRAD BETWEEN ? AND ? "
+cQuery += "   AND CJY_TIPO = ? "
+cQuery += " GROUP BY YEAR(CJY_ENTRAD), MONTH(CJY_ENTRAD), DATENAME(MONTH, CJY_ENTRAD) "
+cQuery += " ORDER BY ANO, MONTH(CJY_ENTRAD) "
+oGetApurISS := FwExecStatement():New()
+oGetApurISS:SetQuery(ChangeQuery(cQuery))
+
+oGetApurISS:setString(1, '2')
+oGetApurISS:setString(2, 'E')
+oGetApurISS:SetNumeric(3, 0)
+oGetApurISS:setString(4, '1')
+oGetApurISS:setString(5, 'S')
+oGetApurISS:SetNumeric(6, 0)
+oGetApurISS:SetUnsafe(7, FIS319SqlName("CJY"))
+oGetApurISS:setString(8, Space(01))
+oGetApurISS:SetIn(9, StrTokArr(cBranches, "," ))
+oGetApurISS:setString(10, StrTran(cPeriodStart, "-", ""))
+oGetApurISS:setString(11, StrTran(cPeriodEnd, "-", ""))
+oGetApurISS:setString(12, 'S')
+cAlias := oGetApurISS:OpenAlias()
+
+FWFreeObj(oGetApurISS)
+
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetApuraISSORACLE()
+Função responsável por preencher o Alias com as informações referentes a apuração de ISS no banco Oracle
+@author Evandro Italo
+@parâmetros de entrada do endpoint: cAlias, nPage, nPageSize, cBranches, cPeriodStart, cPeriodEnd
+@since 19/03/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetApuraISSORACLE(cAlias as character, nPage as numeric, nPageSize as numeric, cBranches as character, cPeriodStart as character, cPeriodEnd as character)
+
+Local cQuery      := ''                 as character
+Local oGetApurISS := JsonObject():New() as object
+
+cQuery += " SELECT  "
+cQuery += "     SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN CJY_VALICM ELSE ? END) AS ISS_RETIDO_DE_TERCEIROS, "
+cQuery += "     SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN CJY_VALICM ELSE ? END) AS ISS_DEVIDO, "
+cQuery += "     EXTRACT(YEAR FROM TO_DATE(CJY_ENTRAD, 'YYYYMMDD')) AS ANO, "
+cQuery += "     CASE EXTRACT(MONTH FROM TO_DATE(CJY_ENTRAD, 'YYYYMMDD')) "
+cQuery += "         WHEN 1 THEN 'JAN' "
+cQuery += "         WHEN 2 THEN 'FEV' "
+cQuery += "         WHEN 3 THEN 'MAR' "
+cQuery += "         WHEN 4 THEN 'ABR' "
+cQuery += "         WHEN 5 THEN 'MAI' "
+cQuery += "         WHEN 6 THEN 'JUN' "
+cQuery += "         WHEN 7 THEN 'JUL' "
+cQuery += "         WHEN 8 THEN 'AGO' "
+cQuery += "         WHEN 9 THEN 'SET' "
+cQuery += "         WHEN 10 THEN 'OUT' "
+cQuery += "         WHEN 11 THEN 'NOV' "
+cQuery += "         WHEN 12 THEN 'DEZ' "
+cQuery += "     END AS MES "
+cQuery += " FROM ? "
+cQuery += " WHERE D_E_L_E_T_ = ? "
+cQuery += "   AND CJY_FILIAL IN (?) "
+cQuery += "   AND TO_DATE(CJY_ENTRAD, 'YYYYMMDD') BETWEEN TO_DATE(?, 'YYYYMMDD') AND TO_DATE(?, 'YYYYMMDD') "
+cQuery += "   AND CJY_TIPO = ? "
+cQuery += " GROUP BY EXTRACT(YEAR FROM TO_DATE(CJY_ENTRAD, 'YYYYMMDD')), EXTRACT(MONTH FROM TO_DATE(CJY_ENTRAD, 'YYYYMMDD')),  "
+cQuery += "          CASE EXTRACT(MONTH FROM TO_DATE(CJY_ENTRAD, 'YYYYMMDD')) "
+cQuery += "              WHEN 1 THEN 'JAN' "
+cQuery += "              WHEN 2 THEN 'FEV' "
+cQuery += "              WHEN 3 THEN 'MAR' "
+cQuery += "              WHEN 4 THEN 'ABR' "
+cQuery += "              WHEN 5 THEN 'MAI' "
+cQuery += "              WHEN 6 THEN 'JUN' "
+cQuery += "              WHEN 7 THEN 'JUL' "
+cQuery += "              WHEN 8 THEN 'AGO' "
+cQuery += "              WHEN 9 THEN 'SET' "
+cQuery += "              WHEN 10 THEN 'OUT' "
+cQuery += "              WHEN 11 THEN 'NOV' "
+cQuery += "              WHEN 12 THEN 'DEZ' "
+cQuery += "          END "
+cQuery += " ORDER BY ANO, EXTRACT(MONTH FROM TO_DATE(CJY_ENTRAD, 'YYYYMMDD')) "
+oGetApurISS := FwExecStatement():New()
+oGetApurISS:SetQuery(ChangeQuery(cQuery))
+
+oGetApurISS:setString(1, '2')
+oGetApurISS:setString(2, 'E')
+oGetApurISS:SetNumeric(3, 0)
+oGetApurISS:setString(4, '1')
+oGetApurISS:setString(5, 'S')
+oGetApurISS:SetNumeric(6, 0)
+oGetApurISS:SetUnsafe(7, FIS319SqlName("CJY"))
+oGetApurISS:setString(8, Space(01))
+oGetApurISS:SetIn(9, StrTokArr(cBranches, "," ))
+oGetApurISS:setString(10, StrTran(cPeriodStart, "-", ""))
+oGetApurISS:setString(11, StrTran(cPeriodEnd, "-", ""))
+oGetApurISS:setString(12, 'S')
+oGetApurISS:CBASEQUERY := oGetApurISS:GETFIXQUERY()
+cAlias := oGetApurISS:OpenAlias()
+
+FWFreeObj(oGetApurISS)
+
+Return 
+
+/*--------------------------------------------------------------------
+{Protheus.doc} GetApuraISSPOSTGRES()
+Função responsável por preencher o Alias com as informações referentes a apuração de ISS no banco Postgresql
+@author Evandro Italo
+@parâmetros de entrada do endpoint: cAlias, nPage, nPageSize, cBranches, cPeriodStart, cPeriodEnd
+@since 19/03/2025
+@return Nil, nulo, não tem retorno.
+//-------------------------------------------------------------------*/
+Static Function GetApuraISSPOSTGRES(cAlias as character, nPage as numeric, nPageSize as numeric, cBranches as character, cPeriodStart as character, cPeriodEnd as character)
+
+Local cQuery      := ''                 as character
+Local oGetApurISS := JsonObject():New() as object
+
+cQuery := " SELECT  "
+cQuery += "     SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN CJY_VALICM ELSE ? END) AS ISS_RETIDO_DE_TERCEIROS, "
+cQuery += "     SUM(CASE WHEN CJY_RECISS = ? AND CJY_TIPOMO = ? THEN CJY_VALICM ELSE ? END) AS ISS_DEVIDO, "
+cQuery += "     SUBSTRING(CJY_ENTRAD, 1, 4) AS ANO, "
+cQuery += "     CASE SUBSTRING(CJY_ENTRAD, 5, 2) "
+cQuery += "         WHEN '01' THEN 'JAN' "
+cQuery += "         WHEN '02' THEN 'FEV' "
+cQuery += "         WHEN '03' THEN 'MAR' "
+cQuery += "         WHEN '04' THEN 'ABR' "
+cQuery += "         WHEN '05' THEN 'MAI' "
+cQuery += "         WHEN '06' THEN 'JUN' "
+cQuery += "         WHEN '07' THEN 'JUL' "
+cQuery += "         WHEN '08' THEN 'AGO' "
+cQuery += "         WHEN '09' THEN 'SET' "
+cQuery += "         WHEN '10' THEN 'OUT' "
+cQuery += "         WHEN '11' THEN 'NOV' "
+cQuery += "         WHEN '12' THEN 'DEZ' "
+cQuery += "     END AS MES "
+cQuery += " FROM ? "
+cQuery += " WHERE D_E_L_E_T_ = ? "
+cQuery += "   AND CJY_FILIAL IN (?) "
+cQuery += "   AND CJY_ENTRAD BETWEEN ? AND ? "
+cQuery += "   AND CJY_TIPO = ? "
+cQuery += " GROUP BY  "
+cQuery += "     SUBSTRING(CJY_ENTRAD, 1, 4), "
+cQuery += "     CASE SUBSTRING(CJY_ENTRAD, 5, 2) "
+cQuery += "         WHEN '01' THEN 'JAN' "
+cQuery += "         WHEN '02' THEN 'FEV' "
+cQuery += "         WHEN '03' THEN 'MAR' "
+cQuery += "         WHEN '04' THEN 'ABR' "
+cQuery += "         WHEN '05' THEN 'MAI' "
+cQuery += "         WHEN '06' THEN 'JUN' "
+cQuery += "         WHEN '07' THEN 'JUL' "
+cQuery += "         WHEN '08' THEN 'AGO' "
+cQuery += "         WHEN '09' THEN 'SET' "
+cQuery += "         WHEN '10' THEN 'OUT' "
+cQuery += "         WHEN '11' THEN 'NOV' "
+cQuery += "         WHEN '12' THEN 'DEZ' "
+cQuery += "     END, "
+cQuery += "     SUBSTRING(CJY_ENTRAD, 5, 2) "
+cQuery += " ORDER BY  "
+cQuery += "     SUBSTRING(CJY_ENTRAD, 1, 4), "
+cQuery += "     SUBSTRING(CJY_ENTRAD, 5, 2)::integer; "
+oGetApurISS := FwExecStatement():New()
+oGetApurISS:SetQuery(ChangeQuery(cQuery))
+
+oGetApurISS:setString(1, '2')
+oGetApurISS:setString(2, 'E')
+oGetApurISS:SetNumeric(3, 0)
+oGetApurISS:setString(4, '1')
+oGetApurISS:setString(5, 'S')
+oGetApurISS:SetNumeric(6, 0)
+oGetApurISS:SetUnsafe(7, FIS319SqlName("CJY"))
+oGetApurISS:setString(8, Space(01))
+oGetApurISS:SetIn(9, StrTokArr(cBranches, "," ))
+oGetApurISS:setString(10, StrTran(cPeriodStart, "-", ""))
+oGetApurISS:setString(11, StrTran(cPeriodEnd, "-", ""))
+oGetApurISS:setString(12, 'S')
+cAlias := oGetApurISS:OpenAlias()
+
+FWFreeObj(oGetApurISS)
+
+Return 

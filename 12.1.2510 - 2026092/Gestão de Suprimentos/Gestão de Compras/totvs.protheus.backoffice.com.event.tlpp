@@ -1,0 +1,240 @@
+#include 'totvs.ch'
+#include 'protheus.ch'
+#include 'tlpp-core.th'
+
+namespace totvs.protheus.backoffice.com.event
+
+using namespace totvs.protheus.fiscal.taf.event
+
+/*/{Protheus.doc} EventsCompras
+    Classe de integração do módulo de Compras com a camada de eventos do TAF.
+    @type class
+    @author Thiago Rodrigues
+    @since 17/08/2026
+    @version P12
+/*/
+class EventsCompras
+    public method new() as object
+    public method SendEvent(ojData as json) as json
+    public method EventSent(cChvNfe as character, cIdEvent as character) as logical
+    public method RetEveCanc(cIdEvent as character, cChvNfe as character) as json
+    public method CancelEvent(ojData as json) as json
+    public method DestroyObj(aObjects as Array)
+endclass
+
+/*/{Protheus.doc} New
+    Construtor da classe EventsCompras.
+    @type method
+    @author Thiago Rodrigues
+    @since 17/08/2026
+    @return object, a própria instância.
+/*/
+method new() as object class EventsCompras
+return self
+
+
+/*/{Protheus.doc} EventSent
+    Verifica a existência de solicitação já enviada para o evento 211128
+    da NF-e informada. A validação consulta a fila T7S, considerando solicitações ainda
+    pendentes de processamento.
+
+    @type method
+    @author Thiago Rodrigues
+    @since 17/08/2026
+    @param cChvNfe, character, chave eletrônica da NF-e 
+    @param cIdEvent,character, Id do evento
+    @return logical, .T. quando existir solicitação na fila (T7S)
+    caso contrário, .F.
+
+/*/
+method EventSent(cChvNfe as character, cIdEvent as Character) as logical class EventsCompras
+    local lPending  := .F. as logical
+    local cQuery    := ""  as character
+    Local cAlias	:= ""  as character
+    local oQry      := Nil as object
+
+    Default cChvNfe  := ""
+    Default cIdEvent := ""
+
+    If AliasInDic("T7S")
+
+        cQuery := " SELECT T7S_CHVNFE "
+        cQuery += " FROM " + RetSqlName("T7S") + " T7S "
+        cQuery += " WHERE T7S.T7S_FILIAL = ? "
+        cQuery += " AND T7S.T7S_CHVNFE = ? "
+        cQuery += " AND T7S.T7S_EVENTO = ? "
+        cQuery += " AND T7S.D_E_L_E_T_ = ? "
+
+        oQry := FWExecStatement():New(ChangeQuery(cQuery))
+        oQry:SetString(1, FWxFilial("T7S"))
+        oQry:SetString(2, cChvNfe)
+        oQry:SetString(3, cIdEvent)
+        oQry:SetString(4, " ")
+
+        cAlias := oQry:OpenAlias()
+        
+        If !(cAlias)->(Eof())
+            lPending := .T.
+        EndIf
+
+        (cAlias)->(DbCloseArea())
+        
+        FwFreeObj(oQry)
+    EndIf
+
+return lPending
+
+/*/{Protheus.doc} SendEvent
+    Monta o json do evento  que será enviado para fila de processamento do TAF. 
+    Verifica se o evento já foi enviado antes de montar o payload.
+
+    @type method
+    @author Thiago Rodrigues
+    @since  17/08/2026
+    @param  ojData - Objeto Json com as informações do evento                   
+            ojData["chvnfe"]             //Chave NFE
+            ojData["authorType"]         //Tipo de Autor (1-Emitente, 2-Destinatário, 3-Sucessora)
+            ojData["stateAuthor"]        //UF do Autor (SP, MG, RS)
+            ojData["acceptanceIndicator"]//Indicador de Aceitação (0-Não, 1-Sim)
+            ojData["event"]              //Evento de Aceite de débito na apuração por emissão de nota de crédito
+            ojData["originTable"]        //Tabela de origem NFE
+            ojData["originRoutine"]      //Rotina solicitante do Evento
+    @return json, resposta técnica da API do TAF ou JSON de bloqueio/erro
+/*/
+Method SendEvent(ojData as json) as json class EventsCompras
+    local ojRequest   := JsonObject():New() as json
+    local ojResponse  := JsonObject():New() as json
+    local oRepository as object
+
+    Default ojData := Nil
+
+    If ojData <> nil .And. !Empty(ojData["chvnfe"])
+
+        If !::EventSent(ojData["chvnfe"],ojData["event"])
+
+            ojRequest["chvnfe"]        := ojData["chvnfe"]
+            ojRequest["originTable"]   := ojData["originTable"]
+            ojRequest["originRoutine"] := ojData["originRoutine"]
+
+            ojRequest["event"]          := JsonObject():New()
+            ojRequest["event"]["event"] := ojData["event"]
+            ojRequest["event"]["items"] := {}
+
+            ojRequest["event"]["fields"] := JsonObject():New()
+            ojRequest["event"]["fields"]["authorType"]          := ojData["authorType"]
+            ojRequest["event"]["fields"]["stateAuthor"]         := ojData["stateAuthor"]
+            ojRequest["event"]["fields"]["acceptanceIndicator"] := ojData["acceptanceIndicator"]
+
+            oRepository := WSEventsRepository():New("POST")
+            ojResponse  := oRepository:postInsertEvents(ojRequest)
+        Endif
+    Endif
+
+    ::DestroyObj({ojRequest, oRepository})
+return ojResponse
+
+
+/* {Protheus.doc}
+	RetEveCanc - Metodo do TAF para validar se pode cancelar o evento enviado
+	
+	@author Thiago Rodrigues
+	@since 18/08/2026
+	@param cIdEvent as character
+    @param cChvNfe, character, chave eletrônica da NF-e 
+    @param cIdEvent,character, Id do evento
+	@return lRet, .T. o evento pode ser cancelado, .F., o evento nao foi encontrado ou nao pode ser cancelado.
+	@version P12
+*/
+Method RetEveCanc(cIdEvent as character, cChvNfe as character) as json class EventsCompras
+
+    Local ojsEveCanc       := JsonObject():New() as Json
+    Local ojRetIDs         := JsonObject():New() as Json
+    Local oProcessingQueue As Object
+
+    Default cIdEvent := ""
+    Default cChvNfe  := ""
+
+    ojsEveCanc['chvnfe'] := cChvNfe
+    ojsEveCanc['event']  := cIdEvent
+
+    oProcessingQueue := Processingqueue():New()
+    ojRetIDs          := oProcessingQueue:RetEventCancel(ojsEveCanc)
+
+    ::DestroyObj({ojsEveCanc, oProcessingQueue})
+
+Return ojRetIDs
+
+
+/* {Protheus.doc}
+	CancelEvent - Metodo para cancelamento do evento enviado anteriormente para o TAF.
+	@author Thiago Rodrigues
+	@since  18/08/2026
+	@param  jData as Json   
+            jData["event"]  //Evento de Aceite de débito na apuração por emissão de nota de crédito                   
+            jData["chvnfe"] //Chave NFE
+	@return jResponse .T. ou .F.
+	@version P12
+*/
+//terminar após validar o pode cancelar o evento
+/*/{Protheus.doc} CancelEvent
+    Cancela o evento enviado anteriormente obtendo o ID via RetEventCancel
+/*/
+Method CancelEvent(ojData as json) as json class EventsCompras
+
+    Local ojReturnCancel as Json
+    Local ojRetIDs       as Json
+    Local oWsRepository  as Object
+    Local aRegistros     := {} as Array
+    Local cIdCancel      := "" as Character
+
+    Default ojData := Nil 
+
+    If ojData != Nil
+
+        // Obtém os IDs elegíveis para cancelamento
+        ojRetIDs := ::RetEveCanc(ojData["event"], ojData["chvnfe"])
+
+        // Valida retorno utilizando a variável correta (ojRetIDs)
+        If ojRetIDs <> Nil .And. Empty(ojRetIDs["errorMsg"]) .And. ojRetIDs:hasproperty('registros')
+            
+            aRegistros := ojRetIDs["registros"]
+
+            If Len(aRegistros) > 0
+                // Extrai o campo 'id' do primeiro objeto retornado no array
+                cIdCancel := aRegistros[1]["id"]
+                oWsRepository := WSEventsRepository():New("PUT")
+                If oWsRepository <> Nil 
+                    ojReturnCancel := oWsRepository:putEventCancel(cIdCancel)
+                EndIf
+            EndIf
+        EndIf
+    EndIf
+
+    ::DestroyObj({ojRetIDs, oWsRepository})
+
+Return ojReturnCancel
+
+
+/*/{Protheus.doc} DestroyObj
+	Função para centralizar a limpeza dos objetos utilizados pela classe.
+	@type  Function
+	@author Thiago Rodrigues
+	@since 18/08/2026
+	@version 1.0
+    @param aObjects, array, array com os objetos a serem limpos
+	@return return Nil, Nil, Nil
+	/*/
+Method DestroyObj(aObjects as Array) class EventsCompras
+	Local nFor			:= 0	as numeric
+	Local nSize 		:= 0	as numeric
+	Default aObjects 	:= {}
+	
+	nSize := Len(aObjects)
+	if (nSize > 0)
+		for nFor := 1 to nSize
+			FwFreeObj(aObjects[nFor])
+		next nFor
+		FwFreeArray(aObjects)
+	endif
+Return Nil
+

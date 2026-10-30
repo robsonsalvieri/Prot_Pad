@@ -1,0 +1,291 @@
+#include 'tlpp-core.th'
+#include 'fwmvcdef.ch'
+#include 'fweventviewconsts.ch'
+#include 'agrobusiness.agd.crma980.event.ch'
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} CRMA980Event
+classe responsável pelo evento das regras de negócio
+do módulo Totvs Agro Distribuidor (SIGAAGD).
+@type class
+@version 12
+@author jc.maldonado
+@since 03/06/2026
+/*/
+class CRMA980Event from FwModelEvent
+	public method new()
+	public method modelPosVld()
+	public method afterTTS()
+endClass
+
+/*/{Protheus.doc} CRMA980Event::new
+Construtor da classe.
+@type method
+@version 12
+@author jc.maldonado
+@since 03/06/2026
+@return object, Instância da classe
+/*/
+method new() class CRMA980Event
+return self
+
+/*/{Protheus.doc} CRMA980Event::ModelPosVld
+Método que é chamado pelo MVC quando ocorrer as ações de pós
+validação do Modelo.
+Esse evento ocorre uma vez no contexto do modelo principal.
+@type method
+@version 12
+@author jc.maldonado
+@since 03/06/2026
+@param oModel, object, Modelo de dados
+@param cModelId, character, Id do modelo
+@return logical, Resultado da validação
+/*/
+method modelPosVld(oModel as object, cModelId as character) class CRMA980Event
+	local nOperation := oModel:GetOperation()
+	local oRepoCliEx := Nil
+	local lClientNEP := .F.
+	local lValid 	 := .T.
+
+	if nOperation == MODEL_OPERATION_UPDATE
+		oRepoCliEx := ClientExtensionRepository():New()
+		lClientNEP := oRepoCliEx:existsById(FWxFilial("NEP") + oModel:GetValue("SA1MASTER", "A1_COD") + oModel:GetValue("SA1MASTER", "A1_LOJA"))
+		freeObj(oRepoCliEx)
+
+		if ! lClientNEP
+			return lValid
+		endif
+
+		lValid := vldAddress(oModel:GetValue("SA1MASTER", "A1_END"))
+	endif
+return lValid
+
+/*/{Protheus.doc} CRMA980Event::afterTTS
+Método que é chamado pelo MVC após a transação.
+Esse evento ocorre uma vez no contexto do modelo principal.
+@type method
+@version 12
+@author jc.maldonado
+@since 17/06/2026
+@param oModel, object, Objeto do modelo principal
+@param cModelId, character, Id do modelo
+/*/
+method afterTTS(oModel, cModelId) class CRMA980Event
+	local nOperation := oModel:GetOperation() as integer
+
+	if nOperation == MODEL_OPERATION_INSERT
+		if ! isBlind() .and. canReplicateCustomerAsSupplier()
+			FWMsgRun(nil, {|| replicateCustomerAsSupplier()}, STR0010, STR0011) //"Aguarde", "Cadastrando fornecedor..."
+		endIf
+	endIf
+return
+
+/*/{Protheus.doc} vldAddress
+Valida se o endereço possui o padrão esperado (Logradouro, número).
+Ex: Av. Brasil, 343
+@type function
+@version 12
+@author jc.maldonado
+@since 03/06/2026
+@param cAdress, character, Endereço
+@return logical, Resultado da validação
+/*/
+Static Function vldAddress(cAdress as character) as logical
+	local cLogradour := trataEnd(cAdress, 'L') as character
+	local cNumero    := trataEnd(cAdress, 'N') as character
+
+	Default cAdress := ""
+
+	if empty(cLogradour) .Or. empty(cNumero)
+		AGDHELP(STR0001, STR0002, STR0003) //'AJUDA', 'Campo Endereço inválido.', 'O endereço precisa seguir o padrao "Logradouro, número". Exemplo: Av. Brasil, 343'
+		return .f.
+	endif
+return .t.
+
+/*/{Protheus.doc} canReplicateCustomerAsSupplier
+Verifica se é possível cadastrar o fornecedor com base nos dados cliente
+@type function
+@version 12
+@author jc.maldonado
+@since 19/06/2026
+@return logical, Resultado da validação
+/*/
+static function canReplicateCustomerAsSupplier() as logical
+	local oUtilsService as object
+	local aAreaSA2      as array
+
+	if ! SUPERGETMV("MV_AGD0010", .f., .f.);
+			.or. ! FWAlertYesNo(STR0005, STR0004) //"Deseja incluir o fornecedor com base nos dados do cliente?","Cadastro de Fornecedor"
+		return .f.
+	endif
+
+	oUtilsService := UtilsService():New()
+
+	if ! oUtilsService:isTableSharingEqual("SA1", "SA2")
+		ApMsgAlert(i18N(STR0006, {oUtilsService:getMessageError()}), STR0004) //"Não será possível cadastrar o fornecedor. #1[MENSAGEM_ERRO]#","Cadastro de Fornecedor"
+		FWFreeObj(oUtilsService)
+		return .f.
+	endIf
+
+	aAreaSA2 := SA2->(FWGetArea())
+	if ! empty(SA1->A1_CGC);
+			.and. posicione("SA2", 3, FwXFilial("SA2") + SA1->A1_CGC, "SA2->A2_CGC") == SA1->A1_CGC;
+			.and. ! FWAlertYesNo(STR0007, STR0004) //"Já existe um cadastrado de fornecedor com o CPF/CNPJ informado, deseja prosseguir mesmo assim?","Cadastro de Fornecedor"
+		FWRestArea(aAreaSA2)
+		return .f.
+	endIf
+
+	FWRestArea(aAreaSA2)
+	FWFreeObj(oUtilsService)
+return .t.
+
+/*/{Protheus.doc} replicateCustomerAsSupplier
+Cadastrar o fornecedor com base nos dados cliente
+@type function
+@version 12
+@author jc.maldonado
+@since 22/06/2026
+/*/
+static function replicateCustomerAsSupplier()
+	local aFieldValue          as array
+	local oSuppliersRepository as object
+
+	aFieldValue := getFieldValueToCreateSupplier()
+
+	//Ponto de Entrada para adicionar mais campos a serem definidos no modelo
+	if ExistBlock("AGDPE001")
+		aEval(ExecBlock("AGDPE001", .f., .f.), {|xIt| aAdd(aFieldValue, xIt)})
+	endIf
+
+	oSuppliersRepository := SuppliersRepository():New()
+	oSuppliersRepository:modelInsert(aclone(aFieldValue))
+
+	if oSuppliersRepository:isSuccess()
+		createClientExtensionWithSupplier(aFieldValue)
+		ApMsgInfo(i18N(STR0008, {alltrim(SA2->A2_COD), alltrim(SA2->A2_LOJA)}), STR0004) //"Cadastrado realizado com sucesso. Código: #1[CODIGO_FORNECEDOR]# Loja: #2[CODIGO_LOJA]#", "Cadastro de Fornecedor"
+	else
+		ApMsgAlert(i18n(STR0009, {oSuppliersRepository:getMessageError()}), STR0004) //"Não foi possível realizar o cadastro. #1[DESCRICAO_ERRO]#", "Cadastro de Fornecedor"
+	endIf
+
+	FwFreeObj(oSuppliersRepository)
+return
+
+/*/{Protheus.doc} getSupplierCodeStore
+Retorna código e loja válidos do fornecedor recém-cadastrado.
+@type function
+@version 12
+@author claudineia.reinert
+@since 13/07/2026
+@param aFieldValue, array, Lista de campos e valores usados na inserção do fornecedor
+@return array, {cCodigoFornecedor, cLojaFornecedor}
+/*/
+static function getSupplierCodeStore(aFieldValue) as array
+	local aCodeStore		:= {'',''}
+	local nPos				as integer
+
+	If !Empty(aFieldValue)
+		nPos := Ascan(aFieldValue, {|e| AllTrim(e[1]) == "A2_COD"})
+		if nPos > 0
+			aCodeStore[1] := allTrim(cValToChar(aFieldValue[nPos][2]))
+		endif
+		nPos := Ascan(aFieldValue, {|e| AllTrim(e[1]) == "A2_LOJA"})
+		if nPos > 0
+			aCodeStore[2] := allTrim(cValToChar(aFieldValue[nPos][2]))
+		endif
+	endif
+
+return aCodeStore
+
+/*/{Protheus.doc} getFieldValueToCreateSupplier
+Retorna a lista de campos/valores a serem definidos no modelo de inserção de fornecedor.
+@type function
+@version 12
+@author jc.maldonado
+@since 19/06/2026
+@return array, Lista de campos e valores a serem definidos no modelo {{cField, cValue}, ...}
+/*/
+static function getFieldValueToCreateSupplier() as array
+	local aAreaSA2 := SA2->(FWGetArea()) as array
+	local aSupplierCodeStore             as array
+	local aFieldValue                    as array
+	local bCharFitSize := {|cValue, cField| Left(cValue, FWSX3Util():GetFieldStruct(cField)[3/*nSize*/])} as codeblock
+
+	if posicione("SA2", 1, FwXFilial("SA2") + SA1->A1_COD, "SA2->A2_COD") == SA1->A1_COD
+		aSupplierCodeStore := SuppliersRepository():getNewCode()
+	else
+		aSupplierCodeStore := {SA1->A1_COD, SA1->A1_LOJA}
+	endIf
+
+	FWRestArea(aAreaSA2)
+
+	aFieldValue := {;
+		{"A2_COD"    , aSupplierCodeStore[1]                          },;
+		{"A2_LOJA"   , aSupplierCodeStore[2]                          },;
+		{"A2_NOME"   , eval(bCharFitSize, SA1->A1_NOME  , "A2_NOME"  )},;
+		{"A2_NREDUZ" , eval(bCharFitSize, SA1->A1_NREDUZ, "A2_NREDUZ")},;
+		{"A2_END"    , eval(bCharFitSize, SA1->A1_END   , "A2_END"   )},;
+		{"A2_BAIRRO" , eval(bCharFitSize, SA1->A1_BAIRRO, "A2_BAIRRO")},;
+		{"A2_EMAIL"  , eval(bCharFitSize, SA1->A1_EMAIL , "A2_EMAIL" )},;
+		{"A2_EST"    , SA1->A1_EST                                    },;
+		{"A2_COD_MUN", SA1->A1_COD_MUN                                },;
+		{"A2_CEP"    , SA1->A1_CEP                                    },;
+		{"A2_TIPO"   , SA1->A1_PESSOA                                 },;
+		{"A2_CGC"    , SA1->A1_CGC                                    },;
+		{"A2_PFISICA", SA1->A1_PFISICA                                },;
+		{"A2_INSCR"  , SA1->A1_INSCR                                  },;
+		{"A2_DDD"    , SA1->A1_DDD                                    },;
+		{"A2_TEL"    , SA1->A1_TEL                                    },;
+		{"A2_PAIS"   , SA1->A1_PAIS                                   },;
+		{"A2_CLIENTE", SA1->A1_COD									  },;
+		{"A2_LOJCLI" , SA1->A1_LOJA									  };
+		}
+return aFieldValue
+
+/*/{Protheus.doc} createClientExtensionWithSupplier
+Cria a tabela de extensão de cliente (NEP) inicializando os campos de dados do fornecedor
+@type function
+@version P12
+@author claudineia.reinert
+@since 13/07/2026
+/*/
+static function createClientExtensionWithSupplier(aFieldSupplier)
+	local aFieldValue          			as array
+	local aSupplierCodeStore			as array
+	local oClientExtensionRepository 	as object
+
+	If NEP->(FieldPos("NEP_CODFOR")) > 0 .AND. NEP->(FieldPos("NEP_LOJFOR")) > 0
+		aSupplierCodeStore := getSupplierCodeStore(aFieldSupplier)
+
+		aFieldValue := getFieldValueToCreateClientExtension(aSupplierCodeStore[1], aSupplierCodeStore[2])
+
+		oClientExtensionRepository := ClientExtensionRepository():New()
+		oClientExtensionRepository:modelInsert(aFieldValue)
+		aFieldValue := array(0)
+
+		FwFreeObj(oClientExtensionRepository)
+	EndIf
+return
+
+/*/{Protheus.doc} getFieldValueToCreateClientExtension
+Retorna a lista de campos/valores a serem definidos no modelo de inserção de extensão de cliente(NEP).
+@type function
+@version 12
+@author jc.maldonado
+@since 19/06/2026
+@return array, Lista de campos e valores a serem definidos no modelo {{cField, cValue}, ...}
+/*/
+static function getFieldValueToCreateClientExtension(cCodFor, cLojFor) as array
+	local aFieldValue                    as array
+	local bCharFitSize := {|cValue, cField| Left(cValue, FWSX3Util():GetFieldStruct(cField)[3/*nSize*/])} as codeblock
+
+
+	aFieldValue := {;
+		{"NEP_CODCLI"    , eval(bCharFitSize, SA1->A1_COD , "NEP_CODCLI")	},;
+		{"NEP_LOJCLI"    , eval(bCharFitSize, SA1->A1_LOJA, "NEP_LOJCLI")	},;
+		{"NEP_PRORUR"    , '2'												},;
+		{"NEP_COOPER"    , '2'												},;
+		{"NEP_CODFOR" 	 , eval(bCharFitSize, cCodFor, "NEP_CODFOR")		},;
+		{"NEP_LOJFOR"    , eval(bCharFitSize, cLojFor, "NEP_LOJFOR")		};
+		}
+return aFieldValue

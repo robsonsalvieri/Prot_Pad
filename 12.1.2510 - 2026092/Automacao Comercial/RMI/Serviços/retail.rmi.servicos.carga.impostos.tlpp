@@ -1,0 +1,216 @@
+#INCLUDE "TOTVS.CH"
+
+namespace totvs.protheus.retail.rmi.servicos.carga.impostos
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} controle
+Controla a geração da carga de impostos, por agrupamento ou multithread.
+
+@type    Function
+@param   aParams, Array, Parâmetros da execução {empresa, filial}
+@return  Nil, Nulo
+@author  Rafael Tenorio da Costa
+@since   28/08/2026
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Function controle(aParams)
+
+    Local cEmpImp       := aParams[1]
+    Local cFilImp       := aParams[2]
+    Local cSemaforo     := allTrim("PSHIM_" + cEmpImp + cFilImp)
+    Local cFiltro       := ""
+    Local jConfigPsh    := nil
+    Local cAgrupador    := "B1_FILIAL, B1_TIPO, B1_UM, B1_PICM, B1_POSIPI, B1_EX_NCM, B1_PICMRET, B1_ORIGEM, B1_CLASFIS, B1_GRTRIB, B1_CNATREC, B1_TNATREC, B1_GRPNATR, B1_FECP, B1_CEST"
+    Local lImpGrupo     := .F.
+    Local nQtdRegThr    := 1000
+    Local nThreads      := 5
+    Local aAux          := {}
+    Local nAux          := 0
+    Local aGrupo        := {}
+    Local cNoLock       := iif( allTrim( upper( tcGetDB() ) ) == "MSSQL", " WITH (NOLOCK)", "")
+    Local cSqlGrupo     := ""
+    Local cGrupos       := ""
+    Local cFiltroImp    := ""
+    Local oIPC          := nil
+
+    varInfo(procName(), aParams)
+
+    rpcSetType(3) 
+    rpcSetEnv(cEmpImp, cFilImp, , , "LOJA", cSemaforo)
+
+    if !LockByName(cSemaforo, .T./*lEmpresa*/, .T./*lFilial*/)
+        LjxjMsgErr( I18n("Serviço #1 já esta sendo utilizado por outra instância.", {cSemaforo}) )
+        rpcClearEnv()
+        return Nil
+    endIf
+
+    ljGrvLog(/*cNumControl*/, "Iniciou controle de geração da carga de impostos:", aParams)
+
+    //Carrega filtro do processo de produtos
+    cFiltro := allTrim( posicione("MHN", 1, xFilial("MHN") + padR("PRODUTO", tamSx3("MHN_COD")[1]), "MHN_FILTRO") )
+
+    //Carrega configurações para geração de impostos
+    jConfigPsh := iif( existFunc("ljRetCadAx"), ljRetCadAx("PSH", /*cId*/), jsonObject():new() )
+
+    cAgrupador := iif( jConfigPsh:hasProperty("agrupadorImpostos"), jConfigPsh["agrupadorImpostos"]                                             , cAgrupador )    
+    lImpGrupo  := jConfigPsh:hasProperty("impostoPorGrupo") .and. jConfigPsh["impostoPorGrupo"] .and. !empty(cAgrupador)
+    nQtdRegThr := iif( jConfigPsh:hasProperty("registrosPorThread") .and. jConfigPsh["registrosPorThread"] > 0, jConfigPsh["registrosPorThread"], nQtdRegThr )
+    nThreads   := iif( jConfigPsh:hasProperty("threads") .and. jConfigPsh["threads"] > 0, jConfigPsh["threads"]                                 , nThreads   )
+
+    fwFreeObj(jConfigPsh)
+
+    //Gera impostos por grupo de produtos
+    if lImpGrupo
+
+        aAux := strTokArr2(cAgrupador, ",", /*lEmptyStr*/)
+        for nAux := 1 to len(aAux)
+            aAux[nAux] := alltrim( aAux[nAux] )
+            Aadd(aGrupo, {aAux[nAux], getSx3Cache(aAux[nAux], "X3_TIPO")})
+        next nAux
+
+        cSqlGrupo := " SELECT COUNT(1) AS QTD_PRODUTOS, " + cAgrupador
+        cSqlGrupo += " FROM " + RetSqlName("SB1") + cNoLock
+        cSqlGrupo += " WHERE B1_FILIAL = '" + xFilial("SB1") + "' "
+        If !Empty(cFiltro)
+            cSqlGrupo += " AND "+ cFiltro
+        EndIf
+        cSqlGrupo += " AND D_E_L_E_T_ = ' '"
+        cSqlGrupo += " GROUP BY " + cAgrupador
+
+    //Gera impostos por mult thread de produtos
+    else
+
+        cSqlGrupo := " WITH ProdutosEnumerados AS ("
+        cSqlGrupo += "     SELECT "
+        cSqlGrupo += "         R_E_C_N_O_,"
+        cSqlGrupo += "         ROW_NUMBER() OVER (ORDER BY R_E_C_N_O_ ASC) AS RN"
+        cSqlGrupo += "     FROM "
+        cSqlGrupo += " " + RetSqlName("SB1") + cNoLock
+        cSqlGrupo += "     WHERE"
+        cSqlGrupo += "         B1_FILIAL = '" + xFilial("SB1") + "'"
+        If !Empty(cFiltro)
+            cSqlGrupo += " AND "+ cFiltro
+        EndIf
+        cSqlGrupo += "         AND D_E_L_E_T_ = ' '"
+        cSqlGrupo += " )"
+        cSqlGrupo += " SELECT"
+        cSqlGrupo += "     ((RN - 1) / " + cValToChar(nQtdRegThr) + ") + 1 AS LOTE,"
+        cSqlGrupo += "     COUNT(1) AS QTD_PRODUTOS,"
+        cSqlGrupo += "     MIN(R_E_C_N_O_) AS REC_INICIO,"
+        cSqlGrupo += "     MAX(R_E_C_N_O_) AS REC_FIM"
+        cSqlGrupo += " FROM"
+        cSqlGrupo += "     ProdutosEnumerados"
+        cSqlGrupo += " GROUP BY"
+        cSqlGrupo += "     (RN - 1) / " + cValToChar(nQtdRegThr)
+        cSqlGrupo += " ORDER BY"
+        cSqlGrupo += "     LOTE ASC;"
+
+    endIf
+
+    ljGrvLog(/*cNumControl*/, "Consulta que retorna produtos agrupados para geração de impostos:", cSqlGrupo)
+    cGrupos := mpSysOpenQuery(cSqlGrupo, /*cAlias*/, /*aSetField*/, /*cDriver*/, /*aBindParam*/)
+
+    //Instancia fwIPCWait para controle multi-thread
+    //https://github.com/charlesreitz/advpl-treinamento-multithread/tree/main
+    oIPC := fwIPCWait():new(cSemaforo, /*nTimeOut*/)
+    oIPC:setThreads(nThreads)
+    oIPC:stopProcessOnError(.T.)
+    oIPC:setEnvironment(cEmpImp, cFilImp)
+    oIPC:start("totvs.protheus.retail.rmi.servicos.carga.impostos.executa")    
+
+    while !(cGrupos)->( eof() )
+
+        //Gera impostos por grupo de produtos
+        if lImpGrupo
+
+            cFiltroImp := ""
+            for nAux := 1 to len(aGrupo)
+                if aGrupo[nAux][2] == "N"
+                    cFiltroImp += " AND " + aGrupo[nAux][1] + " = " + cValToChar( (cGrupos)->&(aGrupo[nAux][1]) )
+                else
+                    cFiltroImp += " AND " + aGrupo[nAux][1] + " = '" + (cGrupos)->&(aGrupo[nAux][1]) + "'"
+                endIf
+            next nAux
+
+        //Gera impostos por mult thread de produtos
+        else
+
+            cFiltroImp := " AND R_E_C_N_O_ >= " + cValToChar( (cGrupos)->REC_INICIO ) + " AND R_E_C_N_O_ <= " + cValToChar( (cGrupos)->REC_FIM )
+        endIf
+
+        //Executa thread utilizando fwIPCWait
+        iif( oIPC:go(cFilImp, cFiltroImp, lImpGrupo), nil, ljxjMsgErr("Erro executar fwIPCWait:go: " + allTrim( oIPC:getError() ), /*cSolucao*/, /*cRotina*/, /*xVar*/) )
+
+        (cGrupos)->( dbSkip() )
+    endDo
+
+    (cGrupos)->( dbCloseArea() )
+
+    //Aguarda a finalizacao das threads que ainda estao processando as ultimas paginas
+    iif( oIPC:stop(), nil, ljxjMsgErr("Erro executar fwIPCWait:stop: " + allTrim( oIPC:getError() ), /*cSolucao*/, /*cRotina*/, /*xVar*/) )
+    fwFreeObj(oIPC)
+
+    UnLockByName(cSemaforo, .T./*lEmpresa*/, .T./*lFilial*/)
+
+    ljGrvLog(/*cNumControl*/, "Finalizou controle de geração da carga de impostos:", aParams)
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} executa
+Executa a carga de impostos em thread separada e sinaliza a finalização para a thread principal.
+
+@type    Function
+@param   cFilImp, Caractere, Filial de execução
+@param   cFiltroImp, Caractere, Filtro de produtos para a carga de impostos
+@param   lImpGrupo, Logico, Indica se a carga de impostos é por grupo
+@return  Nil, Nulo
+@author  Rafael Tenorio da Costa
+@since   28/08/2026
+@version 12.1.2610
+/*/
+//-------------------------------------------------------------------
+Function executa(cFilImp, cFiltroImp, lImpGrupo)
+
+    Local oCadAux       := Nil
+    Local aParams       := {cFilImp, cFiltroImp, lImpGrupo}
+    Local bErrorBlock   := Nil
+    Local lErrorBlock   := .F.
+    Local cErrorBlock   := ""    
+
+    //Condição que pode dar erro
+    //Toda a rotina é executada dentro de um bloco de erro para capturar qualquer erro que ocorra para enviar o sinal de finalização para o fwIPCWait
+    bErrorBlock := ErrorBlock( {|oErro| RmiErroBlock(oErro, @lErrorBlock, @cErrorBlock)} )
+    Begin Sequence
+
+        varInfo( procName(), aParams )
+
+        ljGrvLog(/*cNumControl*/, "Iniciou carga de impostos:", aParams)
+
+        //Carga completa de impostos
+        oCadAux := RmiCadAuxiliaresObj():New( {cFilImp})
+        oCadAux:Impostos(cFiltroImp, lImpGrupo)
+
+        //Procedimentos para finalizar o objeto
+        oCadAux:finaliza(.T.)
+
+        ljGrvLog(/*cNumControl*/, "Finalizou carga de impostos:", aParams)
+
+        fwFreeArray(aParams)
+        fwFreeObj(oCadAux)
+
+        //Caso tenha algum erro capturado pelo ErrorBlock força a saida para o Recover
+        If lErrorBlock
+            Break
+        EndIf
+
+    //Se ocorreu erro
+    Recover
+        
+        ljxjMsgErr("Erro na geração da carga de impostos: " + cErrorBlock, /*cSolucao*/, /*cRotina*/, aParams)
+
+    End Sequence
+    ErrorBlock(bErrorBlock)
+
+Return Nil

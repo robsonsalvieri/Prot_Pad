@@ -1,0 +1,528 @@
+#include "tlpp-core.th"
+#include "FwSchedule.ch"
+
+#DEFINE REACTIVE    1   // Reativa o agendamento
+#DEFINE REMOVE      2   // Exclui o agendamento e cria novamente
+
+Static __lIsProdEnv := isProdEnvType()  //indica que é um ambiente identificado como produção.
+
+NAMESPACE totvs.protheus.backoffice.ba.insights.scheduler
+USING namespace totvs.framework.smartschedule.startSchedule
+USING namespace totvs.framework.schedule.utils
+
+//--------------------------------------------------------------------------------------------
+// Biblioteca de funções relacionadas ao scheduler utilizadas pelo produto Protheus Insights
+//--------------------------------------------------------------------------------------------
+
+//--------------------------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} activeJobs
+Função que realiza a reativação dos Jobs de comunicação\processamento utilizadas pelo Protheus Insights.
+
+@param aJobs, array, Vetor com os agendamentos a serem ativados, semdo:
+    [1]-função a ser agendada
+    [2]-tipo de recorrência do agendamento
+    [3]-horário de execução
+    [4]-empresas\filiais para execução.
+@param lDefaultJobs, Logical, Indica se deve considerar os jobs de comunicação padrão.
+@param nType, integer, Indica a ação que deve ser tomada, onde:
+    1=Reativa o agendamento
+    2=Exclui o agendamento e cria novamente.
+@param aADVPRInfo, array, Vetor com informações para execução via ADVPR
+    [1]-array - grupo de empresas para serem considerados na criação do agendamento.
+    [2]-Character - código do tenant
+
+@author Marcia Junko
+@type function
+@since 07/08/2024
+/*/
+//--------------------------------------------------------------------------------------------------------------------
+Function activeJobs( aJobs, lDefaultJobs, nType, aADVPRInfo )
+	Local aCompanies := {}
+	Local cRecurrence := ""
+	Local cTaskName := ""
+	Local lI20Exist := .F.
+	Local lAdjust := .F. as Logical
+
+	Default aJobs := {}
+	Default lDefaultJobs := .F.
+	Default nType := REMOVE
+	Default aADVPRInfo := { {}, '' } 
+
+	cTaskName   := "totvs.protheus.backoffice.ba.insights.InsightSchedProcess"
+
+	// Indica que o ajuste de agendamento deve ser realizado por grupo de empresas.
+	lAdjust := removeInsightSchedbyCompany( cTaskName )
+
+	lI20Exist := AliasInDic( "I20" )
+	if verifyInspection( aADVPRInfo[2] ) .Or. lAdjust
+		IF lDefaultJobs .Or. lAdjust
+			aCompanies := totvs.protheus.backoffice.ba.insights.util.loadCarolCompanies( )
+			aCompanies := Iif( !Empty( aADVPRInfo[1] ), aADVPRInfo[1], aCompanies )
+			
+			// Adiciona o agendamento da função de processamento de insights não prioritários
+			If FindFunction( "totvs.protheus.backoffice.ba.insights.InsightSchedProcess" ) .And. lI20Exist
+				cRecurrence := "D(Each(.T.);Day(1);EveryDay(.F.););Execs(0002);Interval(12:00);Discard;"
+				
+				aAdd( aJobs, { cTaskName, cRecurrence, "00:00", aCompanies } )
+			EndIf
+		EndIf
+
+		evaluateJobs( aJobs, nType )
+
+		//----------------------------------------------------------
+		// Avalia as inscrições aqui, pois não tem um local adequado
+		// para isso sem ler a cada mensagem recebida.
+		//----------------------------------------------------------
+		If FindFunction( "pinsSaveConfig" ) .And. lI20Exist
+			pinsSaveConfig()
+		EndIf
+	EndIf
+
+	FWFreeArray( aCompanies )
+Return
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} verifyInspection
+Função que valida se os Jobs precisam ser reativados para uso do produto.
+
+@param cADVPRTenant, Character, Código do Tenant para busca na I14 quando a função é executada via ADVPR.
+
+@return Logical, Se .T. indica que o processo de reativação deve ocorrer.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Function verifyInspection( cADVPRTenant )
+	Local lRet := .F.
+	Local cJWTPerm := ""
+
+	Default cADVPRTenant := ''
+
+	//-----------------------------------------------------------------
+	// Avalia se tem que executar uma nova inspeção.
+	//-----------------------------------------------------------------
+	If checkLastInspection( !Empty( cADVPRTenant ) )
+		If __lIsProdEnv
+			//-----------------------------------------------------------------
+			// Avalia se está executando no mesmo ambiente onde o Wizard
+			// foi instalado ou mudou a release da instalação.
+			//-----------------------------------------------------------------
+			If validInstallInfo()
+				//-----------------------------------------------------------------
+				// Verifica a existência de token de permissão
+				//-----------------------------------------------------------------
+				cJWTPerm := validPermByTenant( )
+				if !Empty( cJWTPerm )
+					lRet := .T.
+				endif
+			EndIf
+		EndIf
+	EndIf
+Return lRet
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} validInstallInfo
+Função que analisa os dados de execução do Wizard.
+
+@return Logical, Indica se os dados de instalação são válidos.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Static Function validInstallInfo()
+	Local cWizExecInfo := ''
+	Local cWizRelease := ''
+	Local cExecInfo := ''
+	Local cRelease := ''
+	Local cDBDataBase := ''
+	Local cDBAlias := ''
+	Local lRet := .F.
+
+	//-----------------------------------------------------------------
+	// Dados da execução do Wizard
+	//-----------------------------------------------------------------
+	cWizExecInfo := totvs.protheus.backoffice.ba.insights.util.getSysValue( 'pins_wizard_exec_info' )
+	cWizRelease := totvs.protheus.backoffice.ba.insights.util.getSysValue( 'pins_wizard_exec_release' )
+
+	//-----------------------------------------------------------------
+	// Dados do ambiente atual
+	//-----------------------------------------------------------------
+	cDBDataBase := totvs.protheus.backoffice.ba.insights.util.getDBInfo(  )
+	cDBAlias := totvs.protheus.backoffice.ba.insights.util.getDBInfo( 2 )
+
+	cExecInfo := Alltrim( GetEnvServer() ) + "|" + AllTrim( cDBDataBase ) + "|" + AllTrim( cDBAlias )
+	cRelease := GetRPORelease()
+
+	If __lIsProdEnv
+		If  ( cWizRelease == cRelease ) .And. ( cWizExecInfo == cExecInfo )
+			lRet := .T.
+		Else
+			//-----------------------------------------------------------------
+			// Salva os dados da instalação, caso não exista ou tenha sido alterado
+			//-----------------------------------------------------------------
+			totvs.protheus.backoffice.ba.insights.util.saveInstallInfo()
+			lRet := .T.
+		EndIf
+	EndIf
+Return lRet
+
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} isProdEnvType
+Função que analisa se o ambiente pode ser tratado como "ambiente de produção".
+
+@return Logical, Se .T. indica que é um ambiente identificado como produção.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Static Function isProdEnvType()
+	Local cWizEnvType := ''
+	Local cTypeEnv := ''
+	Local lBCTotvs := .F.
+
+	//verifica se existe a empresa e filial da base congelada para executar o activejobs
+	lBCTotvs := FWFilExist("T1","D MG 01 ")
+
+	cWizEnvType := totvs.protheus.backoffice.ba.insights.util.getSysValue( 'pins_wizard_exec_type_env' )
+	cTypeEnv := totvs.framework.environment.type.envAppGet( .T. )   //1=Produção;2=Homologação;3=Desenvolvimento
+
+Return ( Empty( cWizEnvType ) .Or. cTypeEnv == "1" .Or. lBCTotvs)
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} checkLastInspection
+Função que valida se deve realizar uma nova inspeção dos jobs.
+@param lADVPR, Logical, Indica se a função está sendo executada via ADVPR.
+
+@return Logical, Se .T. indica que a validação deve ser feita.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Static Function checkLastInspection( lADVPR )
+	Local cNow := FWTimeStamp( 6 )
+	Local cLastInspection := ""
+	Local cLastDate := ""
+	Local cLastTime := ""
+	Local cDate := ""
+	Local dLastDate
+	Local dDate
+	Local lExecute := .F.
+
+	//-----------------------------------------------------------------
+	// Dados da última inspeção efetuada
+	//-----------------------------------------------------------------
+	cLastInspection := totvs.protheus.backoffice.ba.insights.util.getSysValue( 'pins_last_inspection' )
+	IF !Empty( cLastInspection ) .Or. lADVPR
+		cLastDate := subs( cLastInspection, 1, 10 )
+		cLastDate := Strtran( cLastDate, '-', '' )
+		dLastDate := STOD( cLastDate )
+		cLastTime := subs( cLastInspection, 12 )
+
+		//-----------------------------------------------------------------
+		// Dados da execução atual
+		//-----------------------------------------------------------------
+		cDate := subs( cNow, 1, 10 )
+		cDate := Strtran( cDate, '-', '' )
+		dDate := STOD( cDate )
+		
+		If ( dDate > dLastDate + 8 )
+			lExecute := .T.
+		EndIf
+
+		//-----------------------------------------------------------------
+		// Salva a execução da inspeção
+		//-----------------------------------------------------------------
+		If lExecute
+			saveLastInspection()
+		EndIf
+	EndIF
+Return lExecute
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} saveLastInspection
+Função que armazena quando a inspeção foi realizada.
+
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Static Function saveLastInspection()
+	Local aParams := {}
+	Local cStampValue := FWTimeStamp( 6 )
+	Local cIdentifier := "pins_last_inspection"
+
+	cStampValue    := StrTran( cStampValue, 'T', ' ' )
+	cStampValue    := StrTran( cStampValue, 'Z', '' )
+
+	aAdd( aParams, { cIdentifier, cStampValue } )
+	totvs.protheus.backoffice.ba.insights.util.saveAppParam( aParams )
+
+	FWFreeArray( aParams )
+Return
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} validPermByTenant
+Função que valida se existe a permissão para um determinado tenant.
+
+@return cJWTPerm, caracter, Token de permissão
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Static Function validPermByTenant()
+	Local aSvAlias := GetArea()
+	Local cQueryI21 := ""
+	Local cAliasI21 := ""
+	Local cJWTPerm := ""
+	Local cInsight := "Permission"
+	Local cModule  := "ALL"
+	Local cDelete  :=  " "
+	Local lPermission := .F.
+	Local oQuery
+
+	If  FindFunction( "pinsExistConfig" ) .And. pinsExistConfig( "Permission" )
+
+		DBSelectArea( "I21" )
+
+		cQueryI21 := " SELECT I21.R_E_C_N_O_  AS I21RECNO " + ;
+					" FROM  ?  I21  " + ;
+					" WHERE I21_FILIAL = ? " + ;
+					" AND I21_INSIGT = ? " + ;
+					" AND I21_MODULO = ? " + ;
+					" AND D_E_L_E_T_ = ? "
+
+		cQueryI21 := ChangeQuery( cQueryI21 )			 
+		oQuery := FWExecStatement():New(cQueryI21)
+		oQuery:SetUnsafe( 1, RetSqlName( "I21" ))
+		oQuery:SetString( 2, Space( TamSX3( "I21_FILIAL" )[1] ) )
+		oQuery:SetString( 3, cInsight )
+		oQuery:SetString( 4, cModule )
+		oQuery:SetString( 5, cDelete )
+		cAliasI21 := oQuery:OpenAlias()
+
+		If ( cAliasI21 )->( !Eof() )
+			I21->( DBGoto( ( cAliasI21 )->I21RECNO ) )
+			cJWTPerm := I21->I21_PAYLOD
+			If !Empty(cJWTPerm)
+				lPermission := .T.
+			Endif	
+		EndIf
+		( cAliasI21 )->( dbCloseArea() )
+	Endif
+
+	//Se a permissão nao for encontrada na I20 e I21 verifica-se na I14
+	If !lPermission
+		cJWTPerm := VldTenantI14()
+	Endif	
+
+	RestArea( aSvAlias )
+
+	FWFreeArray( aSvAlias )
+	FreeObj( oQuery )
+Return cJWTPerm
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} tokenUpdateValid
+Função que valida se o token está atualizado.
+
+@param cJWTPerm, caracter, Token de permissão
+
+@return Logical, Indica que o token é válido e está dentro do prazo de expiração.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//-------------------------------------------------------------------------------------
+Function tokenUpdateValid( cJWTPerm )
+	Local aParts := {}
+	Local cPayload := "" as Character
+	Local cSign := "" as Character
+	Local lTValid := .F.
+	Local oJson
+
+	If !Empty( cJWTPerm )
+		aParts := StrTokArr( cJWTPerm, '.')
+		If Len( aParts ) >= 2
+			cPayload := aParts[ 2 ]
+			cSign := StrTran( decode64( cPayload ), "=", "" )
+			oJson := JsonObject():new()
+			oJson:fromJson( cSign )
+
+			lTValid := oJson['exp'] > Val( FWTimeStamp( 4, DATE(), TIME()) )
+		Endif
+	EndIf
+
+	FWFreeArray( aParts )
+	FreeObj( oJson )
+Return lTValid
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} smartSchedInUse
+Função que avalia o uso do Smart Scheduler
+
+@return Logical, Se .T. indica que o Smart Scheduler está em execução.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//------------------------------------------------------------------------------------------
+Function smartSchedInUse( )
+	Local lSmartSchedIsEnabled := .F.
+	Local lSmartSchedIsRunning := .F.
+	Local lRet := .F.
+
+	lSmartSchedIsEnabled := totvs.framework.smartschedule.startSchedule.smartSchedIsEnabled()
+	lSmartSchedIsRunning := totvs.framework.smartschedule.startSchedule.smartSchedIsRunning()
+	lRet := ( lsmartSchedIsEnabled .And. lSmartSchedIsRunning )
+Return lRet
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} addJob
+Função que realiza a criação dos jobs
+
+@param aData, array, Vetor com os jobs a criar, sendo:
+    [1]-função a ser agendada
+    [2]-tipo de recorrência do agendamento
+    [3]-horário de execução
+    [4]-empresa\filial para execução.
+
+@return caracter, Código do agendamento criado
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//------------------------------------------------------------------------------------------
+Static Function addJob( aData )
+	Local aInfo := {}
+	Local nI := 0
+	Local cTaskID := ''
+	Local cNewTaskID := ''
+
+	For nI := 1 to len( aData )
+		aInfo := aData[ nI ]
+		cTaskID := FwSchdByFunction( aInfo[ 1 ] )
+		If Empty( cTaskID )
+			cNewTaskID := FwInsSchedule( aInfo[ 1 ], "000000", , aInfo[ 2 ], aInfo[ 3 ], Upper( GetEnvServer() ), aInfo[ 4 ] , SCHD_ACTIVE, Date(), 4, NIL )
+		EndIf
+	Next
+Return cNewTaskID
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} reactiveJob
+Função que realiza a criação dos jobs
+
+@param cTaskID, caracter, Código do agendamento a ser reativado.
+
+@return Logical, Indica se o agendamento foi reativado.
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//------------------------------------------------------------------------------------------
+Static Function reactiveJob( cTaskID )
+	Local lRet := .F.
+
+	If !Empty( cTaskID )
+		// Reativa Job - Aguardando função ou classe do Frane - DFRM3-1267
+		lRet := .T.
+	EndIf
+Return lRet
+
+
+//------------------------------------------------------------------------------------------
+/*/{Protheus.doc} evaluateJobs
+Função que realiza a criação dos jobs
+
+@param aData, array, Vetor com informações do agendamento, sendo:
+    [1]-função a ser agendada
+    [2]-tipo de recorrência do agendamento
+    [3]-horário de execução
+    [4]-array com as empresas\filiais para execução.
+@param nType, integer, Indica a ação que deve ser tomada, onde:
+    1=Reativa o agendamento
+    2=Exclui o agendamento e cria novamente.
+
+@author  Marcia Junko
+@since   07/08/2024
+/*/
+//------------------------------------------------------------------------------------------
+Function evaluateJobs( aData, nType )
+	Local cTaskID := ''
+	Local cStatus := ''
+	Local cCompany := ''
+	Local cSchedName := ''
+	Local nI := 0
+	Local nJ := 0
+	Local lNeedCreate := .F.
+	Local aAuxData := {} as Array
+	Local aLoadBranches := {} as Array
+	Local oDASchedule
+	Local oJob
+
+	// Default nType := REACTIVE    //1=Reativa o agendamento
+	Default nType := REMOVE  //2=Exclui o agendamento e cria novamente
+
+	oDASchedule := FWDASchedule():New()
+
+	For nI := 1 to len( aData )
+		lNeedCreate := .F.
+		For nJ := 1 to len( aData[ nI ][ 4 ] )
+			cCompany := aData[ nI ][ 4 ][ nJ ]
+			cSchedName := aData[ nI ][ 1 ] + "('" + cCompany + "')" 
+			
+			cTaskID := FwSchdByFunction( cSchedName )
+			If !Empty( cTaskID )
+				oJob := oDASchedule:getSchedule( cTaskID )
+				cStatus := oJob:getStatus()
+
+				If cStatus <> SCHD_ACTIVE
+					If nType == REACTIVE    //1=Reativa o agendamento
+						reactiveJob( cTaskID )
+					Elseif nType == REMOVE  //2=Exclui o agendamento e cria novamente
+						FWDelSchedule( cTaskID )
+						lNeedCreate := .T.
+					EndIf
+				EndIf
+			Else
+				lNeedCreate := .T.
+			EndIf
+
+			If lNeedCreate
+				aLoadBranches := FWAllFilial(,,cCompany,.F.)
+		
+				If !Empty( aLoadBranches )
+					aAuxData := aClone( aData )
+					aAuxData[ nI ][ 1 ] := cSchedName
+					aAuxData[ nI ][ 4 ] := cCompany + "/" + aLoadBranches[1] + ";"
+					addJob( { aAuxData[ nI ] } )
+				EndIf
+			EndIf
+		Next
+	Next
+
+	FWFreeArray( aAuxData )
+	FWFreeArray( aLoadBranches )
+	FreeObj( oDASchedule )
+	FreeObj( oJob )
+Return
+
+//--------------------------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} removeInsightSchedbyCompany
+Função que remove o agendamento genérico do InsightSchedProcess.
+
+@param cTaskName, Character, Nome da tarefa a ser removida.
+
+@return lRemoved, Logical, indica se o agendamento foi removido com sucesso.
+@author Marcia Junko
+@type function
+@since 24/06/2026
+/*/
+//--------------------------------------------------------------------------------------------------------------------
+Function removeInsightSchedbyCompany( cTaskName )
+	Local cTaskID := '' as Character
+	Local lRemoved := .F. as Logical
+
+	Default cTaskName := "totvs.protheus.backoffice.ba.insights.InsightSchedProcess"
+
+	cTaskID := FwSchdByFunction( cTaskName )
+	If !Empty( cTaskID )
+		lRemoved := FWDelSchedule( cTaskID )
+	EndIf
+Return lRemoved

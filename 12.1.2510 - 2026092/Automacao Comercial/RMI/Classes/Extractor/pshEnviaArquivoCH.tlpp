@@ -1,0 +1,259 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#DEFINE CRLF CHR(13)+CHR(10)
+
+namespace totvs.protheus.retail.rmi.classes.extractor.pshEnviaArquivo
+
+
+/*/{Protheus.doc} pshEnviaArquivoCH
+@type class
+@author Evandro Pattaro
+@since 21/08/2026
+@description Classe para envio de arquivos CH via PDVSync 
+/*/
+Class pshEnviaArquivoCH From RmiEnvPdvSyncObj
+
+    Data cDirArq as character
+    Data cProprietario as character
+    Data nTimeOut as numeric
+    Data cTipoDado as character
+    Data cIdExt as character
+
+    Public Method New(cDirArq as Character, cFilDest as Character) as object
+    Public Method PreparaEnvio(cProcesso as character, cIdExt as Character) as Variant
+    Public Method EnviaArquivo(cArq as character) as Variant
+    Public Method GrvAbertura(cProcesso, cLote, cId) as Variant
+    Public Method TrataRetorno(cJson) as Character
+
+EndClass
+
+/*/{Protheus.doc} New
+@type method
+@author Evandro Pattaro
+@since 21/08/2026
+@description Método construtor da classe
+@param cDirArq, character, Diretório dos arquivos a serem enviados
+@return object, Instância da classe
+/*/
+Method New(cDirArq as Character, cFilDest as Character) as object Class pshEnviaArquivoCH
+
+    Local cGitFolder    := SuperGetMv("MV_PSHGIT", .F., "")
+    Local cAmbiente     := IIf(Empty(cGitFolder), "2","3") // 2 - Produção, 3 - Homologação
+
+    ::cDirArq := AllTrim(cDirArq)
+
+    _Super:New("")
+
+    If !(::oConfAssin:HasProperty("url_arquivos")) .or. (::oConfAssin:HasProperty("url_arquivos") .And. Empty(::oConfAssin['url_arquivos']))
+        ::oConfAssin['url_arquivos'] := IIf(cAmbiente == "2", "https://pdvsync.varejo.totvs.com.br/controle/api/retaguarda/v3/lojalotearquivos/upload", "https://pdvsync-core-controle-qa-ywc7q7nxya-uc.a.run.app/api/retaguarda/v3/lojalotearquivos/upload")
+        ::SalvaConfig() 
+    EndIf
+
+    ::cProprietario := LjRetComp(cFilDest, 'CADASTRO DE LOJA')
+    ::nTimeOut := 60 // 60 segundos
+
+Return Self
+
+/*/{Protheus.doc} PreparaEnvio
+@type method
+@author Evandro Pattaro
+@since 21/08/2026
+@description Método para preparação de envio
+@param cProcesso, character, Identificação do processo
+@return logical, Nulo inicialmente
+/*/
+Method PreparaEnvio(cProcesso as character, cIdExt as Character) as Variant Class pshEnviaArquivoCH
+
+    Local aArquivos := {}
+    Local nI := 0
+    Local nProce := 0
+
+    Default cIdExt := ""
+
+    ::cIdExt := cIdExt
+
+    ::cProcesso := cProcesso
+    ::SetaProcesso(cProcesso)
+
+    nProce := aScan(self:aProcessos, {|x| Alltrim(x[1]) == Alltrim(cProcesso)})
+    if nProce > 0
+        ::cTipoDado := self:aProcessos[nProce][2]
+    endif
+
+    aArquivos := Directory(::cDirArq + DTOS(DATE())+"*_"+lower(Alltrim(::cProcesso))+"_*.zip")
+    
+    If Len(aArquivos) > 0
+       For nI := 1 To Len(aArquivos)
+            If ::lsucesso
+                ::EnviaArquivo(Lower(aArquivos[nI][1]))                   
+            EndIf
+       Next    
+    EndIF
+
+    If ::lSucesso
+        For nI := 1 To Len(aArquivos)
+            FErase(::cDirArq + Lower(aArquivos[nI][1]))
+        Next    
+    EndIf
+
+Return Nil
+
+/*/{Protheus.doc} EnviaArquivo
+@type method
+@author Evandro Pattaro
+@since 21/08/2026
+@description Método para enviar um arquivo
+@param cArq, character, Arquivo a ser enviado
+@return logical, Nulo inicialmente
+/*/
+Method EnviaArquivo(cArq as character) as Variant Class pshEnviaArquivoCH
+    Local oFile     := Nil
+    Local oEnvio    := FWRest():New("")
+    Local cFile     := ""
+    Local cHash     := MD5FILE( ::cDirArq+cArq )
+    Local cPostParms := ""
+    Local cBoundary  := "--------------pshCHBoundary" + StrTran(Time(), ":", "")
+    Local cLote     := ""
+
+    oEnvio:nTimeOut := self:nTimeOut
+    oEnvio:SetPath( Self:oConfAssin["url_arquivos"] )
+
+    ljGrvLog("pshEnviaArquivoCH", "Iniciando envio do arquivo: " + cArq, ::cDirArq+cArq)
+    
+    oFile := FwFileReader():New(::cDirArq+cArq)
+    
+    If oFile:Open()
+        ljGrvLog("pshEnviaArquivoCH", "Arquivo aberto com sucesso: " + cArq, ::cDirArq+cArq)
+        cFile := oFile:FullRead()
+        oFile:Close()
+    Else 
+        ljGrvLog("pshEnviaArquivoCH", "Erro ao abrir o arquivo: " + cArq, ::cDirArq+cArq)
+        ::lSucesso := .F.
+        ::cRetorno := "Erro ao abrir o arquivo: " + ::cDirArq+cArq        
+        oFile:Close()
+    EndIf
+
+    If ::lSucesso
+
+        ljgrvlog("pshEnviaArquivoCH", "parâmetros do envio do arquivo: " + cArq + " - Proprietário: " + ::cProprietario + " - Tipo de dado: " + ::cTipoDado + " - Checksum: " + cHash, ::cDirArq+cArq)
+
+        //Carrega o aHeader com a autenticação do RAC
+        self:getHeader()
+
+        If ::lSucesso
+
+            self:aHeader[1] :=  "Content-Type:  multipart/form-data; boundary=" + cBoundary
+
+            //IdInquilino
+            cPostParms += "--" + cBoundary + CRLF
+            cPostParms += 'Content-Disposition: form-data; name="IdInquilino"' + CRLF
+            cPostParms += CRLF
+            cPostParms += Self:oConfAssin["inquilino"] + CRLF 
+
+            //IdProprietario
+            cPostParms += "--" + cBoundary + CRLF
+            cPostParms += 'Content-Disposition: form-data; name="IdProprietario"' + CRLF
+            cPostParms += CRLF
+            cPostParms += ::cProprietario + CRLF 
+        
+            //CodigoTipoLote
+            cPostParms += "--" + cBoundary + CRLF
+            cPostParms += 'Content-Disposition: form-data; name="CodigoTipoLote"' + CRLF
+            cPostParms += CRLF
+            cPostParms += ::cTipoDado + CRLF 
+
+            //Checksum
+            cPostParms += "--" + cBoundary + CRLF
+            cPostParms += 'Content-Disposition: form-data; name="Checksum"' + CRLF
+            cPostParms += CRLF
+            cPostParms += cHash + CRLF 
+
+            //Arquivo    
+            cPostParms += "--" + cBoundary + CRLF
+            cPostParms += 'Content-Disposition: form-data; name="File"; filename="' + cArq + '"' + CRLF
+            cPostParms += "Content-Type: application/zip" + CRLF
+            cPostParms += CRLF
+            cPostParms += cFile + CRLF
+            cPostParms += "--" + cBoundary + "--" + CRLF
+
+            oEnvio:SetPostParams(cPostParms)
+
+            If oEnvio:Post(self:aHeader)
+                
+                ljgrvLog("pshEnviaArquivoCH", "Envio de arquivo executado. Retorno da API CH : " + oEnvio:cResult, ::cDirArq+cArq)
+
+                cLote := ::TrataRetorno(oEnvio:cResult)
+
+                If Empty(cLote)
+                    ljgrvLog("pshEnviaArquivoCH", "Não foi possível enviar o arquivo "+ cArq +" - " + oEnvio:cResult, ::cDirArq+cArq)
+                    ::lSucesso := .F.
+                    ::cRetorno := "Não foi possível enviar o arquivo "+ cArq + " - " + oEnvio:cResult
+                Else                
+                    ::cRetorno := "Arquivo enviado com sucesso. Lote: " + cLote                
+                    ::GrvAbertura(::cProcesso, cLote, "")
+                    ljGrvLog("pshEnviaArquivoCH", "Arquivo enviado com sucesso. Lote: " + cLote, ::cDirArq+cArq)
+                EndIf
+
+            Else
+                ::lSucesso := .F.
+                ::cRetorno := "Não foi possível enviar o arquivo "+ cArq +" - " + oEnvio:cResult
+                ljGrvLog("pshEnviaArquivoCH", "Não foi possível enviar o arquivo "+ cArq +" - " + oEnvio:cResult, ::cDirArq+cArq)
+            EndIf    
+        Else
+            ljGrvLog("pshEnviaArquivoCH", "Não foi possível enviar o arquivo "+ cArq +" - " + ::cRetorno , ::cDirArq+cArq)
+        EndIf
+    EndIf
+
+    FwFreeObj(oEnvio)
+    FwFreeObj(oFile)
+Return Nil
+
+/*/{Protheus.doc} GrvAbertura
+@type method
+@author Evandro Pattaro
+@since 21/08/2026
+@description Interpreta o retorno do envio e devolve o identificador do lote.
+@param cProcesso, character, Identificação do processo
+@param cLote, character, Identificação do lote retornado pelo CH
+@param cId, character, Identificação da execução da geração do arquivo
+/*/
+Method GrvAbertura(cProcesso, cLote) Class pshEnviaArquivoCH
+
+    
+    _Super:GrvAbertura(cProcesso, cLote, ::cIdExt)
+
+    RecLock("MIK",.F.)
+        MIK->MIK_DTFECH  := Date()
+        MIK->MIK_HRFECH  := Time()
+        MIK->MIK_STATBX  := "1"
+    MIK->( MsUnLock() )
+
+Return Nil
+
+/*/{Protheus.doc} TrataRetorno
+@type method
+@author Evandro Pattaro
+@since 31/08/2026
+@param cJson, character, Retorno JSON recebido da API
+@return character, Identificador do lote ou vazio quando o retorno nao representa sucesso
+/*/
+Method TrataRetorno(cJson) Class pshEnviaArquivoCH
+
+    Local oRet  := JsonObject():New()
+    Local cLote := ""
+    
+    oRet:FromJson( DeCodeUTF8(cJson) )
+
+    LjGrvLog(" pshEnviaArquivoCH ", "Method TrataRetorno(): envio de arquivo executado. JSON de Retorno da API PdvSync : ",{cJson})
+
+    If oRet:HasProperty("success") .And. oRet["success"]
+        If oRet:HasProperty("data") .And. ValType(oRet["data"]) == "J"
+            If oRet["data"]:HasProperty("id")
+                cLote := oRet["data"]["id"]
+            EndIf
+        EndIf
+    EndIf
+
+    FwFreeObj(oRet)
+
+Return cLote

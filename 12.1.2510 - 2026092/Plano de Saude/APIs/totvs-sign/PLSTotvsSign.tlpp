@@ -1,0 +1,774 @@
+#Include "TOTVS.CH"
+#Include "TOPCONN.CH"
+
+// Status do Documento (StatusDocumento enum)
+#Define TAE_STATUS_RASCUNHO     0
+#Define TAE_STATUS_AGUARDANDO   1
+#Define TAE_STATUS_CONCLUIDO    2
+#Define TAE_STATUS_REJEITADO    3
+#Define TAE_STATUS_EXPIRADO     4
+#Define TAE_STATUS_CANCELADO    5
+#Define TAE_STATUS_PROCESSANDO  6
+#Define TAE_STATUS_ERRO         7
+
+#Define LOG_TOTVS_SIGN "totvs_sign.log"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PLSTotvsSign
+Classe de integração com o TOTVS Assinatura Eletrônica (TAE) para 
+assinatura eletrônica de documentos PDF.
+
+Responsável por autenticação via login/senha (token JWE), upload de 
+documentos, criação de publicações com destinatários, consulta de 
+status e download de documentos assinados.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@see     health.plans.api.totvssign.tlpp
+/*/
+//-------------------------------------------------------------------
+Class PLSTotvsSign
+
+    Public Data cBaseUrl        as character
+    Public Data cAccessToken    as character
+    Public Data cUserName       as character
+    Public Data cPassword       as character
+    Public Data cErrorMessage   as character
+    Public Data cResponseBody   as character
+    Public Data nStatusCode     as numeric
+    Public Data lSuccess        as logical
+
+    Public Method new() Constructor
+    Public Method destroy()
+
+    // Autenticação
+    Public Method login()
+
+    // Operações com Documentos
+    Public Method createPublication(nDocumentId, aDestinatarios, cSubject, cMessage)
+    Public Method getPublicationStatus(nPublicationId)
+    Public Method uploadDocument(cPdfPath)
+
+    // Helpers
+    Public Method getStatusDescription(nStatus)
+
+    Public Method buildAuthHeaders()
+    Public Method doPost(cPath, cBody, lCustomHeaders, aCustomHeaders)
+    Public Method doGet(cPath)
+    Public Method loadConfig()
+    Public Method logOperation(cOperation, cDetail)
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+Método construtor. Carrega configurações e inicializa propriedades.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@return  object, instância de PLSTotvsSign
+/*/
+//-------------------------------------------------------------------
+Method new() Class PLSTotvsSign
+
+    self:cBaseUrl        := ""
+    self:cAccessToken    := ""
+    self:cUserName       := ""
+    self:cPassword       := ""
+    self:cErrorMessage   := ""
+    self:cResponseBody   := ""
+    self:nStatusCode     := 0
+    self:lSuccess        := .F.
+
+    self:loadConfig()
+
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} destroy
+Libera recursos e limpa propriedades da classe.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+/*/
+//-------------------------------------------------------------------
+Method destroy() Class PLSTotvsSign
+
+    self:cBaseUrl        := ''
+    self:cAccessToken    := ''
+    self:cUserName       := ''
+    self:cPassword       := ''
+    self:cErrorMessage   := ''
+    self:cResponseBody   := ''
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} loadConfig
+Carrega as configurações do TOTVS Sign a partir dos parâmetros SX6.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+/*/
+//-------------------------------------------------------------------
+Method loadConfig() Class PLSTotvsSign
+
+    self:cBaseUrl     := AllTrim(SuperGetMv("MV_PTSURL",  .F., ""))
+    self:cUserName    := AllTrim(SuperGetMv("MV_PTSUSR",  .F., ""))
+    self:cPassword    := AllTrim(SuperGetMv("MV_PTSPWD",  .F., ""))
+    self:cAccessToken := AllTrim(SuperGetMv("MV_PTSATOK", .F., ""))
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} login
+Autentica no TOTVS Sign via e-mail e senha, gerando token JWE.
+POST /identityintegration/v3/auth/login
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@return  logical, .T. se o login foi bem sucedido e token foi obtido
+/*/
+//-------------------------------------------------------------------
+Method login() Class PLSTotvsSign
+
+    Local oRestClient  as object
+    Local aHeaders     := {} as array
+    Local jBody        as json
+    Local jResponse    as json
+    Local cBody        := "" as character
+    Local cResult      := "" as character
+    Local lOk          := .F. as logical
+
+    self:lSuccess := .F.
+
+    If Empty(self:cUserName) .Or. Empty(self:cPassword)
+        self:cErrorMessage := "Usuário e senha são obrigatórios para login no TAE."
+        self:logOperation("login", self:cErrorMessage)
+        Return .F.
+    EndIf
+
+    self:logOperation("login", "Autenticando usuário: " + self:cUserName)
+
+    // Monta o body do login
+    jBody := JsonObject():new()
+    jBody["userName"] := self:cUserName
+    jBody["password"] := self:cPassword
+    cBody := jBody:toJson()
+    FreeObj(jBody)
+    jBody := Nil
+
+    // Headers
+    aAdd(aHeaders, "Content-Type: application/json")
+
+    oRestClient := FWRest():new(self:cBaseUrl)
+    oRestClient:setPath("/identityintegration/v3/auth/login")
+    oRestClient:setPostParams(cBody)
+
+    If oRestClient:post(aHeaders)
+        cResult := oRestClient:getResult()
+        self:nStatusCode := Val(oRestClient:getHttpCode())
+        self:cResponseBody := cResult
+
+        self:logOperation("login", "Status HTTP: " + oRestClient:getHttpCode())
+
+        // A resposta do login v3 retorna o token JWE diretamente como string
+        // ou como JSON { "token": "xxx" } dependendo da versão
+        jResponse := JsonObject():new()
+
+        If Empty(jResponse:fromJson(cResult))
+            // Tenta extrair token de diferentes formatos de resposta
+            If jResponse["access_token"] <> Nil
+                self:cAccessToken := jResponse["access_token"]
+                self:lSuccess := .T.
+                lOk := .T.
+            ElseIf jResponse["token"] <> Nil
+                self:cAccessToken := jResponse["token"]
+                self:lSuccess := .T.
+                lOk := .T.
+            ElseIf jResponse["data"] <> Nil .And. jResponse["data"]["token"] <> Nil
+                self:cAccessToken := jResponse["data"]["token"]
+                self:lSuccess := .T.
+                lOk := .T.
+            Else
+                // Se não encontrou em JSON, o próprio resultado pode ser o token
+                self:cErrorMessage := "Formato de resposta não reconhecido: " + Left(cResult, 200)
+            EndIf
+        Else
+            self:cErrorMessage := "Erro ao parsear resposta do login: " + cResult
+        EndIf
+
+        FreeObj(jResponse)
+        jResponse := Nil
+    Else
+        self:cErrorMessage := oRestClient:getLastError()
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+        self:logOperation("login", "Falha HTTP: " + oRestClient:getHttpCode() + " - " + self:cErrorMessage)
+    EndIf
+
+    If lOk
+        self:logOperation("login", "Login realizado com sucesso. Token obtido.")
+    Else
+        self:logOperation("login", "Falha no login: " + self:cErrorMessage)
+    EndIf
+
+    FreeObj(oRestClient)
+    fwFreeArray(aHeaders)
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} createPublication
+Cria uma publicação (envio para assinatura) no TOTVS Sign.
+POST /documents/v1/publicacoes
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   nDocumentId, numeric, ID do documento retornado pelo upload
+@param   aDestinatarios, array, array de JSONs com dados dos destinatários
+@param   cSubject, character, assunto do e-mail de notificação
+@param   cMessage, character, mensagem do corpo do e-mail
+@return  numeric, ID da publicação criada (0 se falhou)
+/*/
+//-------------------------------------------------------------------
+Method createPublication(nDocumentId, aDestinatarios, cSubject, cMessage, cNumGui) Class PLSTotvsSign
+
+    Local jBody        as json
+    Local jOpcoes      as json
+    Local jResponse    as json
+    Local cBody        := "" as character
+    Local cPath        := "" as character
+    Local nPubId       := 0 as numeric
+
+    Default cSubject := "Documento para assinatura eletrônica"
+    Default cMessage := "Por favor, revise e assine o documento anexo."
+    Default cNumGui    := ""
+
+    self:lSuccess := .F.
+
+    If nDocumentId <= 0
+        self:cErrorMessage := "ID do documento é obrigatório."
+        self:logOperation("createPublication", self:cErrorMessage)
+        Return 0
+    EndIf
+
+    If Empty(aDestinatarios) .Or. Len(aDestinatarios) == 0
+        self:cErrorMessage := "É necessário informar ao menos um destinatário."
+        self:logOperation("createPublication", self:cErrorMessage)
+        Return 0
+    EndIf
+
+    // Monta o JSON da publicação
+    jBody := JsonObject():new()
+    jBody["idDocumento"]    := nDocumentId
+    jBody["destinatarios"]  := aDestinatarios
+    jBody["observadores"]   := {}
+    jBody["utilizaWorkflow"] := .F.
+
+    // Opções da publicação
+    jOpcoes := JsonObject():new()
+    jOpcoes["solicitaAssinaturaManuscrita"] := .F.
+    jOpcoes["permiteRejeitarDocumento"]     := .T.
+    jOpcoes["intervaloLembrete"]            := 0
+
+    If !Empty(cSubject)
+        jOpcoes["assuntoMensagem"] := cSubject
+    EndIf
+
+    If !Empty(cMessage)
+        jOpcoes["corpoMensagem"] := cMessage
+    EndIf
+
+    jBody["publicacaoOpcoes"] := jOpcoes
+
+    cBody := EncodeUTF8(jBody:toJson())
+    cPath := "/documents/v1/publicacoes"
+
+    self:logOperation("createPublication", "Criando publicação para documento ID: " + cValToChar(nDocumentId))
+
+    If self:doPost(cPath, cBody, .F., {},cNumGui)
+        jResponse := JsonObject():new()
+
+        If Empty(jResponse:fromJson(self:cResponseBody))
+            // Verifica se a API indicou sucesso (success: true)
+            If jResponse["success"] <> Nil .And. ValType(jResponse["success"]) == "L" .And. jResponse["success"]
+                // API retornou sucesso - tenta obter o ID da publicação
+                If jResponse["data"] <> Nil .And. ValType(jResponse["data"]) == "N"
+                    nPubId := jResponse["data"]
+                ElseIf jResponse["data"] <> Nil .And. ValType(jResponse["data"]) == "O" .And. jResponse["data"]["id"] <> Nil
+                    nPubId := jResponse["data"]["id"]
+                Else
+                    // TAE retorna data:null na criação - usa o documentId como referência
+                    nPubId := nDocumentId
+                EndIf
+                self:lSuccess := .T.
+            // Tenta diferentes formatos alternativos
+            ElseIf jResponse["id"] <> Nil .And. ValType(jResponse["id"]) == "N"
+                nPubId := jResponse["id"]
+                self:lSuccess := .T.
+            ElseIf jResponse["idPublicacao"] <> Nil .And. ValType(jResponse["idPublicacao"]) == "N"
+                nPubId := jResponse["idPublicacao"]
+                self:lSuccess := .T.
+            Else
+                self:cErrorMessage := "Resposta sem indicação de sucesso: " + self:cResponseBody
+            EndIf
+
+            If self:lSuccess
+                self:logOperation("createPublication", "Publicação criada com sucesso. ID: " + cValToChar(nPubId))
+            EndIf
+        Else
+            self:cErrorMessage := "Erro ao parsear resposta: " + self:cResponseBody
+        EndIf
+
+        FreeObj(jResponse)
+        jResponse := Nil
+    Else
+        self:logOperation("createPublication", "Falha no POST: " + self:cErrorMessage)
+    EndIf
+
+    FreeObj(jBody)
+    FreeObj(jOpcoes)
+    jBody   := Nil
+    jOpcoes := Nil
+
+Return nPubId
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getPublicationStatus
+Consulta o status de uma publicação no TOTVS Sign.
+GET /documents/v2/publicacoes/{id}
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   nPublicationId, numeric, ID da publicação
+@return  numeric, status da publicação (enum StatusDocumento) ou -1 se erro
+/*/
+//-------------------------------------------------------------------
+Method getPublicationStatus(nPublicationId) Class PLSTotvsSign
+
+    Local cPath     := "" as character
+    Local nStatus   := -1 as numeric
+    Local jResponse as json
+
+    self:lSuccess := .F.
+
+    If nPublicationId <= 0
+        self:cErrorMessage := "ID da publicação é obrigatório."
+        Return -1
+    EndIf
+
+    cPath := "/documents/v2/publicacoes/" + cValToChar(nPublicationId)
+
+    self:logOperation("getPublicationStatus", "Consultando publicação ID: " + cValToChar(nPublicationId))
+
+    If self:doGet(cPath)
+        jResponse := JsonObject():new()
+
+        If Empty(jResponse:fromJson(self:cResponseBody))
+            // A resposta do TAE vem com estrutura: { "code":200, "success":true, "data": { "status": X, ... } }
+            If jResponse["data"] <> Nil .And. ValType(jResponse["data"]) == "J" .And. jResponse["data"]["status"] <> Nil
+                nStatus := jResponse["data"]["status"]
+                self:lSuccess := .T.
+                self:logOperation("getPublicationStatus", ;
+                    "ID: " + cValToChar(nPublicationId) + ;
+                    " Status: " + cValToChar(nStatus) + ;
+                    " (" + self:getStatusDescription(nStatus) + ")")
+            ElseIf jResponse["status"] <> Nil .And. ValType(jResponse["status"]) == "N"
+                nStatus := jResponse["status"]
+                self:lSuccess := .T.
+                self:logOperation("getPublicationStatus", ;
+                    "ID: " + cValToChar(nPublicationId) + ;
+                    " Status: " + cValToChar(nStatus) + ;
+                    " (" + self:getStatusDescription(nStatus) + ")")
+            Else
+                self:cErrorMessage := "Resposta sem campo 'status': " + self:cResponseBody
+            EndIf
+        Else
+            self:cErrorMessage := "Erro ao parsear resposta: " + self:cResponseBody
+        EndIf
+
+        FreeObj(jResponse)
+        jResponse := Nil
+    EndIf
+
+Return nStatus
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} uploadDocument
+Realiza o upload de um arquivo PDF para o TOTVS Sign.
+POST /documents/v1/envelopes/upload (multipart/form-data)
+
+Retorna o ID do documento enviado.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   cPdfPath, character, caminho completo do arquivo PDF
+@return  numeric, ID do documento no TAE (0 se falhou)
+/*/
+//-------------------------------------------------------------------
+Method uploadDocument(cPdfPath) Class PLSTotvsSign
+
+    Local oRestClient  as object
+    Local aHeaders     := {} as array
+    Local cBoundary    := "" as character
+    Local cBody        := "" as character
+    Local cPdfContent  := "" as character
+    Local cDocName     := "" as character
+    Local nDocId       := 0 as numeric
+    Local jResponse    as json
+    Local cCRLF        := Chr(13) + Chr(10) as character
+
+    self:lSuccess := .F.
+
+    If Empty(self:cAccessToken)
+        self:cErrorMessage := "Token de acesso não disponível. Faça login primeiro."
+        self:logOperation("uploadDocument", self:cErrorMessage)
+        Return 0
+    EndIf
+
+    // Verifica se o arquivo existe
+    If !File(cPdfPath)
+        self:cErrorMessage := "Arquivo não encontrado: " + cPdfPath
+        self:logOperation("uploadDocument", self:cErrorMessage)
+        Return 0
+    EndIf
+
+    // Lê o conteúdo binário do PDF
+    cPdfContent := MemoRead(cPdfPath)
+    If Empty(cPdfContent)
+        self:cErrorMessage := "Erro ao ler arquivo ou arquivo vazio: " + cPdfPath
+        self:logOperation("uploadDocument", self:cErrorMessage)
+        Return 0
+    EndIf
+
+    self:logOperation("uploadDocument", "Arquivo lido: " + cPdfPath + " (" + cValToChar(Len(cPdfContent)) + " bytes)")
+
+    // Extrai o nome do arquivo do caminho
+    cDocName := SubStr(cPdfPath, RAt("\", cPdfPath) + 1)
+    If Empty(cDocName) .Or. RAt("\", cPdfPath) == 0
+        cDocName := SubStr(cPdfPath, RAt("/", cPdfPath) + 1)
+    EndIf
+    If Empty(cDocName)
+        cDocName := "documento.pdf"
+    EndIf
+
+    // Monta o body multipart/form-data
+    cBoundary := "PlsTaeUpload" + DToS(Date()) + StrTran(Time(), ":", "")
+
+    // Part 1: Campo NomeEnvelope (obrigatório)
+    cBody := "--" + cBoundary + cCRLF
+    cBody += 'Content-Disposition: form-data; name="NomeEnvelope"' + cCRLF + cCRLF
+    cBody += cDocName + cCRLF
+
+    // Part 2: Arquivo PDF
+    cBody += "--" + cBoundary + cCRLF
+    cBody += 'Content-Disposition: form-data; name="Envelope"; filename="' + cDocName + '"' + cCRLF
+    cBody += 'Content-Type: application/pdf' + cCRLF + cCRLF
+    cBody += cPdfContent + cCRLF
+    cBody += "--" + cBoundary + "--" + cCRLF
+
+    // Headers - multipart com autenticação
+    aAdd(aHeaders, "Content-Type: multipart/form-data; boundary=" + cBoundary)
+    aAdd(aHeaders, "Authorization: Bearer " + self:cAccessToken)
+
+    self:logOperation("uploadDocument", "Enviando upload para /documents/v1/envelopes/upload")
+
+    oRestClient := FWRest():new(self:cBaseUrl)
+    oRestClient:setPath("/documents/v1/envelopes/upload")
+    oRestClient:setPostParams(cBody)
+
+    If oRestClient:post(aHeaders)
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+        self:logOperation("uploadDocument", "Status HTTP: " + oRestClient:getHttpCode())
+
+        jResponse := JsonObject():new()
+
+        If Empty(jResponse:fromJson(self:cResponseBody))
+            // Tenta diferentes formatos de resposta para obter o ID
+            If jResponse["id"] <> Nil .And. ValType(jResponse["id"]) == "N"
+                nDocId := jResponse["id"]
+                self:lSuccess := .T.
+            ElseIf jResponse["idDocumento"] <> Nil .And. ValType(jResponse["idDocumento"]) == "N"
+                nDocId := jResponse["idDocumento"]
+                self:lSuccess := .T.
+            ElseIf jResponse["data"] <> Nil .And. ValType(jResponse["data"]) == "O" .And. jResponse["data"]["id"] <> Nil
+                nDocId := jResponse["data"]["id"]
+                self:lSuccess := .T.
+            ElseIf jResponse["data"] <> Nil .And. ValType(jResponse["data"]) == "N"
+                nDocId := jResponse["data"]
+                self:lSuccess := .T.
+            Else
+                self:cErrorMessage := "Resposta sem ID de documento: " + self:cResponseBody
+            EndIf
+
+            If self:lSuccess
+                self:logOperation("uploadDocument", "Upload realizado com sucesso. ID: " + cValToChar(nDocId))
+            EndIf
+        Else
+            self:cErrorMessage := "Erro ao parsear resposta: " + self:cResponseBody
+        EndIf
+
+        FreeObj(jResponse)
+        jResponse := Nil
+    Else
+        self:cErrorMessage := oRestClient:getLastError()
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+        self:logOperation("uploadDocument", "Falha HTTP: " + oRestClient:getHttpCode() + " - " + self:cErrorMessage)
+    EndIf
+
+    FreeObj(oRestClient)
+    fwFreeArray(aHeaders)
+
+Return nDocId
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} buildAuthHeaders
+Monta o array de headers de autenticação para as chamadas REST.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@return  array, headers com Authorization Bearer e Content-Type JSON
+/*/
+//-------------------------------------------------------------------
+Method buildAuthHeaders() Class PLSTotvsSign
+
+    Local aHeaders := {} as array
+
+    aAdd(aHeaders, "Authorization: Bearer " + self:cAccessToken)
+    aAdd(aHeaders, "Content-Type: application/json")
+
+Return aHeaders
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} doPost
+Realiza uma requisição HTTP POST para a API do TOTVS Sign.
+Suporta retry automático com re-login em caso de token expirado (401).
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   cPath, character, path do endpoint
+@param   cBody, character, corpo da requisição
+@param   lCustomHeaders, logical, .T. para usar headers customizados
+@param   aCustomHeaders, array, headers customizados (quando lCustomHeaders = .T.)
+@param   cNumGui, character, número de GUIA para log (opcional)
+@return  logical, .T. se a comunicação foi bem sucedida
+/*/
+//-------------------------------------------------------------------
+Method doPost(cPath, cBody, lCustomHeaders, aCustomHeaders, cNumGui) Class PLSTotvsSign
+
+    Local oRestClient as object
+    Local aHeaders    := {} as array
+    Local lOk         := .F. as logical
+    Local lRetry      := .F. as logical
+    Local cHoraIni    := 0 as numeric
+    Local cHoraFim    := 0 as numeric
+
+    Default lCustomHeaders := .F.
+    Default cNumGui        := ""
+
+    If lCustomHeaders .And. !Empty(aCustomHeaders)
+        aHeaders := aCustomHeaders
+    Else
+        aHeaders := self:buildAuthHeaders()
+    EndIf
+
+    oRestClient := FWRest():new(self:cBaseUrl)
+    oRestClient:setPath(cPath)
+
+    If !Empty(cBody)
+        oRestClient:setPostParams(cBody)
+    EndIf
+
+    cHoraIni  := Time()
+    If oRestClient:post(aHeaders)
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+        lOk := .T.
+    Else
+        self:cErrorMessage := oRestClient:getLastError()
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+    EndIf
+    cHoraFim := Time()
+
+    logExtAPI("REST", "TAE", "Envio de E-mail com o TAE", "POST", self:cBaseUrl, '', cValToChar(self:nStatusCode), oRestClient:GetResult(), ElapTime(cHoraIni, cHoraFim), cNumGui)
+
+    // Se status 401, tenta re-login e refazer a chamada
+    If self:nStatusCode == 401 .And. !lCustomHeaders
+        self:logOperation("doPost", "Token expirado (401). Tentando re-login...")
+        lRetry := .F.
+
+        If self:login()
+            self:logOperation("doPost", "Re-login realizado. Retentando requisição...")
+            fwFreeArray(aHeaders)
+            aHeaders := self:buildAuthHeaders()
+            lRetry := .T.
+        Else
+            self:logOperation("doPost", "Falha no re-login: " + self:cErrorMessage)
+        EndIf
+
+        If lRetry
+            oRestClient:setPath(cPath)
+
+            If !Empty(cBody)
+                oRestClient:setPostParams(cBody)
+            EndIf
+
+            If oRestClient:post(aHeaders)
+                self:cResponseBody := oRestClient:getResult()
+                self:nStatusCode   := Val(oRestClient:getHttpCode())
+                lOk := .T.
+                self:logOperation("doPost", "Retentativa bem-sucedida. Status: " + cValToChar(self:nStatusCode))
+            Else
+                self:cErrorMessage := oRestClient:getLastError()
+                self:cResponseBody := oRestClient:getResult()
+                self:nStatusCode   := Val(oRestClient:getHttpCode())
+                lOk := .F.
+                self:logOperation("doPost", "Retentativa falhou. Status: " + cValToChar(self:nStatusCode))
+            EndIf
+        EndIf
+    EndIf
+
+    FreeObj(oRestClient)
+    fwFreeArray(aHeaders)
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} doGet
+Realiza uma requisição HTTP GET para a API do TOTVS Sign.
+Suporta retry automático com re-login em caso de token expirado (401).
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   cPath, character, path do endpoint
+@return  logical, .T. se a comunicação foi bem sucedida
+/*/
+//-------------------------------------------------------------------
+Method doGet(cPath) Class PLSTotvsSign
+
+    Local oRestClient as object
+    Local aHeaders    := {} as array
+    Local lOk         := .F. as logical
+    Local lRetry      := .F. as logical
+
+    aHeaders := self:buildAuthHeaders()
+
+    oRestClient := FWRest():new(self:cBaseUrl)
+    oRestClient:setPath(cPath)
+
+    If oRestClient:get(aHeaders)
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+        lOk := .T.
+    Else
+        self:cErrorMessage := oRestClient:getLastError()
+        self:cResponseBody := oRestClient:getResult()
+        self:nStatusCode   := Val(oRestClient:getHttpCode())
+    EndIf
+
+    // Se status 401, tenta re-login e refazer a chamada
+    If self:nStatusCode == 401
+        self:logOperation("doGet", "Token expirado (401). Tentando re-login...")
+        lRetry := .F.
+
+        If self:login()
+            self:logOperation("doGet", "Re-login realizado. Retentando requisição...")
+            fwFreeArray(aHeaders)
+            aHeaders := self:buildAuthHeaders()
+            lRetry := .T.
+        Else
+            self:logOperation("doGet", "Falha no re-login: " + self:cErrorMessage)
+        EndIf
+
+        If lRetry
+            oRestClient:setPath(cPath)
+
+            If oRestClient:get(aHeaders)
+                self:cResponseBody := oRestClient:getResult()
+                self:nStatusCode   := Val(oRestClient:getHttpCode())
+                lOk := .T.
+                self:logOperation("doGet", "Retentativa bem-sucedida. Status: " + cValToChar(self:nStatusCode))
+            Else
+                self:cErrorMessage := oRestClient:getLastError()
+                self:cResponseBody := oRestClient:getResult()
+                self:nStatusCode   := Val(oRestClient:getHttpCode())
+                lOk := .F.
+                self:logOperation("doGet", "Retentativa falhou. Status: " + cValToChar(self:nStatusCode))
+            EndIf
+        EndIf
+    EndIf
+
+    FreeObj(oRestClient)
+    fwFreeArray(aHeaders)
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getStatusDescription
+Retorna a descrição textual de um status de publicação do TAE.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   nStatus, numeric, código do status
+@return  character, descrição do status
+/*/
+//-------------------------------------------------------------------
+Method getStatusDescription(nStatus) Class PLSTotvsSign
+
+    Local cDesc := "" as character
+
+    Do Case
+        Case nStatus == TAE_STATUS_RASCUNHO
+            cDesc := "Rascunho"
+        Case nStatus == TAE_STATUS_AGUARDANDO
+            cDesc := "Aguardando assinaturas"
+        Case nStatus == TAE_STATUS_CONCLUIDO
+            cDesc := "Concluído"
+        Case nStatus == TAE_STATUS_REJEITADO
+            cDesc := "Rejeitado"
+        Case nStatus == TAE_STATUS_EXPIRADO
+            cDesc := "Expirado"
+        Case nStatus == TAE_STATUS_CANCELADO
+            cDesc := "Cancelado"
+        Case nStatus == TAE_STATUS_PROCESSANDO
+            cDesc := "Em processamento"
+        Case nStatus == TAE_STATUS_ERRO
+            cDesc := "Erro"
+        Otherwise
+            cDesc := "Desconhecido (" + cValToChar(nStatus) + ")"
+    EndCase
+
+Return cDesc
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} logOperation
+Registra log de operações do TOTVS Sign no console do Protheus.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@param   cOperation, character, nome da operação
+@param   cDetail, character, detalhe da operação
+/*/
+//-------------------------------------------------------------------
+Method logOperation(cOperation, cDetail) Class PLSTotvsSign
+
+    PlsLogFil("[" + DTOS(Date()) + " " + Time() + "] [PLSTotvsSign][" + cOperation + "] " + cDetail, LOG_TOTVS_SIGN)
+
+Return

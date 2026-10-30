@@ -1,0 +1,388 @@
+#Include "agrobusiness.agd.quota.movement.service.ch"
+#include "totvs.ch"
+#include "tlpp-core.th"
+
+namespace totvs.protheus.agrobusiness.agd  
+
+/*/{Protheus.doc} QuotaMovementService
+Serviço responsável pela regra de negócio da listagem de movimentações de quotas (NF4).
+@type class
+@version 12
+@author rodrigo.nsoledade
+@since 14/05/2025
+/*/
+class QuotaMovementService FROM UtilsService
+	public method New()
+	public method list()
+	public method gravarMovimento()
+	public method confirmarMovimento()
+	public method transferirCotas()
+	public method gerarTituloFinanceiro()
+
+	private method gerarTitulosAPagar()
+	private method gerarTitulosAReceber()
+endclass
+
+/*/{Protheus.doc} New
+Inicializador da classe service
+@type method
+@version 12
+@since 14/05/2025
+@author rodrigo.nsoledade
+@return variant, self
+/*/
+method New() class QuotaMovementService
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} list
+Realiza a listagem paginada das movimentações de quotas
+@type method
+@version 12
+@since 14/05/2025
+@author rodrigo.nsoledade
+@param nPage, numeric, número da página
+@param nPageSize, numeric, tamanho da página
+@param oJsonQryParam, object, parâmetros da query string
+@return variant, this
+/*/
+method list(nPage, nPageSize, oJsonQryParam) class QuotaMovementService
+	Local oRepository     as object
+
+	Default nPage := 1
+	Default nPageSize := 10
+	Default oJsonQryParam := Nil
+
+	oRepository := QuotaMovementRepository():New()
+
+	oRepository:find(nPage, nPageSize, oJsonQryParam)
+
+	Self:setFullResponse(oRepository)
+
+	oRepository:DeActivate()
+
+	FreeObj(oRepository)
+Return Nil
+
+
+/*/{Protheus.doc} gravarMovimento
+Gravar Movimento para determinado cooperado, loja e quantidade de cotas
+@type method
+@version 12
+@author jean.schulze
+@since 7/14/2026
+@param cFilial, character, filial
+@param cCooperado, character, cooperado
+@param cLoja, character, loja
+@param nValorTotalCota, variant, valor total das cotas
+@param cTipoMovimento, character, tipo de movimento
+@param cObservacao, character, observação
+@return variant, nil
+/*/
+method gravarMovimento(cFilMov, cCooperado, cLoja, nValorTotalCota, cTipoMovimento, cObservacao, cJuros, lAprovado, nValorImposto) class QuotaMovementService
+	Local aArea			  := FWGetArea()
+	Local oRepository      := QuotaMovementRepository():New()
+	Local nFatorMovimento  := SUPERGETMV("MV_AGD0011", .F., 1)
+	Local aMovimento       := {}
+
+	Default cObservacao := ""
+	Default cJuros      := ""
+	Default lAprovado   := .T.
+	Default nValorImposto := 0
+
+	AAdd(aMovimento, {"NF4_FILIAL", cFilMov})
+	AAdd(aMovimento, {"NF4_CODCOO", cCooperado})
+	AAdd(aMovimento, {"NF4_LOJCOO", cLoja})
+	AAdd(aMovimento, {"NF4_IDMOV",  oRepository:getNewCode(cCooperado, cLoja)})
+	AAdd(aMovimento, {"NF4_DTMOV",  dDataBase})
+	AAdd(aMovimento, {"NF4_HRMOV",  Time()})
+	AAdd(aMovimento, {"NF4_OPTMOV", POSICIONE("NF5",1,FWxFilial('NF5')+AllTrim(cTipoMovimento),"NF5_TIPO")})
+	AAdd(aMovimento, {"NF4_TIPMOV", AllTrim(cTipoMovimento)})
+	AAdd(aMovimento, {"NF4_QTDCOT", (nValorTotalCota - nValorImposto) / nFatorMovimento })
+	AAdd(aMovimento, {"NF4_VLRCOT", nFatorMovimento})
+	AAdd(aMovimento, {"NF4_VLRCAP", nValorTotalCota - nValorImposto})
+	AAdd(aMovimento, {"NF4_OBS",    cObservacao})
+	AAdd(aMovimento, {"NF4_CODJUR", cJuros})
+	AAdd(aMovimento, {"NF4_STATUS", IIF(lAprovado, "1", "2")})
+	AAdd(aMovimento, {"NF4_VALIMP", nValorImposto})
+	AAdd(aMovimento, {"NF4_VALBRT", nValorTotalCota})
+
+	oRepository:save(aMovimento)
+
+	Self:setFullResponse(oRepository)
+
+	oRepository:DeActivate()
+
+	FreeObj(oRepository)
+	FwRestArea(aArea)
+return nil
+
+/*/{Protheus.doc} confirmarMovimento
+Confirma o movimento gerando titulos financeiros e atualização de saldo
+@type method
+@version 12
+@author jean.schulze
+@since 7/22/2026
+@param cCooperado, character, codigo do cooperado
+@param cLoja, character, loja do cooperado
+@param cIdMovimento, character, identificador do movimento
+@param valorCota, variant, valor da cota
+@param cTipoMovimento, character, tipo de movimento
+@return variant, nil
+/*/
+method confirmarMovimento(cCooperado, cLoja, cIdMovimento, valorCota, valorImpostos, cTipoMovimento) class QuotaMovementService
+	Local aArea := FWGetArea() as array
+	Local oQuotaRepo           as object
+	Local oTipoRepository      as object
+
+	Self:gerarTituloFinanceiro(cCooperado, cLoja, cIdMovimento, (valorCota + valorImpostos), cTipoMovimento)
+	
+	if Self:isSuccess()
+		oQuotaRepo := QuotaRepository():New()
+		oTipoRepository := QuotaTypeMovementRepository():New(xFilial('NF5')+cTipoMovimento)
+
+		if oTipoRepository:isPendentePagamento() .And. Posicione("NF3", 1, FWxFilial('NF3') + cCooperado + cLoja, "NF3_STATUS") == '2' //2=Inativo
+			oQuotaRepo:updateRepository({{'NF3_STATUS', '3'}}, FWxFilial('NF3') + cCooperado + cLoja) //3=Pendente Pagamento
+		endIf
+
+		//caso seja movimento difrente de financeiro a receber ou seja baixa automática, atualiza o saldo do cooperado, no contrario vai fazer no pagamento do tiulo no AGDI140
+		if !oTipoRepository:isGeraFinanceiroReceber() .or. oTipoRepository:isBaixaAutomatica() 
+			
+			/*Verifica a geração do Movimento Adicional*/
+			if oTipoRepository:isGeraMovimentoAdicional() 
+				Self:gravarMovimento(FWxFilial('NF4'), cCooperado, cLoja, (valorCota + valorImpostos), oTipoRepository:getTipoMovimentoAdicional())
+			endif	
+
+			oQuotaRepo:updateCooperatorQuotaStatusByMovement(cCooperado, cLoja, oTipoRepository:isAtivadorCooperado())
+		
+		endif	
+		FWFreeObj(oQuotaRepo)
+		FWFreeObj(oTipoRepository)
+	EndIf
+
+	FWRestArea(aArea)
+return nil	
+
+
+/*/{Protheus.doc} transferirCotas
+Transfere cotas entre cooperados ativos, gravando movimento de origem e destino.
+@type method
+@version 12
+@author lindembergson.pacheco
+@since 06/07/2026
+@param cCooperadoOrigem, character, cooperado origem (codigo+loja)
+@param nQtdCotas, numeric, quantidade de cotas transferidas
+@param cTipoMovimento, character, tipo de movimento da tabela NF5
+@param cCooperadoDestino, character, cooperado destino (codigo+loja)
+@return variant, nil
+/*/
+method transferirCotas(jComandTransferir) class QuotaMovementService
+	Local aArea            := FWGetArea() As Array
+	Local nFatorMovimento  := SUPERGETMV("MV_AGD0011", .F., 1)
+	Local oQuotaRepository As Object
+
+	cCooperadoOrigem  := jComandTransferir["cooperadoOrigem"]
+	cLojaOrigem       := jComandTransferir["lojaOrigem"]
+	cCooperadoDestino := jComandTransferir["cooperadoDestino"]
+	cLojaDestino      := jComandTransferir["lojaDestino"]
+	nQtdCotas         := jComandTransferir["qtdCotas"]
+	nValorTotalCotas  := nQtdCotas * nFatorMovimento
+	cObservacao 	  := jComandTransferir["observacao"]
+	cCodMovOrigem     := jComandTransferir["codigoMovimento"]
+	cCodMovDestino   := POSICIONE("NF5",1,FWxFilial('NF5')+AllTrim(cCodMovOrigem),"NF5_CMOVAD")
+	
+	If Empty(cCooperadoOrigem + cLojaOrigem) .Or. Empty(cCooperadoDestino + cLojaDestino)
+		Self:setError(STR0004, 422) //"Cooperado de origem/destino não informado."
+		Return nil
+	EndIf
+
+	If nQtdCotas <= 0
+		Self:setError(STR0005, 422) //"Quantidade de cotas deve ser maior que zero."
+		Return nil
+	EndIf
+
+	If cCooperadoOrigem + cLojaOrigem == cCooperadoDestino + cLojaDestino
+		Self:setError(STR0006, 422) //"Cooperado de origem e destino devem ser diferentes."
+		Return nil
+	EndIf
+
+	If Empty(AllTrim(cCodMovOrigem)) .or. POSICIONE("NF5",1,FWxFilial('NF5')+AllTrim(cCodMovOrigem),"NF5_TIPO") <> "4" //Transferência Saída
+		Self:setError(STR0007, 422) //"Tipo de movimento inválido. O movimento deve ser do tipo Transferência Saída."
+		Return nil
+	EndIf
+
+	If Empty(AllTrim(cCodMovDestino)) .or. POSICIONE("NF5",1,FWxFilial('NF5')+AllTrim(cCodMovDestino),"NF5_TIPO") <> "5" //Transferência Saída
+		Self:setError(STR0008, 422) //"Tipo de movimento inválido. O movimento relacionado deve ser do tipo Transferência Entrada."
+		Return nil
+	EndIf
+
+	If POSICIONE("NF3",1,FWxFilial('NF3')+AllTrim(cCooperadoOrigem + cLojaOrigem),"NF3_STATUS") <> "1"
+		Self:setError(STR0009, 422) //"Cooperado de origem sem conta ativa de cotas."
+		Return nil
+	EndIf
+
+	If POSICIONE("NF3",1,FWxFilial('NF3')+AllTrim(cCooperadoOrigem + cLojaOrigem),"NF3_QTDCOT") < nQtdCotas
+		Self:setError(STR0010, 422) //"Saldo de cotas insuficiente para o cooperado de origem."
+		FWRestArea(aArea)
+		Return nil
+	EndIf
+
+
+	Begin Transaction
+
+		oQuotaRepository := QuotaRepository():New()
+		If !oQuotaRepository:existsById(FWxFilial("NF3") + cCooperadoDestino + cLojaDestino)			
+			oQuotaRepository:generateCooperatorQuotaByMovement(cCooperadoDestino, cLojaDestino, cCodMovDestino, nQtdCotas)
+		EndIf
+		
+		Self:gravarMovimento(FWxFilial('NF4'), cCooperadoOrigem, cLojaOrigem, nValorTotalCotas, cCodMovOrigem, cObservacao)
+
+		If Self:isSuccess()
+			Self:gravarMovimento(FWxFilial('NF4'), cCooperadoDestino, cLojaDestino, nValorTotalCotas, cCodMovDestino, cObservacao)
+			if !Self:isSuccess()
+				DisarmTransaction()
+			endif
+		else
+			DisarmTransaction()	
+		EndIf
+	End Transaction
+
+	if Self:isSuccess()
+		Self:setSuccess(STR0012) //"Transferência de cotas realizada com sucesso."
+	endif
+
+	FreeObj(oQuotaRepository)
+	FWRestArea(aArea)
+return nil
+
+
+/*/{Protheus.doc} gerarTituloFinanceiro
+Realiza o processamento do movimento de acordo com o tipo de movimento
+@type method
+@version 12
+@author jc.maldonado
+@since 02/07/2026
+@param cCooperado, character, codigo do cooperado
+@param cLoja, character, loja do cooperado
+@param cIdMovimento, character, identificador do movimento
+@param valorCota, numeric, valor da cota
+@param cTipoMovimento, character, tipo de movimento
+/*/
+method gerarTituloFinanceiro(cCooperado as character, cLoja as character, cIdMovimento as character, valorCota as numeric, cTipoMovimento as character) class QuotaMovementService
+	Local aArea := FWGetArea()     as array
+	Local oTipoMovimentoRepository as object
+	Local jDadosTitulo             as json
+
+	oTipoMovimentoRepository := QuotaTypeMovementRepository():New(FWxFilial('NF5') + cTipoMovimento)
+
+	if oTipoMovimentoRepository:isGeraFinanceiro()
+		jDadosTitulo := oTipoMovimentoRepository:getParametrosFinanceiro()
+
+		jDadosTitulo['emissao']    := dDataBase
+		jDadosTitulo['valorTotal'] := valorCota
+
+		if oTipoMovimentoRepository:isGeraFinanceiroPagar()
+			Self:gerarTitulosAPagar(jDadosTitulo, cCooperado, cLoja, cIdMovimento)
+		else //Financeiro a Receber
+			Self:gerarTitulosAReceber(jDadosTitulo, cCooperado, cLoja, cIdMovimento, valorCota)
+		Endif
+
+		FreeObj(jDadosTitulo)
+	Else
+		Self:setSuccess(STR0014) //"Movimento não obrigatório"
+	endif
+
+	FWFreeObj(oTipoMovimentoRepository)
+	FWRestArea(aArea)
+return
+
+/*/{Protheus.doc} QuotaMovementService::gerarTitulosAPagar
+Gera os titulos a pagar a partir do movimento
+@type method
+@version 12
+@author jc.maldonado
+@since 31/08/2026
+@param jDadosTitulo, json, Informações do titulo
+@param cCooperado, character, Código do Cooperado
+@param cLoja, character, Loja Cooperado
+@param cIdMovimento, character, Id do Movimento
+@return variant, nil
+/*/
+method gerarTitulosAPagar(jDadosTitulo as json, cCooperado as character, cLoja as character, cIdMovimento as character) class QuotaMovementService
+	local oAccountsPayableService as object
+	local oQuotaTitleRepository   as object
+	local jMovimento              as json
+
+	jDadosTitulo['fornecedor'] := POSICIONE("NEP", 1, FWxFilial('NEP') + cCooperado + cLoja, "NEP_CODFOR") //buscar o cooperado como fornecedor
+	jDadosTitulo['loja']       := POSICIONE("NEP", 1, FWxFilial('NEP') + cCooperado + cLoja, "NEP_LOJFOR") //buscar a loja do cooperado como fornecedor
+	jDadosTitulo['origem']     := "2"
+
+	oAccountsPayableService := AccountsPayableService():New()
+	oAccountsPayableService:gerarTitulos(jDadosTitulo)
+
+	if oAccountsPayableService:isSuccess()
+		jMovimento := JsonObject():New()
+		jMovimento["cooperado"]   := cCooperado
+		jMovimento["loja"] 		  := cLoja
+		jMovimento["idMovimento"] := cIdMovimento
+
+		oQuotaTitleRepository := QuotaTitleRepository():New()
+		oQuotaTitleRepository:saveAllTitulos(jMovimento, oAccountsPayableService:getResponse())
+
+		Self:setFullResponse(oQuotaTitleRepository)
+
+		FreeObj(oQuotaTitleRepository)
+	else
+		Self:setFullResponse(oAccountsPayableService)
+	endif
+
+	FwFreeObj(oAccountsPayableService)
+return
+
+/*/{Protheus.doc} QuotaMovementService::gerarTitulosAReceber
+Gera os titulos a receber a partir do movimento
+@type method
+@version 12
+@author jc.maldonado
+@since 31/08/2026
+@param jDadosTitulo, json, Informações do titulo
+@param cCooperado, character, Código do Cooperado
+@param cLoja, character, Loja Cooperado
+@param cIdMovimento, character, Id do Movimento
+@param valorCota, numeric, Valor da Cota
+@return variant, nil
+/*/
+method gerarTitulosAReceber(jDadosTitulo as json, cCooperado as character, cLoja as character, cIdMovimento as character, valorCota as numeric) class QuotaMovementService
+	local oAccountsReceivableService as object
+	local jMovimento                 as json
+	local oQuotaTitleRepository      as object
+
+	jDadosTitulo["cooperado"]   	:= cCooperado
+	jDadosTitulo["loja"]        	:= cLoja
+	jDadosTitulo["idMovimento"] 	:= cIdMovimento
+	jDadosTitulo["quantidadeCotas"] := valorCota
+	jDadosTitulo["dataMovimento"]	:= dDataBase
+	jDadosTitulo['origem']      	:= "1"
+
+	oAccountsReceivableService := AccountsReceivableService():New()
+	oAccountsReceivableService:gerarTituloReceber(jDadosTitulo)
+
+	if oAccountsReceivableService:isSuccess()
+		jMovimento := JsonObject():New()
+		jMovimento["cooperado"]   := cCooperado
+		jMovimento["loja"]        := cLoja
+		jMovimento["idMovimento"] := cIdMovimento
+
+		oQuotaTitleRepository := QuotaTitleRepository():New()
+		oQuotaTitleRepository:saveAllTitulos(jMovimento, oAccountsReceivableService:getResponse())
+
+		Self:setFullResponse(oQuotaTitleRepository)
+
+		FWFreeObj(jMovimento)
+		FWFreeObj(oQuotaTitleRepository)
+	else
+		Self:setFullResponse(oAccountsReceivableService)
+	endif
+
+	FwFreeObj(oAccountsReceivableService)
+Return

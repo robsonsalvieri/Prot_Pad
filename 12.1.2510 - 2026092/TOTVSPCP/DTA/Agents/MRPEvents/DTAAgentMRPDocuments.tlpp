@@ -1,0 +1,1038 @@
+#Include "TLPP-CORE.TH"
+#Include "TOTVS.CH"
+#Include "DTAAgentMRPDocuments.CH"
+
+#DEFINE DOCUMENT_TYPE_OP      "1"
+#DEFINE DOCUMENT_TYPE_SC      "2"
+#DEFINE DOCUMENT_TYPE_PC      "3"
+#DEFINE DOCUMENT_TYPE_AE      "4"
+
+#DEFINE STATUS_HZQ_PENDENTE    "0"
+#DEFINE STATUS_HZQ_ATUALIZANDO "1"
+#DEFINE STATUS_HZQ_PROCESSADO  "2"
+#DEFINE STATUS_HZQ_ERRO        "3"
+
+//Constantes de atualização
+#DEFINE MARCA_CHECK     "1"
+#DEFINE DESMARCA_CHECK  "0"
+
+/*/{Protheus.doc} DTAAgentMRPDocuments
+Classe responsável por gerenciar as operações na tabela HZQ (documentos gerados pelo agente de logs do MRP).
+
+@type class
+@author renan.roeder
+@since 04/05/2026
+/*/
+Class DTAAgentMRPDocuments
+	Private Data cError   as Character
+	Private Data cTicket  as Character
+	Private Data jCatalog as Json
+	Private Data jFilters as Json
+
+	Public Method new(jFilters as Json, cTicket as Character) as Object
+	Public Method destroy()
+	Public Method getError() as Character
+	Public Method setFilters(jFilters as Json)
+	Public Method updateChecks() as Logical
+	Public Method validAppointments() as Logical
+	Public Method validFixedHorizon() as Logical
+	Public Method validMovements() as Logical
+
+	Private Method appendArray(aDest as Array, aSrc as Array)
+	Private Method appendSqlClause(aParts as Array, aParams as Array, aClause as Array)
+	Private Method buildConcatFields(aFields as Array) as Character
+	Private Method buildDateFilter(cField as Character) as Array
+	Private Method buildDocumentSubquery(jCfg as Json, aWhereDc as Array) as Array
+	Private Method buildDocumentWhere(jCfg as Json) as Array
+	Private Method buildEventTypeWhere() as Array
+	Private Method buildPlaceholders(nQty as Integer) as Character
+	Private Method buildProductFilter(cField as Character) as Array
+	Private Method buildProductSubquery() as Array
+	Private Method buildWarehouseFilter(cField as Character) as Array
+	Private Method emptySqlClause() as Array
+	Private Method execPrepared(cSQL as Character, aParams as Array) as Logical
+	Private Method getDocumentsCatalog()
+	Private Method getDocumentTypes() as Array
+	Private Method resolveCheckValue(cMode as Character) as Character
+	Private Method updateHZQForDocumentType(cDocType as Character, cMode as Character, aWhereEvt as Array, cIdHZR as Character) as Logical
+	Private Method usesProductIndicator(cTicket as Character) as Logical
+
+	Static Method applyPreferences(cTicket as Character, aPreferences as Array, cErrorMessage as Character) as Logical
+	Static Method toggleCheck(nRecno as Integer) as Character
+	Static Method updateChecksByRecno(aRecnos as Array, cMode as Character, cIdRegra as Character)
+	Static Method updateDocumentStatus(nRecno as Numeric, lSuccess as Logical, cMsgErro as Character)
+	Static Method updateHZQByFilter(cTicket as Character, cStatus as Character, cCheck as Character, cMotivo as Character, cFilter as Character, aFilterData as Array) as Logical
+	Static Method validDocuments(cTicket as Character, cErrorMessage as Character, aRules as Array) as Logical
+EndClass
+
+/*/{Protheus.doc} new
+Construtor. Recebe o JSON de filtros e o ticket do contexto.
+
+@type method
+@author renan.roeder
+@since 04/05/2026
+@param 01 jFilters, Json     , Filtros contendo selection_mode, delivery_date_range, document_types, action_types, product_filters e warehouses
+@param 02 cTicket , Character, Ticket do contexto ao qual a seleção de documentos será associada
+@return Object, Instância de DTAAgentMRPDocuments
+/*/
+Method new(jFilters as Json, cTicket as Character) as Object Class DTAAgentMRPDocuments
+	::jFilters := jFilters
+	::cTicket  := cTicket
+	::cError   := ""
+
+	//De-para com as tabelas dos documentos e os campos usados nos filtros de data, fornecedor e produto.
+	::getDocumentsCatalog()
+Return Self
+
+/*/{Protheus.doc} destroy
+Destrutor. Limpa os dados da instância.
+
+@type method
+@author renan.roeder
+@since 04/05/2026
+@return Nil
+/*/
+Method destroy() Class DTAAgentMRPDocuments
+	::cTicket  := ""
+	::cError   := ""
+	FreeObj(::jFilters)
+	FreeObj(::jCatalog)
+Return
+
+/*/{Protheus.doc} updateChecks
+Atualiza HZQ_CHECK para todas as origens de documento aplicáveis. Suporta os modos ADD e REMOVE.
+Opera dentro de uma única transação. Em caso de falha em qualquer tipo de documento, toda a transação é desfeita.
+
+@type method
+@author renan.roeder
+@since 04/05/2026
+@return lSuccess, Logical, .T. se todas as origens forem atualizadas com sucesso
+/*/
+Method updateChecks() as Logical Class DTAAgentMRPDocuments
+	Local aDocTypes as Array
+	Local aCatalog  as Array
+	Local aWhereEvt as Array
+	Local nIndex    as Integer
+	Local lSuccess  as Logical
+
+	lSuccess := .T.
+
+	If Empty(::cTicket)
+		::cError := STR0004 //"Ticket não informado para atualização da seleção de documentos."
+		Return .F.
+	EndIf
+
+	//Verifica se existe filtro pelo tipo do documento (origem). Se não houver, considera todas as origens disponíveis no catálogo.
+	aDocTypes := ::getDocumentTypes()
+	If Len(aDocTypes) == 0
+		aCatalog := ::jCatalog:GetNames()
+		For nIndex := 1 To Len(aCatalog)
+			aAdd(aDocTypes, aCatalog[nIndex])
+		Next
+		aSize(aCatalog, 0)
+	EndIf
+
+	//Evento - 002,003,007
+	aWhereEvt := ::buildEventTypeWhere()
+
+	//Marca ou desmarca os documentos por tipo.
+	Begin Transaction
+		For nIndex := 1 To Len(aDocTypes)
+			If !::updateHZQForDocumentType(aDocTypes[nIndex], ::jFilters["selection_mode"], aWhereEvt, ::jFilters["HZR_ID"])
+				lSuccess := .F.
+				DisarmTransaction()
+				Exit
+			EndIf
+		Next
+	End Transaction
+
+	aSize(aDocTypes, 0)
+	aSize(aWhereEvt, 0)
+Return lSuccess
+
+/*/{Protheus.doc} getDocumentTypes
+Retorna os tipos de documento a partir do filtro document_types (OP/SC/PC/AE).
+
+@type method
+@author renan.roeder
+@since 24/04/2025
+@return aTypes, Array, Array com constantes de tipo de documento (ex.: {"1", "3"})
+/*/
+Method getDocumentTypes() as Array Class DTAAgentMRPDocuments
+	Local aTypes   := {} as Array
+	Local cDocType := "" as Character
+	Local nIndex   := 0  as Integer
+
+	If !::jFilters:HasProperty("document_types") .Or. Len(::jFilters["document_types"]) == 0
+		Return aTypes
+	EndIf
+
+	For nIndex := 1 To Len(::jFilters["document_types"])
+		cDocType := AllTrim(::jFilters["document_types"][nIndex])
+		If ::jCatalog:HasProperty(cDocType)
+			aAdd(aTypes, cDocType)
+		EndIf
+	Next
+
+Return aTypes
+
+/*/{Protheus.doc} updateHZQForDocumentType
+Atualiza HZQ_CHECK para um único tipo de documento aplicando os filtros recebidos.
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 cDocType , Character, DOCUMENT_TYPE_OP/SC/PC/AE
+@param 02 cMode    , Character, ADD/REMOVE/REPLACE
+@param 03 aWhereEvt, Array    , Condição de filtro {SQL, values} pré-calculada a partir de action_types
+@param 04 cIdHZR   , Character, HZR_ID associado ao filtro
+@return lReturn, Logical, .T. se a operação for concluída com sucesso
+/*/
+Method updateHZQForDocumentType(cDocType as Character, cMode as Character, aWhereEvt as Array, cIdHZR as Character) as Logical Class DTAAgentMRPDocuments
+	Local aDocSub  as Array
+	Local aParams  as Array
+	Local aWhereDc as Array
+	Local cMotivo  as Character
+	Local cSQL     as Character
+	Local lReturn  as Logical
+
+	If Empty(cIdHZR)
+		cMotivo := STR0001 //"Atualizado via chat."
+	Else
+		cMotivo := I18N(STR0002, {cIdHZR}) //"Atualizado conforme regra (HZR_ID) #1[ID]#"
+	EndIf
+
+	//Monta os filtros de data, fornecedor e produto (código, material e grupo) para a tabela do documento.
+	aWhereDc := ::buildDocumentWhere(::jCatalog[cDocType])
+	//Monta a cláusula IN dos documentos na tabela de origem, conforme os filtros.
+	aDocSub  := ::buildDocumentSubquery(::jCatalog[cDocType], aWhereDc)
+
+	cSQL := "UPDATE " + RetSqlName("HZQ") + " SET HZQ_CHECK = ?, HZQ_MOTCHK = ?"
+	cSQL += " WHERE HZQ_FILIAL = ?"
+	cSQL +=   " AND HZQ_TICKET = ?"
+	cSQL +=   " AND HZQ_ORIGEM = ?"
+	cSQL +=   " AND HZQ_STATUS IN ('" + STATUS_HZQ_PENDENTE + "', '" + STATUS_HZQ_ERRO + "')"
+	cSQL +=   " AND D_E_L_E_T_ = ' '"
+	aParams := {}
+	aAdd(aParams, ::resolveCheckValue(cMode))
+	aAdd(aParams, cMotivo)
+	aAdd(aParams, xFilial("HZQ"))
+	aAdd(aParams, ::cTicket)
+	aAdd(aParams, cDocType)
+
+	If !Empty(aWhereEvt[1])
+		cSQL += aWhereEvt[1]
+		::appendArray(aParams, aWhereEvt[2])
+	EndIf
+
+	If !Empty(aDocSub[1])
+		cSQL += aDocSub[1]
+		::appendArray(aParams, aDocSub[2])
+	EndIf
+
+	lReturn := ::execPrepared(cSQL, aParams)
+
+	aSize(aParams, 0)
+	aSize(aDocSub, 0)
+	aSize(aWhereDc, 0)
+
+Return lReturn
+
+/*/{Protheus.doc} execPrepared
+Executa comandos UPDATE ou DELETE na tabela HZQ.
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 cSQL   , Character, Query com placeholders ?
+@param 02 aParams, Array    , Valores na ordem dos placeholders
+@return lOk, Logical, .T. se a operação for concluída com sucesso
+/*/
+Method execPrepared(cSQL as Character, aParams as Array) as Logical Class DTAAgentMRPDocuments
+	Local cFinal := ""  as Character
+	Local lOk    := .T. as Logical
+	Local nIndex := 0   as Integer
+	Local oStmt  := Nil as Object
+
+	oStmt := FWPreparedStatement():New(cSQL)
+	For nIndex := 1 To Len(aParams)
+		oStmt:setString(nIndex, AllTrim(aParams[nIndex]))
+	Next
+	cFinal := oStmt:getFixQuery()
+	oStmt:Destroy()
+	If TCSqlExec(cFinal) < 0
+		::cError := STR0006 //"Falha ao atualizar HZQ."
+		lOk := .F.
+	EndIf
+Return lOk
+
+/*/{Protheus.doc} appendArray
+Concatena os elementos de aSrc no final de aDest (modifica aDest por referência).
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 aDest, Array, Destino dos elementos
+@param 02 aSrc , Array, Origem dos elementos
+@return Nil
+/*/
+Method appendArray(aDest as Array, aSrc as Array) Class DTAAgentMRPDocuments
+	Local nIndex as Integer
+
+	For nIndex := 1 To Len(aSrc)
+		aAdd(aDest, aSrc[nIndex])
+	Next
+Return Nil
+
+/*/{Protheus.doc} buildDocumentWhere
+Constrói a cláusula WHERE para buscar documentos nas tabelas de origem (SC1/SC2/SC7).
+Combina os filtros de data, fornecedor e produto com o operador AND.
+
+@type method
+@author renan.roeder
+@since 24/04/2025
+@param 01 jCfg, Json, Configuração do tipo de documento
+@return aClause, Array, Array com a condição SQL e os parâmetros do filtro { cWhere, aParams }
+/*/
+Method buildDocumentWhere(jCfg as Json) as Array Class DTAAgentMRPDocuments
+	Local aParts   := {}                 as Array
+	Local aParams  := {}                 as Array
+	Local aClause  := ::emptySqlClause() as Array
+	Local cWhere   := ""                 as Character
+	Local nIndex   := 0                  as Integer
+
+	::appendSqlClause(@aParts, @aParams, ::buildDateFilter(jCfg["dateField"]))
+	::appendSqlClause(@aParts, @aParams, ::buildWarehouseFilter(jCfg["warehouseField"]))
+	::appendSqlClause(@aParts, @aParams, ::buildProductFilter(jCfg["productField"]))
+
+	If Len(aParts) == 0
+		Return aClause
+	EndIf
+
+	cWhere := "D_E_L_E_T_ = ' '"
+	For nIndex := 1 To Len(aParts)
+		cWhere += " AND " + aParts[nIndex]
+	Next
+
+	aClause[1] := cWhere
+	aClause[2] := aParams
+Return aClause
+
+/*/{Protheus.doc} appendSqlClause
+Verifica se aClause possui conteúdo e anexa seus dados a aParts e aParams.
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 aParts , Array, Cláusulas acumuladas (altera por referência)
+@param 02 aParams, Array, Parâmetros acumulados (altera por referência)
+@param 03 aClause, Array, { cClause, aClauseParams }
+@return Nil
+/*/
+Method appendSqlClause(aParts as Array, aParams as Array, aClause as Array) Class DTAAgentMRPDocuments
+	If !Empty(aClause[1])
+		aAdd(aParts, aClause[1])
+		::appendArray(aParams, aClause[2])
+	EndIf
+Return Nil
+
+/*/{Protheus.doc} buildDateFilter
+Monta o predicado do intervalo de datas (delivery_date_range.start_date/end_date).
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 cField, Character, Nome do campo de data na tabela alvo
+@return Array, Array com a cláusula SQL e parâmetros { cClause, aParams }
+/*/
+Method buildDateFilter(cField as Character) as Array Class DTAAgentMRPDocuments
+	Local aParams := {}  as Array
+	Local cPart   := ""  as Character
+	Local jDates  := Nil as Json
+
+	If !::jFilters:HasProperty("delivery_date_range")
+		Return ::emptySqlClause()
+	EndIf
+
+	jDates := ::jFilters["delivery_date_range"]
+
+	If jDates:HasProperty("start_date") .And. !Empty(jDates["start_date"])
+		cPart += cField + " >= ?"
+		aAdd(aParams, StrTran(jDates["start_date"],"-",""))
+	EndIf
+	If jDates:HasProperty("end_date") .And. !Empty(jDates["end_date"])
+		If !Empty(cPart)
+			cPart += " AND "
+		EndIf
+		cPart += cField + " <= ?"
+		aAdd(aParams, StrTran(jDates["end_date"],"-",""))
+	EndIf
+
+	jDates := Nil
+Return {cPart, aParams}
+
+/*/{Protheus.doc} buildWarehouseFilter
+Monta o predicado de armazém (warehouses IN ...).
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 cField, Character, Nome do campo de armazém na tabela alvo
+@return Array, Array com a cláusula SQL e parâmetros { cClause, aParams }
+/*/
+Method buildWarehouseFilter(cField as Character) as Array Class DTAAgentMRPDocuments
+
+	If !::jFilters:HasProperty("warehouses") .Or. Len(::jFilters["warehouses"]) == 0
+		Return ::emptySqlClause()
+	EndIf
+
+Return {cField + " IN " + ::buildPlaceholders(Len(::jFilters["warehouses"])), ::jFilters["warehouses"]}
+
+/*/{Protheus.doc} buildProductFilter
+Monta o predicado de produto por meio de uma subquery em SB1 (codes, material_types e stock_groups combinados com AND).
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 cField, Character, Nome do campo de produto na tabela alvo
+@return Array, Array com a cláusula SQL e parâmetros { cClause, aParams }
+/*/
+Method buildProductFilter(cField as Character) as Array Class DTAAgentMRPDocuments
+	Local aSub as Array
+
+	aSub := ::buildProductSubquery()
+	If Empty(aSub[1])
+		Return ::emptySqlClause()
+	EndIf
+
+Return {cField + " IN " + aSub[1], aSub[2]}
+
+/*/{Protheus.doc} buildProductSubquery
+Constrói uma subquery em SB1 com filtros de produto (codes, material_types e stock_groups) combinados com AND.
+
+@type method
+@author renan.roeder
+@since 28/04/2026
+@return Array, Array com a cláusula SQL e parâmetros { cSub, aParams }
+/*/
+Method buildProductSubquery() as Array Class DTAAgentMRPDocuments
+	Local aCodes    := {}  as Array
+	Local aGroups   := {}  as Array
+	Local aMaterial := {}  as Array
+	Local aParams   := {}  as Array
+	Local cConds    := ""  as Character
+	Local cSub      := ""  as Character
+	Local jProd     := Nil as Json
+
+	If !::jFilters:HasProperty("product_filters")
+		Return ::emptySqlClause()
+	EndIf
+
+	jProd := ::jFilters["product_filters"]
+
+	If jProd:HasProperty("codes")
+		aCodes := jProd["codes"]
+	EndIf
+	If jProd:HasProperty("material_types")
+		aMaterial := jProd["material_types"]
+	EndIf
+	If jProd:HasProperty("stock_groups")
+		aGroups := jProd["stock_groups"]
+	EndIf
+
+	If Len(aCodes) == 0 .And. Len(aMaterial) == 0 .And. Len(aGroups) == 0
+		Return ::emptySqlClause()
+	EndIf
+
+	aAdd(aParams, xFilial("SB1"))
+
+	If Len(aCodes) > 0
+		cConds += " B1_COD IN " + ::buildPlaceholders(Len(aCodes))
+		::appendArray(aParams, aCodes)
+	EndIf
+	If Len(aMaterial) > 0
+		If !Empty(cConds)
+			cConds += " AND "
+		EndIf
+		cConds += " B1_TIPO IN " + ::buildPlaceholders(Len(aMaterial))
+		::appendArray(aParams, aMaterial)
+	EndIf
+	If Len(aGroups) > 0
+		If !Empty(cConds)
+			cConds += " AND "
+		EndIf
+		cConds += " B1_GRUPO IN " + ::buildPlaceholders(Len(aGroups))
+		::appendArray(aParams, aGroups)
+	EndIf
+
+	cSub := "(SELECT B1_COD FROM " + RetSqlName("SB1")
+	cSub +=  " WHERE B1_FILIAL = ?"
+	cSub +=    " AND D_E_L_E_T_ = ' '"
+	cSub +=    " AND (" + cConds + "))"
+
+Return {cSub, aParams}
+
+/*/{Protheus.doc} buildPlaceholders
+Gera a string "(?, ?, ?, ...)" com nQty placeholders para uso em IN(...).
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@param 01 nQty, Integer, Quantidade de placeholders
+@return cRet, Character, Placeholders conforme a quantidade solicitada. Ex.: "(?,?,?)"
+/*/
+Method buildPlaceholders(nQty as Integer) as Character Class DTAAgentMRPDocuments
+	Local cRet as Character
+
+	cRet := Replicate("?,", nQty)
+	cRet := PadR(cRet, Len(cRet)-1)
+	cRet := "(" + cRet + ")"
+Return cRet
+
+/*/{Protheus.doc} buildEventTypeWhere
+Monta o predicado do filtro de tipo de evento (action_types -> HZQ_TPEVEN).
+
+@type method
+@author renan.roeder
+@since 30/04/2026
+@return Array, Condição SQL para filtro do tipo de evento { cClause, aParams }
+/*/
+Method buildEventTypeWhere() as Array Class DTAAgentMRPDocuments
+
+	If !::jFilters:HasProperty("action_types") .Or. Len(::jFilters["action_types"]) == 0
+		Return ::emptySqlClause()
+	EndIf
+
+Return {" AND HZQ_TPEVEN IN " + ::buildPlaceholders(Len(::jFilters["action_types"])), ::jFilters["action_types"]}
+
+/*/{Protheus.doc} buildConcatFields
+Monta a expressão SQL de concatenação de campos, compatível com SQL Server (+) e Oracle/PostgreSQL (||).
+
+@type method
+@author renan.roeder
+@since 05/05/2026
+@param 01 aFields, Array, Array com os nomes dos campos a concatenar
+@return cExpr, Character, Expressão SQL (ex.: "C2_NUM + C2_ITEM + C2_SEQUEN")
+/*/
+Method buildConcatFields(aFields as Array) as Character Class DTAAgentMRPDocuments
+	Local cExpr := ""   as Character
+	Local cOper := "||" as Character
+	
+	If "MSSQL" $ TCGetDB()
+		cOper := "+"
+	EndIf
+
+	cExpr := ArrTokStr(aFields, cOper)
+Return cExpr
+
+/*/{Protheus.doc} emptySqlClause
+Retorna uma cláusula SQL vazia no formato canônico { cWhere, aBinds }.
+Centraliza o literal { "", {} } usado pelos construtores de filtros.
+
+@type method
+@author renan.roeder
+@since 06/05/2026
+@return Array, Parâmetros que representam a condição SQL vazia { "", {} }
+/*/
+Method emptySqlClause() as Array Class DTAAgentMRPDocuments
+Return {"", {}}
+
+/*/{Protheus.doc} resolveCheckValue
+Traduz o modo de seleção em valor de HZQ_CHECK a ser gravado.
+REMOVE -> DESMARCA_CHECK; ADD -> MARCA_CHECK.
+
+@type method
+@author renan.roeder
+@since 06/05/2026
+@param 01 cMode, Character, Modo de seleção (ADD/REMOVE)
+@return cValue, Character, Valor a ser gravado em HZQ_CHECK
+/*/
+Method resolveCheckValue(cMode as Character) as Character Class DTAAgentMRPDocuments
+	Local cValue := MARCA_CHECK as Character
+
+	If cMode == "REMOVE"
+		cValue := DESMARCA_CHECK
+	EndIf
+Return cValue
+
+/*/{Protheus.doc} buildDocumentSubquery
+Monta a cláusula SQL "AND HZQ_DOCUM IN (SELECT ... FROM <tabela de origem> ...)" a
+partir da configuração dos campos dos documentos e do WHERE de documentos pré-calculado.
+Retorna uma cláusula vazia quando não há filtros de documento aplicáveis.
+
+@type method
+@author renan.roeder
+@since 06/05/2026
+@param 01 jCfg    , Json , Configuração dos campos dos documentos
+@param 02 aWhereDc, Array, Parâmetros { cWhere, aBinds } produzidos por buildDocumentWhere
+@return Array, Filtro SQL com as condições dos documentos { cClause, aParams }
+/*/
+Method buildDocumentSubquery(jCfg as Json, aWhereDc as Array) as Array Class DTAAgentMRPDocuments
+	Local aParams := {} as Array
+	Local cSQL    := "" as Character
+
+	If Empty(aWhereDc[1])
+		Return ::emptySqlClause()
+	EndIf
+
+	cSQL := " AND HZQ_DOCUM IN ("
+	cSQL +=     " SELECT " + ::buildConcatFields(jCfg["docFields"]) + " FROM " + RetSqlName(jCfg["alias"])
+	cSQL +=      " WHERE " + jCfg["filialField"] + " = ?"
+	aAdd(aParams, xFilial(jCfg["alias"]))
+	If !Empty(jCfg["extraWhere"])
+		cSQL +=    " AND " + jCfg["extraWhere"]
+	EndIf
+	cSQL +=        " AND " + aWhereDc[1]
+	cSQL += " )"
+	::appendArray(aParams, aWhereDc[2])
+
+Return {cSQL, aParams}
+
+/*/{Protheus.doc} getDocumentsCatalog
+Catálogo único de tipos de documento do MRP, com a configuração de tabelas e campos usada na geração das consultas.
+
+@type method
+@author renan.roeder
+@since 06/05/2026
+@return Nil
+/*/
+Method getDocumentsCatalog() Class DTAAgentMRPDocuments
+	Local jOP := JsonObject():New() as Json
+	Local jSC := JsonObject():New() as Json
+	Local jPC := JsonObject():New() as Json
+	Local jAE := JsonObject():New() as Json
+
+	::jCatalog := JsonObject():New()
+
+	jOP["alias"]          := "SC2"
+	jOP["docFields"]      := {"C2_NUM", "C2_ITEM", "C2_SEQUEN", "C2_ITEMGRD"}
+	jOP["filialField"]    := "C2_FILIAL"
+	jOP["extraWhere"]     := ""
+	jOP["dateField"]      := "C2_DATPRF"
+	jOP["warehouseField"] := "C2_LOCAL"
+	jOP["productField"]   := "C2_PRODUTO"
+	::jCatalog[DOCUMENT_TYPE_OP] := jOP
+
+	jSC["alias"]          := "SC1"
+	jSC["docFields"]      := {"C1_NUM", "C1_ITEM", "C1_ITEMGRD"}
+	jSC["filialField"]    := "C1_FILIAL"
+	jSC["extraWhere"]     := ""
+	jSC["dateField"]      := "C1_DATPRF"
+	jSC["warehouseField"] := "C1_LOCAL"
+	jSC["productField"]   := "C1_PRODUTO"
+	::jCatalog[DOCUMENT_TYPE_SC] := jSC
+
+	jPC["alias"]          := "SC7"
+	jPC["docFields"]      := {"C7_NUM", "C7_ITEM", "C7_SEQUEN", "C7_ITEMGRD"}
+	jPC["filialField"]    := "C7_FILIAL"
+	jPC["extraWhere"]     := "C7_TIPO = '1'"
+	jPC["dateField"]      := "C7_DATPRF"
+	jPC["warehouseField"] := "C7_LOCAL"
+	jPC["productField"]   := "C7_PRODUTO"
+	::jCatalog[DOCUMENT_TYPE_PC] := jPC
+
+	jAE["alias"]          := "SC7"
+	jAE["docFields"]      := {"C7_NUM", "C7_ITEM", "C7_SEQUEN", "C7_ITEMGRD"}
+	jAE["filialField"]    := "C7_FILIAL"
+	jAE["extraWhere"]     := "C7_TIPO = '2'"
+	jAE["dateField"]      := "C7_DATPRF"
+	jAE["warehouseField"] := "C7_LOCAL"
+	jAE["productField"]   := "C7_PRODUTO"
+	::jCatalog[DOCUMENT_TYPE_AE] := jAE
+
+	jOP := Nil
+	jSC := Nil
+	jPC := Nil
+	jAE := Nil
+Return
+
+/*/{Protheus.doc} toggleCheck
+Alterna o valor de HZQ_CHECK (1->0, 0->1) para o registro informado pelo RECNO.
+
+@type method
+@author renan.roeder
+@since 04/05/2026
+@param 01 nRecno, Integer, R_E_C_N_O_ do registro na HZQ
+@return cNewValue, Character, Novo valor de HZQ_CHECK após a alternância
+/*/
+Method toggleCheck(nRecno as Integer) as Character Class DTAAgentMRPDocuments
+	Local cNewValue := "" as Character
+
+	HZQ->(dbGoTo(nRecno))
+	If HZQ->(Recno()) == nRecno .And. HZQ->(!Deleted())
+		If HZQ->HZQ_CHECK == MARCA_CHECK
+			cNewValue := DESMARCA_CHECK
+		Else
+			cNewValue := MARCA_CHECK
+		EndIf
+
+		RecLock("HZQ", .F.)
+			HZQ->HZQ_CHECK  := cNewValue
+			HZQ->HZQ_MOTCHK := STR0003 //"Alterado manualmente via tela (Resultado MRP)."
+		HZQ->(MsUnLock())
+	EndIf
+
+Return cNewValue
+
+/*/{Protheus.doc} updateDocumentStatus
+Atualiza o status de processamento e a mensagem de erro do documento na tabela HZQ.
+
+@type method
+@author lucas.franca
+@since 16/06/2026
+@param 01 nRecno  , Numeric  , R_E_C_N_O_ do registro na HZQ
+@param 02 lSuccess, Logical  , Indica sucesso no processamento (.T.) ou erro (.F.)
+@param 03 cMsgErro, Character, Mensagem de erro a ser gravada em HZQ_MSGERR
+@return Nil
+/*/
+Method updateDocumentStatus(nRecno as Numeric, lSuccess as Logical, cMsgErro as Character) Class DTAAgentMRPDocuments
+	Local cStatus := STATUS_HZQ_ERRO as Character
+
+	Default cMsgErro := ""
+
+	If lSuccess
+		cStatus := STATUS_HZQ_PROCESSADO
+	EndIf
+
+	HZQ->(dbGoTo(nRecno))
+	RecLock("HZQ", .F.)
+		HZQ->HZQ_STATUS := cStatus
+		HZQ->HZQ_MSGERR := PadR(cMsgErro, Len(HZQ->HZQ_MSGERR))
+	HZQ->(MsUnLock())
+Return
+
+/*/{Protheus.doc} getError
+Retorna a mensagem de erro da última operação.
+
+@type method
+@author lucas.franca
+@since 14/05/2026
+@return cError, Character, Mensagem de erro
+/*/
+Method getError() as Character Class DTAAgentMRPDocuments
+Return ::cError
+
+/*/{Protheus.doc} setFilters
+Define os filtros a serem aplicados nas operações.
+
+@type method
+@author lucas.franca
+@since 14/05/2026
+@param 01 jFilters, Json, JSON contendo os filtros de seleção
+@return Nil
+/*/
+Method setFilters(jFilters as Json) Class DTAAgentMRPDocuments
+	::jFilters := jFilters
+Return
+
+/*/{Protheus.doc} applyPreferences
+Aplica as preferências de seleção aos documentos.
+
+@type method
+@author lucas.franca
+@since 14/05/2026
+@param 01 cTicket      , Character, Ticket do contexto
+@param 02 aPreferences , Array    , Array de preferências (JSONs de filtros)
+@param 03 cErrorMessage, Character, Retorna por referência a mensagem de erro, caso ocorra
+@return lSuccess, Logical, Indica se as preferências foram aplicadas com sucesso
+/*/
+Method applyPreferences(cTicket as Character, aPreferences as Array, cErrorMessage as Character) as Logical Class DTAAgentMRPDocuments
+	Local lSuccess   as Logical
+	Local nIndex     as Integer
+	Local oAgentDocs as Object
+
+	lSuccess   := .T.
+	oAgentDocs := DTAAgentMRPDocuments():New(Nil, cTicket)
+	For nIndex := 1 To Len(aPreferences)
+		oAgentDocs:setFilters(aPreferences[nIndex])
+		If !oAgentDocs:updateChecks()
+			cErrorMessage := oAgentDocs:getError()
+			lSuccess      := .F.
+			Exit
+		EndIf
+	Next nIndex
+
+	oAgentDocs:Destroy()
+	FreeObj(oAgentDocs)
+Return lSuccess
+
+/*/{Protheus.doc} updateChecksByRecno
+Atualiza o indicador HZQ_CHECK de uma lista de registros identificados por RECNO.
+
+@type method
+@author lucas.franca
+@since 16/06/2026
+@param 01 aRecnos, Array    , Array com os RECNOs dos registros cuja seleção será atualizada
+@param 02 cMode  , Character, Operação a ser aplicada na seleção dos registros (ADD ou REMOVE)
+@param 03 cIdRegra, Character, ID da regra associada à alteração da seleção
+*/
+Method updateChecksByRecno(aRecnos as Array, cMode as Character, cIdRegra as Character) Class DTAAgentMRPDocuments
+	Local cCheck  := MARCA_CHECK as Character
+	Local cMotivo := ""          as Character
+	Local nIndex  := 0           as Integer
+
+	If Empty(cIdRegra)
+		cMotivo := STR0001 //"Atualizado via chat."
+	Else
+		cMotivo := STR0002 + cIdRegra //"Atualizado pelo agente conforme regra (HZR_ID): "
+	EndIf
+
+	If cMode == "REMOVE"
+		cCheck := DESMARCA_CHECK
+	EndIf
+
+	Begin Transaction
+		For nIndex := 1 To Len(aRecnos)
+			HZQ->(dbGoTo(aRecnos[nIndex]))
+			If HZQ->(Recno()) == aRecnos[nIndex]
+				RecLock("HZQ", .F.)
+					HZQ->HZQ_CHECK := cCheck
+					HZQ->HZQ_MOTCHK := cMotivo
+				HZQ->(MsUnLock())
+			EndIf
+		Next nIndex
+	End Transaction
+Return Nil
+
+/*/{Protheus.doc} updateHZQByFilter
+Atualiza os registros da tabela HZQ conforme o filtro definido.
+
+@author marcelo.neumann
+@since 11/06/2026
+@version P12
+@param 01 cTicket    , Character, Número do Ticket do MRP
+@param 02 cStatus    , Character, Novo status a ser definido para os registros
+@param 03 cCheck     , Character, Novo valor do campo HZQ_CHECK a ser definido
+@param 04 cMotivo    , Character, Motivo a ser definido no campo HZQ_MOTCHK
+@param 05 cFilter    , Character, Filtro SQL a ser aplicado na atualização dos registros
+@param 06 aFilterData, Array    , Array de dados a serem aplicados ao filtro SQL
+@return lOk, Logical, Indica se os documentos foram atualizados com sucesso
+/*/
+Method updateHZQByFilter(cTicket as Character, cStatus as Character, cCheck as Character, cMotivo as Character, cFilter as Character, aFilterData as Array) as Logical Class DTAAgentMRPDocuments
+	Local aFilters  := {}  as Array
+	Local cUpdate   := ""  as Character
+	Local lOk       := .T. as Logical
+	Local nIndex    := 0   as Integer
+	Local oStmt     := Nil as Object
+	Default cFilter := "1 = 1"
+
+	aAdd(aFilters, xFilial("HZQ"))
+	aAdd(aFilters, cTicket)
+	If aFilterData != Nil
+		For nIndex := 1 To Len(aFilterData)
+			aAdd(aFilters, aFilterData[nIndex])
+		Next nIndex
+	EndIf
+
+	cUpdate := "UPDATE " + RetSqlName("HZQ")
+	cUpdate +=   " SET HZQ_STATUS = '" + cStatus + "',"
+	cUpdate +=       " HZQ_CHECK = '"  + cCheck  + "',"
+	cUpdate +=       " HZQ_MOTCHK = '" + cMotivo + "'"
+	cUpdate += " WHERE HZQ_FILIAL = ?"
+	cUpdate +=   " AND HZQ_TICKET = ?"
+	cUpdate +=   " AND D_E_L_E_T_ = ' '"
+	cUpdate +=   " AND " + cFilter
+
+	oStmt := FWPreparedStatement():New(cUpdate)
+	oStmt:setParams(aFilters)
+	cUpdate := oStmt:getFixQuery()
+	oStmt:Destroy()
+
+	If TCSqlExec(cUpdate) < 0
+		lOk := .F.
+	EndIf
+
+	aSize(aFilters, 0)
+Return lOk
+
+/*/{Protheus.doc} validDocuments
+Valida os documentos selecionados de acordo com as regras definidas.
+
+@type method
+@author marcelo.neumann
+@since 28/07/2026
+@param 01 cTicket      , Character, Ticket do contexto
+@param 02 cErrorMessage, Character, Retorna por referência a mensagem de erro, caso ocorra
+@param 03 aRules       , Array    , Retorna por referência as regras aplicadas na marcação dos documentos
+@return lSuccess, Logical, Indica se os documentos foram validados com sucesso
+/*/
+Method validDocuments(cTicket as Character, cErrorMessage as Character, aRules as Array) as Logical Class DTAAgentMRPDocuments
+	Local lSuccess   := .T. as Logical
+	Local oAgentDocs := DTAAgentMRPDocuments():New(Nil, cTicket)
+
+	aAdd(aRules, {"selection_mode": "REMOVE", "rule_description": STR0007}) //"Remover da seleção as ordens de produção que já possuem movimentações."
+	//Valida se a OP já foi movimentada (SD3) e desmarca o check nesse caso.
+	If !oAgentDocs:validMovements()
+		lSuccess := .F.
+		cErrorMessage := I18N(STR0008, {"SD3"}) //"Erro ao atualizar HZQ (#1[TABELA]#)."
+	EndIf
+
+	aAdd(aRules, {"selection_mode": "REMOVE", "rule_description": STR0009}) //"Remover da seleção as ordens de produção que já estão em execução."
+	//Valida se a OP já foi apontada (SH6) e desmarca o check nesse caso.
+	If !oAgentDocs:validAppointments()
+		lSuccess := .F.
+		cErrorMessage := I18N(STR0008, {"SH6"}) //"Erro ao atualizar HZQ (#1[TABELA]#)."
+	EndIf
+
+	aAdd(aRules, {"selection_mode": "REMOVE", "rule_description": STR0010}) //"Remover da seleção os documentos que estão dentro do horizonte fixo configurado para o produto."
+	//Valida se o documento está dentro do horizonte fixo (SVK).
+	If !oAgentDocs:validFixedHorizon()
+		lSuccess := .F.
+		cErrorMessage := I18N(STR0008, {"SVK"}) //"Erro ao atualizar HZQ (#1[TABELA]#)."
+	EndIf
+
+Return lSuccess
+
+/*/{Protheus.doc} validMovements
+Valida se a OP já foi movimentada (SD3) e desmarca o check nesse caso.
+
+@type method
+@author marcelo.neumann
+@since 28/07/2026
+@return lSuccess, Logical, Indica se a OP já foi movimentada (SD3)
+/*/
+Method validMovements() as Logical Class DTAAgentMRPDocuments
+	Local cFilter  as Character
+	Local lSuccess as Logical
+
+	cFilter :=     " HZQ_ORIGEM = '" + DOCUMENT_TYPE_OP + "'"
+	cFilter += " AND HZQ_CHECK  = '" + MARCA_CHECK + "'"
+	cFilter += " AND EXISTS (SELECT DISTINCT SD3.D3_OP"
+	cFilter +=               " FROM " + RetSqlName("SD3") + " SD3"
+	cFilter +=              " WHERE SD3.D3_FILIAL  = '" + xFilial("SD3") + "'"
+	cFilter +=                " AND SD3.D3_OP      = HZQ_DOCUM"
+	cFilter +=                " AND SD3.D3_ESTORNO = ' '"
+	cFilter +=                " AND SD3.D_E_L_E_T_ = ' ')"
+
+	lSuccess := Self:updateHZQByFilter(Self:cTicket       , ;
+                              STATUS_HZQ_PENDENTE, ;
+                              DESMARCA_CHECK     , ;
+                              STR0011            , ; //"Desmarcado porque a OP já foi movimentada (SD3)."
+                              cFilter)
+Return lSuccess
+
+/*/{Protheus.doc} validAppointments
+Valida se a OP já possui apontamentos (SH6) e desmarca o check nesse caso.
+
+@type method
+@author marcelo.neumann
+@since 28/07/2026
+@return lSuccess, Logical, Indica se a OP já possui apontamentos (SH6)
+/*/
+Method validAppointments() as Logical Class DTAAgentMRPDocuments
+	Local cFilter  as Character
+	Local lSuccess as Logical
+
+	cFilter :=     " HZQ_ORIGEM = '" + DOCUMENT_TYPE_OP + "'"
+	cFilter += " AND HZQ_CHECK  = '" + MARCA_CHECK + "'"
+	cFilter += " AND EXISTS (SELECT DISTINCT SH6.H6_OP"
+	cFilter +=               " FROM " + RetSqlName("SH6") + " SH6"
+	cFilter +=              " WHERE SH6.H6_FILIAL  = '" + xFilial("SH6") + "'"
+	cFilter +=                " AND SH6.H6_OP      = HZQ_DOCUM"
+	cFilter +=                " AND SH6.D_E_L_E_T_ = ' ')"
+
+	lSuccess := Self:updateHZQByFilter(Self:cTicket       , ;
+                              STATUS_HZQ_PENDENTE, ;
+                              DESMARCA_CHECK     , ;
+                              STR0012            , ; //"Desmarcado porque a OP já foi apontada (SH6)."
+                              cFilter)
+Return lSuccess
+
+/*/{Protheus.doc} validFixedHorizon
+Valida se a OP está dentro do horizonte fixo (SVK) e desmarca o check nesse caso.
+
+@type method
+@author marcelo.neumann
+@since 28/07/2026
+@return lSuccess, Logical, Indica se a OP está dentro do Horizonte Fixo (SVK)
+/*/
+Method validFixedHorizon() as Logical Class DTAAgentMRPDocuments
+	Local cBanco     := AllTrim(TcGetDB())
+	Local cFilter    := ""  as Character
+	Local cDataIni   := DtoS(dDatabase) as Character
+	Local lSuccess   := .T. as Logical
+	Local lUsaPrdInd := Self:usesProductIndicator(Self:cTicket)
+
+	cFilter :=     " HZQ_CHECK = '" + MARCA_CHECK + "'"
+	cFilter += " AND EXISTS (SELECT 1"
+	cFilter +=               " FROM " + RetSqlName("SVK") + " SVK"
+	If lUsaPrdInd
+		cFilter +=           " LEFT OUTER JOIN " + RetSqlName("SBZ") + " SBZ"
+		cFilter +=             " ON SBZ.BZ_FILIAL  = '" + xFilial("SBZ") + "'"
+		cFilter +=            " AND SBZ.BZ_COD     = SVK.VK_COD"
+		cFilter +=            " AND SBZ.D_E_L_E_T_ = ' '"
+		cFilter +=          " WHERE ("
+		cFilter +=                  " (SBZ.BZ_COD IS NOT NULL AND COALESCE(SBZ.BZ_TPHOFIX, ' ') <> ' ' AND COALESCE(SBZ.BZ_HORFIX , 0) > 0) OR"
+		cFilter +=                  " (SBZ.BZ_COD IS NULL AND SVK.VK_COD IS NOT NULL AND COALESCE(SVK.VK_TPHOFIX, ' ') <> ' '  AND COALESCE(SVK.VK_HORFIX, 0) > 0) "
+		cFilter +=                " )"
+	Else
+		cFilter +=          " WHERE COALESCE(SVK.VK_TPHOFIX, ' ') <> ' ' "
+		cFilter +=            " AND COALESCE(SVK.VK_HORFIX, 0) > 0 "
+	EndIf
+	cFilter +=                " AND SVK.VK_FILIAL  = '" + xFilial("SVK") + "'"
+	cFilter +=                " AND SVK.VK_COD     = HZQ_PROD"
+	cFilter +=                " AND SVK.D_E_L_E_T_ = ' '"
+
+	//Adiciona a condição de data conforme a parametrização do horizonte fixo.
+	If cBanco == "ORACLE"
+		cFilter +=            " AND TO_DATE(HZQ_DTORIG, 'YYYYMMDD') <= "
+		cFilter +=                  "(CASE WHEN [SVK.VK_TPHOFIX] = '1' THEN (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + [SVK.VK_HORFIX])"
+		cFilter +=                       " WHEN [SVK.VK_TPHOFIX] = '2' THEN (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + ([SVK.VK_HORFIX] * 7 ) )"
+		cFilter +=                       " WHEN [SVK.VK_TPHOFIX] = '3' THEN (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + ([SVK.VK_HORFIX] * 30) )"
+		cFilter +=                       " ELSE (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + ([SVK.VK_HORFIX] * 365))"
+		cFilter +=                  " END)"
+		cFilter +=                  ")"
+	ElseIf cBanco == "POSTGRES"
+		cFilter +=            " AND TO_DATE(HZQ_DTORIG, 'YYYYMMDD') <= "
+		cFilter +=                  "(CASE WHEN [SVK.VK_TPHOFIX] = '1' THEN (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + [SVK.VK_HORFIX]*interval'1 days' )"
+		cFilter +=                       " WHEN [SVK.VK_TPHOFIX] = '2' THEN (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + [SVK.VK_HORFIX]*interval'1 weeks' )"
+		cFilter +=                       " WHEN [SVK.VK_TPHOFIX] = '3' THEN (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + [SVK.VK_HORFIX]*interval'1 months' )"
+		cFilter +=                       " ELSE (TO_DATE('" + cDataIni + "', 'YYYYMMDD') + [SVK.VK_HORFIX]*interval'1 years')"
+		cFilter +=                  " END)"
+		cFilter +=                  ")"
+	Else
+		cFilter +=            " AND CONVERT(DATETIME, HZQ_DTORIG) <= "
+		cFilter +=                  "(CASE WHEN [SVK.VK_TPHOFIX] = '1' THEN DATEADD(DAY, SVK.VK_HORFIX, CONVERT(DATETIME, '" + cDataIni + "'))"
+		cFilter +=                       " WHEN [SVK.VK_TPHOFIX] = '2' THEN DATEADD(DAY, SVK.VK_HORFIX * 7, CONVERT(DATETIME, '" + cDataIni + "'))"
+		cFilter +=                       " WHEN [SVK.VK_TPHOFIX] = '3' THEN DATEADD(DAY, SVK.VK_HORFIX * 30, CONVERT(DATETIME, '" + cDataIni + "'))"
+		cFilter +=                       " ELSE DATEADD(DAY, SVK.VK_HORFIX * 365, CONVERT(DATETIME, '" + cDataIni + "'))"
+		cFilter +=                  " END)"
+		cFilter +=                  ")"
+	EndIf
+
+	//Ajusta os comandos [SVK.VK_TPHOFIX] e [SVK.VK_HORFIX] de acordo com o parâmetro de indicador de produto.
+	If lUsaPrdInd
+		cFilter := StrTran(cFilter, "[SVK.VK_HORFIX]" , "COALESCE(SBZ.BZ_HORFIX, SVK.VK_HORFIX)")
+		cFilter := StrTran(cFilter, "[SVK.VK_TPHOFIX]", "COALESCE(SBZ.BZ_TPHOFIX, SVK.VK_TPHOFIX)")
+	Else
+		cFilter := StrTran(cFilter, "[SVK.VK_HORFIX]" , "SVK.VK_HORFIX" )
+		cFilter := StrTran(cFilter, "[SVK.VK_TPHOFIX]", "SVK.VK_TPHOFIX")
+	EndIf
+
+	lSuccess := Self:updateHZQByFilter(Self:cTicket       , ;
+                           STATUS_HZQ_PENDENTE, ;
+                           DESMARCA_CHECK     , ;
+                           STR0013            , ; //"Desmarcado porque o documento está dentro do Horizonte Fixo (SBZ/SVK)."
+                           cFilter)
+
+Return lSuccess
+
+/*/{Protheus.doc} usesProductIndicator
+Recupera o conteúdo do parâmetro MV_ARQPROD utilizado em uma execução do MRP.
+
+@type  Method
+@author Marcelo Neumann
+@since 28/07/2026
+@version P12
+@param 01 cTicket, Character, Ticket de execução do MRP
+@return lUsaPrdInd, Logical, Indica se o Ticket foi executado utilizando MV_ARQPROD=SBZ
+/*/
+Method usesProductIndicator(cTicket as Character) as Logical Class DTAAgentMRPDocuments
+	Local lUsaPrdInd := .F. as Logical
+
+	HW1->(dbSetOrder(1)) //HW1_FILIAL+HW1_TICKET+HW1_PARAM
+	If HW1->(dbSeek(xFilial("HW1")+cTicket+"usesProductIndicator"))
+		lUsaPrdInd := AllTrim(HW1->HW1_VAL) == "1"
+	EndIf
+
+Return lUsaPrdInd

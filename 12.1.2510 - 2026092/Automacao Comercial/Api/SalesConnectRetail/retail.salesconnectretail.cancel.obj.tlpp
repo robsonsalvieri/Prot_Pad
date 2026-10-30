@@ -1,0 +1,419 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "retail.salesconnectretail.cancel.obj.ch"
+
+namespace totvs.protheus.retail.salesconnectretail.obj
+
+using namespace totvs.protheus.retail.salesconnectretail.dto
+
+/*/{Protheus.doc} SalesConnectRetailCancelObj
+Objeto de processamento da API POST /api/retail/v1/SalesConnectRetail/cancel/
+(DVARPV-6460). Recebe 1 venda ja cancelada na SEFAZ e replica o cancelamento na
+retaguarda via ExecAuto LJ140EXC (sincrono, sem TSS - protocolo informado).
+
+Pipeline executado em :Process():
+  1. Authenticate   : valida X-PASS-KEY vs token fixo da API
+  2. ParseRequest   : desserializa o body em SalesConnectRetailCancelRequestDto + obrigatorios
+  3. LocalizeVenda  : consulta a SF3 ANTES da SL1 (venda ja cancelada -> 409/0012, pois o
+                      cancelamento limpa L1_DOC/L1_SERIE da SL1); depois posiciona a SL1 (CA#2)
+  4. ValidateCancel : exige L1_SITUA="OK" (processada pelo GravaBatch) - CA#6/#7
+  5. DispatchCancel : ExecAuto LJ140EXC (nOpc=5, sem TSS)
+
+Campos publicos lidos pela Function thin:
+  nHttpStatus : HTTP status final (200/400/401/404/409/500)
+  cReturn     : JSON do body de resposta
+
+@author  Thalys Augusto Alves Juvenal
+@since   22/06/2026
+@version 1.0
+@type class
+/*/
+Class SalesConnectRetailCancelObj
+    Public Data cAuthToken  as Character
+    Public Data cBody       as Character
+    Public Data nHttpStatus as Numeric
+    Public Data cReturn     as Character
+    Public Data cUuid       as Character
+
+    Protected Data oRequestDto as Object
+
+    Public Method New(cAuthToken as Character, cBody as Character) as Object
+    Public Method Process() as Logical
+
+    Protected Method Authenticate()   as Logical
+    Protected Method ParseRequest()   as Logical
+    Protected Method IsVendaCancelada() as Logical
+    Protected Method LocalizeVenda()  as Logical
+    Protected Method ValidateCancel() as Logical
+    Protected Method DispatchCancel() as Logical
+    Protected Method BuildSuccess(cBranch as Character, cDocumentNumber as Character, cStatus as Character, cMessage as Character) as Logical
+    Protected Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical
+EndClass
+
+/*/{Protheus.doc} New
+Construtor. Recebe o token X-PASS-KEY e o body JSON cru do cancelamento.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@param  cAuthToken, character, valor cru do header X-PASS-KEY
+@param  cBody,      character, payload JSON cru (1 venda)
+@return object, Self
+/*/
+Method New(cAuthToken as Character, cBody as Character) as Object Class SalesConnectRetailCancelObj
+    ::cAuthToken  := cAuthToken
+    ::cBody       := cBody
+    ::nHttpStatus := 200
+    ::cReturn     := ""
+    ::cUuid       := FwUUIDv4()
+    ::oRequestDto := Nil
+Return Self
+
+/*/{Protheus.doc} Process
+Orquestra o pipeline de cancelamento (single-exit). Cada etapa abortada retorna
+.F. e ja preencheu nHttpStatus + cReturn via BuildError.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@return logical, .T. sucesso, .F. erro
+/*/
+Method Process() as Logical Class SalesConnectRetailCancelObj
+    Local lRet as Logical
+
+    LjGrvLog("SalesConnectRetailCancelObj", ;
+        "[" + ::cUuid + "] inicio - ambiente ativo: empresa '" + AllTrim(cEmpAnt) + ;
+        "' filial '" + AllTrim(cFilAnt) + "'")
+
+    lRet := ::Authenticate()
+
+    If lRet
+        lRet := ::ParseRequest()
+    EndIf
+
+    If lRet
+        lRet := ::LocalizeVenda()
+    EndIf
+
+    If lRet
+        lRet := ::ValidateCancel()
+    EndIf
+
+    If lRet
+        lRet := ::DispatchCancel()
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} Authenticate
+Valida o X-PASS-KEY contra o token fixo da API (definido neste fonte).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@return logical, .T. autorizado, .F. caso contrario (nHttpStatus=401)
+/*/
+Method Authenticate() as Logical Class SalesConnectRetailCancelObj
+    Local lRet        := .T. as Logical
+    Local cAuthHeader := ""  as Character
+    Local cExpected   := ""  as Character
+
+    If ValType(::cAuthToken) == "C"
+        cAuthHeader := AllTrim(::cAuthToken)
+    EndIf
+    // Token fixo da API (produto TOTVS) - DVARPV-6451 / DVARPV-6460 / DVARPV-6461
+    cExpected := "2lz3fw3vOvPd0TsQ1Kj8hGast77d1YKZRj6LYRwIZG3M"
+
+    If Empty(cAuthHeader)
+        ::BuildError("0002", STR0001, 401)   // "Token X-PASS-KEY invalido ou ausente"
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 401: X-PASS-KEY ausente")
+        lRet := .F.
+    ElseIf !(cAuthHeader == cExpected)
+        ::BuildError("0002", STR0001, 401)   // "Token X-PASS-KEY invalido ou ausente"
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 401: X-PASS-KEY incorreto")
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ParseRequest
+Desserializa o body em SalesConnectRetailCancelRequestDto e valida campos
+obrigatorios. JSON invalido ou campo ausente resultam em 400/0001.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@return logical, .T. sucesso, .F. erro (nHttpStatus=400)
+/*/
+Method ParseRequest() as Logical Class SalesConnectRetailCancelObj
+    Local lRet  := .T. as Logical
+    Local cMiss := ""  as Character
+    Local cMsg  := ""  as Character
+    Local oErr  as Object
+
+    Try
+        ::oRequestDto := SalesConnectRetailCancelRequestDto():New()
+        ::oRequestDto:fromJson(::cBody)
+    Catch oErr
+        // Propaga a mensagem especifica do fromJson na resposta (ex.: "Body JSON invalido:
+        // body vazio" ou "...: <erro JSON>"). Fallback no generico STR0002 se vazia.
+        cMsg := oErr:Description
+        If Empty(cMsg)
+            cMsg := STR0002
+        EndIf
+        ::BuildError("0001", cMsg, 400)
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 400: body invalido | " + oErr:Description)
+        lRet := .F.
+    EndTry
+
+    If lRet
+        cMiss := ::oRequestDto:missingField()
+        If !Empty(cMiss)
+            ::BuildError("0001", STR0003 + cMiss, 400)   // "Campo obrigatorio ausente: "
+            LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 400: campo ausente " + cMiss)
+            lRet := .F.
+        EndIf
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} LocalizeVenda
+Consulta a SF3 (IsVendaCancelada) ANTES de buscar a SL1: venda ja cancelada -> 409/0012
+(o cancelamento limpa L1_DOC/L1_SERIE da SL1). Caso contrario, posiciona a SL1 por
+L1_FILIAL + L1_DOC + L1_SERIE (FWPreparedStatement - anti SQL injection); nao encontrada
+-> 404/0010 (CA#2).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@return logical, .T. venda posicionada, .F. nao encontrada/erro
+/*/
+Method LocalizeVenda() as Logical Class SalesConnectRetailCancelObj
+    Local lRet     := .T. as Logical
+    Local oReq     := ::oRequestDto
+    Local cFilSL1  := xFilial("SL1")
+    Local cQuery   := ""
+    Local oStmt    as Object
+    Local cAlias   := ""  as Character
+    Local nRecSL1  := 0
+    Local oErr     as Object
+
+    Try
+        // Venda ja cancelada? Consulta a SF3 (livro fiscal) ANTES da SL1: o cancelamento limpa
+        // L1_DOC/L1_SERIE da SL1, entao a busca na SL1 retornaria "nao encontrada" (0010) para
+        // uma venda cancelada. A SF3 retem o documento com a marca (F3_DTCANC/F3_CODRSEF=101).
+        If ::IsVendaCancelada()
+            ::BuildError("0012", STR0006, 409)   // "Venda ja cancelada"
+            LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 409: ja cancelada (SF3) " + ;
+                AllTrim(oReq:cDocumentNumber) + "/" + AllTrim(oReq:cDocumentSeries))
+            lRet := .F.
+        Else
+            cQuery := "SELECT R_E_C_N_O_ AS RECSL1 FROM " + RetSqlName("SL1") + " SL1 "
+            cQuery += "WHERE SL1.L1_FILIAL = ? AND SL1.L1_DOC = ? AND SL1.L1_SERIE = ? AND SL1.D_E_L_E_T_ = ' ' "
+
+            oStmt := FWPreparedStatement():New()
+            oStmt:SetQuery(cQuery)
+            oStmt:SetString(1, cFilSL1)
+            oStmt:SetString(2, PadR(oReq:cDocumentNumber, TamSx3("L1_DOC")[1]))
+            oStmt:SetString(3, PadR(oReq:cDocumentSeries, TamSx3("L1_SERIE")[1]))
+
+            cAlias := GetNextAlias()
+            DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmt:GetFixQuery()), cAlias, .F., .T.)
+
+            If (cAlias)->(Eof())
+                // Documento inexistente (a venda CANCELADA ja foi barrada acima pela SF3).
+                ::BuildError("0010", STR0004, 404)   // "Venda nao encontrada na retaguarda"
+                LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 404: venda nao encontrada " + ;
+                    AllTrim(oReq:cDocumentNumber) + "/" + AllTrim(oReq:cDocumentSeries))
+                lRet := .F.
+            Else
+                nRecSL1 := (cAlias)->RECSL1
+            EndIf
+            (cAlias)->(DbCloseArea())
+            FWFreeObj(oStmt)
+
+            If lRet
+                DbSelectArea("SL1")
+                SL1->(DbGoto(nRecSL1))
+            EndIf
+        EndIf
+    Catch oErr
+        If !Empty(cAlias) .And. Select(cAlias) > 0
+            (cAlias)->(DbCloseArea())
+        EndIf
+        ::BuildError("0099", STR0007 + ::cUuid, 500)   // "Falha no cancelamento. UUID: "
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] erro localizacao: " + oErr:Description)
+        lRet := .F.
+    EndTry
+Return lRet
+
+/*/{Protheus.doc} IsVendaCancelada
+Indica se a venda informada (documentNumber/documentSeries) ja foi cancelada, consultando o
+livro fiscal SF3 (F3_NFISCAL+F3_SERIE com F3_DTCANC preenchido ou F3_CODRSEF='101'). O
+cancelamento limpa L1_DOC/L1_SERIE da SL1, entao a SF3 (que retem o documento) e a fonte da
+verdade. Usado pelo LocalizeVenda ANTES da busca na SL1 (se cancelada -> 409/0012).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  29/06/2026
+@return logical, .T. se a SF3 tem o documento cancelado, .F. caso contrario
+/*/
+Method IsVendaCancelada() as Logical Class SalesConnectRetailCancelObj
+    Local lRet   := .F. as Logical
+    Local oReq   := ::oRequestDto
+    Local cQuery := ""
+    Local oStmt  as Object
+    Local cAlias := ""  as Character
+
+    cQuery := "SELECT R_E_C_N_O_ AS RECSF3 FROM " + RetSqlName("SF3") + " SF3 "
+    cQuery += "WHERE SF3.F3_FILIAL = ? AND SF3.F3_NFISCAL = ? AND SF3.F3_SERIE = ? "
+    cQuery += "AND ( SF3.F3_DTCANC > ' ' OR SF3.F3_CODRSEF = '101' ) AND SF3.D_E_L_E_T_ = ' ' "
+
+    oStmt := FWPreparedStatement():New()
+    oStmt:SetQuery(cQuery)
+    oStmt:SetString(1, xFilial("SF3"))
+    oStmt:SetString(2, PadR(oReq:cDocumentNumber, TamSx3("F3_NFISCAL")[1]))
+    oStmt:SetString(3, PadR(oReq:cDocumentSeries, TamSx3("F3_SERIE")[1]))
+
+    cAlias := GetNextAlias()
+    DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmt:GetFixQuery()), cAlias, .F., .T.)
+    lRet := !(cAlias)->(Eof())
+    (cAlias)->(DbCloseArea())
+    FWFreeObj(oStmt)
+Return lRet
+
+/*/{Protheus.doc} ValidateCancel
+Valida se a venda posicionada pode ser cancelada. Exige L1_SITUA="OK" (processada
+pelo GravaBatch - CA#6/#7). Demais estados (RX em fila / ER erro) -> 409/0011 nao
+integrada. Venda ja cancelada nao chega aqui: o LocalizeVenda ja a barrou com 409/0012
+(consulta a SF3 antes da SL1).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@return logical, .T. pode cancelar, .F. caso contrario
+/*/
+Method ValidateCancel() as Logical Class SalesConnectRetailCancelObj
+    Local lRet   as Logical
+    Local cSitua := AllTrim(SL1->L1_SITUA) as Character
+
+    If cSitua == "OK"
+        lRet := .T.
+        // ok - segue para o cancelamento
+    Else
+        // RX (em fila) / ER (erro) -> nao integrada ao ERP pelo GravaBatch. Venda ja cancelada
+        // nao chega aqui: o LocalizeVenda ja a barrou com 0012 (consulta a SF3 antes da SL1).
+        ::BuildError("0011", STR0005, 409)   // "...nao foi integrada ao ERP pelo Job GravaBatch."
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 409: nao integrada (L1_SITUA=" + cSitua + ")")
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} DispatchCancel
+Replica o miolo do EXECANRMI (RmiRetailCancellation): posiciona a data do
+cancelamento, forca o modo nao-interativo (Lj140StInD), abre transacao e dispara
+o ExecAuto LJ140EXC (nOpc=5) passando o protocolo SEFAZ (cProtoNfce - pula o TSS),
+lForceExc=.T. (o LJ140EXC exclui o orcamento) e lVendaInt=.T. (modo integracao).
+O proprio LJ140EXC grava o financeiro (SE1), a SF3 (F3_CODRSEF='101') e exclui o
+orcamento - a API NAO altera essas tabelas por fora. Em erro: rollback
+(DisarmTransaction) + 500/0099 com o motivo no response (integracao sincrona -
+sem persistir em L1_ERGRVBT).
+A SL1 ja vem posicionada por LocalizeVenda (usa L1_NUM/L1_FILIAL/L1_DOC/L1_SERIE).
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@return logical, .T. cancelada, .F. falha (nHttpStatus=500/0099)
+/*/
+Method DispatchCancel() as Logical Class SalesConnectRetailCancelObj
+    Local lRet      := .T. as Logical
+    Local oReq      := ::oRequestDto
+    Local dDataBkp  := dDataBase as Date
+    Local dCancel   as Date
+    Local cFil      := SL1->L1_FILIAL as Character
+    Local cDoc      := SL1->L1_DOC    as Character
+    Local cSerie    := SL1->L1_SERIE  as Character
+    Local cNum      := SL1->L1_NUM    as Character
+    Local aErroAuto := {} as Array
+    Local cMsgRet   := "" as Character
+    Local nI        := 0  as Numeric
+
+    Private lMsHelpAuto    := .T.
+    Private lMsErroAuto    := .F.
+    Private lAutoErrNoFile := .T.
+
+    // Data do cancelamento (default dDataBase). ISO "YYYY-MM-DD" -> Date.
+    If !Empty(oReq:cCancelDate)
+        dCancel := SToD(StrTran(SubStr(oReq:cCancelDate, 1, 10), "-", ""))
+    Else
+        dCancel := dDataBase
+    EndIf
+    If Empty(dCancel)
+        dCancel := dDataBase
+    EndIf
+    dDataBase := dCancel
+
+    // Forca comportamento similar ao EAI no LOJA140 (sem interface).
+    If ExistFunc("Lj140StInD")
+        Lj140StInD(.T.)
+    EndIf
+
+    Begin Transaction
+        // p7=L1_NUM (numero da venda), p8=cNumCancDoc, p10=cProtoNfce (pula TSS),
+        // p11=lForceExc=.T. (LJ140EXC exclui o orcamento), p12=lVendaInt=.T. (modo
+        // integracao). A SF3 (F3_CODRSEF) e o orcamento sao gravados pelo proprio
+        // LJ140EXC - a API nao altera essas tabelas por fora.
+        MsExecAuto({|a,b,c,d,e,f,g,h,i,j,k,l| LJ140EXC(a,b,c,d,e,f,g,h,i,j,k,l)}, "SL1", ;
+            /*nReg*/, 5, /*aReserv*/, .T., cFil, cNum, oReq:cCancelDocNumber, ;
+            /*lFinCanc*/, oReq:cCancelProtocol, /*lForceExc*/ .T., /*lVendaInt*/ .T.)
+
+        If lMsErroAuto
+            aErroAuto := GetAutoGrLog()
+            For nI := 1 To Len(aErroAuto)
+                cMsgRet += aErroAuto[nI] + Chr(10)
+            Next nI
+            lRet := .F.
+            DisarmTransaction()
+            MsUnLockAll()
+        EndIf
+    End Transaction
+
+    dDataBase := dDataBkp
+
+    If lRet
+        ::BuildSuccess(AllTrim(cFil), AllTrim(cDoc), "Cancelled", "Venda cancelada com sucesso")
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 200 cancelada " + AllTrim(cDoc) + "/" + AllTrim(cSerie))
+    Else
+        // Integracao sincrona: o motivo do erro vai no response (nao em L1_ERGRVBT).
+        ::BuildError("0099", STR0007 + ::cUuid + " - " + cMsgRet, 500)
+        LjGrvLog("SalesConnectRetailCancelObj", "[" + ::cUuid + "] 500: falha cancelamento | " + cMsgRet)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} BuildSuccess
+Preenche nHttpStatus=200 e cReturn com o JSON de SalesConnectRetailCancelResponseDto.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@param  cBranch,         character, filial da venda
+@param  cDocumentNumber, character, numero do documento
+@param  cStatus,         character, situacao do cancelamento
+@param  cMessage,        character, mensagem complementar
+@return logical, sempre .T.
+/*/
+Method BuildSuccess(cBranch as Character, cDocumentNumber as Character, cStatus as Character, cMessage as Character) as Logical Class SalesConnectRetailCancelObj
+    Local oDto as Object
+
+    ::nHttpStatus := 200
+    oDto := SalesConnectRetailCancelResponseDto():New(cBranch, cDocumentNumber, cStatus, cMessage)
+    ::cReturn := oDto:toJson()
+    FWFreeObj(oDto)
+Return .T.
+
+/*/{Protheus.doc} BuildError
+Preenche nHttpStatus e cReturn com um SalesConnectRetailErrorDto serializado.
+@type   method
+@author Thalys Augusto Alves Juvenal
+@since  22/06/2026
+@param  cCode,    character, codigo de erro
+@param  cMessage, character, mensagem
+@param  nStatus,  numeric,   HTTP status final
+@return logical, sempre .F.
+/*/
+Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical Class SalesConnectRetailCancelObj
+    Local oDto as Object
+
+    ::nHttpStatus := nStatus
+    oDto := SalesConnectRetailErrorDto():New(cCode, cMessage)
+    ::cReturn := oDto:toJson()
+    FWFreeObj(oDto)
+Return .F.

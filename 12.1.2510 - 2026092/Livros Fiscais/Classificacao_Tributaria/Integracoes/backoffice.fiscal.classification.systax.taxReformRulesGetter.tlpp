@@ -1,0 +1,943 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "classificadorfiscal.ch"
+
+#define HTTP_CODE_OK 200 // (OK): Requisição bem-sucedida.
+
+Namespace totvs.protheus.backoffice.fiscal.Classifier
+
+/*/{Protheus.doc} FisTaxReformRulesGetter
+Classe responsável por obter as regras de reforma tributária da Systax, realizando a requisição à API,
+processando os dados recebidos e persistindo as regras novas ou atualizadas no banco de dados.
+@type class
+@author Juliano Fernandes
+@since 12/03/2026
+/*/
+Class FisTaxReformRulesGetter
+
+    Private Data cBaseUrl           as character
+    Private Data cPath              as character
+    Private Data cPathParams        as character
+    Private Data cPathParamsModel   as character
+    Private Data cDefaultPagination as character
+    Private Data aHeader            as array
+    Private Data cToken             as character
+    Private Data cUsername          as character
+    Private Data lAutomation        as logical
+    Private Data lDictUpdated       as logical
+    Private Data oStatementPrevRule as object
+    Private Data cMockServer        as character
+    Private Data cMockPath          as character
+    Private Data oScenarioMap       as object
+
+    Public Method new() constructor
+    Public Method destroy()
+    Public Method get() as json
+    Public Method setDictUpdated(lDictUpdated as logical)
+    Public Method setBaseUrlForTest(cUrl as character)
+
+    Private Method loadConfig()
+    Private Method setPathParams()
+    Private Method updatePathParams(cPointer as character, cParamNextPage as character)
+    Private Method getPointer() as character
+    Private Method setHeader()
+    Private Method getToken(cUsername as character) as character
+    Private Method executeRequest() as object
+    Private Method validateResponse(oRest as object) as logical
+    Private Method processData(jResult as json, cResult as character, cSystaxPointer as character, cRelease as character) as logical
+    Private Method handleNextPage(jResult as json) as logical
+    Private Method savePointer(cPointer as character)
+    Private Method searchPreviousRule(cScenarioId as character, cProduct as character, cOrigin as character, cDB as character) as character
+    Private Method convertJsonFieldToQuery(cDB as character) as character
+    Private Method hasRuleUpdate(jReturn as json) as logical
+    Protected Method mesmaRegraTributaria(cJsonRegraAnterior,cJsonRegraAtual) as logical
+    Protected Method removeEstatistica(jRegra) as logical
+    Private Method resolveProductCode(jProduct as json, nLen as numeric) as character
+    Private Method resolveOriginCode(jProduct as json, nLen as numeric) as character
+    Private Method saveRule(cScenarioId as character, cNewScenarioId as character, cProduct as character, cOrigin as character, cJsonRule as character, cPointer as character, lUpdate as logical, cRelease as character)
+
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe, responsável por inicializar os dados necessários para a execução do processo de
+obtenção das regras de reforma tributária da Systax.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cMockServer, character, URL do servidor mock utilizado para testes automatizados, caso aplicável
+@param cMockPath, character, Caminho do endpoint mock utilizado para testes automatizados, caso aplicável
+/*/
+Method new(cMockServer as character, cMockPath as character) Class FisTaxReformRulesGetter
+
+    Default cMockServer := ""
+    Default cMockPath   := ""
+
+    self:cMockServer := cMockServer
+    self:cMockPath   := cMockPath
+
+    self:setDictUpdated(FISExtCmp("12.1.2510", .T., "CJI", "CJI_TIPO") .And. FwSIXUtil():ExistIndex("CJI", "3") .And. FwAliasInDic("CI5") .And.;
+        FISExtCmp("12.1.2510", .T., "CJG", "CJG_IDCENR") .And. FISExtCmp("12.1.2510", .T., "CJB", "CJB_IDCENR"))
+    self:oScenarioMap := FISScenarioMappingSystax():New()
+    self:loadConfig()
+
+Return self
+
+/*/{Protheus.doc} setDictUpdated
+Define o estado do dicionário de dados para suporte a testes automatizados.
+Permite simular o cenário de dicionário desatualizado sem depender do ambiente de produção.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param lDictUpdated, logical, .F. para simular dicionário desatualizado; .T. para restaurar o comportamento padrão
+/*/
+Method setDictUpdated(lDictUpdated as logical) Class FisTaxReformRulesGetter
+    self:lDictUpdated := lDictUpdated
+Return
+
+/*/{Protheus.doc} setBaseUrlForTest
+Define a URL base da integração Systax para suporte a testes automatizados.
+Permite exercitar o fluxo de produção (cMockServer vazio) apontando para servidor mock.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cUrl, character, URL do servidor a ser usada como URL de produção
+/*/
+Method setBaseUrlForTest(cUrl as character) Class FisTaxReformRulesGetter
+    self:cBaseUrl := cUrl
+Return
+
+/*/{Protheus.doc} destroy
+Método responsável por liberar os recursos utilizados pela classe, garantindo a limpeza adequada da memória.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+/*/
+Method destroy() Class FisTaxReformRulesGetter
+
+    If ValType(self:aHeader) == "A"
+        FWFreeArray(self:aHeader)
+        self:aHeader := Nil
+    EndIf
+
+    If ValType(self:oStatementPrevRule) == "O"
+        self:oStatementPrevRule:Destroy()
+        self:oStatementPrevRule := Nil
+    EndIf
+
+    If ValType(self:oScenarioMap) == "O"
+        self:oScenarioMap:Destroy()
+        self:oScenarioMap := Nil
+    EndIf
+
+Return
+
+/*/{Protheus.doc} loadConfig
+Carrega os parâmetros da integração Systax no padrão atual do produto, incluindo a URL base,
+os caminhos de endpoint e o token de autenticação.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+/*/
+Method loadConfig() Class FisTaxReformRulesGetter
+
+    Local aParam := {"URLREGRA2", "USERNAMEDEFAULT"} as array
+    Local cParameter := GetConfigClassif(aParam) as character
+    Local jParameter := JsonObject():New() as json
+
+    If jParameter:FromJson(cParameter) == Nil
+        self:cPath              := "/api/regrasreforma/reforma"
+        self:cPathParamsModel   := "/{paginacao}/{ponteiro}/{paramProxPag}"
+        self:cDefaultPagination := "100"
+        self:cBaseUrl           := jParameter["URLREGRA2"]
+        self:cUsername          := jParameter["USERNAMEDEFAULT"]
+        self:cToken             := self:getToken(self:cUsername)
+        self:lAutomation        := !Empty(self:cMockServer) .And. !Empty(self:cMockPath)
+
+        If self:lAutomation
+            self:cDefaultPagination := "1"
+        EndIf
+
+        self:setPathParams()
+        self:setHeader()
+    EndIf
+
+    FreeObj(jParameter)
+    FWFreeArray(aParam)
+
+Return
+
+/*/{Protheus.doc} setPathParams
+Método responsável por configurar os parâmetros de path para a requisição à API da Systax, utilizando
+os valores definidos na classe e realizando as substituições necessárias para controle de paginação.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+/*/
+Method setPathParams() Class FisTaxReformRulesGetter
+
+    /*/
+    |--------------|-------------------------------------------------------------------|---------------|
+    | Parâmetro    | Detalhamento do preenchimento                                     | Obrigatório   |
+    |--------------|-------------------------------------------------------------------|---------------|
+    | paginacao    | Quantidade de registros/regras a serem entregues por página.      | Sim           |
+    |              | Limite máximo 100.                                                |               |
+    |--------------|-------------------------------------------------------------------|---------------|
+    | ponteiro     | Ponteiro do controle de atualização.                              | Sim           |
+    |              | Para carga inicial (recebimento de todas as regras), informar 0.  |               |
+    |              | Para atualizações, informar o ponteiro retornado na primeira      |               |
+    |              | chamada do dia anterior (ou o ponteiro retornado na primeira      |               |
+    |              | chamada do processo anterior, caso seja realizado mais de um      |               |
+    |              | processo de leitura por dia).                                     |               |
+    |--------------|-------------------------------------------------------------------|---------------|
+    | paramProxPag | É o dado recebido no response que identificará quais regras       | Sim           |
+    |              | devem retornar na próxima página. Na primeira chamada do          |               |
+    |              | processo, informar 0. Sempre que a quantidade de regras           |               |
+    |              | retornadas for igual ao valor informado no critério "paginacao",  |               |
+    |              | deverá ser feita mais uma chamada para obter a próxima página.    |               |
+    |              | A partir da 2ª chamada, informar no parâmetro "paramProxPag"      |               |
+    |              | o valor retornado no campo "paramProxPag" do response da          |               |
+    |              | página anterior.                                                  |               |
+    |--------------|-------------------------------------------------------------------|---------------|
+    /*/
+
+    self:cPathParams := self:cPath + self:cPathParamsModel
+    self:cPathParams := StrTran(self:cPathParams, "{paginacao}",    self:cDefaultPagination)
+    self:cPathParams := StrTran(self:cPathParams, "{ponteiro}",     self:getPointer())
+    self:cPathParams := StrTran(self:cPathParams, "{paramProxPag}", "0")
+
+Return
+
+/*/{Protheus.doc} updatePathParams
+Método responsável por atualizar os parâmetros de controle de paginação para as chamadas subsequentes
+à API da Systax, utilizando o ponteiro e o parâmetro de próxima página retornados no response da API.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cPointer, character, Ponteiro retornado pela API da Systax para controle de atualização das regras, que deve ser utilizado nas chamadas subsequentes
+@param cParamNextPage, character, Parâmetro que identifica quais regras devem ser retornadas na próxima página
+/*/
+Method updatePathParams(cPointer as character, cParamNextPage as character) Class FisTaxReformRulesGetter
+
+    If !Empty(cPointer) .And. !Empty(cParamNextPage)
+        self:cPathParams := self:cPath + self:cPathParamsModel
+        self:cPathParams := StrTran(self:cPathParams, "{paginacao}",    self:cDefaultPagination)
+        self:cPathParams := StrTran(self:cPathParams, "{ponteiro}",     cPointer)
+        self:cPathParams := StrTran(self:cPathParams, "{paramProxPag}", cParamNextPage)
+    EndIf
+
+Return
+
+/*/{Protheus.doc} getPointer
+Método responsável por obter o ponteiro de controle para consulta das regras de reforma tributária,
+realizando a leitura na tabela CJI conforme o tipo específico para reforma tributária.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@return character, Retorna o ponteiro de controle para consulta das regras de reforma tributária, ou "0" caso não seja encontrado nenhum registro correspondente no banco de dados
+/*/
+Method getPointer() as character Class FisTaxReformRulesGetter
+
+    Local cQuery     := "" as character
+    Local oStatement as object
+    Local cPointer   := "0" as character
+
+    If self:lDictUpdated
+        cQuery := " SELECT CJI_ULTPON "
+        cQuery += " FROM " + RetSqlName("CJI")
+        cQuery += " WHERE CJI_FILIAL = ? "
+        cQuery += "     AND CJI_DTCONS <= ? "
+        cQuery += "     AND CJI_TIPO = ? "
+        cQuery += "     AND D_E_L_E_T_ = ? "
+        cQuery += " ORDER BY R_E_C_N_O_ DESC "
+
+        oStatement := FwExecStatement():New( ChangeQuery(cQuery) )
+        oStatement:SetString(1, xFilial("CJI"))
+        oStatement:SetDate(2, Date())
+        oStatement:SetString(3, "2")
+        oStatement:SetString(4, " ")
+
+        cPointer := AllTrim(oStatement:ExecScalar("CJI_ULTPON"))
+
+        If Empty(cPointer)
+            cPointer := "0"
+        EndIf
+
+        oStatement:Destroy()
+        oStatement := Nil
+    EndIf
+
+Return cPointer
+
+/*/{Protheus.doc} setHeader
+Método responsável por configurar os headers da requisição à API da Systax, incluindo o
+token de autenticação e outros headers necessários para a comunicação com a API.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+/*/
+Method setHeader() Class FisTaxReformRulesGetter
+
+    self:aHeader := {}
+
+    AAdd(self:aHeader, "Content-Type: application/json; charset=UTF-8")
+    AAdd(self:aHeader, "Content-Length: <calculated when request is sent>")
+    AAdd(self:aHeader, "Accept: */*")
+    AAdd(self:aHeader, "User-Agent: Chrome/65.0 (compatible; Protheus " + GetBuild() + ")")
+    AAdd(self:aHeader, "Authorization: Bearer " + self:cToken)
+
+Return
+
+/*/{Protheus.doc} getToken
+Método responsável por obter o token de autenticação para acesso à API da Systax, utilizando o username informado para consulta.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cUsername, character, Username utilizado para consulta do token de autenticação na função consultTok
+@return character, Retorna o token de autenticação obtido através da função consultTok, ou vazio caso ocorra algum erro durante a obtenção do token
+/*/
+Method getToken(cUsername as character) as character Class FisTaxReformRulesGetter
+
+    Local cToken := "" as character
+
+    If !Empty(cUsername)
+        cToken := AllTrim(ConsultTok(cUsername, self:cMockServer))
+    EndIf
+
+Return cToken
+
+/*/{Protheus.doc} get
+Método responsável por orquestrar o processo de obtenção das regras de reforma tributária da Systax,
+incluindo a execução da requisição, validação da resposta, processamento dos dados recebidos e controle
+de paginação para obtenção de todas as regras disponíveis.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@return json, Retorna um JSON contendo o resultado do processo, incluindo um indicador de sucesso e uma mensagem descritiva do resultado da operação.
+/*/
+Method get() as json Class FisTaxReformRulesGetter
+
+    Local jRet           as json
+    Local lRequestMore   := .T. as logical
+    Local cMessage       := STR0246 as character  // "Dicionário desatualizado. Verifique as atualizações da Classificação Tributária"
+    Local cRelease       := GetRpoRelease() as character
+    Local lSavePointer   := .T. as logical
+    Local cSystaxPointer as character
+    Local oRest          as object
+    Local lOk            := .F. as logical
+    Local jResult        as json
+    Local cResult        as character
+    Local lHasData       := .F. as logical
+
+    If self:lDictUpdated
+        DbSelectArea("CJI")
+
+        While lRequestMore
+            cMessage     := STR0317 // "Erro ao buscar novas regras."
+            lRequestMore := .F.
+
+            oRest := self:executeRequest()
+            lOk   := self:validateResponse(oRest)
+
+            If lOk
+                cResult := oRest:GetResult()
+                jResult := JsonObject():New()
+                lOk     := jResult:FromJson(cResult) == Nil
+            EndIf
+
+            If lOk
+                cMessage := STR0207 // "Nenhuma regra disponível no momento."
+
+                lSavePointer := lSavePointer .And. ;
+                    jResult:HasProperty("ponteiro") .And. ;
+                    ValType(jResult["ponteiro"]) == "C" .And. ;
+                    !Empty(jResult["ponteiro"])
+
+                If lSavePointer
+                    cSystaxPointer := jResult["ponteiro"]
+                    self:savePointer(cSystaxPointer)
+                    lSavePointer := .F.
+                EndIf
+
+                lHasData     := self:processData(jResult, cResult, cSystaxPointer, cRelease)
+                lRequestMore := self:handleNextPage(jResult)
+            EndIf
+
+            If ValType(jResult) == "J"
+                FreeObj(jResult)
+                jResult := Nil
+            EndIf
+
+            FreeObj(oRest)
+            oRest := Nil
+        EndDo
+
+        If lOk .And. lHasData
+            cMessage := STR0208 // "Novas regras recebidas com sucesso."
+        EndIf
+
+        CJI->(DbCloseArea())
+    EndIf
+
+    jRet := {;
+        "success": lOk,;
+        "message": cMessage;
+    }
+
+Return jRet
+
+/*/{Protheus.doc} executeRequest
+Método responsável por executar a requisição à API da Systax para obtenção das regras de reforma
+tributária, utilizando os parâmetros e headers configurados na classe.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@return object, Retorna o objeto contendo a resposta da requisição à Systax, que pode ser utilizado para validação e processamento dos dados retornados
+/*/
+Method executeRequest() as object Class FisTaxReformRulesGetter
+
+    Local oRest  as object
+    Local nAuth  as numeric
+
+    If self:lAutomation
+        self:cBaseUrl    := self:cMockServer
+        self:cPathParams := self:cMockPath
+    EndIf
+
+    // Atualiza token a cada requisição para prevenir expiração durante a paginação
+    self:cToken := self:getToken(self:cUsername)
+    nAuth := AScan(self:aHeader, {|c| "Authorization:" $ c})
+    If nAuth > 0
+        self:aHeader[nAuth] := "Authorization: Bearer " + self:cToken
+    EndIf
+
+    oRest := FwRest():New(self:cBaseUrl)
+    oRest:SetPath(self:cPathParams)
+    oRest:Get(self:aHeader)
+
+Return oRest
+
+/*/{Protheus.doc} validateResponse
+Método responsável por validar se a resposta da requisição à Systax é válida, verificando se o status
+HTTP é 200 (OK) e se o conteúdo retornado possui o formato esperado.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param oRest, object, Objeto contendo a resposta da requisição à Systax a ser validada
+@return logical, Retorna true se a resposta for válida e atender aos critérios de sucesso, ou false caso contrário
+/*/
+Method validateResponse(oRest as object) as logical Class FisTaxReformRulesGetter
+
+    Local lOk     := .F. as logical
+    Local cResult as character
+    Local jResult as json
+
+    If ValType(oRest) == "O"
+        cResult := oRest:GetResult()
+        jResult := JsonObject():New()
+        lOk     := jResult:FromJson(cResult) == Nil
+
+        If lOk
+            lOk := jResult:HasProperty("status") .And. ;
+                   ValType(jResult["status"]) == "J" .And. ;
+                   jResult["status"]:HasProperty("codStatus") .And. ;
+                   jResult["status"]["codStatus"] == HTTP_CODE_OK
+        EndIf
+
+        If ValType(jResult) == "J"
+            FreeObj(jResult)
+            jResult := Nil
+        EndIf
+    EndIf
+
+Return lOk
+
+/*/{Protheus.doc} processData
+Método responsável por processar as regras recebidas da Systax, realizando a comparação com as regras
+atuais do banco de dados e salvando as regras novas ou atualizadas, conforme necessário.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param jResult, json, JSON contendo as regras recebidas da Systax a serem processadas
+@param cResult, character, String contendo o resultado da requisição à Systax em formato JSON, utilizada para salvar a regra no banco de dados caso seja necessário
+@param cSystaxPointer, character, Ponteiro retornado pela Systax para controle das regras
+@param cRelease, character, Versão do release
+@return logical, Retorna true se foram processadas regras novas ou atualizadas, ou false caso contrário
+/*/
+Method processData(jResult as json, cResult as character, cSystaxPointer as character, cRelease as character) as logical Class FisTaxReformRulesGetter
+
+    Local nLenCJBIdScenario := FwSx3Util():GetFieldStruct("CJB_IDCENA")[3] as numeric
+    Local nLenCJBProduct    := FwSx3Util():GetFieldStruct("CJB_PRODUT")[3] as numeric
+    Local nLenCJBOrigin     := FwSx3Util():GetFieldStruct("CJB_ORIGEM")[3] as numeric
+    Local nI                as numeric
+    Local nJ                as numeric
+    Local jScenario         as json
+    Local cScenarioId       as character
+    Local cLegacyScenarioId as character
+    Local jProduct          as json
+    Local cProductCode      as character
+    Local cOriginCode       as character
+    Local jRule             as json
+    Local cDB               := Upper(TcGetDb()) as character
+    Local cJsPrevRule       as character
+    Local cJsScenario       as character
+    Local cJsProduct        as character
+    Local cJsRule           as character
+    Local lUpdate           as logical
+    Local lHasData          := .F. as logical
+
+    If jResult:HasProperty("cenario") .And. ValType(jResult["cenario"]) == "A"
+        DbSelectArea("CJG")
+        CJG->(DbSetOrder(2)) // CJG_FILIAL+CJG_IDCENA+CJG_IDPPRO+CJG_IDPPAR
+
+        For nI := 1 To Len(jResult["cenario"])
+            jScenario := jResult["cenario"][nI]
+
+            If jScenario:HasProperty("idCenario") .And. !Empty(jScenario["idCenario"]) .And. ;
+               jScenario:HasProperty("produto") .And. ValType(jScenario["produto"]) == "A"
+                cScenarioId       := PadR(jScenario["idCenario"], nLenCJBIdScenario)
+                cLegacyScenarioId := PadR(self:oScenarioMap:getLegacyCode(AllTrim(cScenarioId)), nLenCJBIdScenario)
+
+                For nJ := 1 To Len(jScenario["produto"])
+                    jProduct := jScenario["produto"][nJ]
+
+                    cProductCode := self:resolveProductCode(jProduct, nLenCJBProduct)
+                    cOriginCode  := self:resolveOriginCode(jProduct, nLenCJBOrigin)
+
+                    If !Empty(cProductCode) .And. !Empty(cOriginCode)
+                        If CJG->(MsSeek(xFilial("CJG") + cLegacyScenarioId))
+                            // Atualiza CJG_IDCENR com o Id do cenário novo
+                            CJG->(RecLock("CJG", .F.))
+                            CJG->CJG_IDCENR := cScenarioId
+                            CJG->(MsUnlock())
+
+                            jRule := JsonObject():New()
+                            jRule:FromJson(DecodeUtf8(cResult, "cp1252"))
+
+                            jRule["cenario"] := {}
+                            AAdd(jRule["cenario"], JsonObject():New())
+
+                            cJsScenario := jScenario:ToJson()
+                            jRule["cenario"][1]:FromJson(DecodeUTF8(cJsScenario, "cp1252"))
+
+                            jRule["cenario"][1]["produto"] := {}
+                            AAdd(jRule["cenario"][1]["produto"], JsonObject():New())
+
+                            cJsProduct := jProduct:ToJson()
+                            jRule["cenario"][1]["produto"][1]:FromJson(DecodeUTF8(cJsProduct, "cp1252"))
+                            cJsRule := jRule:ToJson()
+
+                            FreeObj(jRule)
+                            jRule := Nil
+
+                            cJsPrevRule := self:searchPreviousRule(cLegacyScenarioId, cProductCode, cOriginCode, cDB)
+
+                            If !Empty(cJsPrevRule)
+                                If cRelease > "12.1.2310"
+                                    If jProduct:HasProperty("regra")
+                                        lUpdate := self:hasRuleUpdate(jProduct["regra"])
+
+                                        If lUpdate .And. !self:mesmaRegraTributaria(cJsPrevRule,cJsRule)
+                                            self:saveRule(cLegacyScenarioId, cScenarioId, cProductCode, cOriginCode, cJsRule, cSystaxPointer, lUpdate, cRelease)
+                                        EndIf
+                                    EndIf
+                                EndIf
+                            Else
+                                lUpdate := .F.
+                                self:saveRule(cLegacyScenarioId, cScenarioId, cProductCode, cOriginCode, cJsRule, cSystaxPointer, lUpdate, cRelease)
+                            EndIf
+
+                            lHasData := .T.
+                        EndIf
+                    EndIf
+                Next nJ
+            EndIf
+        Next nI
+
+        CJG->(DbCloseArea())
+    EndIf
+
+Return lHasData
+
+/*/{Protheus.doc} mesmaRegraTributaria
+Compara o payload tributario da Reforma, ignorando o envelope tecnico e estatistica.
+@type method
+@author Squad Fiscal
+@since 08/09/2026
+@param cJsonRegraAnterior, character, Regra anterior armazenada na CJB
+@param cJsonRegraAtual, character, Regra atual recebida da Systax
+@return logical, Indica se os payloads tributarios sao iguais
+/*/
+Method mesmaRegraTributaria(cJsonRegraAnterior as character, cJsonRegraAtual as character) as logical Class FisTaxReformRulesGetter
+
+    Local jRegraAnterior := JsonObject():New() as json
+    Local jRegraAtual := JsonObject():New() as json
+    Local jPayloadAnterior as json
+    Local jPayloadAtual as json
+    Local lRet := .F. as logical
+
+    If jRegraAnterior:FromJson(cJsonRegraAnterior) == Nil .And. ;
+       jRegraAtual:FromJson(cJsonRegraAtual) == Nil .And. ;
+       jRegraAnterior:HasProperty("cenario") .And. ;
+       jRegraAtual:HasProperty("cenario") .And. ;
+       ValType(jRegraAnterior["cenario"]) == "A" .And. ;
+       ValType(jRegraAtual["cenario"]) == "A" .And. ;
+       Len(jRegraAnterior["cenario"]) > 0 .And. ;
+       Len(jRegraAtual["cenario"]) > 0 .And. ;
+       ValType(jRegraAnterior["cenario"][1]) == "J" .And. ;
+       ValType(jRegraAtual["cenario"][1]) == "J" .And. ;
+       jRegraAnterior["cenario"][1]:HasProperty("produto") .And. ;
+       jRegraAtual["cenario"][1]:HasProperty("produto") .And. ;
+       ValType(jRegraAnterior["cenario"][1]["produto"]) == "A" .And. ;
+       ValType(jRegraAtual["cenario"][1]["produto"]) == "A" .And. ;
+       Len(jRegraAnterior["cenario"][1]["produto"]) > 0 .And. ;
+       Len(jRegraAtual["cenario"][1]["produto"]) > 0 .And. ;
+       ValType(jRegraAnterior["cenario"][1]["produto"][1]) == "J" .And. ;
+       ValType(jRegraAtual["cenario"][1]["produto"][1]) == "J" .And. ;
+       jRegraAnterior["cenario"][1]["produto"][1]:HasProperty("regra") .And. ;
+       jRegraAtual["cenario"][1]["produto"][1]:HasProperty("regra") .And. ;
+       ValType(jRegraAnterior["cenario"][1]["produto"][1]["regra"]) == "J" .And. ;
+       ValType(jRegraAtual["cenario"][1]["produto"][1]["regra"]) == "J"
+
+        jPayloadAnterior := jRegraAnterior["cenario"][1]["produto"][1]["regra"]
+        jPayloadAtual := jRegraAtual["cenario"][1]["produto"][1]["regra"]
+
+        self:removeEstatistica(jPayloadAnterior)
+        self:removeEstatistica(jPayloadAtual)
+        lRet := framework.types.json.Compare(jPayloadAnterior,jPayloadAtual)
+    EndIf
+
+    FreeObj(jRegraAnterior)
+    FreeObj(jRegraAtual)
+
+Return lRet
+
+/*/{Protheus.doc} removeEstatistica
+Remove recursivamente estatistica de objetos e arrays da copia usada na comparacao.
+@type method
+@author Squad Fiscal
+@since 08/09/2026
+@param jRegra, variant, Payload que sera normalizado
+@return logical, Indica que a normalizacao foi executada
+/*/
+Method removeEstatistica(jRegra as variant) as logical Class FisTaxReformRulesGetter
+
+    Local aNomes := {} as array
+    Local nIndice as integer
+    Local xValor as variant
+    Local nItem as integer
+
+    If ValType(jRegra) == "A"
+        For nItem := 1 To Len(jRegra)
+            self:removeEstatistica(jRegra[nItem])
+        Next nItem
+
+        Return .T.
+    ElseIf ValType(jRegra) <> "J"
+        Return .T.
+    EndIf
+
+    aNomes := jRegra:GetNames()
+
+    For nIndice := 1 To Len(aNomes)
+        If aNomes[nIndice] == "estatistica"
+            jRegra:DelName(aNomes[nIndice])
+        Else
+            xValor := jRegra[aNomes[nIndice]]
+
+            If ValType(xValor) == "J"
+                self:removeEstatistica(xValor)
+            ElseIf ValType(xValor) == "A"
+                For nItem := 1 To Len(xValor)
+                    self:removeEstatistica(xValor[nItem])
+                Next nItem
+            EndIf
+        EndIf
+    Next nIndice
+
+    FWFreeArray(aNomes)
+
+Return .T.
+
+/*/{Protheus.doc} resolveProductCode
+Resolve o código do produto a partir do JSON de produto recebido da API.
+Para regras gerais (tipoRegra == "REG"), retorna o conteúdo de tipoRegra, pois codigoProduto pode não existir.
+Para demais tipos, retorna o conteúdo de codigoProduto apenas se não estiver vazio.
+@type method
+@author Juliano Fernandes
+@since 27/05/2026
+@param jProduct, json, nó JSON do produto a ser analisado
+@param nLen, numeric, tamanho do campo CJB_PRODUT para formatação com PadR
+@return character, código do produto formatado, ou vazio quando não resolvido
+/*/
+Method resolveProductCode(jProduct as json, nLen as numeric) as character Class FisTaxReformRulesGetter
+
+    Local lIsGeneral := jProduct:HasProperty("tipoRegra") .And. !Empty(jProduct["tipoRegra"]) .And. jProduct["tipoRegra"] == "REG" as logical
+    Local lHasCode   := jProduct:HasProperty("codigoProduto") .And. !Empty(jProduct["codigoProduto"]) as logical
+
+    If lIsGeneral
+        Return PadR(jProduct["tipoRegra"], nLen)
+    ElseIf lHasCode
+        Return PadR(jProduct["codigoProduto"], nLen)
+    EndIf
+
+Return ""
+
+/*/{Protheus.doc} resolveOriginCode
+Resolve o código de origem do produto a partir do JSON de produto recebido da API.
+O campo origemProduto pode ser numérico (ex: 0) ou character. Valores numéricos são
+convertidos para character antes do retorno, garantindo que 0 seja tratado como válido.
+@type method
+@author Juliano Fernandes
+@since 27/05/2026
+@param jProduct, json, nó JSON do produto a ser analisado
+@param nLen, numeric, tamanho do campo CJB_ORIGEM para formatação com PadR
+@return character, código de origem formatado (incluindo "0" de origemProduto numérico), ou vazio quando ausente
+/*/
+Method resolveOriginCode(jProduct as json, nLen as numeric) as character Class FisTaxReformRulesGetter
+
+    Local xOrigin as variant
+
+    If jProduct:HasProperty("origemProduto")
+        xOrigin := jProduct["origemProduto"]
+
+        If ValType(xOrigin) == "N"
+            Return PadR(AllTrim(cValToChar(xOrigin)), nLen)
+        ElseIf ValType(xOrigin) == "C" .And. !Empty(xOrigin)
+            Return PadR(xOrigin, nLen)
+        EndIf
+    EndIf
+
+Return ""
+
+/*/{Protheus.doc} handleNextPage
+Método responsável por verificar se é necessário realizar uma nova requisição para obter a próxima página de regras,
+com base na quantidade de regras retornadas e no parâmetro de controle "paramProxPag" presente no response da Systax.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param jResult, json, JSON contendo o resultado da requisição atual, utilizado para verificar a quantidade de regras retornadas e o parâmetro "paramProxPag" para controle de paginação
+@return logical, Retorna true se for necessário realizar uma nova requisição para obter a próxima página de regras, ou false caso contrário
+/*/
+Method handleNextPage(jResult as json) as logical Class FisTaxReformRulesGetter
+
+    Local lRequestMore as logical
+
+    lRequestMore := jResult:HasProperty("cenario") .And. ;
+        ValType(jResult["cenario"]) == "A" .And. ;
+        Len(jResult["cenario"]) == Val(self:cDefaultPagination) .And. ;
+        jResult:HasProperty("paramProxPag") .And. ;
+        !Empty(jResult["paramProxPag"])
+
+    If lRequestMore
+        self:updatePathParams(jResult["ponteiro"], jResult["paramProxPag"])
+
+        If self:lAutomation
+            self:cMockPath := "/getRegras009"
+        EndIf
+    EndIf
+
+Return lRequestMore
+
+/*/{Protheus.doc} savePointer
+Método responsável por salvar o ponteiro retornado pela API da Systax no banco de dados.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cPointer, character, Ponteiro retornado pela API da Systax a ser salvo no banco de dados para controle das regras.
+/*/
+Method savePointer(cPointer as character) Class FisTaxReformRulesGetter
+
+    Local dQueryDate := Date() as date
+    Local cType      := "2" as character // Tipo 2 - Reforma
+
+    If self:lAutomation
+        dQueryDate := dDataBase
+    EndIf
+
+    CJI->(DbSetOrder(3)) // CJI_FILIAL+DTOS(CJI_DTCONS)+CJI_TIPO
+    If CJI->(MsSeek(xFilial("CJI") + DToS(dQueryDate) + cType))
+        CJI->(RecLock("CJI", .F.))
+        CJI->CJI_ULTPON := cPointer
+        CJI->(MsUnlock())
+    Else
+        CJI->(DbSetOrder(2)) // CJI_FILIAL+CJI_PRIPON
+        If !CJI->(MsSeek(xFilial("CJI") + cPointer))    
+            CJI->(RecLock("CJI", .T.))
+            CJI->CJI_FILIAL := xFilial("CJI")
+            CJI->CJI_PRIPON := cPointer
+            CJI->CJI_DTCONS := dQueryDate
+            CJI->CJI_HRCONS := Time()
+            CJI->CJI_ULTPON := cPointer
+            CJI->CJI_TIPO   := cType // Tipo 2 - Reforma
+            CJI->(MsUnlock())
+        EndIf
+    EndIf
+
+Return
+
+/*/{Protheus.doc} searchPreviousRule
+Método responsável por buscar a regra anterior no banco de dados, para comparação com a regra recebida da Systax e controle de atualização.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cScenarioId, character, ID do cenário a ser buscado
+@param cProduct, character, ID do produto a ser buscado
+@param cOrigin, character, ID da origem a ser buscada
+@param cDB, character, Identificação do banco de dados utilizado
+@return character, Retorna o campo da regra anterior em formato JSON, ou vazio caso não seja encontrada nenhuma regra correspondente no banco de dados
+/*/
+Method searchPreviousRule(cScenarioId as character, cProduct as character, cOrigin as character, cDB as character) as character Class FisTaxReformRulesGetter
+
+    Local cQry     := "" as character
+    Local oMemoObj as object
+    Local cRet     as character
+
+    oMemoObj := MemoInQuery():New()
+    oMemoObj:ExecMemo()
+
+    If self:oStatementPrevRule == Nil
+        cQry += " SELECT ? "
+        cQry += " FROM " + RetSqlName("CJB")
+        cQry += " WHERE CJB_FILIAL = ? "
+        cQry += "   AND CJB_IDCENA = ? "
+        cQry += "   AND CJB_PRODUT = ? "
+        cQry += "   AND CJB_ORIGEM = ? "
+        cQry += "   AND CJB_STATUS IN ( ? ) "
+        cQry += "   AND D_E_L_E_T_ = ? "
+        cQry += " ORDER BY R_E_C_N_O_ DESC "
+
+        self:oStatementPrevRule := FwExecStatement():New( ChangeQuery(cQry) )
+    EndIf
+
+    self:oStatementPrevRule:SetUnsafe(1, self:convertJsonFieldToQuery(cDB))
+    self:oStatementPrevRule:SetString(2, xFilial("CJB"))
+    self:oStatementPrevRule:SetString(3, cScenarioId)
+    self:oStatementPrevRule:SetString(4, cProduct)
+    self:oStatementPrevRule:SetString(5, cOrigin)
+    self:oStatementPrevRule:SetIn(6, {"AA", "AP"}) // Pendente, aprovada
+    self:oStatementPrevRule:SetString(7, " ")
+
+    cRet := self:oStatementPrevRule:ExecScalar("CJB_JSREGR")
+
+    oMemoObj:Close()
+    FreeObj(oMemoObj)
+
+Return cRet
+
+/*/{Protheus.doc} convertJsonFieldToQuery
+Método responsável por converter o campo JSON da regra para o formato adequado na query, considerando as
+particularidades de cada banco de dados (ex: PostgreSQL precisa do campo JSON ser codificado com escape).
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cDB, character, Identificação do banco de dados utilizado, obtida através da função tcGetDb() e convertida para uppercase. Ex: "POSTGRES", "SQLSERVER", "ORACLE".
+@return character, Retorna o campo JSON formatado de acordo com as necessidades do banco de dados.
+/*/
+Method convertJsonFieldToQuery(cDB as character) as character Class FisTaxReformRulesGetter
+
+    Local cField := " encode(CJB_JSREGR,'escape') CJB_JSREGR " as character
+
+    If !( "POSTGRES" $ cDB )
+        cField := " CJB_JSREGR CJB_JSREGR "
+    EndIf
+
+Return cField
+
+/*/{Protheus.doc} hasRuleUpdate
+Método responsável por verificar se a regra recebida da Systax possui alguma atualização em relação
+à regra atualmente armazenada no banco de dados, comparando os campos de estatística das regras.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param jReturn, json, JSON contendo a regra recebida da Systax a ser comparada com a regra atual do banco de dados
+@return logical, Retorna true se a regra recebida da Systax possuir alguma atualização em relação à regra atual do banco de dados, ou false caso contrário
+/*/
+Method hasRuleUpdate(jReturn as json) as logical Class FisTaxReformRulesGetter
+
+    Local lUpdate := .F. as logical
+    Local aKeys1  := jReturn:GetNames() as array
+    Local cKey1   as character
+    Local aKeys2  as array
+    Local cKey2   as character
+    Local nI      := 0 as integer
+    Local nJ      := 0 as integer
+
+    For nI := 1 To Len(aKeys1)
+        cKey1 := aKeys1[nI]
+
+        If ValType(jReturn[cKey1]) == "J"
+            aKeys2 := jReturn[cKey1]:GetNames()
+
+            For nJ := 1 To Len(aKeys2)
+                cKey2 := aKeys2[nJ]
+
+                If ValType(jReturn[cKey1][cKey2]) == "J" .And. ;
+                   jReturn[cKey1][cKey2]:HasProperty("estatistica") .And. ;
+                   !Empty(jReturn[cKey1][cKey2]["estatistica"])
+
+                    lUpdate := .T.
+                    Exit
+                EndIf
+            Next nJ
+
+            FWFreeArray(aKeys2)
+            aKeys2 := Nil
+
+            If lUpdate
+                Exit
+            EndIf
+        EndIf
+    Next nI
+
+    FWFreeArray(aKeys1)
+    aKeys1 := Nil
+
+Return lUpdate
+
+/*/{Protheus.doc} saveRule
+Método responsável por salvar a regra no banco de dados.
+@type method
+@author Juliano Fernandes
+@since 12/03/2026
+@param cScenarioId, character, ID do cenário legado, gravado no campo CJB_IDCENA
+@param cNewScenarioId, character, ID do cenário novo (RT), gravado no campo CJB_IDCENR
+@param cProduct, character, Código do produto
+@param cOrigin, character, Código de origem
+@param cJsonRule, character, Regra em formato JSON a ser salva
+@param cPointer, character, Ponteiro retornado pela API da Systax para controle de atualização
+@param lUpdate, logical, Indica se a regra é uma atualização (true) ou uma nova regra (false)
+@param cRelease, character, Release do RPO para controle de campos e regras de negócio
+/*/
+Method saveRule(cScenarioId as character, cNewScenarioId as character, cProduct as character, cOrigin as character, cJsonRule as character, cPointer as character, lUpdate as logical, cRelease as character) Class FisTaxReformRulesGetter
+
+    Local cSeek := xFilial("CJB") + cScenarioId + cProduct + cOrigin as character
+
+    If cRelease > "12.1.2310"
+        cSeek += cPointer
+    EndIf
+
+    DbSelectArea("CJB")
+    CJB->(DbSetOrder(1)) // CJB_FILIAL+CJB_IDCENA+CJB_PRODUT+CJB_ORIGEM+CJB_PTSYS
+    If !CJB->(MsSeek(cSeek))
+        CJB->(RecLock("CJB", .T.))
+
+            CJB->CJB_FILIAL := xFilial("CJB")
+            CJB->CJB_IDCENA := cScenarioId
+            CJB->CJB_IDCENR := cNewScenarioId
+            CJB->CJB_PRODUT := cProduct
+            CJB->CJB_ORIGEM := cOrigin
+            CJB->CJB_JSREGR := cJsonRule
+            CJB->CJB_PTSYS  := cPointer
+            CJB->CJB_STATUS := "AA" // Aguardando Aprovação
+
+            If lUpdate
+                CJB->CJB_STSRET := "2" // Status Atualização
+                CJB->CJB_JSRGNW := cJsonRule
+            EndIf
+
+        CJB->(MsUnlock())
+    EndIf
+
+    CJB->(DbCloseArea())
+
+Return

@@ -1,0 +1,307 @@
+#include 'tlpp-core.th'
+
+namespace portal.cliente.home
+using namespace gfin.util
+using namespace portal.cliente.util
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } HomeDataProtheus
+Classe para acesso aos dados do Protheus
+
+@method getDataMovements Retorna os valores dos saldos em aberto de um cliente aglutinados em meses.
+
+@author Renato Ito
+@since 03/08/2020
+/*/
+//-------------------------------------------------------------------
+class HomeDataProtheus
+
+	private data docTypesNotIn 				As Array // tipos de títulos que serão removidos da query
+	private data lPCHOMQRY					As Logical //Define se o ponto de entrada existe no ambiente
+	private data cTableTemporaryCustomers	As Character //Nome da tabela temporaria que contem os clientes selecionados
+	private data aCustomers					As Array //Matriz que contem os clientes selecionados para exibição dos valores
+	private data cWherePcHomQry				As Character //Variavel que irá armazenar o conteudo de where do PE PCHOMQRY
+
+	public method new()
+	public method getDataMovements() 			As Json
+	public method getDataBalances() 			As Json
+	private method getBalancesForCurrencies() 	As Numeric
+	private method getWherePcHomQry()			As Character
+
+endclass
+
+/*/{Protheus.doc} new
+	Metodo construtor da classe
+	@author Vitor Duca
+	@since 02/12/2024
+	@version 1.0
+	@return self, Object, Instancia da classe
+/*/
+method new() class HomeDataProtheus
+	Self:lPCHOMQRY := ExistBlock("PCHOMQRY")
+	Self:docTypesNotIn := separa(MVABATIM + "|" + MVFUABT + "|" + MVRECANT + "|" + MV_CRNEG + "|" + MVPROVIS, '|')
+	Self:cTableTemporaryCustomers := ""
+	Self:aCustomers := {}
+	Self:cWherePcHomQry := ""
+return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDataMovements
+Retorna os valores dos saldos em aberto de um cliente aglutinados em meses.
+
+@param	customerId, character, código do cliente
+		storeId, character, loja do cliente
+		branches, array, filiais do sistema
+		nPeriodos, numeric, períodos (meses)
+		dateRef, date,	data base para filtro
+
+@return json com os tributos
+		{
+			"result" : true ou false 
+			"response" : {
+				"items:{
+					"period": character,
+					"value": numeric
+				}
+			}
+		}
+@author Renato Ito
+@since 03/08/2020
+/*/
+//-------------------------------------------------------------------
+method getDataMovements(customers as array, nPeriodos as numeric, dateRef as date) as Json class HomeDataProtheus
+	Local statement 				As object
+	Local retValues 				As Array
+	Local aBranches 				As Array
+	Local response					As Json
+	Local cWhere 					As Character
+	Local nContPeriod				As Numeric
+	Local nValue   					As Numeric
+	Local cBranchesSE1				As Character
+	Local cInnerJoin				As Character
+	
+	Self:aCustomers					:= customers
+	Self:cTableTemporaryCustomers	:= CreateTemporaryCustomers(Self:aCustomers, "SE1")
+	cBranchesSE1 					:= " SE1." + BranchesToCustomerForTable("SE1", Self:aCustomers)
+	retValues 						:= {}
+	aBranches 						:= {}
+	response 						:= JsonObject():New()
+	nValue 							:= 0
+	cInnerJoin						:= ""
+
+	cInnerJoin += " INNER JOIN " + Self:cTableTemporaryCustomers + " TMP "
+	cInnerJoin += " ON "
+	cInnerJoin += " " + totvs.protheus.backoffice.ngf.util.BranchRelation( {"SA1","FILIAL","TMP"}, {"SE1","E1_FILIAL","SE1"} )
+	cInnerJoin += " AND SE1.E1_CLIENTE = TMP.CLIENTE "
+	cInnerJoin += " AND SE1.E1_LOJA = TMP.LOJA "
+	cInnerJoin += " AND TMP.D_E_L_E_T_ = ' ' "
+
+	cWhere := cBranchesSE1
+	cWhere += " AND SE1.E1_VENCREA >= ? "
+	cWhere += " AND SE1.E1_VENCREA <= ? "
+	cWhere += " AND SE1.E1_TIPO NOT IN (?) "
+	cWhere += " AND SE1.E1_SALDO > 0 "
+	cWhere += " AND SE1.D_E_L_E_T_ = ' ' "
+	cWhere += Self:getWherePcHomQry()
+
+	statement := FwPreparedStatement():New(cWhere)
+
+	For nContPeriod := 1 To nPeriodos
+
+		statement:SetString(1, DtoS(FirstDate(dateRef)))
+		statement:SetString(2, DtoS(LastDate(dateRef)))
+		statement:SetIn(3, Self:docTypesNotIn)
+
+		cWhere := statement:GetFixQuery()
+
+		nValue += totvs.protheus.backoffice.fin.functions.currencyBills("SE1", cWhere, "SE1.E1_SALDO", cInnerJoin)
+
+		AADD(retValues, {{"period", SubStr(DToS(dateRef), 1, 6)}, {"value", nValue}})
+
+		nValue 	:= 0
+		dateRef := MonthSum(dateRef, 1)
+	Next nContPeriod
+
+	response["result"]	:= .T.
+	response["response"] := arrayToAPI(retValues, .F.)
+
+	DestroyTemporaryCustomers()
+	Self:cTableTemporaryCustomers := ""
+
+return response
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDataBalances
+Retorna os saldos de um cliente, separado os atrasados, em aberto e vencendo nos próximos 7 dias.
+
+@param	customerId, character, código do cliente
+		storeId, character, loja do cliente
+		branches, array, filiais do sistema
+		dateRef, date,	data base para filtro
+
+@return json com os tributos
+		{
+			"result" : true ou false 
+			"response" : {
+					totalBalance: number;
+					weekBalance: number;
+					overdueBalance: number;
+				}
+			}
+		}
+@author Renato Ito
+@since 03/08/2020
+/*/
+//-------------------------------------------------------------------
+method getDataBalances(aCustomers as array, dDateRef as date) as Json class HomeDataProtheus
+	Local jOpen            				As Json
+	Local jOverdue         				As Json
+	Local jTotais          				As Json
+	Local jResponse        				As Json
+	Local cBranchesSE1 			 		As Character
+
+	Self:aCustomers					:= aCustomers
+	Self:cTableTemporaryCustomers	:= CreateTemporaryCustomers(Self:aCustomers, "SE1")
+	cBranchesSE1 					:= " SE1." + BranchesToCustomerForTable("SE1", Self:aCustomers)
+	jOpen     						:= JsonObject():New()
+	jOverdue  						:= JsonObject():New()
+	jTotais   						:= JsonObject():New()
+	jResponse 						:= JsonObject():New()
+
+	jOpen[ '0To7' ] 			:= 0
+	jOpen[ '8To15' ] 			:= 0
+	jOpen[ '16To30' ] 			:= 0
+	jOpen[ 'biggerThan30' ]	 	:= 0
+
+	jOverdue[ '1To7' ]	 		:= 0
+	jOverdue[ '8To15' ]	 		:= 0
+	jOverdue[ '16To30' ]	 	:= 0
+	jOverdue[ 'biggerThan30' ] 	:= 0
+
+	jTotais[ 'open' ] 			:= 0
+	jTotais[ 'overdue' ] 		:= 0
+
+	// GRÁFICO DE PIZZA 1
+	jTotais[ 'open' ] += Self:getBalancesForCurrencies('open', cBranchesSE1, dDateRef)
+	jTotais[ 'overdue' ] += Self:getBalancesForCurrencies('over', cBranchesSE1, dDateRef)
+
+	// GRÁFICO DE PIZZA 2
+	jOpen[ '0To7' ] += Self:getBalancesForCurrencies('period', cBranchesSE1, dDateRef, DaySum(dDateRef, 7))
+	jOpen[ '8To15' ] += Self:getBalancesForCurrencies('period', cBranchesSE1, DaySum(dDateRef, 8), DaySum(dDateRef, 15))
+	jOpen[ '16To30' ] += Self:getBalancesForCurrencies('period', cBranchesSE1, DaySum(dDateRef, 16), DaySum(dDateRef, 30))
+	jOpen[ 'biggerThan30' ] += Self:getBalancesForCurrencies('open', cBranchesSE1, DaySum(dDateRef, 31))
+
+	// GRÁFICO DE PIZZA 3
+	jOverdue[ '1To7' ] += Self:getBalancesForCurrencies('period', cBranchesSE1, DaySub(dDateRef, 7), DaySub(dDateRef, 1))
+	jOverdue[ '8To15' ] += Self:getBalancesForCurrencies('period', cBranchesSE1, DaySub(dDateRef, 15), DaySub(dDateRef, 8))
+	jOverdue[ '16To30' ] += Self:getBalancesForCurrencies('period', cBranchesSE1, DaySub(dDateRef, 30), DaySub(dDateRef, 16))
+	jOverdue[ 'biggerThan30' ] += Self:getBalancesForCurrencies('over', cBranchesSE1, DaySub(dDateRef, 30))
+
+	jTotais[ 'amount' ]  := jTotais[ 'open' ] + jTotais[ 'overdue' ]
+
+	jResponse[ 'result' ]                := .T.
+	jResponse[ 'response' ]              := JsonObject():New()
+	jResponse[ 'response' ][ 'open' ]    := jOpen
+	jResponse[ 'response' ][ 'overdue' ] := jOverdue
+	jResponse[ 'response' ][ 'total' ]   := jTotais
+
+	DestroyTemporaryCustomers()
+	Self:cTableTemporaryCustomers := ""
+
+return jResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc } getBalancesForCurrencies
+	Converte os valores para Real dos títulos em moedas estrangerias para os gráficos donuts
+
+	@author Sidney Santos
+	@since 04/04/2024
+/*/
+//-------------------------------------------------------------------
+Method getBalancesForCurrencies(cType As Character, cBranchesSE1 As Character, dVencRea As Date, dVencReaAte As Date) As Numeric class HomeDataProtheus
+	Local oStatement					As object
+	Local cWhere						As Character
+	Local nValue 			 		   	As Numeric
+	Local cInnerJoin					As Character
+
+	Default cType 				:= ''
+	Default cBranchesSE1		:= ''
+	Default dVencRea			:= dDataBase
+	Default dVencReaAte			:= dDataBase
+
+	nValue := 0
+	cInnerJoin := ""
+
+	cInnerJoin += " INNER JOIN " + Self:cTableTemporaryCustomers + " TMP "
+	cInnerJoin += " ON "
+	cInnerJoin += " " + totvs.protheus.backoffice.ngf.util.BranchRelation( {"SA1","FILIAL","TMP"}, {"SE1","E1_FILIAL","SE1"} )
+	cInnerJoin += " AND SE1.E1_CLIENTE = TMP.CLIENTE "
+	cInnerJoin += " AND SE1.E1_LOJA = TMP.LOJA "
+	cInnerJoin += " AND TMP.D_E_L_E_T_ = ' ' "
+
+	cWhere := cBranchesSE1
+	cWhere += " AND SE1.E1_TIPO NOT IN (?) "
+
+	If cType == "period"
+		cWhere += " AND SE1.E1_SALDO > 0"
+		cWhere += " AND SE1.E1_VENCREA >= ?"
+		cWhere += " AND SE1.E1_VENCREA <= ?"
+		cWhere += " AND SE1.D_E_L_E_T_ = ' '"
+	ElseIf cType == "over"
+		cWhere += " AND SE1.E1_SALDO > 0"
+		cWhere += " AND SE1.E1_VENCREA < ?"
+		cWhere += " AND SE1.D_E_L_E_T_ = ' '"
+	Else
+		cWhere += " AND SE1.E1_SALDO > 0"
+		cWhere += " AND SE1.E1_VENCREA >= ?"
+		cWhere += " AND SE1.D_E_L_E_T_ = ' '"
+	EndIf
+	
+	cWhere += Self:getWherePcHomQry()
+
+	oStatement := FwPreparedStatement():New(cWhere)
+	oStatement:SetIn(1, Self:docTypesNotIn)
+	oStatement:SetDate(2, dVencRea)
+
+	If cType == "period"
+		oStatement:SetDate(3, dVencReaAte)
+	EndIf
+
+	cWhere := oStatement:GetFixQuery()
+
+	nValue += totvs.protheus.backoffice.fin.functions.currencyBills("SE1", cWhere, "(SE1.E1_SALDO + SE1.E1_SDACRES - SE1.E1_SDDECRE)", cInnerJoin)
+
+	oStatement:Destroy()
+
+return nValue
+
+/*/{Protheus.doc} getWherePcHomQry
+	Recuperar o where customizado do ponto de entrada PCHOMQRY
+	caso ele exista no ambiente
+	@author Vitor Duca
+	@since 03/12/2024
+	@version 1.0
+	@param param_name, param_type, param_descr
+	@return return_var, return_type, return_description
+/*/
+Method getWherePcHomQry() As Character Class HomeDataProtheus
+	Local nCount		:= 0					As Numeric
+	Local aCustomerPE	:= {}					As Array
+	Local jCustomerPE	:= JsonObject():new()	As Json
+	Local cWhere		:= ""					As Character
+
+	If self:lPCHOMQRY .and. Empty(Self:cWherePcHomQry)
+		For nCount := 1 to Len(Self:aCustomers)
+			jCustomerPE := {;
+				"filial": Self:aCustomers[nCount]['branchId'],;
+				"codigo": Self:aCustomers[nCount]['customerId'],;
+				"loja": Self:aCustomers[nCount]['storeId'];
+			}
+			AAdd(aCustomerPE, jCustomerPE)
+		Next nCount
+		
+		If !Empty(cWhere := ExecBlock("PCHOMQRY", .F., .F., { aCustomerPE }))
+			Self:cWherePcHomQry := " AND " + cWhere
+		Endif	
+	Endif
+Return Self:cWherePcHomQry

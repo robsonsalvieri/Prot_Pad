@@ -1,0 +1,192 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "PSHEXTRACTOROBJ.CH"
+
+namespace totvs.protheus.retail.rmi.classes.extractor.pshextractorobj
+
+using namespace totvs.protheus.retail.rmi.classes.extractor.pshextractor
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} pshExtractorObj
+    Classe filha de LojRestObj20 para tratamento da API PSH Extractor
+/*/
+//-------------------------------------------------------------------
+Class pshExtractorObj From LojRestObj20
+
+    Public Method new()             as Object
+    Public Method getReturn()       as Character
+    
+    Protected Method validation(cOrigem as Character)   as Variant
+
+    Private Method execAuto()   as Variant
+    Private Method checkCargaMin() as Logical
+
+    Data cAssinante as Character
+    Data cFilSel    as Character
+    Data nPageSize  as Numeric
+    Data nThreads   as Numeric
+    Data aProcessos as Array
+    Data lEnvia     as Logical
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+Método construtor da Classe
+/*/
+//-------------------------------------------------------------------
+Method New(oWsRestObj As Object) as Object Class pshExtractorObj
+
+    Self:cAssinante := ""
+    Self:cFilSel    := ""
+    Self:nPageSize  := 50000
+    Self:nThreads   := 4
+    Self:aProcessos := {}
+    Self:lEnvia     := .F.
+
+    _Super:New(oWsRestObj)
+
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} validation
+Metodo para validações executado na API
+/*/
+//-------------------------------------------------------------------
+Method Validation(cOrigem as Character) as Variant Class pshExtractorObj
+    Local nI as Numeric
+
+    _Super:Validation(cOrigem)
+
+    If self:lSuccess
+
+        If cOrigem == "POST"
+
+            If self:jParans:hasProperty("assinante")
+                Self:cAssinante := self:jParans["assinante"]
+            EndIf
+            
+            If self:jParans:hasProperty("filialSelecionada")
+                Self:cFilSel := self:jParans["filialSelecionada"]
+            EndIf
+            
+            If self:jParans:hasProperty("pageSize")
+                Self:nPageSize := Val(self:jParans["pageSize"])
+            EndIf
+            
+            If self:jParans:hasProperty("threads")
+                Self:nThreads := Val(self:jParans["threads"])
+            EndIf
+
+            If Empty(Self:cAssinante) .Or. Empty(Self:cFilSel)
+                self:lSuccess := .F.
+                self:cError   := STR0001 // "Parametros assinante e filialSelecionada são obrigatórios."
+                
+            ElseIf Empty( LjRetComp(self:jparans['filialSelecionada'], 'CADASTRO DE LOJA') )            
+                self:lSuccess   := .F.
+                self:cError     := STR0002 // "Filial não configurada para envio de dados! Verifique o cadastro auxiliar de Loja/Compartilhamento"
+
+            ElseIf self:jBody:HasProperty("processos") .And. ValType(self:jBody["processos"]) == "A"
+                If !self:checkCargaMin()
+                    self:lSuccess   := .F.
+                    self:cError     := STR0003 // "A extracao do PSH ja esta em execucao! Aguarde a finalizacao do processo para iniciar uma nova carga."
+                Else
+                    For nI := 1 To Len(self:jBody["processos"])
+                        AAdd(Self:aProcessos, self:jBody["processos"][nI])
+                    Next nI
+
+                    If self:jBody:HasProperty("envia") .And. ValType(self:jBody["envia"]) == "L"
+                        Self:lEnvia := self:jBody["envia"]
+                    EndIf
+                EndIf
+                
+                //Self:execAuto()
+            Else
+                self:lSuccess := .F.
+                self:cError   := STR0004 // "Propriedade 'processos' não encontrada ou inválida."
+            EndIf
+
+        EndIf
+    EndIf  
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getReturn
+Retorna json formatado
+/*/
+//-------------------------------------------------------------------
+Method getReturn() as Character Class pshExtractorObj
+    Local jRetorno  as Object 
+    Local cRetorno  as Character
+
+    jRetorno:= JsonObject():New()
+    jRetorno:FromJson( _Super:GetReturn() )
+    
+    If self:lSuccess
+        jRetorno["status"]  := "success"
+        jRetorno["message"] := STR0005 // "Carga via arquivo iniciada! Os arquivos serao gerados na pasta \autocom\psh\extractor\"
+    EndIf
+
+    cRetorno := EncodeUtf8( jRetorno:toJson() )
+
+    LjGrvLog("pshExtractorObj", "Retorno da API de pshExtractorObj", cRetorno)
+
+    FwFreeObj(jRetorno)
+
+Return cRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} iniciaCarga
+Inicia o processo de carga chamando a rotina de job
+/*/
+//-------------------------------------------------------------------
+Method execAuto() as Variant Class pshExtractorObj
+
+    FWLogMsg("INFO", , "REST", "iniciaCarga", "", "01", "Iniciando carga PSH EXTRACTOR em JOB. Filial: " + Self:cFilSel, 0, 0, {})
+
+    StartJob("totvs.protheus.retail.rmi.classes.extractor.pshextractorobj.PshExtJob", GetEnvServer(), .F., cEmpAnt, Self:cFilSel, Self:cAssinante, Self:cFilSel, Self:nPageSize, Self:nThreads, Self:aProcessos, Self:lEnvia)
+
+Return Nil
+
+Method checkCargaMin() as Logical Class pshExtractorObj
+    Local lRetorno  := .T.
+    Local cquery    := ""
+    Local aRetorno  := {}
+    
+    cQuery := "SELECT COUNT(1) AS PROC_CARGA FROM "+RetSqlName("MIN")+" WHERE MIN_CARGA IN ('1','2')"
+    
+    If TCSqlToArr(cQuery,aRetorno) == 0 .And. Len(aRetorno) > 0
+        If aRetorno[1][1] > 0
+            lRetorno := .F.
+        EndIf            
+    EndIf
+
+Return lRetorno
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PshExtJob
+Executa a carga do PSH Extractor em background
+@param cEmp Empresa atual
+@param cFil Filial atual
+@param cAssinante Assinante
+@param cFilSel Filial selecionada 
+@param nPageSize Tamanho da paginacao
+@param nThreads Numero de threads
+@param aProcessos Processos para extracao
+@param lEnvia Indica se deve enviar os dados apos a extracao
+/*/
+//-------------------------------------------------------------------
+Function PshExtJob(cEmp as Character, cFil as Character, cAssinante as Character, cFilSel as Character, nPageSize as Numeric, nThreads as Numeric, aProcessos as Array, lEnvia as Logical)
+    Local oExtractor as Object
+    
+    Default lEnvia := .F.
+
+    RPCSetType(3)
+    RPCSetEnv(cEmp, cFil)
+
+    oExtractor := pshExtractor():New(cAssinante, cFilSel, nPageSize, nThreads)
+    oExtractor:Inicia(aProcessos, lEnvia)
+
+    FwFreeObj(oExtractor)
+
+Return

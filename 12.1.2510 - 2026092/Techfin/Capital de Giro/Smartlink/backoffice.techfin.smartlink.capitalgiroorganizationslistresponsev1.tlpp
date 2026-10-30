@@ -1,0 +1,169 @@
+#include "TOTVS.ch"
+#include "TBICONN.ch"
+
+/*/{Protheus.doc} CapitalGiroOrganizationsListResponseV1MessageReader
+    Classe de Integração Capital de Giro
+    Atualiza dados das Filiais habilitadas para operar Capital de Giro.
+    @type class
+    @author Danilo Matos 
+    @since 15/09/2025
+/*/
+class CapitalGiroOrganizationsListResponseV1MessageReader
+    data aDataOrgs   as array
+    data jMSGData    as json
+    data jMessage    as json
+    data cMock       as character
+    data lMock       as logical
+
+    public method new() constructor
+    public method read(oLinkMessage as object) as logical
+    public method mock() 
+    public method formatMessage()
+    public method processMessage() as logical
+end class
+
+/*/{Protheus.doc} CapitalGiroOrganizationsListResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Danilo Matos
+	@since 15/09/2025
+    @return object, Instância da classe
+*/
+method New() class CapitalGiroOrganizationsListResponseV1MessageReader
+    ::aDataOrgs := {}
+    ::jMSGData  := JsonObject():new()
+    ::jMessage  := JsonObject():new()
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} CapitalGiroOrganizationsListResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 15/09/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class CapitalGiroOrganizationsListResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T. 
+return
+
+/*/{Protheus.doc} CapitalGiroOrganizationsListResponseV1MessageReader::read
+	responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Danilo Matos
+	@since 15/09/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+
+method read(oLinkMessage as object) as logical class CapitalGiroOrganizationsListResponseV1MessageReader
+    local lSuccess := .F.  as logical
+    local cMessage := ""   as character
+
+    cMessage := if(::lMock, ::cMock, oLinkMessage:RawMessage())
+
+    if ::jMessage:FromJSON(cMessage) == NIL
+        ::jMSGData  := ::jMessage["data"]
+        ::formatMessage()
+        lSuccess := ::processMessage()
+    endIf
+
+    FwFreeObj(::jMSGData)
+    FwFreeObj(::jMessage)
+
+Return lSuccess
+
+/*/{Protheus.doc} CapitalGiroOrganizationsListResponseV1MessageReader::formatMessage
+	Obtem as filiais e status da mensagem de resposta do Smartlink Antecipa e agrupa por Grupo de Empresa.
+	@type method
+	@author Danilo Matos
+	@since 15/09/2025
+/*/
+method formatMessage() class CapitalGiroOrganizationsListResponseV1MessageReader
+    local aSM0        := FWLoadSM0()    as array
+    local nOrg        := 0              as numeric
+    local nPosFil     := 0              as numeric
+    local cBranchCNPJ := ""             as character
+    local nStatus     := 0              as numeric
+    local jOrgData    := nil            as json
+
+    if ::jMSGData:hasProperty('customers')
+        for nOrg := 1 to len(::jMSGData["customers"])
+            cBranchCNPJ := ::jMSGData["customers"][nOrg]["document"]
+            nStatus     := ::jMSGData["customers"][nOrg]["customerStatus"]  //0 – Ativo,1  – Bloqueado, 3 –Cancelado
+            if (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+                jOrgData := JsonObject():new()
+                jOrgData["ARA_GRPSM0"] := aSM0[nPosFil][1]
+                jOrgData["ARA_FILSM0"] := aSM0[nPosFil][2]
+                jOrgData["ARA_NOMFIL"] := aSM0[nPosFil][7]
+                jOrgData["ARA_CNPJ"]   := PadR(cBranchCNPJ, TamSx3("ARA_CNPJ")[1])
+                jOrgData["ARA_STATUS"] := cValToChar(nStatus)                  //0=Ativo;1=Bloqueado Credito;2=Bloqueado Atraso;3=Cancelado;4=Bloqueado outros
+                jOrgData["ARA_NOMFIL"] := ::jMSGData["customers"][nOrg]["name"]
+
+                AADD(::aDataOrgs, {aSM0[nPosFil][1], aSM0[nPosFil][2], jOrgData:toJSON()})
+            endIf
+        next nOrg
+    FwFreeObj(jOrgData)
+    endIf
+return
+
+/*/{Protheus.doc} CapitalGiroOrganizationsListResponseV1MessageReader::processMessage
+	Inicia o processamento das organizações obtidas da mensagem de resposta do Smartlink Antecipa.
+	@type method
+	@author Danilo Matos
+	@since 15/09/2025
+/*/
+method processMessage() as logical class CapitalGiroOrganizationsListResponseV1MessageReader
+    local nOrg     := 0   as numeric
+    local cPayload := ""  as character
+    local lSuccess := .T. as logical
+
+    cPayload := ::jMessage:ToJSON()
+    for nOrg := 1 to len(::aDataOrgs)
+        lSuccess := StartJob("TCGOrgLst", GetEnvServer(), .T., ::aDataOrgs[nOrg][1], ::aDataOrgs[nOrg][2], ::aDataOrgs[nOrg][3], cPayload)
+    next nOrg
+
+return lSuccess
+
+/*/{Protheus.doc} TCGOrgLst
+    Gravação da tabela ARA-Organization Techfin para Capital de Giro
+    @type function
+    @author Danilo Matos 
+    @since 15/09/2025
+    @param cCompany, character, Grupo Empresa
+    @param cBranch , character, Filial
+    @param jData   , json     , dados da organização
+    @param cPayload, character, mensagem recebida
+/*/
+Function TCGOrgLst(cCompany as character, cBranch as character, cData as character, cPayload as character) as logical
+    local lInsert := .F.                 as logical
+    local jData   := JsonObject():new()  as json
+
+    RPCSetType(3)
+    RPCSetEnv(cCompany, cBranch,,,'FIN')
+
+    jData:fromJson(cData)
+
+    ARA->(dbSetOrder(1)) // ARA_FILIAL + ARA_CNPJ + ARA_PRODTF
+    lInsert := !ARA->(MsSeek(FWxFilial('ARA') + jData["ARA_CNPJ"] + "3"))
+
+    RecLock('ARA', lInsert)
+        if lInsert
+            ARA->ARA_FILIAL := FWxFilial('ARA')
+            ARA->ARA_GRPSM0 := jData["ARA_GRPSM0"]
+            ARA->ARA_FILSM0 := jData["ARA_FILSM0"]
+            ARA->ARA_NOMFIL := jData["ARA_NOMFIL"]
+            ARA->ARA_CNPJ   := jData["ARA_CNPJ"]
+            ARA->ARA_PRODTF := "3"
+        endIf
+        ARA->ARA_STATUS := jData["ARA_STATUS"]
+    ARA->(MsUnlock())
+
+    totvs.protheus.backoffice.techfin.util.logSmartLink(cPayload, "ARA", ARA->ARA_MSUID, "3", "Organization", "T")
+    
+    FwFreeObj(jData)
+    RpcClearEnv()
+Return .T.
+

@@ -1,0 +1,380 @@
+#INCLUDE 'tlpp-core.th'
+#INCLUDE 'tlpp-rest.th'
+#INCLUDE 'protheus.ch'
+#INCLUDE 'totvs.protheus.fiscal.taf.batchEvents.ch'
+
+namespace totvs.protheus.fiscal.taf.event
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} TafGetBatchEvents
+Endpoint REST GET /api/taf/fiscal/v1/batchEvents.
+Consulta lotes de eventos cadastrados no monitor a partir de T7I,
+consolidando seus documentos em T7A e a descricao do evento em T7E.
+
+@type      function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@return    lOk  Logical  Retorna o resultado do envio da resposta REST
+/*/
+//----------------------------------------------------------------
+@GET(endpoint='/api/taf/fiscal/v1/batchEvents', description='Consulta lotes de eventos do monitor.')
+Function TafGetBatchEvents() As Logical
+
+	Local jParam         := oRest:getQueryRequest() as Json
+	Local nPage          := 1 as Numeric
+	Local nPageSize      := 20 as Numeric
+	Local cFilBatch      := FWxFilial('T7I') as Character
+	Local cStatus        := '' as Character
+	Local cEvents        := '' as Character
+	Local cStartPeriod   := '' as Character
+	Local cEndPeriod     := '' as Character
+	Local oError         := Nil as Object
+	Local cPayload       := '' as Character
+	Local nStatusCode    := 200 as Numeric
+
+	If ValType(jParam) == 'J'
+		If jParam:HasProperty('page') .And. !Empty(jParam:GetJsonText('page'))
+			nPage := Val(jParam:GetJsonText('page'))
+		EndIf
+
+		If jParam:HasProperty('pageSize') .And. !Empty(jParam:GetJsonText('pageSize'))
+			nPageSize := Val(jParam:GetJsonText('pageSize'))
+		EndIf
+
+		If jParam:HasProperty('status') .And. !Empty(jParam:GetJsonText('status'))
+			cStatus := AllTrim(jParam:GetJsonText('status'))
+		EndIf
+
+		If jParam:HasProperty('events') .And. !Empty(jParam:GetJsonText('events'))
+			cEvents := AllTrim(jParam:GetJsonText('events'))
+		EndIf
+
+		If jParam:HasProperty('startPeriod') .And. !Empty(jParam:GetJsonText('startPeriod'))
+			cStartPeriod := AllTrim(jParam:GetJsonText('startPeriod'))
+		EndIf
+
+		If jParam:HasProperty('endPeriod') .And. !Empty(jParam:GetJsonText('endPeriod'))
+			cEndPeriod := AllTrim(jParam:GetJsonText('endPeriod'))
+		EndIf
+	EndIf
+
+	oError := ValidateBatchEventsRequirements()
+
+	If oError <> Nil
+		nStatusCode := Val(cValToChar(oError['code']))
+		cPayload := oError:ToJson()
+		FwFreeObj(oError)
+	Else
+		cPayload := GetBatchEventsService(cFilBatch, nPage, nPageSize, cStatus, cStartPeriod, cEndPeriod, cEvents)
+	EndIf
+
+	oRest:setKeyHeaderResponse('Content-Type', 'application/json')
+
+Return oRest:setStatusResponse(nStatusCode, cPayload)
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} ValidateBatchEventsRequirements
+Valida se o dicionario possui as estruturas minimas para consulta de lotes.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@return    oError  Object  JsonObject de erro quando o ambiente nao suporta a API
+/*/
+//----------------------------------------------------------------
+Static Function ValidateBatchEventsRequirements() As Object
+
+	Local aRequiredFields := {'T7I_DTINC', 'T7I_EVENTO', 'T7I_SEQUEN', 'T7I_TOTLOT', 'T7I_TOTSUC', 'T7I_TOTFAL', 'T7I_STATUS', 'T7A_SEQLOT', 'T7E_EVENTO', 'T7E_DESCRI'} as Array
+	Local nIndex          := 0 as Numeric
+
+	For nIndex := 1 To Len(aRequiredFields)
+		If !TAFColumnPos(aRequiredFields[nIndex])
+			Return BuildBatchErrorResp(400, ;
+				STR0003, ; //'Campo obrigatorio nao encontrado no dicionario.', ;
+				STR0004  + aRequiredFields[nIndex] + STR0005) //'O campo ' + aRequiredFields[nIndex] + ' precisa existir para a consulta de lotes.'
+		EndIf
+	Next nIndex
+
+Return Nil
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} GetBatchEventsService
+Executa a consulta de lotes sobre T7I/T7A/T7E, aplica os filtros
+informados e devolve o payload JSON de sucesso conforme o contrato.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@param     cFilBatch     Character  Filial utilizada na consulta de lotes
+@param     nPage         Numeric    Pagina da consulta
+@param     nPageSize     Numeric    Quantidade de registros por pagina
+@param     cStatus       Character  Lista CSV de status de lote
+@param     cStartPeriod  Character  Data inicial no formato YYYY-MM-DD
+@param     cEndPeriod    Character  Data final no formato YYYY-MM-DD
+@param     cEvents       Character  Lista CSV de codigos de evento
+@return    cJson         Character  JSON serializado do contrato de sucesso
+/*/
+//----------------------------------------------------------------
+Static Function GetBatchEventsService(cFilBatch     as Character, ;
+		nPage         as Numeric, ;
+		nPageSize     as Numeric, ;
+		cStatus       as Character, ;
+		cStartPeriod  as Character, ;
+		cEndPeriod    as Character, ;
+		cEvents       as Character) as Character
+
+	Local cQry         := '' as Character
+	Local cAliasQry    := '' as Character
+	Local oQry         := Nil as Object
+	Local oItem        := Nil as Json
+	Local aResponse    := {} as Array
+	Local aEventFilter := ParseBatchFilter(cEvents) as Array
+	Local aStatusFilter := ParseBatchFilter(cStatus) as Array
+	Local nBind        := 1 as Numeric
+	Local nOffset      := 0 as Numeric
+	Local cDateStart   := NormalizeBatchDate(cStartPeriod) as Character
+	Local cDateEnd     := NormalizeBatchDate(cEndPeriod) as Character
+	Local cBatchDate   := '' as Character
+
+	Default cFilBatch := FWxFilial('T7I')
+	Default nPage := 1
+	Default nPageSize := 20
+	Default cStatus := ''
+	Default cStartPeriod := ''
+	Default cEndPeriod := ''
+	Default cEvents := ''
+
+	nOffset := (nPage - 1) * nPageSize
+
+	cQry += ' SELECT T7I.T7I_DTINC   AS BATCHDATE, '
+	cQry += '        T7I.T7I_EVENTO  AS EVENTCODE, '
+	cQry += '        MAX(T7E.T7E_DESCRI) AS EVENTDESCRIPTION, '
+	cQry += '        T7I.T7I_SEQUEN  AS SEQUENCE, '
+	cQry += '        T7I.T7I_TOTLOT  AS DOCUMENTQUANTITY, '
+	cQry += '        T7I.T7I_TOTSUC  AS SUCCESSCOUNT, '
+	cQry += '        T7I.T7I_TOTFAL  AS FAILURECOUNT, '
+	cQry += '        T7I.T7I_STATUS  AS BATCHSTATUS '
+	cQry += ' FROM ' + RetSqlName('T7I') + ' T7I '
+	cQry += ' LEFT JOIN ' + RetSqlName('T7E') + ' T7E ON '
+	cQry += '        T7E.T7E_FILIAL = ? '
+	cQry += '    AND T7E.T7E_EVENTO = T7I.T7I_EVENTO '
+	cQry += '    AND T7E.D_E_L_E_T_ = ? '
+	cQry += ' WHERE T7I.D_E_L_E_T_ = ? '
+	cQry += '   AND T7I.T7I_FILIAL = ? '
+
+	If !Empty(cDateStart)
+		cQry += '   AND T7I.T7I_DTINC >= ? '
+	EndIf
+
+	If !Empty(cDateEnd)
+		cQry += '   AND T7I.T7I_DTINC <= ? '
+	EndIf
+
+	If Len(aEventFilter) > 0
+		cQry += '   AND T7I.T7I_EVENTO IN (?) '
+	EndIf
+
+	If Len(aStatusFilter) > 0
+		cQry += '   AND T7I.T7I_STATUS IN (?) '
+	EndIf
+
+	cQry += ' GROUP BY T7I.T7I_DTINC, T7I.T7I_EVENTO, T7I.T7I_SEQUEN, T7I.T7I_TOTLOT, T7I.T7I_TOTSUC, T7I.T7I_TOTFAL, T7I.T7I_STATUS '
+	cQry += ' ORDER BY T7I.T7I_DTINC DESC, T7I.T7I_EVENTO, T7I.T7I_SEQUEN '
+	cQry += ' OFFSET ' + AllTrim(Str(nOffset)) + ' ROWS '
+	cQry += ' FETCH NEXT ' + AllTrim(Str(nPageSize)) + ' ROWS ONLY '
+
+	oQry := FwExecStatement():New(ChangeQuery(cQry))
+	oQry:SetString(nBind++, FWxFilial('T7E'))
+	oQry:SetString(nBind++, Space(1))
+	oQry:SetString(nBind++, Space(1))
+	oQry:SetString(nBind++, cFilBatch)
+
+	If !Empty(cDateStart)
+		oQry:SetString(nBind++, cDateStart)
+	EndIf
+
+	If !Empty(cDateEnd)
+		oQry:SetString(nBind++, cDateEnd)
+	EndIf
+
+	If Len(aEventFilter) > 0
+		oQry:SetIn(nBind++, aEventFilter)
+	EndIf
+
+	If Len(aStatusFilter) > 0
+		oQry:SetIn(nBind++, aStatusFilter)
+	EndIf
+
+	cAliasQry := oQry:OpenAlias()
+
+	While !((cAliasQry)->(EOF()))
+		oItem := JsonObject():New()
+		cBatchDate := AllTrim(cValToChar((cAliasQry)->BATCHDATE))
+
+		oItem['batchId'         ] := (cAliasQry)->EVENTCODE +'|' + cBatchDate + '|' + AllTrim(cValToChar((cAliasQry)->SEQUENCE))
+		oItem['eventCode'       ] := AllTrim               (cValToChar((cAliasQry)->EVENTCODE)                       )
+		oItem['eventDescription'] := AllTrim               (cValToChar((cAliasQry)->EVENTDESCRIPTION)                )
+		oItem['creationDate'    ] := FormatBatchDisplayDate(cBatchDate)
+		oItem['documentQuantity'] := (cAliasQry)->DOCUMENTQUANTITY
+		oItem['successCount'    ] := (cAliasQry)->SUCCESSCOUNT
+		oItem['failureCount'    ] := (cAliasQry)->FAILURECOUNT
+		oItem['status'          ] := Val(AllTrim(cValToChar((cAliasQry)->BATCHSTATUS)))
+
+		AAdd(aResponse, oItem)
+
+		(cAliasQry)->(DBSkip())
+	EndDo
+
+	If !Empty(cAliasQry)
+		(cAliasQry)->(DBCloseArea())
+	EndIf
+
+	If oQry <> Nil
+		oQry:Destroy()
+	EndIf
+
+Return BuildBatchResponseJson(aResponse)
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} ParseBatchFilter
+Converte uma lista CSV em array compativel com binds IN da query.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@param     cFilter  Character  Lista separada por virgula
+@return    aFilter  Array      Array de itens normalizados
+/*/
+//----------------------------------------------------------------
+Static Function ParseBatchFilter(cFilter As Character) As Array
+
+	Local aTokens := {} as Array
+	Local aFilter := {} as Array
+	Local nIndex  := 0 as Numeric
+	Local cItem   := '' as Character
+
+	Default cFilter := ''
+
+	If !Empty(AllTrim(cFilter))
+		aTokens := StrTokArr(AllTrim(cFilter), ',')
+
+		For nIndex := 1 To Len(aTokens)
+			cItem := AllTrim(cValToChar(aTokens[nIndex]))
+			If !Empty(cItem)
+				AAdd(aFilter, cItem)
+			EndIf
+		Next nIndex
+	EndIf
+
+Return aFilter
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} NormalizeBatchDate
+Normaliza a data recebida na query string para o formato YYYYMMDD.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@param     cDate  Character  Data no formato YYYY-MM-DD
+@return    cDate  Character  Data normalizada para bind SQL
+/*/
+//----------------------------------------------------------------
+Static Function NormalizeBatchDate(cDate As Character) As Character
+
+	Default cDate := ''
+
+	cDate := StrTran(AllTrim(cDate), '-', '')
+
+	If Empty(cDate)
+		Return ''
+	EndIf
+
+Return DToS(SToD(cDate))
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} FormatBatchDisplayDate
+Formata a data do lote para exibicao no contrato da API.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@param     cDate  Character  Data no formato YYYYMMDD
+@return    cText  Character  Data no formato YYYY-MM-DD
+/*/
+//----------------------------------------------------------------
+Static Function FormatBatchDisplayDate(cDate As Character) As Character
+
+	Local cText := '' as Character
+
+	Default cDate := ''
+
+	cDate := AllTrim(cDate)
+
+	If Len(cDate) == 8
+		cText := SubStr(cDate, 1, 4) + '-' + SubStr(cDate, 5, 2) + '-' + SubStr(cDate, 7, 2)
+	EndIf
+
+Return cText
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} BuildBatchResponseJson
+Monta o JSON de sucesso do endpoint batchEvents a partir do array
+de itens carregados na consulta, utilizando o mesmo envelope de
+resposta padrao com items e hasNext.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@param     aResponse  Array      Array de JsonObject com os lotes retornados
+@return    cJson      Character  JSON serializado no formato {items, hasNext}
+/*/
+//----------------------------------------------------------------
+Static Function BuildBatchResponseJson(aResponse As Array) As Character
+
+	Local cJson  := '' as Character
+	Local oResp  := JsonObject():New() as Object
+
+	Default aResponse := {}
+
+	oResp['items'] := aResponse
+	oResp['hasNext'] := .F.
+
+	cJson := oResp:ToJson()
+	FwFreeObj(oResp)
+
+Return cJson
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} BuildBatchErrorResp
+Monta o payload padrao de erro da API batchEvents.
+
+@type      static function
+@author    Evandro Italo
+@since     20/05/2026
+@version   1.0
+@param     nCode     Numeric    Codigo HTTP da resposta
+@param     cMessage  Character  Mensagem principal do erro
+@param     cDetail   Character  Mensagem detalhada do erro
+@return    oError    Object     JsonObject com code, message e detailedMessage
+/*/
+//----------------------------------------------------------------
+Static Function BuildBatchErrorResp(nCode As Numeric, cMessage As Character, cDetail As Character) As Object
+
+	Local oError := JsonObject():New() as Object
+
+	Default nCode := 500
+	Default cMessage := ''
+	Default cDetail := ''
+
+	oError['code'] := nCode
+	oError['message'] := FWHttpEncode(cMessage)
+	oError['detailedMessage'] := FWHttpEncode(cDetail)
+
+Return oError

@@ -1,0 +1,188 @@
+#include "TOTVS.ch"
+#include "TBICONN.ch"
+
+/*/{Protheus.doc} AntecipaEligibilityRulesListResponseV1MessageReader
+	Classe de Integração Novo Antecipa
+	Atualiza regras de elegibilidade dos títulos
+	@type class
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+class AntecipaEligibilityRulesListResponseV1MessageReader from LongNameClass
+	data aDataRules as array
+	data jMSGData  as json
+	data jMessage  as json
+    data cMock     as character
+    data lMock     as logical
+
+	public method new() constructor
+	public method read()
+	public method mock()
+	method formatData()
+	method procRules()
+end class
+
+/*/{Protheus.doc} AntecipaEligibilityRulesListResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+method New() class AntecipaEligibilityRulesListResponseV1MessageReader
+	::aDataRules := {}
+	::jMSGData  := JsonObject():new()
+	::jMessage  := JsonObject():new()
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} AntecipaEligibilityRulesListResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 9/13/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaEligibilityRulesListResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaEligibilityRulesListResponseV1MessageReader::read
+	esponsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class AntecipaEligibilityRulesListResponseV1MessageReader
+
+	local lSuccess := .F. as logical
+	local cPayload := ""  as character
+	local cDecoded := ""  as character
+
+	cPayload := if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+	cDecoded := DecodeUTF8(cPayload)
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+
+	if ::jMessage:FromJSON(cPayload) == NIL
+		::jMSGData  := ::jMessage["data"]
+		::formatData()
+		::procRules()
+		lSuccess := .T.
+	endIf
+    FwFreeObj(::jMSGData)
+	FwFreeObj(::jMessage)
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} AntecipaEligibilityRulesListResponseV1MessageReader::formatData
+	Agrupa os dados por empresa/filial
+	@type method
+	@author Squad TechFin
+	@since 8/12/2025
+/*/
+method formatData() class AntecipaEligibilityRulesListResponseV1MessageReader
+	local aSM0			as array
+	local nX			as numeric
+	local nY			as numeric
+	local nPosFil		as numeric
+	local cBranchCNPJ	as character
+	local cStatus		as character
+	local jOrgData		as json	
+
+	aSM0         := FWLoadSM0() 
+	nX			 := 0
+	nY			 := 0
+	nPosFil      := 0
+	cBranchCNPJ  := ""
+	cStatus      := ""
+
+	if ::jMSGData:hasProperty('issuers')
+		for nX := 1 to len(::jMSGData["issuers"])
+			cBranchCNPJ  := ::jMSGData["issuers"][nX]["documentNumber"]
+			if (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+				jOrgData := JsonObject():new()
+				jOrgData["cCnpj"]	:= cBranchCNPJ
+				jOrgData["rules"]	:= {}
+				for nY := 1 to len(::jMSGData["rules"])
+					Aadd(jOrgData["rules"], JsonObject():new())
+					jOrgData["rules"][nY]['id']		:= ::jMSGData["rules"][nY]['id']
+					jOrgData["rules"][nY]['name']	:= ::jMSGData["rules"][nY]['name']
+					jOrgData["rules"][nY]['rule']	:= ::jMSGData["rules"][nY]['rule']
+					jOrgData["rules"][nY]['status']	:= ::jMSGData["rules"][nY]['status']
+				next nY	
+				aAdd(::aDataRules, {aSM0[nPosFil][1], aSM0[nPosFil][2], jOrgData:toJSON()}) //Grupo Empresa, Filial, Dados
+			endIf
+		next nX	
+	endIf
+return
+
+/*/{Protheus.doc} AntecipaEligibilityRulesListResponseV1MessageReader::procRules
+	Inicia gravação para cada empresa/filial recebida na mensagem
+	@type method
+	@author Squad TechFin
+	@since 9/13/2025
+/*/
+method procRules() class AntecipaEligibilityRulesListResponseV1MessageReader
+	local nX     	as numeric
+	local cPayload	as character
+
+	cPayload := ::jMessage:ToJSON()
+	for nX := 1 to len(::aDataRules)
+		StartJob("TAGrvRules", GetEnvServer(), .T., ;
+			::aDataRules[nX][1] /*cCompany*/, ::aDataRules[nX][2] /*cBranch*/, ::aDataRules[nX][3], cPayload)
+	next nX
+return
+
+/*/{Protheus.doc} TAGrvRules
+	Gravação da tabela ARB-Regras de Elegibilidade
+	@type function
+	@author Squad TechFin
+	@since 9/13/2025
+	@param cCompany	 , character, Grupo Empresa
+	@param cBranch 	 , character, Filial
+	@param cData	 , character, dados da organização
+	@param cPayload	 , character, mensagem recebida
+/*/
+Function TAGrvRules(cCompany as character, cBranch as character, cData as character, cPayload as character)
+	local lInsert    := .T.                as logical
+	local lHasStatus := .F.                as logical
+	local jData      := JsonObject():new() as json
+	local nX         := 0                  as numeric
+	local oSmartUtil := nil                as object
+	RPCSetType(3) 
+	RpcClearEnv()
+	RPCSetEnv(cCompany, cBranch,,,'FIN') 
+	
+	if FWSX3Util():SeekX3File('ARB_STATUS') 
+		lHasStatus := .T.	    
+    EndIf 
+	jData:fromJson(cData)
+	dbSelectArea('ARB')
+	dbSetOrder(1)
+	For nX:=1 to Len(jData["rules"])
+		lInsert := !ARB->(dbSeek(FWxFilial('ARB') + jData["cCnpj"] + '1' + jData["rules"][nX]["id"]))
+		RecLock('ARB', lInsert)
+			ARB->ARB_FILIAL := FWxFilial('ARB')
+			ARB->ARB_CNPJ   := jData["cCnpj"]
+			ARB->ARB_PRODTF := "1" // Produto: Totvs Antecipa
+			ARB->ARB_COD	:= jData["rules"][nX]["id"]
+			ARB->ARB_DESC	:= jData["rules"][nX]["name"]
+			ARB->ARB_REGRA	:= jData["rules"][nX]["rule"]
+			If lHasStatus
+				ARB->ARB_STATUS	:= cValToChar(jData["rules"][nX]["status"])//0 - Inativa, 1 - Ativa
+			EndIF
+		ARB->(MsUnlock())
+	Next nX
+
+	oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+	oSmartUtil:setAliasMSUID("ARA")
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oSmartUtil)
+	RpcClearEnv()
+
+Return

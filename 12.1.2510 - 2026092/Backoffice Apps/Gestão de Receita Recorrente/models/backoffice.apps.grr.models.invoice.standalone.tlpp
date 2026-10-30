@@ -1,0 +1,216 @@
+#include "totvs.ch"
+#include "tlpp-rest.th"
+#include "tlpp-core.th"
+#include "backoffice.apps.grr.models.invoice.standalone.ch"
+
+namespace totvs.protheus.backoffice.apps.grr.models
+using namespace totvs.protheus.backoffice.apps.grr.general
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} StandaloneInvoiceIntegrationModel
+    @description Classe responsável por adequar dados do Protheus
+    à entidade Standalone Invoice do GR.
+    @author claudio.yoshio@totvs.com.br
+    @since 10/02/2025
+    @version 12.1.2510
+*/
+//------------------------------------------------------------------
+class StandaloneInvoiceIntegrationModel from totvs.protheus.backoffice.apps.grr.models.InvoiceIntegrationModel
+    public method new(cSalesOrderBranch as character, cSalesOrderCode as character) as object
+    public method getJson() as json
+
+    private method prepareStatement()
+    private method setQueryParameters()
+    private method getPaymentMethods() as array
+endClass
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} new
+    @type method
+    @author claudio.yoshio@totvs.com.br
+	@since 06/01/2026
+    @version 12.1.2510
+/*/
+//------------------------------------------------------------------
+method new(cSalesOrderBranch as character, cSalesOrderCode as character) as object class StandaloneInvoiceIntegrationModel
+    _Super:new()
+
+    self:clear()
+    if valType(cSalesOrderBranch) == "C" .and. valType(cSalesOrderCode) == "C" .and. !empty(cSalesOrderCode)
+        self:setInvoice(cSalesOrderBranch, cSalesOrderCode)
+    endIf
+return self
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getJson
+    @description Retorna o JSON para envio à plataforma do Gestão de Receitas
+    @type method
+    @author claudio.yoshio@totvs.com.br
+	@since 06/01/2026
+    @version 12.1.2510
+/*/
+//------------------------------------------------------------------
+method getJson() as json class StandaloneInvoiceIntegrationModel
+    local itemIntegrationId as character
+    local jInvoice := JsonObject():new() as json
+    local jItems := JsonObject():new() as json
+    local nTotalAddOnTaxes := 0 as numeric
+    local nTotalAmount := 0 as numeric
+    local nUsageTotalAmount := 0 as numeric
+    local cRealCurrencyId := "bbff1352-0256-4ac9-8aaa-df0f619f3d37" as character
+
+    self:prepareStatement()
+    self:openAlias()
+
+    if !(self:cAlias)->(Eof())
+        self:lIsB2B := (GRRInvGenerate( (self:cAlias)->C5_CONDPAG ) == '2') //2=Emite NF no vencimento (B2B)
+
+        jInvoice['organizationIntegrationId'] := cEmpAnt + "|" + (self:cAlias)->C5_FILIAL
+        jInvoice['source'] := "MATA410"
+        jInvoice['description'] := STR0001 + Alltrim((self:cAlias)->C5_NUM) //Fatura
+        jInvoice['currencyId'] := cRealCurrencyId
+        jInvoice['currencyCode'] := "BRL"
+        jInvoice['paymentMethods'] := self:getPaymentMethods()
+        jInvoice['reference'] := (self:cAlias)->C5_NUM
+        jInvoice['integrationId'] := cEmpAnt + '|'+ (self:cAlias)->C5_FILIAL + '|' + Alltrim((self:cAlias)->C5_NUM)
+        jInvoice['origin'] := "Protheus"
+        jInvoice['creationDate'] := left(fwTimeStamp(3, (self:cAlias)->C5_EMISSAO), 10)
+        jInvoice['generateCharge'] := "false"
+        jInvoice['dueDate'] := left(fwTimeStamp(3, self:getDueDate()), 10)
+        jInvoice['customer'] := self:getCustomerJson()
+
+        while !(self:cAlias)->(Eof())
+            jItems := JsonObject():New()
+            itemIntegrationId := cEmpAnt + "|" + xFilial("SB1") + "|" + (self:cAlias)->C6_PRODUTO
+            //Cadastra o item na plataforma
+            if (self:cAlias)->HRG_RECURR == "T"
+                jItems['integrationId'] := itemIntegrationId
+            else
+                jItems['itemIntegrationId'] := itemIntegrationId
+            endIf
+            jItems['description'] := AllTrim((self:cAlias)->B1_DESC)
+            jItems['unitMeasurement'] := (self:cAlias)->C6_UM
+            jItems['billItemReference'] := (self:cAlias)->C6_ITEM
+            jItems['quantity'] := (self:cAlias)->C6_QTDVEN
+            jItems['baseValue'] := (self:cAlias)->C6_PRCVEN
+            jItems['value'] := (self:cAlias)->C6_PRCVEN
+            jItems['totalAmount'] := (self:cAlias)->C6_VALOR
+            nTotalAmount += (self:cAlias)->C6_VALOR
+            nUsageTotalAmount += (self:cAlias)->C6_VALOR
+
+            aAdd(self:aSalesOrderItems, jItems)
+
+            (self:cAlias)->(dbSkip())
+        endDo
+        jInvoice['items'] := self:aSalesOrderItems
+        jInvoice['totalAmount'] := nTotalAmount
+        jInvoice['usageTotalAmount'] := nUsageTotalAmount
+
+        nTotalAddOnTaxes := self:calculateAddOnTaxes()
+        if nTotalAddOnTaxes > 0
+            jInvoice['totalAmount'] += nTotalAddOnTaxes
+            jInvoice['usageTotalAmount'] += nTotalAddOnTaxes
+        endif
+    endif
+
+    self:closeAlias()
+return jInvoice
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} prepareStatement
+    @type method
+    @author claudio.yoshio@totvs.com.br
+	@since 06/01/2026
+    @version 12.1.2510
+/*/
+//------------------------------------------------------------------
+method prepareStatement() class StandaloneInvoiceIntegrationModel
+    local aStruct := {} as array
+    local cQuery := "" as character
+    
+    if self:oExec == NIL
+        aAdd(aStruct, FWSX3Util():GetFieldStruct( "C5_EMISSAO" ))
+        aAdd(aStruct, FWSX3Util():GetFieldStruct( "C5_DATA1" ))
+
+        cQuery += " SELECT SC5.C5_FILIAL, SC5.C5_NUM, SC5.C5_CLIENT, SC5.C5_LOJACLI, SC5.C5_EMISSAO, SC5.C5_CONDPAG, SC5.C5_DATA1, "
+        cQuery += " SC6.C6_PRODUTO, SC6.C6_UM, SC6.C6_ITEM, SC6.C6_QTDVEN, SC6.C6_PRCVEN, SC6.C6_VALOR, "
+        cQuery += " SE4.E4_TIPO, SE4.E4_FORMA, SB1.B1_DESC, COALESCE(HRG.HRG_RECURR,'') AS HRG_RECURR "
+        
+        cQuery += " FROM " + retSqlName("SC5") + " SC5 "
+        
+        cQuery += " JOIN " + retSqlName("SC6") + " SC6 "
+        cQuery += " ON " + fwJoinFilial("SC6", "SC5")
+        cQuery += " AND SC6.C6_NUM = SC5.C5_NUM "
+        cQuery += " AND SC6.D_E_L_E_T_ = ? "
+
+        cQuery += " JOIN " + retSqlName("SE4") + " SE4 "
+        cQuery += " ON SE4.E4_FILIAL = ? "
+        cQuery += " AND SE4.E4_CODIGO = SC5.C5_CONDPAG "
+        cQuery += " AND SE4.D_E_L_E_T_ = ? "
+
+        cQuery += " JOIN " + retSqlName("SB1") + " SB1 "
+        cQuery += " ON SB1.B1_FILIAL = ? "
+        cQuery += " AND SB1.B1_COD = SC6.C6_PRODUTO "
+        cQuery += " AND SB1.D_E_L_E_T_ = ? "
+
+        cQuery += " LEFT JOIN " + retSqlName("HRG") + " HRG "
+        cQuery += " ON " + fwJoinFilial("HRG", "SB1")
+        cQuery += " AND HRG.HRG_ALIAS = ? "
+        cQuery += " AND HRG.HRG_CODE = SB1.B1_COD "
+        cQuery += " AND SB1.D_E_L_E_T_ = ? "
+
+        cQuery += " WHERE SC5.C5_FILIAL = ? "
+        cQuery += " AND SC5.C5_NUM = ? "
+        cQuery += " AND SC5.D_E_L_E_T_ = ? "
+
+        self:oExec := FWExecStatement():new(changeQuery(cQuery))
+        self:oExec:setFields(aStruct)
+    endIf
+    self:setQueryParameters()
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} setQueryParameters
+    @type method
+    @author claudio.yoshio@totvs.com.br
+	@since 06/01/2026
+    @version 12.1.2510
+/*/
+//------------------------------------------------------------------
+method setQueryParameters() class StandaloneInvoiceIntegrationModel
+    self:nParamOrder := 1
+    self:oExec:setString(self:nParamOrder++, " ")
+    self:oExec:setString(self:nParamOrder++, xFilial("SE4"))
+    self:oExec:setString(self:nParamOrder++, " ")
+    self:oExec:setString(self:nParamOrder++, xFilial("SB1"))
+    self:oExec:setString(self:nParamOrder++, " ")
+    self:oExec:setString(self:nParamOrder++, "SB1")
+    self:oExec:setString(self:nParamOrder++, " ")
+    self:oExec:setString(self:nParamOrder++, self:cSalesOrderBranch)
+    self:oExec:setString(self:nParamOrder++, self:cSalesOrderCode)
+    self:oExec:setString(self:nParamOrder++, " ")
+return
+
+//------------------------------------------------------------------
+/*/{Protheus.doc} getPaymentMethods
+    @description Obtém o método de pagamento de acordo com a condição de pagamento
+    @type method
+    @return aPaymentMethods, array, método de pagamento para a fatura (1-Boleto | 2-Cartão de Crédito | 3-Pix)
+    @author claudio.yoshio@totvs.com.br
+	@since 06/01/2026
+    @version 12.1.2510
+/*/
+//------------------------------------------------------------------
+method getPaymentMethods() as array class StandaloneInvoiceIntegrationModel
+    local aPaymentMethods := {} as array
+    local cSE4PaymentMethod as character
+    
+    cSE4PaymentMethod := allTrim((self:cAlias)->E4_FORMA)
+    if cSE4PaymentMethod == "BOL"
+        aAdd(aPaymentMethods, "1")
+    elseIf cSE4PaymentMethod $ "CC|CD"
+        aAdd(aPaymentMethods, "2")
+    elseIf cSE4PaymentMethod == "PX"
+        aAdd(aPaymentMethods, "3")
+    endIf
+return aPaymentMethods

@@ -1,0 +1,395 @@
+#Include "agrobusiness.agd.calculation.interest.capital.service.ch"
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include 'fwmvcdef.ch'
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} CalculationInterestCapitalService
+Serviço responsável pelo cálculo dos juros de movimentações de quotas (NF4).
+@type class
+@version 12
+@author rodrigo.nsoledade
+@since 14/05/2025
+/*/
+class CalculationInterestCapitalService FROM UtilsService
+	public method new()
+	public method calcular(cCodigoProcesso)
+	public method aprovar(cCodigoProcesso)
+	public method reprovar(cCodigoProcesso)
+	public method concluir(cCodigoProcesso)
+	public method hasScheduleConfigurado()
+
+	private method getJurosAplicavel(nJuros, dDataEntrada, dDataCorte)
+	private method getValorImpostoRenda(cCodCliente, cLoja, cCodFornecedor, cLojFornecedor, nValor, jParamFinanceiros)
+endclass
+
+/*/{Protheus.doc} New
+Inicializador da classe service
+@type method
+@version 12
+@since 14/05/2025
+@author rodrigo.nsoledade
+@return variant, self
+/*/
+method New() class CalculationInterestCapitalService
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} calcular
+Executa o calculo de juros das cotas ativas e gera movimentos na NF4
+@type method
+@version 12
+@since 14/05/2025
+@author rodrigo.nsoledade
+@param cCodigoProcesso, character, identificador do processo de calculo
+@return variant, nil
+/*/
+method calcular(cCodigoProcesso) class CalculationInterestCapitalService
+	Local oProcessInterestCapitalRepository as object
+	Local oMovimentService					as object
+	Local oContaRepository			        as object
+	Local cErroTransacao                    as character
+	Local nContas                           as numeric
+	Local lAprovado                         as logical
+	Local cAliasCoop						as character
+	Local jDadosFinanceiros					as json
+	Local oHistoryService                   as object
+	Local cSuccessMsg                       as character
+	Local cChaveId 							as character
+	Local aSaldos                           := {}
+
+	Default cCodigoProcesso := ""
+
+	cChaveId 							:= FWxfilial("NF7") + cCodigoProcesso
+	oProcessInterestCapitalRepository   := ProcessInterestCapitalRepository():New(cChaveId)
+	jDadosCalculo := oProcessInterestCapitalRepository:getParametrosCalculo()
+
+	if oProcessInterestCapitalRepository:isCalculado()
+		Self:setError(STR0001) //"Processo de cálculo ja foi executado."
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	if valType(jDadosCalculo) != "J"
+		Self:setError(STR0002) //"Dados do Processo de cálculo inválido"
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","2"}}, cChaveId) //2=Processando
+
+	oMovimentService         := QuotaMovementService():New()
+	oContaRepository         := QuotaRepository():New()
+	oTipoMovimentoRepository := QuotaTypeMovementRepository():New(xFilial('NF5')+jDadosCalculo['tipoMovimento'])
+
+	lAprovado         := IIF(jDadosCalculo['simulacao'], .F., .T.)
+	jDadosFinanceiros := oTipoMovimentoRepository:getParametrosFinanceiro()
+
+	oProcessInterestCapitalRepository:removerMovimentosCalculo()
+
+	cAliasCoop := MpSysOpenQuery(oContaRepository:getQueryContasCooperadosJuros(FWxFilial("NF3"), jDadosCalculo["dataCorteCalculo"], jDadosCalculo['geraDemitidos'], jDadosCalculo['dataCorteDemitido']))
+
+	Begin Transaction
+		While (cAliasCoop)->(!Eof()) .and. Empty(cErroTransacao)
+
+			if jDadosCalculo['dataCorteCalculo'] > STOD((cAliasCoop)->NF3_DATOFF) .and. !Empty((cAliasCoop)->NF3_DATOFF)
+				dDataBaseCalculo  := STOD((cAliasCoop)->NF3_DATOFF)
+				nQuotaBaseCalculo := (cAliasCoop)->NF3_VALOFF
+			else
+				dDataBaseCalculo := jDadosCalculo['dataCorteCalculo']
+				aSaldos           := oContaRepository:cooperatorBalance(FWXFilial("NF3"), (cAliasCoop)->NF3_CODCOO, (cAliasCoop)->NF3_LOJCOO, dDataBaseCalculo)
+				nQuotaBaseCalculo := aSaldos[2]
+			endif
+			
+			nJurosAplicavel  := Self:getJurosAplicavel(jDadosCalculo['juros'], STOD((cAliasCoop)->NF3_DATATV), dDataBaseCalculo)
+			nCotaJurosBruto  := nQuotaBaseCalculo * (nJurosAplicavel / 100)
+			nValorImposto    := Self:getValorImpostoRenda((cAliasCoop)->NF3_CODCOO, (cAliasCoop)->NF3_LOJCOO, (cAliasCoop)->NEP_CODFOR, (cAliasCoop)->NEP_LOJFOR, nCotaJurosBruto, jDadosFinanceiros)
+
+			if nCotaJurosBruto > 0
+				oMovimentService:gravarMovimento((cAliasCoop)->NF3_FILIAL, (cAliasCoop)->NF3_CODCOO, (cAliasCoop)->NF3_LOJCOO, nCotaJurosBruto, jDadosCalculo['tipoMovimento'],  STR0003 + AllTrim(cCodigoProcesso), cCodigoProcesso, lAprovado, nValorImposto ) //"Juros de cotas - processo "
+
+				If !oMovimentService:isSuccess()
+					cErroTransacao := oMovimentService:getMessageError() + STR0014 + ": " + (cAliasCoop)->NF3_CODCOO + " | " + (cAliasCoop)->NF3_LOJCOO
+					DisarmTransaction()
+					BREAK
+				EndIf
+
+				nContas++
+			endif
+
+			(cAliasCoop)->(DbSkip())
+		EndDo
+	End Transaction
+
+	(cAliasCoop)->(DbCloseArea())
+
+	oHistoryService := HistoryService():new()
+
+	If !Empty(cErroTransacao)
+		oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","4"}}, cChaveId )
+		oHistoryService:registrar("NF7", cChaveId, MODEL_OPERATION_UPDATE, nil, cErroTransacao, "ERRO CALCULO")
+		Self:setError(cErroTransacao, 400)
+	Else
+		cSuccessMsg := STR0004 + cValToChar(nContas) //"Calculo de juros concluido. Total de cooperados processados: "
+
+		if jDadosCalculo['simulacao']
+			oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","3"}}, cChaveId)
+			oHistoryService:registrar("NF7", cChaveId, MODEL_OPERATION_UPDATE, nil, cSuccessMsg, "SIMULACAO CALCULADA")
+		Else
+			oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","6"}}, cChaveId)
+			oHistoryService:registrar("NF7", cChaveId, MODEL_OPERATION_UPDATE, nil, cSuccessMsg, "CALCULO APROVADO")
+		EndIf
+
+		Self:setSuccess(cSuccessMsg)
+	EndIf
+
+	FreeObj(oHistoryService)
+	FreeObj(oMovimentService)
+	FreeObj(oContaRepository)
+Return Nil
+
+/*/{Protheus.doc} concluir
+Conclui processo de Simulação de Juros, confirmando os movimentos gerados.
+@type method
+@version 12
+@author jean.schulze
+@since 7/22/2026
+@param cCodigoProcesso, character, codigo do processo
+@return variant, nil
+/*/
+method concluir(cCodigoProcesso) class CalculationInterestCapitalService
+	Local oProcessInterestCapitalRepository as object
+	Local oMovimentoRepository  			as object
+	Local cErroTransacao                    as character
+	Local cAliasMov							as character
+	Local oHistoryService                   as object
+	Local cChaveId 							:= xfilial("NF7")+cCodigoProcesso
+
+	Default cCodigoProcesso := ""
+
+	oProcessInterestCapitalRepository   := ProcessInterestCapitalRepository():New(cChaveId)
+
+	if !oProcessInterestCapitalRepository:isPendenteConclusao()
+		Self:setError(STR0005) //"Processo de cálculo não necessita de aprovação."
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	oHistoryService := HistoryService():new()
+	oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","9"}}, cChaveId ) //Processando Aprovação
+
+	oMovimentService      := QuotaMovementService():New()
+	oMovimentoRepository  := QuotaMovementRepository():New()
+
+	cAliasMov := MpSysOpenQuery(oProcessInterestCapitalRepository:getQueryMovimentos(xfilial("NF4"), cCodigoProcesso))
+	Begin Transaction
+		While (cAliasMov)->(!Eof()) .and. Empty(cErroTransacao)
+
+			oMovimentoRepository:updateRepository({{"NF4_STATUS","1"}}, xfilial("NF4")+(cAliasMov)->NF4_CODCOO+(cAliasMov)->NF4_LOJCOO+(cAliasMov)->NF4_IDMOV )
+			oMovimentService:confirmarMovimento( (cAliasMov)->NF4_CODCOO, (cAliasMov)->NF4_LOJCOO, (cAliasMov)->NF4_IDMOV, (cAliasMov)->NF4_VLRCAP, (cAliasMov)->NF4_VALIMP, (cAliasMov)->NF4_TIPMOV)
+
+			If !oMovimentService:isSuccess()
+				cErroTransacao := oMovimentService:getMessageError() + " " + oMovimentService:getDetailedMessage() + STR0014 + ": " + (cAliasMov)->NF4_CODCOO + " | " + (cAliasMov)->NF4_LOJCOO
+				DisarmTransaction()
+				BREAK
+			EndIf
+
+			(cAliasMov)->(DbSkip())
+		EndDo
+	End Transaction
+
+	(cAliasMov)->(DbCloseArea())
+
+	If !Empty(cErroTransacao)
+		oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","4"}}, cChaveId )
+		oHistoryService:registrar("NF7", cChaveId, MODEL_OPERATION_UPDATE, nil, cErroTransacao, X3CboxDesc( "NF7_STATUS", "4"), 2)
+		Self:setError(cErroTransacao, 400)
+	Else
+		oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","6"}}, cChaveId )
+		oHistoryService:registrar("NF7", cChaveId, MODEL_OPERATION_UPDATE, nil, STR0006, X3CboxDesc( "NF7_STATUS", "6"), 2)
+		Self:setSuccess(STR0006) //"Aprovação de juros concluida."
+	EndIf
+
+	FreeObj(oProcessInterestCapitalRepository)
+	FreeObj(oMovimentService)
+	FreeObj(oMovimentoRepository)
+Return Nil
+
+/*/{Protheus.doc} aprovar
+Aprova lista de Movimentos
+@type method
+@version 12
+@author jean.schulze
+@since 8/13/2026
+@param cCodigoProcesso, character, codigo do processo
+@return variant, nil
+/*/
+method aprovar(cCodigoProcesso) class CalculationInterestCapitalService
+	Local oProcessInterestCapitalRepository as object
+
+	Default cCodigoProcesso := ""
+
+	oProcessInterestCapitalRepository   := ProcessInterestCapitalRepository():New(xfilial("NF7")+cCodigoProcesso)
+
+	if !oProcessInterestCapitalRepository:isPendenteAprovacao()
+		Self:setError(STR0005) //"Processo de cálculo não necessita de aprovação."
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	if !AGDGRAVAHIS(STR0009,"NF7",xfilial("NF7")+cCodigoProcesso, STR0010,.T.,,1) //APROVAR
+		Self:setError(STR0011)
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	if Self:hasScheduleConfigurado()
+		oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","8"}}, xfilial("NF7")+cCodigoProcesso ) //Aprovado
+		Self:setSuccess(STR0006 + " - " + STR0015) //"Aprovação de juros concluida."
+	else
+		Self:concluir(cCodigoProcesso)
+	endif
+
+	FreeObj(oProcessInterestCapitalRepository)
+Return Nil
+
+
+/*/{Protheus.doc} reprovar
+Reprova lista de Movimentos
+@type method
+@version 12
+@author jean.schulze
+@since 7/22/2026
+@param cCodigoProcesso, character, codigo do processo
+@return variant, nil
+/*/
+method reprovar(cCodigoProcesso) class CalculationInterestCapitalService
+	Local oProcessInterestCapitalRepository as object
+
+	Default cCodigoProcesso := ""
+
+	oProcessInterestCapitalRepository   := ProcessInterestCapitalRepository():New(xfilial("NF7")+cCodigoProcesso)
+
+	if !oProcessInterestCapitalRepository:isPendenteAprovacao()
+		Self:setError(STR0007) //"Processo de cálculo não necessita de aprovação."
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	if !AGDGRAVAHIS(STR0012,"NF7",xfilial("NF7")+cCodigoProcesso, STR0013,.T.) //Reprovar
+		Self:setError(STR0011)
+		FreeObj(oProcessInterestCapitalRepository)
+		Return Nil
+	endif
+
+	oProcessInterestCapitalRepository:removerMovimentosCalculo()
+	oProcessInterestCapitalRepository:updateRepository({{"NF7_STATUS","7"}}, xfilial("NF7")+cCodigoProcesso )
+
+	if oProcessInterestCapitalRepository:isSuccess()
+		Self:setSuccess(STR0008) //"Processo de cálculo de juros reprovado."
+	else
+		Self:setFullResponse(oProcessInterestCapitalRepository)
+	EndIf
+
+	FreeObj(oProcessInterestCapitalRepository)
+Return Nil
+
+/*/{Protheus.doc} hasScheduleConfigurado
+Verifica se o job de cálculo de juros de capital está configurado no scheduler e ativo
+@type method
+@version 12
+@author jean.schulze
+@since 8/13/2026
+@return variant, true ou false
+/*/
+method hasScheduleConfigurado() class CalculationInterestCapitalService
+	Local oScheduleInfo as object
+	Local aJobJurosInfo as array
+	Local lJobAtivo     := .F.
+
+	oScheduleInfo := totvs.framework.schedule.information.ScheduleInformation():New()
+	aJobJurosInfo := oScheduleInfo:getSchedulesByRoutine("AGDJ020")	//Job de processamento de juros de capital
+
+	if Len(aJobJurosInfo) > 0 .and. !(aJobJurosInfo[1][1]:CSTATUS $ "1|3" ) //Job ativo
+		lJobAtivo := .T.
+	endif
+
+return lJobAtivo
+
+/*/{Protheus.doc} getJurosAplicavel
+Retorna o Juros proporcional de acordo com a quantidade de dias entre a data de entrada e a data de corte.
+Se a diferença for maior que 1 ano, aplica o juros integral. Caso contrário, calcula proporcionalmente
+considerando se o ano da data de corte é bissexto (366 dias) ou não (365 dias).
+@type method
+@version 12
+@author jean.schulze
+@since 7/28/2026
+@param nJuros, numeric, Juros total
+@param dDataEntrada, date, Data de entrada
+@param dDataCorte, date, Data de corte
+@return variant, Juros proporcional ou integral
+/*/
+method getJurosAplicavel(nJuros as numeric, dDataEntrada as date, dDataCorte as date) class CalculationInterestCapitalService
+	local nDiasProporcionais as numeric
+	local nJurosProporcionais as numeric
+	local nDiasDoAno as numeric
+
+	// Determina a quantidade de dias do ano (bissexto = 366, não-bissexto = 365) - verifica se já passou do dia 29 de fevereiro para considerar o ano bissexto
+	nAnoBissexto := IIF(dDataCorte >= STOD(cValToChar(Year(dDataCorte))+"0301"), Year(dDataCorte), Year(dDataCorte-1))
+	nDiasDoAno   := IIF(AnoBissexto(nAnoBissexto), 366, 365)
+
+	// Calcula a quantidade de dias entre as datas
+	nDiasProporcionais := (dDataCorte - dDataEntrada) + 1 //Considerar também o dia de Ativação
+
+	// Se a diferença for maior que 1 ano, aplica juros integral (100%)
+	if nDiasProporcionais >= nDiasDoAno
+		nJurosProporcionais := nJuros
+	else
+		// Calcula juros proporcional: (juros * dias_reais) / dias_do_ano
+		nJurosProporcionais := nJuros * (nDiasProporcionais / nDiasDoAno)
+	endif
+
+	return nJurosProporcionais
+
+/*/{Protheus.doc} getValorImpostoRenda
+Retorna o valor do imposto de renda baseado nos parâmetros financeiros fornecidos.
+@type method
+@version 12
+@author jean.schulze
+@since 13/08/2026
+@param cCodCliente, character, Código do cliente
+@param cLoja, character, Loja do cliente
+@param cCodFornecedor, character, Código do fornecedor
+@param cLojFornecedor, character, Loja do fornecedor
+@param nValor, numeric, Valor sobre o qual calcular o imposto
+@param jParamFinanceiros, json, Parâmetros financeiros
+@return variant, Valor do imposto de renda calculado
+@return variant, nil
+/*/
+method getValorImpostoRenda(cCodCliente as character, cLoja as character, cCodFornecedor as character, cLojFornecedor as character, nValor as numeric, jParamFinanceiros as json) class CalculationInterestCapitalService
+	Local nImposto  as numeric
+	Local aImpostos as array
+	Local nI        as numeric
+
+	nImposto := 0
+
+	if jParamFinanceiros != nil .and. jParamFinanceiros['tipoGeracaoFinanceiro'] != "1" //Não gera financeiro
+
+		if jParamFinanceiros['tipoGeracaoFinanceiro'] == "2" //Financeiro a pagar
+			aImpostos := FinCalImp("1", jParamFinanceiros['natureza'], cCodFornecedor, cLojFornecedor, cFilAnt, nValor, dDataBase, .F., {}, jParamFinanceiros['tipoTitulo'], "", Nil, {})
+		else
+			aImpostos := FinCalImp("2", jParamFinanceiros['natureza'], cCodCliente, cLoja, cFilAnt, nValor, dDataBase, .F., {}, jParamFinanceiros['tipoTitulo'], "", Nil, {})
+		endif
+
+		if len(aImpostos) > 0
+			for nI := 1 to len(aImpostos)
+				if aImpostos[nI][8] == "IRF" //Verifica se é Imposto de renda
+					nImposto += aImpostos[nI][3]
+					exit
+				endif
+			next nI
+		endif
+
+	endif
+return nImposto

@@ -1,0 +1,470 @@
+#include 'tlpp-core.th'
+
+Namespace totvs.protheus.backoffice.fiscal.Classifier
+
+/*/{Protheus.doc} ConvertFormula()
+
+    Classe para converter fórmulas de cálculo da Systax para a nova estrutura de cálculo do TOTVS configurador de tributos
+    
+    @author Rafael Oliveira
+    @since 18/06/2024
+    @version 12.1.2310
+    @obs A classe atende DOIS conjuntos de formulas simultaneamente: as legadas
+        (ICMS, ICMS-ST, importacao, PIS/COFINS) e as da Reforma Tributaria (IBS, CBS,
+        IS). Qualquer alteracao no mapeamento ou no mecanismo de substituicao precisa
+        preservar os dois caminhos - o FISformulaTestGroup cobre ambos.
+    @see .specs/features/dserfis4-3517-tax-reform-integrative-classifier-systax/analise-defeitos-convertformula.md
+/*/
+Class ConvertFormula
+
+    Data aTokenMappingICMSST    as array // Mapeamento aplicado somente no contexto ICMS-ST (LHS vBCST)
+    Data aTokenMappingStandalone as array // Tokens atomicos aplicados apenas quando isolados (fora do StrTran global)
+    Data aTokenValidoAtomico    as array // Operandos dos destinos compostos, apenas para o hash de tokens validos
+    Data aTokenMappingUnitary   as array // Armazenar o mapeamento das fórmulas unitárias
+    Data aTokenMappingComposite as array // Armazenar o mapeamento das fórmulas compostas
+    Data oHashUnitary           as object // Armazenar o mapeamento das fórmulas unitárias
+    Data oHashComposite         as object // Armazenar o mapeamento das fórmulas compostas
+    Data aTokensInvalids         as array // Armazenar os tokens inválidos    
+    Data cNewFormula            as character // Armazenar a fórmula a ser convertida
+
+    Public Method new() CONSTRUCTOR //método construtor da classe
+    Public Method convert(cFormula, lBaseICMSST) //método para converter a fórmula    
+
+    Public Method GetInValidTokens() //método retornar os tokens inválidos
+
+    Private Method ConvertTokens(cFormula, aMapping) //método para converter os tokens da fórmula
+    Private Method ValidTokens(cFormula, aMapping) //método para verificar se a fórmula possui tokens inválidos    
+
+    Public Method ReplaceStandaloneToken(cFormula, cToken, cNewToken) //substitui token apenas quando isolado
+    Public Method IsTokenIsolated(cFormula, nPos, nTamTok) //fronteira de token na posicao
+    Public Method destroy() //método para destruir a classe    
+
+EndClass
+
+
+/*/{Protheus.doc} new()
+    
+    Método construtor da classe ConvertFormula
+
+    @author Rafael Oliveira
+    @since 18/06/2024
+    @version 12.1.2310
+    @obs aTokenMappingStandalone existe porque ConvertTokens aplica StrTran GLOBAL e SEQUENCIAL sobre o resultado ACUMULADO. Isso permite que um token de ORIGEM
+        case dentro de um token de DESTINO que uma entrada anterior acabou de produzir:
+        "PIS" casa dentro do "TRIBPIS" gerado por {"VPIS","TRIBPIS"}, resultando em
+        "TRIBT:ALQ:000063". Nenhuma ordem do array resolve - invertendo, "VPIS" viraria
+        "VT:ALQ:000063". Por isso PIS, PIBSUF e PCBS ficam FORA do StrTran e sao
+        aplicados por ReplaceStandaloneToken. "VIS" permanece no mapeamento unitario
+        por nao ser substring de nenhum destino. Os de/para da Reforma seguem todos
+        ativos: muda o mecanismo de substituicao, nao o destino.
+    @obs aTokenValidoAtomico existe porque ValidTokens quebra a formula por espaco,
+        operador e parentese - ver o StrTokArr no corpo daquele metodo - e compara o token
+        ATOMICO com as chaves do hash, que vem da coluna de destino. Um destino que
+        contenha esses separadores, como "(O:VAL_MERCADORIA)" ou
+        "(T:VAL:000022+T:VAL:000045+T:VAL:000016)", jamais casa com um token extraido, e o
+        token corretamente resolvido seria acusado de invalido. Por isso os OPERANDOS
+        desses destinos sao declarados a parte e anexados ao aHashUnit, no mesmo padrao ja
+        usado para o aTokenMappingICMSST.
+    @obs NAO escrever a string literal de delimitadores dentro de um bloco ProtheusDoc: a
+        sequencia asterisco-barra que ela contem FECHA o comentario, e todo o texto
+        seguinte passa a ser compilado como codigo. Descreva os separadores por extenso,
+        como acima.
+    @obs ATENCAO ao incluir de/para cujo destino seja uma EXPRESSAO: cada operando dela
+        precisa ser acrescentado em aTokenValidoAtomico, senao GetInValidTokens passa a
+        acusar como invalido um token que foi resolvido corretamente. O FISformulaTestGroup
+        denuncia o esquecimento na assercao de tokens invalidos - desde que exista caso
+        cobrindo a formula em questao.
+    @history 07/08/2026, joao.manoel, PIS/PIBSUF/PCBS movidos do StrTran global para
+        aTokenMappingStandalone (aplicado por ReplaceStandaloneToken) e criado
+        aTokenValidoAtomico com os operandos dos destinos compostos. Corrige
+        "TRIBT:ALQ:000063" na formula convertida e "O:VAL_MERCADORIA" reportado como
+        token invalido. Issue DSERFIS4-3517
+    @see .specs/features/dserfis4-3517-tax-reform-integrative-classifier-systax/analise-defeitos-convertformula.md
+/*/
+
+Method new() CLASS ConvertFormula
+
+    Local aHashUnit := {} as array
+    Local nHashI    := 0  as integer
+
+    // Inicializa as variáveis
+
+    Self:aTokensInvalids         := {}
+    Self:aTokenMappingComposite := {}
+    Self:aTokenMappingICMSST    := {}
+    Self:aTokenMappingUnitary   := {}    
+    Self:aTokenMappingStandalone := {}
+    Self:aTokenValidoAtomico    := {}
+
+    // mapeamento das fórmulas|   
+    
+    //Systax: {{"token antigo", "token novo"}}  
+    //Sempre adicionar o token mais completo primeiro, para evitar que tokens menores sejam convertidos erroneamente
+    //Exemplo: VOUTROS deve ser adicionado antes de VOUTRO, para que o token VOUTRO não seja convertido erroneamente
+
+
+    self:aTokenMappingUnitary := {;
+                {"P_RED_BC"     , "I:PERC_REDUCAO_BASE"},;
+                {"PREDBCST"     , "I:PERC_REDUCAO_BASE"},;    //{"PREDBCST"   , "I:PERC_REDUCAO_BASE"},;
+                {"PREDBC"       , "I:PERC_REDUCAO_BASE"},;    //{"PREDBC"     , "I:PERC_REDUCAO_BASE"},;
+                {"PMVAST"       , "I:MVA"},;                  //{"PMVAST"     , "I:MVA"},;  
+                {"PICMS"        , "ALIQICMS"},;
+                {"PALIQ_INTERNA", "ALIQICMS"},;
+                {"PALÍQ_INTERNA", "ALIQICMS"},;
+                {"QBCPROD"      , "O:QUANTIDADE"},;
+                {"QTRIB"        , "O:QUANTIDADE"},;
+                {"QUNID"        , "O:QUANTIDADE"},;
+                {"VALIQPROD"    , "ALIQTRIB"},;
+                {"VALOR_PAUTA"  , "I:PAUTA"},;
+                {"VPAUTA"       , "I:PAUTA"},;
+                {"VCOFINS"      , "TRIBCOFINS"},;
+                {"VDESCINC"     , "O:DESCONTO"},; // vDescInc: Desconto incondicional - Reforma tributaria
+                {"VDESC"        , "O:DESCONTO"},;
+                {"VFRETE"       , "O:FRETE"},;
+                {"VIPI"         , "TRIBIPI"},;
+                {"VICMS"        , "TRIBICMS"},;
+                {"VOUTROSTRIBUTOS", "(T:VAL:000022+T:VAL:000045+T:VAL:000016+T:VAL:000021)"},; //IPI + PIS + COFINS + ICMS - Reforma tributaria
+                {"VOUTROS"      , "O:DESPESAS"},;
+                {"VOUTRO"       , "O:DESPESAS"},;
+                {"VPIS"         , "TRIBPIS"},;
+                {"VSEG"         , "O:SEGURO"},;
+                {"VACRESCVOP"   , "0"},; // vAcrescVop: Valor de acréscimo referente ajustes ao valor da operação
+                {"VJUROS"       , "O:DESPESAS"},;//TOKENS DA REFORMA TRIBUTARIA
+                {"VMULTAS"      , "O:DESPESAS"},;
+                {"VACRESC"      , "O:DESPESAS"},; // vAcresc: Demais acréscimos da operação
+                {"VENCARGOS"    , "O:DESPESAS"},;
+                {"VTRANSP"      , "O:FRETE"},;
+                {"PREDALIQ"     , "I:PERC_REDUCAO_ALIQ"},; // pRedAlíq: Percentual de redução de alíquota
+                {"VIS"          , "T:VAL:000063"};
+                }
+
+    // Mapeamento aplicado SOMENTE no contexto da base do ICMS-ST (LHS = vBCST), onde um
+    // "vBC" (ou "vBCICMS") isolado no RHS representa a base do ICMS da operacao propria. Fica FORA do
+    // aTokenMappingUnitary de proposito: la o StrTran e global e corromperia "vBC II" e
+    // o "vBC" (base do tributo corrente) das formulas de PIS/COFINS/etc.
+    Self:aTokenMappingICMSST := {;
+                {"VBCICMS"      , "T:BAS:000021"},;
+                {"VBC"          , "T:BAS:000021"};
+                }
+
+    // Tokens da Reforma aplicados apenas quando isolados - ver @obs do construtor.
+    Self:aTokenMappingStandalone := {;
+                {"PIBSUF"       , "T:ALQ:000060"},;
+                {"PCBS"         , "T:ALQ:000066"},;
+                {"PIS"          , "T:ALQ:000063"};
+                }
+
+    // Operandos que existem APENAS dentro de destinos compostos:
+    // "(O:VAL_MERCADORIA)" e "(T:VAL:000022+T:VAL:000045+T:VAL:000016[+T:VAL:000021])".
+    // Nao sao de/para - entram somente no hash de tokens validos. Ver @obs do construtor.
+    Self:aTokenValidoAtomico := {;
+                {"O:VAL_MERCADORIA" , "O:VAL_MERCADORIA"},;
+                {"T:VAL:000016"     , "T:VAL:000016"},;
+                {"T:VAL:000021"     , "T:VAL:000021"},;
+                {"T:VAL:000022"     , "T:VAL:000022"},;
+                {"T:VAL:000045"     , "T:VAL:000045"};
+                }
+
+    Self:aTokenMappingComposite := {;                
+                {"(VALOR ICMS DA OPERACAO)"   , "O:VAL_ICM_TRIBUTADO"},;
+                {"(VALOR DO FCP DA OPERACAO)" , "O:VAL_FECP"},;
+                {"1 - (PREDBCST / 100)"     , "PREDBCST"},;                
+                {"1 - (PREDBCST/100)"       , "PREDBCST"},;
+                {"1-(PREDBC_ST/100)"         , "PREDBCST"},;
+                {"1 - (P_RED_BC / 100)"     , "PREDBC"},;
+                {"1 - (PREDBC / 100 )"      , "PREDBC"},;
+                {"1 - (PREDBC / 100)"       , "PREDBC"},;
+                {"1 - (PREDBC/100)"         , "PREDBC"},;
+                {"1 + (PREDBC / 100)"       , "PREDBC"},;
+                {"1 + (PMVAST / 100)"       , "PMVAST"},;
+                {"1 + (PMVAST/100)"         , "PMVAST"},;
+                {"PMVAST/100"               , "PMVAST"},;
+                {"MVA/100"                  , "PMVAST"},;                
+                {"PALIQ_INTERNA/100"        , "ALIQICMS"},;
+                {"PALIQ_INTERESTADUAL/100"  , "ALIQICMS"},;
+                {"(QTRIB * VUNTRIB)"        , "(O:VAL_MERCADORIA)"},;
+                {"(QTRIB VUNTRIB)"          , "(O:VAL_MERCADORIA)"},;
+                {"(QTRIB*VUNTRIB)"          , "(O:VAL_MERCADORIA)"},; 
+                {"(QTRIB X VUNTRIB)"        , "(O:VAL_MERCADORIA)"},;
+                {"QTRIB*VPRODUNI"           , "(O:VAL_MERCADORIA)"},;
+                {"QTRIB * VPRODUNI"         , "(O:VAL_MERCADORIA)"},;
+                {"VTRIBUTOS (EXCETO VIBS, VCBS, VIS, VICMS) "    , "(T:VAL:000022+T:VAL:000045+T:VAL:000016)"}; //IPI + PIS + COFINS
+                }
+
+                ////{"(1 - (PICMS / 100))" , "ALIQICMS"} removido, pois legado atualizava primeiro PICMS
+    
+    //Hash de tokens VALIDOS. Alem dos mapeamentos de conversao, inclui os operandos
+    //dos destinos compostos (aTokenValidoAtomico) - ver @obs do construtor.
+    aHashUnit := aClone(Self:aTokenMappingUnitary)
+
+    For nHashI := 1 To Len(Self:aTokenMappingICMSST)
+        aAdd(aHashUnit, Self:aTokenMappingICMSST[nHashI])
+    Next nHashI
+
+    For nHashI := 1 To Len(Self:aTokenMappingStandalone)
+        aAdd(aHashUnit, Self:aTokenMappingStandalone[nHashI])
+    Next nHashI
+
+    For nHashI := 1 To Len(Self:aTokenValidoAtomico)
+        aAdd(aHashUnit, Self:aTokenValidoAtomico[nHashI])
+    Next nHashI
+
+    Self:oHashUnitary    := AToHM(aHashUnit, 2)
+    Self:oHashComposite  := AToHM(Self:aTokenMappingComposite, 2)
+
+Return self
+
+/*/{Protheus.doc} GetInValidTokens
+
+    Metodo para verificar se a fórmula possui tokens inválidos
+
+    @author Rafael Oliveira
+    @since 23/06/2024
+    @version 12.1.2310
+    @return aTokensInvalids, array, array com tokens inválidos da fórmula
+/*/
+Method GetInValidTokens() CLASS ConvertFormula
+    // Verifica se a fórmula possui tokens inválidos
+    self:ValidTokens()
+Return self:aTokensInvalids
+
+/*/{Protheus.doc} ConvertFormula::convert()
+    
+    Método para converter a fórmula de cálculo da Systax para a nova estrutura de cálculo do TOTVS configurador de tributos
+
+    @param cFormula, character - fórmula a ser convertida
+    @param lBaseICMSST, logical - Se fórmula tem icms st a ser convertida parametro opcional se não passar o default .F.
+    @return character, cNewFormula, character, fórmula convertida
+    @author Rafael Oliveira
+    @since 18/06/2024
+    @version 12.1.2310
+    @history 04/07/2026, joao.manoel, Contexto ICMS-ST (indicador 60): resolve o "vBC" isolado remanescente como a
+        base do ICMS da operacao propria (T:BAS:000021). Substitui apenas o token isolado - "vBC II" e o "vBC" 
+        de outros tributos permanecem intactos. Este mapeamento NAO entra no StrTran global 
+        de proposito (vBC e base relativa)..
+        Issue DSERFISE-18407
+    @obs Ordem dos passos: composto (StrTran) -> unitario (StrTran) -> isolados da
+        Reforma -> isolados do ICMS-ST. Os dois ultimos usam ReplaceStandaloneToken e
+        ficam no fim por simetria: refinamento por token isolado sempre depois do
+        StrTran global. Para os tokens da Reforma as duas ordens seriam seguras ("PIS"
+        dentro de "VPIS" tambem nao esta isolado), mas manter o padrao deixa o fluxo
+        uniforme e evita que uma futura entrada dependa de ordem implicita.
+    @history 07/08/2026, joao.manoel, Novo passo de substituicao por token isolado para
+        os tokens da Reforma (aTokenMappingStandalone), entre o passo unitario e o do
+        ICMS-ST. Issue DSERFIS4-3517
+/*/
+Method convert(cFormula, lBaseICMSST) CLASS ConvertFormula
+
+    Local nIcmsSt := 0 as integer
+    Local nStd    := 0 as integer
+
+    Default lBaseICMSST := .F.
+
+    aSize(self:aTokensInvalids, 0)
+    self:cNewFormula := ""
+
+    If !Empty(cFormula)
+
+        cFormula := alltrim((upper(cFormula)))
+        
+        // Converte os tokens da fórmula
+        // Primeiro convete os tokens compostos
+        self:cNewFormula := self:ConvertTokens(cFormula, self:aTokenMappingComposite) // converte os tokens compostos
+
+        // Depois converte os tokens unitários
+        self:cNewFormula := self:ConvertTokens(self:cNewFormula, self:aTokenMappingUnitary) // converte os tokens unitários
+
+        // Depois os tokens que so podem ser trocados quando isolados - ver @obs.
+        For nStd := 1 To Len(self:aTokenMappingStandalone)
+            self:cNewFormula := self:ReplaceStandaloneToken(self:cNewFormula, self:aTokenMappingStandalone[nStd][1], self:aTokenMappingStandalone[nStd][2])
+        Next nStd
+        
+        If lBaseICMSST
+            For nIcmsSt := 1 To Len(self:aTokenMappingICMSST)
+                self:cNewFormula := self:ReplaceStandaloneToken(self:cNewFormula, self:aTokenMappingICMSST[nIcmsSt][1], self:aTokenMappingICMSST[nIcmsSt][2])
+            Next nIcmsSt
+        EndIf
+
+    Endif
+
+Return self:cNewFormula
+
+/*/{Protheus.doc} ConvertTokens()
+
+    Método para converter os tokens da fórmula
+
+    @param cFormula - fórmula a ser convertida
+    @param aMapping - mapeamento dos tokens
+    @return cNewFormula, character, fórmula convertida
+
+    @author Rafael Oliveira
+    @since 18/06/2024
+    @version 12.1.2310
+/*/
+
+Method ConvertTokens(cFormula, aMapping) CLASS ConvertFormula
+
+    Local cNewFormula := cFormula // inicializa a variável com a fórmula original
+    Local cOldToken := "" // inicializa a variável com o token antigo
+    Local cNewToken := "" // inicializa a variável com o token novo
+    Local nI := 0 // inicializa a variável de controle    
+
+    // Percorre o array de mapeamento
+    For nI := 1 to len(aMapping)
+        cOldToken := aMapping[nI][1] // obtém o token antigo
+        cNewToken := aMapping[nI][2] // obtém o token novo
+
+        // Verifica se o token antigo foi convertido        
+        cNewFormula := strtran(cNewFormula, cOldToken, cNewToken) // substitui o token antigo pelo novo        
+    Next
+
+Return cNewFormula
+
+/*/{Protheus.doc} ValidTokens()
+
+    Método para verificar se a fórmula possui tokens inválidos
+
+    @return aTokensInvalids, array, array com tokens inválidos da fórmula
+    
+    @author Rafael Oliveira
+    @since 18/06/2024
+    @version 12.1.2310
+
+/*/
+
+Method ValidTokens() CLASS ConvertFormula
+
+    Local aTokens  as array
+    Local aRet     as array
+    Local nI       as numeric
+    Local cToken   as character
+
+    If !Empty(self:cNewFormula)
+        // Inicializa o array de tokens conforme a fórmula
+        aTokens := StrTokArr(self:cNewFormula, " =+-*/()[]")
+
+        // Percorre o array de tokens
+        For nI := 1 to len(aTokens)
+
+            //Verifica se o token não é um número
+            If !IsDigit(aTokens[nI])
+                cToken := alltrim(aTokens[nI]) // remove espaços em branco
+                // Verifica se o token não está no mapeamento
+                If !HMGet( self:oHashUnitary, cToken, @aRet ) .and. !HMGet( self:oHashComposite, cToken, @aRet )
+                    aAdd(self:aTokensInvalids, aTokens[nI]) // adiciona o token inválido no array
+                Endif
+            Endif
+        Next
+
+        aSize(aTokens, 0) // libera a memória
+    Endif
+
+Return self:aTokensInvalids
+
+
+/*/{Protheus.doc} ReplaceStandaloneToken()
+
+    Substitui um token APENAS quando ele aparece isolado na formula, preservando
+    tokens compostos como "VBC II" (onde "VBC" e seguido por letra). Usado para o
+    de/para de contexto do ICMS-ST, evitando o StrTran global sobre um token que
+    representa uma base relativa.
+
+    @param cFormula  - formula onde substituir
+    @param cToken    - token a localizar (ex.: "VBC")
+    @param cNewToken - token de destino (ex.: "T:BAS:000021")
+    @return character, formula com o token isolado substituido
+    @author Joao Manoel
+    @since 15/07/2026
+/*/
+Method ReplaceStandaloneToken(cFormula, cToken, cNewToken) CLASS ConvertFormula
+
+    Local cRet    := "" as character
+    Local nPos    := 1  as integer
+    Local nLen    := Len(cFormula) as integer
+    Local nTamTok := Len(cToken)   as integer
+
+    While nPos <= nLen
+        If SubStr(cFormula, nPos, nTamTok) == cToken .And. Self:IsTokenIsolated(cFormula, nPos, nTamTok)
+            cRet += cNewToken
+            nPos += nTamTok
+            Loop
+        EndIf
+        cRet += SubStr(cFormula, nPos, 1)
+        nPos++
+    EndDo
+
+Return cRet
+
+
+/*/{Protheus.doc} IsTokenIsolated()
+
+    Indica se o token que comeca em nPos (com nTamTok caracteres) esta isolado, ou
+    seja, delimitado a esquerda por inicio/operador/parentese/espaco e a direita por
+    fim/operador/parentese. Se a direita vier letra ou digito (ex.: "VBC II"), o token
+    NAO e isolado e nao deve ser substituido.
+
+    @param cFormula - formula analisada
+    @param nPos     - posicao inicial (1-based) do token
+    @param nTamTok  - tamanho do token
+    @return logical, .T. se o token esta isolado
+    @author Joao Manoel
+    @since 15/07/2026
+/*/
+Method IsTokenIsolated(cFormula, nPos, nTamTok) CLASS ConvertFormula
+
+    Local nLen      := Len(cFormula) as integer
+    Local nLook     := nPos + nTamTok as integer
+    Local cPrev     := "" as character
+    Local cNext     := "" as character
+    Local cDelimEsq := " =+-*/()[]" as character
+    Local cDelimDir := "=+-*/()[]"  as character
+
+    If nPos > 1
+        cPrev := SubStr(cFormula, nPos - 1, 1)
+    EndIf
+
+    While nLook <= nLen .And. SubStr(cFormula, nLook, 1) == " "
+        nLook++
+    EndDo
+
+    If nLook <= nLen
+        cNext := SubStr(cFormula, nLook, 1)
+    EndIf
+
+Return ( nPos == 1 .Or. cPrev $ cDelimEsq ) .And. ( Empty(cNext) .Or. cNext $ cDelimDir )
+
+
+/*/{Protheus.doc} destroy()
+
+    Método para destruir a classe
+
+    @return self - classe destruída
+    @author Rafael Oliveira
+    @since 18/06/2024
+    @version 12.1.2310
+/*/
+Method destroy() CLASS ConvertFormula
+
+    // Redimensiona os arrays para liberar a memória
+    aSize(self:aTokensInvalids, 0)
+    self:aTokensInvalids := nil
+    
+    aSize(self:aTokenMappingComposite, 0)
+    self:aTokenMappingComposite := nil
+    
+    aSize(self:aTokenMappingUnitary, 0)
+    self:aTokenMappingUnitary := nil
+
+    aSize(self:aTokenMappingICMSST, 0)
+    self:aTokenMappingICMSST := nil
+
+    aSize(self:aTokenMappingStandalone, 0)
+    self:aTokenMappingStandalone := nil
+
+    aSize(self:aTokenValidoAtomico, 0)
+    self:aTokenValidoAtomico := nil
+
+    FwFreevar(self:oHashComposite)
+    FwFreevar(self:oHashUnitary)
+
+Return self

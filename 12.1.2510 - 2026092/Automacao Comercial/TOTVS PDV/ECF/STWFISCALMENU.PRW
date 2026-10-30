@@ -1,0 +1,19 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "PARMTYPE.CH"
+#INCLUDE "FILEIO.CH"
+#INCLUDE "AUTODEF.CH"
+#INCLUDE "DIRECTRY.CH"
+
+#DEFINE F_NAME					1
+
+Function STWFMXXX()
+
+
+Return Nil
+
+
+//teste migração azure
+
+
+
+

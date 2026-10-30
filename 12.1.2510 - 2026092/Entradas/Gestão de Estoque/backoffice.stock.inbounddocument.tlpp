@@ -1,0 +1,1319 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "backoffice.stock.inbounddocument.ch"
+
+namespace backoffice.stock.inbounddocument
+
+static __lNFESD3 := NIL
+static __lD3NumCq := NIL
+
+/*/{Protheus.doc} validateTesCreditDebit
+   Valida a TES para documento de debito e credito e seus complementos no documento de entrada 
+   podem movimentar o estoque ou não
+   @type  Function
+   @author reynaldo
+   @since 10/04/2026
+   @version 1.0
+   @param cMovEstoque, character, Se a tes utilizada no item do documento de entrada permite (S) ou n&#65533;o (N) movimentar o estoque(F4_ESTOQUE)
+   @param cTipoNF, character, Identifica o tipo de documento de entrada (F1_TIPO/cTipo)
+   @param cComplNF, character, Identifica o tipo de complmento do documento de entrada (F1_TPCOMPL/cTpCompl)
+   @return lBloqueia, logical, se para este item de nf permite ou n&#65533;o o uso da TES informada
+   /*/
+Function validateTesCreditDebit(cMovEstoque, cTipoNF, cComplNF)
+	Local lBloqueia := .F.
+
+	// 5 - Nota de credito
+	// 6 - Nota de debito
+	if cTipoNF $ '5/6'
+
+		// se a TES movimenta Estoque
+		if cMovEstoque == "S"
+
+			// se movimenta estoque. As notas de debito e credito, a principio, não devem permitir movimentar estoque
+			lBloqueia := .T.
+
+			// 5 - Nota de credito
+			if cTipoNF $ '5'
+				// 03=Retorno por Recusa Total na Entrega ou Por Não Localizao do Destinatário na Tentativa de Entrega
+				// 06=Retorno por Recusa Parcial na Entrega
+				if cComplNF $ '3/4/6'
+					lBloqueia := .F.
+				EndIf
+			endIf
+		EndIf
+	EndIf
+
+return lBloqueia
+
+/*/{Protheus.doc} isReverseFlow()
+Indica se o documento de entrada subtrai o estoque, devido ser do tipo: "credito", complemento: "reducao de valores"
+
+@type function
+@author marcos pires
+@since 11.06.2026
+@version 12.1.2025
+@param cD1_TIPO, caracter, tipo do documento de entrada (F1_TIPO)
+@param cD1_TIPODOC, caracter, tipo do complemento do documento de entrada (F1_TIPO + F1_TPCOMPL)
+@param cD1_FORMUL, caracter, indica se é formulario proprio (F1_FORMUL)
+@return logical, indica se o documento de entrada é do tipo reverso, ou seja, subtrai o estoque
+
+/*/
+Function isReverseFlow(cD1_TIPO, cD1_TIPODOC, cD1_FORMUL, cTpCompl) as logical
+	Local lRet := .F. as logical
+
+	Default cD1_TIPO    := ""
+	Default cD1_TIPODOC := ""
+	Default cD1_FORMUL  := ""
+	Default cTpCompl    := ""
+
+	If cPaisLoc <> "BRA"
+		Return .F.
+	EndIf
+
+	If cD1_TIPO == "5"
+		If cD1_TIPODOC $ "54/56" .Or. cTpCompl $ "4/6"
+			If cD1_FORMUL <> "S"
+				lRet := .T.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} updateB2FromD1
+Valida o saldo físico do produto para notas de redução (invertida - A103linOK)
+@author Squad Entradas
+@since 13/03/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function updateB2FromD1(cTipo,cTipoDoc,cFormul,cTpCompl,lAgregaOri,lEstorno,AdadosSBF)
+	Local lIsReverse := .F. as logical
+	Local lInverte   := .F. as logical
+	Local nMultipl   := 1   as numeric
+
+	Default lAgregaOri:= .F.
+	Default lEstorno  := .F.
+	Default AdadosSBF := {}
+
+	lIsReverse := isReverseFlow(cTipo,cTipoDoc,cFormul,cTpCompl)
+
+	//Inclusao/Estorno de nota de redução inversa
+	If lIsReverse
+		//Estorna os movimentos REC
+		If lEstorno
+			estornaSD3()
+		EndIf
+
+		//Gera o movimento RED/DED
+		geraSD3(lEstorno,AdadosSBF)
+		B2AtuComD3({SD3->D3_CUSTO1,SD3->D3_CUSTO2,SD3->D3_CUSTO3,SD3->D3_CUSTO4,SD3->D3_CUSTO5})
+	Else
+		// Estorno de nota normal: subtrai do saldo
+		If lEstorno
+			nMultipl := -1
+			lInverte := .T.
+		Else
+			//Inclusão de nota fiscal de crédito: nao agrega qtd no lote origem
+			If lAgregaOri
+				If backoffice.stock.averagecost.creditnote.IsNotaCredito(Nil,cTipo,cTpCompl)
+					lAgregaOri := .F.
+				EndIf
+			EndIf
+		EndIf
+		B2AtuComD1(nMultipl,,,lInverte,lAgregaOri)
+	EndIf
+
+Return
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraSD3
+Valida a alteração do lote/sublote para notas de crédito
+@author Squad Entradas
+@since 03/07/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function geraSD3(lEstorno,AdadosSBF)
+
+	Local cEndEst   := "" as character
+	Local nPosSDB   := 0  as numeric
+	Local cChvBusca := FWxFilial("SD3")+SD1->D1_COD+SD1->D1_LOCAL+SD1->D1_NUMSEQ+"RED" as character
+
+	if __lNFESD3 == NIL
+		__lNFESD3 := .F.
+		if SD3->(FieldPos("D3_NUMDOC")) > 0
+			if SD3->(FieldPos("D3_SERDOC")) > 0
+				__lNFESD3 := .T.
+			endif
+		endIf
+	endIf
+
+	If __lD3NumCq == Nil // Validacao campo novo D3_NUMCQ - Reforma Tributária
+		__lD3NumCq	:= SD3->( FieldPos( "D3_NUMCQ" ) ) > 0
+	EndIf
+
+	// Posiciona no Produto
+	SB1->(MsSeek(FWxFilial("SB1")+SD1->D1_COD))
+
+	If lEstorno .And. Localiza(SD1->D1_COD)
+		dbSelectArea("SD3")
+		SD3->(DbSetOrder(3))
+		If SD3->(DbSeek(cChvBusca))
+			cEndEst := SD3->D3_LOCALIZ
+		Endif
+	Endif
+
+	Reclock("SD3",.T.)
+	SD3->D3_FILIAL    := FWxFilial("SD3")
+	SD3->D3_COD       := SD1->D1_COD
+	If QtdComp(SD1->D1_QUANT) > QtdComp(0)
+		SD3->D3_QUANT   := SD1->D1_QUANT
+		SD3->D3_QTSEGUM := SD1->D1_QTSEGUM
+	EndIf
+	SD3->D3_LOCAL     := SD1->D1_LOCAL
+	SD3->D3_DOC       := SD1->D1_DOC
+	If lEstorno
+		SD3->D3_TM     := "499"
+		SD3->D3_CF     := "DED"
+		SD3->D3_ESTORNO:= "S"
+	Else
+		SD3->D3_TM     := "999"
+		SD3->D3_CF     := "RED"
+	EndIf
+	SD3->D3_OP		   := SD1->D1_OP
+	SD3->D3_EMISSAO   := SD1->D1_DTDIGIT
+	SD3->D3_NUMSEQ    := SD1->D1_NUMSEQ
+	SD3->D3_USUARIO   := cUserName
+	SD3->D3_TIPO      := SB1->B1_TIPO
+	SD3->D3_GRUPO     := SB1->B1_GRUPO
+	SD3->D3_UM        := SB1->B1_UM
+	SD3->D3_SEGUM	   := SD1->D1_SEGUM
+	SD3->D3_CONTA	   := SD1->D1_CONTA
+	if __lNFESD3
+		SD3->D3_NUMDOC    := SD1->D1_DOC
+		SD3->D3_SERDOC    := SD1->D1_SERIE
+	endif
+	SD3->D3_FORNDOC   := SD1->D1_FORNECE
+	SD3->D3_LOJADOC   := SD1->D1_LOJA
+	SD3->D3_CHAVE     := "ED"
+
+	// Gravação do custo
+	SD3->D3_CUSTO1    := SD1->D1_CUSTO
+	SD3->D3_CUSTO2    := SD1->D1_CUSTO2
+	SD3->D3_CUSTO3    := SD1->D1_CUSTO3
+	SD3->D3_CUSTO4    := SD1->D1_CUSTO4
+	SD3->D3_CUSTO5    := SD1->D1_CUSTO5
+
+	// Gravação dos dados da rastreabilidade
+	If Rastro(SD1->D1_COD)
+		SD3->D3_LOTECTL	:= SD1->D1_LOTECTL
+		SD3->D3_NUMLOTE	:= SD1->D1_NUMLOTE
+		SD3->D3_DTVALID	:= SD1->D1_DTVALID
+		SD3->D3_POTENCI	:= SD1->D1_POTENCI
+	EndIf
+
+	// Gravação dos dados da Localização
+	If Localiza(SD1->D1_COD)
+		If lEstorno
+			SD3->D3_LOCALIZ   := cEndEst
+		Else
+			nPosSDB := Ascan(AdadosSBF, {|x| Alltrim(x[1]) == Alltrim(SD1->D1_ITEM)})
+			If nPosSDB > 0
+				SD3->D3_LOCALIZ	:= AdadosSBF[nPosSDB][3]
+			Endif
+		Endif
+	Endif
+
+	If SD3->D3_LOCAL == SuperGetMV("MV_CQ")
+
+		If __lD3NumCq  //Criado campo na D3_NUMCQ para gravação do campo D7_NUMERO - Reforma Tributária
+			SD3->D3_NUMCQ := getNumCQ(SD3->D3_COD)
+		EndIf
+	EndIf
+
+	SD3->(MsUnlock())
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} estornaSD3
+Marca o movimento RED como estornado
+@author Squad Entradas
+@since 06/07/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function estornaSD3()
+	Local cChvBusca := FWxFilial("SD3")+SD1->D1_COD+SD1->D1_LOCAL+SD1->D1_NUMSEQ+"RED" as character
+	Local aAreaSD3  := SD3->(GetArea()) as array
+
+	SD3->(DbSetOrder(3))
+
+	If SD3->(DbSeek(cChvBusca))
+		While SD3->(!Eof()) .And. SD3->(D3_FILIAL+D3_COD+D3_LOCAL+D3_NUMSEQ+D3_CF) == cChvBusca
+			Reclock("SD3",.F.)
+			SD3->D3_ESTORNO := "S"
+			SD3->(MsUnlock())
+			SD3->(DbSkip())
+		EndDo
+	EndIf
+
+	RestArea(aAreaSD3)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} vldSaldoFisico
+Valida o saldo físico do produto para notas de redução (invertida - A103linOK)
+@author Squad Entradas
+@since 13/03/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function vldSaldoFisico(nPosCod,nPosLocal,nPosQuant,nPosTes)
+	Local cCod     := aCols[n][nPosCod]   as character
+	Local cLocal   := aCols[n][nPosLocal] as character
+	Local lEstNeg  := SuperGetMV("MV_ESTNEG",.F.,"N") == "S" as logical
+	Local lRet     := .T. as logical
+
+	If !lEstNeg
+		//Valida&#65533;&#65533;o pelo LinOK
+		lRet := calculaSaldoFisico(cCod,cLocal,nPosCod,nPosLocal,nPosQuant,nPosTes)
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} calculaSaldoFisico
+Calcula o saldo físico do produto para notas de redução (invertida)
+@author Squad Entradas
+@since 13/03/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Static Function calculaSaldoFisico(cCod,cLocal,nPosCod,nPosLocal,nPosQuant,nPosTes)
+	Local nQtd   as numeric
+	Local nX     as integer
+	Local lRet   := .T. as logical
+	Local lOk    as logical
+	Local nSaldo as numeric
+	Local cHelp  as character
+
+	//Posiciona no índice da SB2
+	SB2->(DbSetOrder(1))
+
+	For nX := 1 to Len(aCols)
+		If !aCols[nX][Len(aHeader)+1]
+			If cCod == aCols[nX][nPosCod] .And. cLocal == aCols[nX][nPosLocal]
+				lOk := TesAtualizaEstoque(aCols[nX][nPosTes])
+				If !lOk
+					Loop
+				EndIf
+				nQtd += aCols[nX][nPosQuant]
+			EndIf
+		EndIf
+	Next nX
+
+	If QtdComp(nQtd) > QtdComp(0)
+		If SB2->(DbSeek(FWxFilial("SB2")+cCod+cLocal))
+			nSaldo := SaldoMov(Nil,.T.,Nil,.F.,,Nil,Nil,dDataBase) - nQtd
+			If QtdComp(nSaldo) < QtdComp(0)
+				cHelp:= "Produto: "+cCod+" Local: "+cLocal //"Produto: "--" Local: "
+				Help(" ",1,"MA240NEGAT",,cHelp,4,1)
+				lRet := .F.
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} vldSaldoLote
+Valida o saldo por lote/sublote para notas de redução (invertida - A103linOK)
+@author Squad Entradas
+@since 23/06/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function vldSaldoLote(nPosCod,nPosLocal,nPosQuant,nPosLoteCtl,nPosSLote)
+	Local lRet 	   := .T. as logical
+	Local cCod     := aCols[n][nPosCod] as character
+	Local cLocal   := aCols[n][nPosLocal] as character
+	Local cLoteCtl := aCols[n][nPosLoteCtl] as character
+	Local cNumLote := aCols[n][nPosSLote] as character
+
+	If !Empty(cLoteCtl+cNumLote)
+		lRet := calculaSaldoLote(cCod,cLocal,cLoteCtl,cNumLote,nPosCod,nPosLocal,nPosLoteCtl,nPosSLote,nPosQuant)
+	Else
+		lRet := .F.
+		cHelp:="Produto: "+AllTrim(cCod)+"Local: "+cLocal+"Lote: "+cLoteCtl // Produto#Local#Saldo Disp.#Lote
+		Help(" ",1,"A240LOTCTL",,cHelp,4,1)
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} calculaSaldoLote
+Calcula o saldo por lote/sublote para notas de redução (invertida)
+@author Squad Entradas
+@since 23/06/2026
+@version 1.0vldSaldoEstoque 
+/*/
+//-------------------------------------------------------------------
+Static Function calculaSaldoLote(cCod,cLocal,cLoteCtl,cNumLote,nPosCod,nPosLocal,nPosLoteCtl,nPosSLote,nPosQuant)
+	Local lRet 	       := .T. as logical
+	Local nX 	       as numeric
+	Local nQtd	       as numeric
+	Local nSaldo       as numeric
+	Local cHelp	       as character
+	Local cSubLoteItem as character
+
+	For nX := 1 to Len(aCols)
+		If !Empty(cNumLote)
+			cSubLoteItem := AllTrim(aCols[nX][nPosSLote])
+		Else
+			cSubLoteItem := ""
+		EndIf
+
+		If !aCols[nX][Len(aHeader)+1]
+			If cCod == aCols[nX][nPosCod] .And. cLocal == aCols[nX][nPosLocal] ;
+					.And. cLoteCtl == aCols[nX][nPosLoteCtl] .And. cSubLoteItem == AllTrim(cNumLote)
+				nQtd += aCols[nX][nPosQuant]
+			EndIf
+		EndIf
+	Next nX
+
+	nSaldo:= QtdComp(SaldoLote(cCod,cLocal,cLoteCtl,cNumLote,.F.,.T.,NIL,dDataBase))
+	If nSaldo < QtdComp(nQtd)
+		lRet := .F.
+		cHelp:="Produto: "+AllTrim(cCod)+"Local: "+cLocal+"Saldo Disp. "+AllTrim(cValToChar(nSaldo))+"Lote: "+cLoteCtl // Produto#Local#Saldo Disp.#Lote
+		Help(" ",1,"A240LOTENE",,cHelp,4,1)
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} vldSaldoEstoque
+Valida o saldo do produto na inclusão de notas de crédito por redução (invertida - A103TudOk)
+@author Squad Entradas
+@since 23/06/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function vldSaldoEstoque(nPosCod,nPosLocal,nPosQuant,nPosTes,nPosLoteCtl,nPosLote,nLine)
+	Local lRastro  := SuperGetMV("MV_RASTRO",.F.,"N") == "S" as logical
+	Local lEstNeg  := SuperGetMV("MV_ESTNEG",.F.,"N") == "S" as logical
+	Local cCod     as character
+	Local cLocal   as character
+	Local cLoteCtl as character
+	Local cSubLote as character
+	Local nX       as numeric
+	Local lOk      := .T. as logical
+	Local lRet     as variant
+	Local oProduto := JsonObject():New() as json
+	Local oRastro  := JsonObject():New() as json
+
+	For nX := 1 to Len(aCols)
+		If !(nX == nLine)
+			cCod   := aCols[nX][nPosCod]
+			cLocal := aCols[nX][nPosLocal]
+			If !lEstNeg
+				lRet := oProduto[cCod+cLocal]
+				If lRet == Nil
+					lOk := calculaSaldoFisico(cCod,cLocal,nPosCod,nPosLocal,nPosQuant,nPosTes)
+					oProduto[cCod+cLocal] := .T.
+					If !lOk
+						Exit
+					EndIf
+				EndIf
+			EndIf
+
+			If lOk .And. lRastro .And. Rastro(cCod)
+				cLoteCtl := aCols[nX][nPosLoteCtl]
+				cSubLote := aCols[nX][nPosLote]
+				lRet     := oRastro[cCod+cLocal+cLoteCtl+cSubLote]
+				If lRet == Nil
+					lOk := calculaSaldoLote(cCod,cLocal,cLoteCtl,cSubLote,nPosCod,nPosLocal,nPosLoteCtl,nPosLote,nPosQuant)
+					oRastro[cCod+cLocal+cLoteCtl+cSubLote] := .T.
+				EndIf
+			EndIf
+		EndIf
+	Next nX
+
+	oProduto := Nil
+	oRastro  := Nil
+
+Return lOk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} tesAtualizaEstoque
+Indica se a tes informada no item atualiza estoque
+@author Squad Entradas
+@since 25/02/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Static Function tesAtualizaEstoque(cTes)
+	Local lRet     := .F.
+	Local aAreaSF4 := {}
+
+	// Retorna se a tes do item atualiza estoque
+	If !Empty(cTes)
+		aAreaSF4 := SF4->(GetArea())
+		SF4->(DBSetOrder(1))
+		If SF4->(MsSeek(FWxFilial("SF4")+cTes))
+			If SF4->F4_ESTOQUE == "S"
+				lRet := .T.
+			EndIf
+		EndIf
+		RestArea(aAreaSF4)
+	EndIf
+
+Return lRet
+//-------------------------------------------------------------------
+/*/{Protheus.doc} vldLote
+Valida a alteração do lote/sublote para notas de crédito
+@author Squad Entradas
+@since 23/06/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function vldLote(cConteudo,cCod,nPos,cTipo,cFormul,cTpCompl,lRevFlow)
+	Local lRet      := .T. as logical
+	Local aAreaSD1  := {}  as array
+
+	If (cConteudo <> aCols[n][nPos])
+		lRevFlow := isReverseFlow(cTipo,,cFormul,cTpCompl)
+		If lRevFlow
+			If l103Auto .And. Type("oJDocOrig") == "J"
+				lRet := .F.
+				aDoc := oJDocOrig['documentos'][1]
+				aAreaSD1 := SD1->(GetArea())
+
+				//Pesquisa pelo lote na nota de origem
+				SD1->(DbSetOrder(11))
+				If SD1->(DbSeek(FWxFilial("SD1")+oJDocOrig['documentos'][1]['documento']+oJDocOrig['documentos'][1]['serie']+oJDocOrig['documentos'][1]['forclirf']+oJDocOrig['documentos'][1]['lojarf']+cCod+cConteudo))
+					lRet := .T.
+				EndIf
+
+				RestArea(aAreaSD1)
+			Else
+				lRet := .F.
+			EndIf
+
+			If !lRet
+				Help(NIL,NIL,"A103CRDLOT",,STR0001,1,0,,,,,,{STR0002})
+			EndIf
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} vldLocalCQ
+Valida se o produto da nota fiscal está no armazém CQ
+@author Squad Entradas
+@since 07/07/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function vldLocalCQ(cDoc,cSerie,cFornecedor,cLoja,cCod,nItem)
+
+	Local aAreaSD1   := SD1->(GetArea())
+	Local cLocalCQ   := SuperGetMV("MV_CQ")
+	Local lRet       := .F.
+	Local cItemChave := ""
+
+	If ValType(nItem) == "N"
+		cItemChave := StrZero(nItem, 4)
+	ElseIf ValType(nItem) == "C"
+		cItemChave := nItem
+	EndIf
+
+	SD1->(DBSetOrder(1))
+	If SD1->(MsSeek(xFilial("SD1")+cDoc+cSerie+cFornecedor+cLoja+cCod+cItemChave))
+		If SD1->D1_LOCAL == cLocalCQ
+			lRet := .T.
+		EndIf
+	EndIf
+	RestArea(aAreaSD1)
+
+Return lRet
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GeraCQ
+Gera ajuste CQ para documento do tipo: "credito", complemento: "reducao de valores"
+@author Squad Entradas
+@since 07/07/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function GeraCQ(cDoc, cSerie, cFornecedor, cLoja, cCod, cItem, cNumSeq, nQuant, nQtSegum)
+	Local aAreaSD1      := {}
+	Local aAreaSD7      := {}
+	Local cDirCQ        := GetMv('MV_DIRCQ')
+	Local cDocRef       := ""
+	Local cFornRef      := ""
+	Local cLibera       := ""
+	Local cLojaRef      := ""
+	Local cLoteCtl      := ""
+	Local cNumLote      := ""
+	Local cOrigLan      := ""
+	Local cSerRef       := ""
+	Local cSeq          := ''
+	Local cObs
+	Local cTexto        := ""
+	Local cTipoCQ       := ""
+	Local lRet          := .F.
+	Local nSaldoCQ      := 0
+	Local nSaldoCQ2      := 0
+	Local nSeq          := 0
+	Local nTipo         := 0
+
+	If oJDocOrig <> nil .and. oJDocOrig:hasproperty('documentos') .and.  len(oJDocOrig['documentos']) > 0
+		cDocRef  := oJDocOrig['documentos'][1]['documento']
+		cSerRef  := oJDocOrig['documentos'][1]['serie']
+		cFornRef := oJDocOrig['documentos'][1]['forclirf']
+		cLojaRef := oJDocOrig['documentos'][1]['lojarf']
+
+		aAreaSD1 := SD1->(GetArea())
+		SD1->(DBSetOrder(1))
+		If SD1->(MsSeek(xFilial("SD1")+cDocRef+cSerRef+cFornRef+cLojaRef+cCod+SD1->D1_ITEMORI))
+			aAreaSD7 := SD7->(GetArea())
+			SD7->(dbSetOrder(2))
+			SD7->(DbGoBottom())
+			If SD7->(MsSeek(xFilial("SD7")+SD1->D1_NUMCQ+SD1->D1_COD+SD1->D1_LOCAL))
+				While !SD7->(Eof()) .And. SD7->D7_FILIAL == xFilial("SD7") .And. ;
+						SD7->D7_NUMERO == SD1->D1_NUMCQ .And. SD7->D7_PRODUTO == SD1->D1_COD .And. SD7->D7_LOCAL == SD1->D1_LOCAL
+
+					If SD7->D7_SALDO > 0
+						cSeq      := SD7->D7_SEQ
+						nTipo     := SD7->D7_TIPO
+						nSaldoCQ  := (SD7->D7_SALDO - nQuant)
+						nSaldoCQ2 := (SD7->D7_SALDO2 - nQtSegum)
+						cOrigLan  := SD7->D7_ORIGLAN
+						cTipoCQ   := SD7->D7_TIPOCQ
+						cLibera   := SD7->D7_LIBERA
+						cLoteCtl  := SD7->D7_LOTECTL
+						cNumLote  := SD7->D7_NUMLOTE
+						lRet      := .T.
+					Else
+						lRet      := .F.
+					EndIf
+
+					SD7->(DbSkip())
+				EndDo
+
+				If lRet .And. nSaldoCQ >= 0
+					RecLock('SD7', .T.)
+					Replace D7_FILIAL  With xFilial('SD7')
+					Replace D7_NUMERO  With SD1->D1_NUMCQ
+					Replace D7_PRODUTO With cCod
+					Replace D7_ORIGLAN With cOrigLan
+					Replace D7_USUARIO With CUSERNAME
+					Replace D7_LOCAL   With SD1->D1_LOCAL
+					Replace D7_LOCDEST With SD1->D1_LOCAL
+					Replace D7_TIPO    With 2
+					Replace D7_DOC     With cDoc
+					Replace D7_SERIE   With cSerie
+					Replace D7_FORNECE With cFornecedor
+					Replace D7_LOJA    With cLoja
+					Replace D7_QTDE    With nQuant
+					Replace D7_DATA    With dDataBase
+					Replace D7_SEQ     With (cSeq:=StrZero((Val(cSeq)+1),3))
+					Replace D7_SALDO   With nSaldoCQ
+					Replace D7_SALDO2  With nSaldoCQ2
+					Replace D7_NUMSEQ  With cNumSeq
+					Replace D7_TIPOCQ  With cTipoCQ
+					Replace D7_LIBERA  With cLibera
+					Replace D7_LOTECTL With cLoteCtl
+					Replace D7_NUMLOTE With cNumLote
+					MsUnlock()
+					cArqCQ:='CQ'+SD7->D7_NUMERO+'.TXT'
+					cTexto := MemoRead(cDirCQ+cArqCQ)
+					cObs :='Documento:'+cDoc+' Série: '+cSerie+' Fornecedor: '+cFornecedor+' Loja: '+cLoja+' Produto: '+cCod+' Item: '+cItem
+					nTipo := nTipo
+					nSeq  := Val(cSeq)
+					cTexto += fGrvCQObs(cObs,nTipo,nSeq)
+					lRet := .T.
+				Else
+					Help(NIL, NIL, "A103NDNC", NIL, STR0003, 1, 0, NIL, NIL, NIL, NIL, NIL, {}) //"Não será realizada a baixa no CQ referente à NF de crédito, complemento redução de valor, pois não há saldo suficente."
+				EndIf
+			EndIf
+		Endif
+		RestArea(aAreaSD1)
+	EndIf
+
+Return lRet
+
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getNumCQ
+Gera ajuste CQ para documento do tipo: "credito", complemento: "reducao de valores"
+@author Squad Entradas
+@since 07/07/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Static Function getNumCQ(cCod)
+	Local aAreaSD1  := {}
+	Local cNumCQ    := " "
+
+	If Type("oJDocOrig") == "J"
+		aAreaSD1 := SD1->(GetArea())
+		SD1->(DBSetOrder(1))
+
+		If SD1->(MsSeek(xFilial("SD1")+oJDocOrig['documentos'][1]['documento']+oJDocOrig['documentos'][1]['serie']+oJDocOrig['documentos'][1]['forclirf']+oJDocOrig['documentos'][1]['lojarf']+cCod+SD1->D1_ITEMORI))
+			cNumCQ := SD1->D1_NUMCQ
+		EndIf
+
+		RestArea(aAreaSD1)
+	EndIf
+
+Return cNumCQ
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getSD1
+Busca o tipo de documento a partir da SD7
+@author Squad Entradas
+@since 09/07/2025
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Function getSD1(cTipoDoc)
+
+	Local aAreaSD1  := {}
+	Local cChaveSD1 := ""
+	Local lRet      := .F.
+
+	Default cTipoDoc := ""
+
+	aAreaSD1 := SD1->(GetArea())
+	SD1->(DBSetOrder(1))
+	cChaveSD1 := xFilial("SD1") + SD7->D7_DOC + SD7->D7_SERIE + SD7->D7_FORNECE + SD7->D7_LOJA + SD7->D7_PRODUTO
+	If SD1->(MsSeek(cChaveSD1))
+		While !SD1->(Eof()) .And. ;
+				SD1->D1_FILIAL  == xFilial("SD1") .And. ;
+				SD1->D1_DOC     == SD7->D7_DOC .And. ;
+				SD1->D1_SERIE   == SD7->D7_SERIE .And. ;
+				SD1->D1_FORNECE == SD7->D7_FORNECE .And. ;
+				SD1->D1_LOJA    == SD7->D7_LOJA .And. ;
+				SD1->D1_COD     == SD7->D7_PRODUTO
+				If backoffice.stock.inbounddocument.IsReverseFlow(SD1->D1_TIPO,SD1->D1_TIPODOC,SD1->D1_FORMUL)
+					lRet 	 := .T.
+					cTipoDoc := SD1->D1_TIPODOC
+					exit
+				EndIf
+			SD1->(DbSkip())
+		EndDo
+	EndIf
+
+	If !Empty(aAreaSD1)
+		RestArea(aAreaSD1)
+	EndIf
+
+Return lRet
+
+/*/{Protheus.doc} vldEndereco
+   Valida se foi informado endereco para o item da NFvia Execauto
+   @type  Function
+   @author Squad Entradas
+   @since 14/07/2026
+   @version 1.0
+   @param aDadosSBF, array, array com as informacoes de enderecos
+   @param cItemNF, character, item da NF
+   @return lRet, logical, indica se foi informado endereco
+   /*/
+Function vldEndereco(aDadosSBF, cItemNF)
+	Local nPosItem := 0   as numeric
+	Local lRet     := .T. as logical
+
+	nPosItem := aScan(aDadosSBF, {|x| AllTrim(x[1]) == AllTrim(cItemNF)})
+
+	If nPosItem > 0
+		If Empty(aDadosSBF[nPosItem][3])
+			lRet := .F.
+		EndIf
+	Else
+		lRet := .F.
+	EndIf
+
+	If !lRet
+		Help(, 1, "A103CRDEND", , STR0004, 1, 0, , , , , , {STR0005}) // E OBRIGATORIO informar o endereco para produtos que controlam localizacao nas NFs de credito de reducao. # Informe um endereco valido para o produto informado.
+	EndIf
+
+Return lRet
+
+/*/{Protheus.doc} ValidMA103
+Função chamada na validação da linha do programa MATA103.
+Caso precise adicionar novas validações e deseje acionar esta mesma função em outros
+pontos do MATA103, utilize a variável nTipoValid, passando um número diferente dos que
+já estão em uso, assim haverá a separação das validações.
+@type function
+@version 12.1.2510
+@author tp.ciro.pedreira
+@since 08/07/2026
+@param nTipoValid, numeric, número que representa o grupo de validações que se deseja executar
+@return logical, .T. = registro correto; .F. = registro com erro
+/*/
+Function ValidMA103(nTipoValid As Numeric) As Logical
+
+	Local lRet As Logical
+	Local nPosIdentB6 As Numeric
+
+	Default nTipoValid := 0
+
+	lRet := .T.
+
+	If nTipoValid == 1 // Executado na função A103LinOk().
+		nPosIdentB6 := GetPosSD1("D1_IDENTB6")
+
+		If SF4->F4_PODER3 == "D"
+			If nPosIdentB6 > 0 .And. Empty(aCols[n][nPosIdentB6])
+				lRet := .F.
+				Help(NIL, NIL, "NCNDPODER3", NIL, STR0006, 1, 0, NIL, NIL, NIL, NIL, NIL, {STR0007}) // #"Incompatibilidade de TES. Não é possível usar um TES com controle de poder de terceiros na devolução para uma Nota Fiscal original sem esse controle." ##"Altere o TES ou revise a configuração da nota original."
+			EndIf
+		ElseIf SF4->F4_PODER3 == "N"
+			If nPosIdentB6 > 0 .And. !Empty(aCols[n][nPosIdentB6])
+				lRet := .F.
+				Help(NIL, NIL, "NCNNPODER3", NIL, STR0008, 1, 0, NIL, NIL, NIL, NIL, NIL, {STR0007}) // #"Incompatibilidade de TES. Não é possível usar um TES sem controle de poder de terceiros para uma Nota Fiscal original com esse controle." ##"Altere o TES ou revise a configuração da nota original."
+			EndIf
+		ElseIf SF4->F4_PODER3 == "R"
+			lRet := .F.
+			Help(NIL, NIL, "NCNRPODER3", NIL, STR0009, 1, 0, NIL, NIL, NIL, NIL, NIL, {STR0010}) // #"Incompatibilidade de TES. Não é possível usar um TES com controle de poder de terceiros na remessa para este tipo de documento." ##"Altere o TES."
+		EndIf
+	EndIf
+
+Return lRet
+
+/*/{Protheus.doc} PrcTp54
+Retorna o preço atualizado após a inclusão da nota de tipo crédito e tipo de
+complemento 4 - Redução de valores.
+@type function
+@version 12.1.2510
+@author tp.ciro.pedreira
+@since 14/07/2026
+@param cChvTp54, character, chave de busca da nota fiscal de tipo crédito e tipo complemento 4 - redução de valores
+@param nQuant, numeric, quantidade total do saldo do poder de terceiros
+@return numeric, preço unitário atualizado
+/*/
+Function PrcTp54(cChvTp54 As Character, nQuant As Numeric) As Numeric
+
+	Local nComplPrc As Numeric
+	Local aAreaSB6 As Array
+
+	Default cChvTp54 := ""
+	Default nQuant   := 0
+
+	nComplPrc := 0
+	aAreaSB6  := SB6->(FWGetArea())
+
+	SB6->(DBSetOrder(3)) // Indice 3 - B6_FILIAL+B6_IDENT+B6_PRODUTO+B6_PODER3
+	If SB6->(DBSeek(cChvTp54))
+		While cChvTp54 == SB6->(B6_FILIAL+B6_IDENT+B6_PRODUTO+B6_PODER3) .And. !SB6->(EOF())
+			If SB6->B6_QUANT == 0
+				nComplPrc += SB6->B6_PRUNIT / nQuant
+			EndIf
+			SB6->(DbSkip())
+		EndDo
+	EndIf
+
+	FWRestArea(aAreaSB6)
+
+Return nComplPrc
+
+/*/{Protheus.doc} QryMN410A
+Retorna query SQL de consulta de dados para uso na função A410TotPoder3() do fonte MATN410A.prw.
+@type function
+@version 12.1.2510
+@author tp.ciro.pedreira
+@since 20/07/2026
+@param nTipo, numeric, 1 = retornar query SQL; 2 = faz o bind da query
+@param lVldData, logical, conteúdo do parametro MV_VLDDATA
+@param __oPrepSB6, object, objeto da classe FwExecStatement()
+@param cFilSF1, character, filial da tabela SF1
+@param cFilSB6, character, filial da tabela SB6
+@param cProduto, character, código do produto
+@param cCliFor, character, código do cliente ou fornecedor
+@param cLoja, character, loja do cliente ou fornecedor
+@param cIdentB6, character, identificação da origem do registro na tabela SB6
+@param cTpCliFor, character, indica se a busca será pelo cliente ou fornecedor
+@param cFilSD1, character, filial da tabela SD1
+@param nParam, numeric, controle da sequencia dos parametros usados no bind da query
+@return character, query SQL
+/*/
+Function QryMN410A(nTipo As Numeric, lVldData As Logical, __oPrepSB6 As Object, cFilSF1 As Character, cFilSB6 As Character, cProduto As Character, cCliFor As Character, cLoja As Character, cIdentB6 As Character, cTpCliFor As Character, cFilSD1 As Character, nParam As Numeric) As Character
+
+	Local cQuery As Character
+
+	Default nTipo      := 0
+	Default lVldData   := .F.
+	Default __oPrepSB6 := Nil
+	Default cFilSF1    := ""
+	Default cFilSB6    := ""
+	Default cProduto   := ""
+	Default cCliFor    := ""
+	Default cLoja      := ""
+	Default cIdentB6   := ""
+	Default cTpCliFor  := ""
+	Default cFilSD1    := ""
+	Default nParam     := 0
+
+	If nTipo == 1
+		cQuery := " UNION ALL "
+		cQuery += "SELECT DISTINCT(SD1.R_E_C_N_O_) SD1RECNO,SB6.R_E_C_N_O_ SB6RECNO,D1_VUNIT,D1_TOTAL,D1_VALDESC,D1_VALDEV,0 SD2RECNO,0 D2_PRCVEN,0 D2_TOTAL,0 D2_DESCON,D1_NUMLOTE NUMLOTE,D1_LOTECTL LOTECTL,'' D2_TIPO,D1_TIPO, "
+		cQuery += "B6_FILIAL,B6_PRODUTO,B6_CLIFOR,B6_LOJA,B6_PODER3,B6_IDENTB6,B6_TPCF,B6_QUANT,B6_QULIB,B6_TIPO "
+		cQuery += " FROM "+RetSqlName("SB6")+" SB6 ,"
+		cQuery += RetSqlName("SD1")+" SD1 "
+		cQuery += "INNER JOIN " + RetSqlName("SF1")+" SF1 ON SF1.F1_FILIAL = ? "
+		cQuery += " AND SF1.F1_DOC = SD1.D1_DOC "
+		cQuery += " AND SF1.F1_SERIE = SD1.D1_SERIE "
+		cQuery += " AND SF1.F1_LOJA = SD1.D1_LOJA "
+		cQuery += " AND SF1.F1_FORNECE = SD1.D1_FORNECE "
+		If cPaisLoc=="BRA" .And. SF1->(ColumnPos("F1_TPCOMPL")>0)
+			cQuery += " AND SF1.F1_TPCOMPL = ? "
+		EndIf
+		cQuery += " AND SF1.F1_TIPO = ? "
+		cQuery += " AND SF1.D_E_L_E_T_ = ? "
+		cQuery += "WHERE SB6.B6_FILIAL = ? AND "
+		cQuery += "SB6.B6_PRODUTO = ? AND "
+		If !IsTriangular()
+			cQuery += "SB6.B6_CLIFOR = ? AND "
+			cQuery += "SB6.B6_LOJA = ? AND "
+		EndIf
+		cQuery += "SB6.B6_PODER3  = ? AND "
+		cQuery += "(SB6.B6_IDENT = ? OR "
+		cQuery += " SB6.B6_IDENTB6 = ? ) AND "
+		cQuery += "SB6.B6_TPCF = ? AND "
+		cQuery += "SB6.D_E_L_E_T_ = ? AND "
+		cQuery += "SB6.B6_TIPO = ? AND "
+		cQuery += "SD1.D1_FILIAL = ? AND "
+		cQuery += "SD1.D1_IDENTB6 = SB6.B6_IDENT AND "
+		If lVldData
+			cQuery += "SD1.D1_DTDIGIT <= ? AND "
+		EndIf
+		cQuery += "SD1.D_E_L_E_T_ = ? "
+	ElseIf nTipo == 2
+		__oPrepSB6:SetString(nParam++,cFilSF1)
+		If cPaisLoc=="BRA" .And. SF1->(ColumnPos("F1_TPCOMPL")>0)
+			__oPrepSB6:SetString(nParam++,'4')
+		EndIf
+		__oPrepSB6:SetString(nParam++,'5')
+		__oPrepSB6:SetString(nParam++,' ')
+		__oPrepSB6:SetString(nParam++,cFilSB6)
+		__oPrepSB6:SetString(nParam++,cProduto)
+		If !IsTriangular()
+			__oPrepSB6:SetString(nParam++,cCliFor)
+			__oPrepSB6:SetString(nParam++,cLoja)
+		EndIf
+		__oPrepSB6:SetString(nParam++,'D')
+		__oPrepSB6:SetString(nParam++,cIdentB6)
+		__oPrepSB6:SetString(nParam++,cIdentB6)
+		__oPrepSB6:SetString(nParam++,cTpCliFor)
+		__oPrepSB6:SetString(nParam++,' ')
+		__oPrepSB6:SetString(nParam++,'D')
+		__oPrepSB6:SetString(nParam++,cFilSD1)
+		If lVldData
+			__oPrepSB6:SetString(nParam++,DTOS(dDataBase))
+		EndIf
+		__oPrepSB6:SetString(nParam++,' ')
+	EndIf
+
+Return cQuery
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} isCredReductionOwnForm
+Verifica se o documento de entrada e do tipo credito (5),
+complemento reducao de valores (4) e formulario proprio (S).
+@type Function
+@author Squad Entradas
+@since 10/08/2026
+@version 1.0
+@param cTipo, character, Tipo do documento de entrada (F1_TIPO)
+@param cTpCompl, character, Tipo de complemento do documento (F1_TPCOMPL)
+@param cFormul, character, Indica se e formulario proprio (F1_FORMUL)
+@param cFormul, character, Indica se e formulario proprio (PASSA N= NORMAL/P=PROPRIO)
+@return lRet, logical, .T. = documento e credito + reducao + formulario proprio
+/*/
+//-------------------------------------------------------------------
+Function isCredReductionOwnForm(cTipo as character, cTpCompl as character, cFormul as character, cTipoForm as character) as logical
+	Local lRet := .F. as logical
+
+	Default cTipo     := ""
+	Default cTpCompl  := ""
+	Default cFormul   := ""
+	Default cTipoForm := ""
+
+	If cTipo == "5" .And. cTpCompl $ "3/4/6" .and. cFormul == "S" .and. cTipoForm == "P"
+		lRet := .T.
+	ElseIf cTipo == "5" .And. cTpCompl $ "4/6" .and. cFormul <> "S" .and. cTipoForm == "N"
+		lRet := .T.
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} A103TrFil
+Analisa transferencia entre filiais no documento de entrada.
+Nao valida a nota de saida quando o documento for do tipo credito (5),
+complemento reducao de valores (4) e formulario proprio (S).
+@type Function
+@author Squad Entradas
+@since 10/08/2026
+@version 1.0
+@param cTes, character, Codigo da TES
+@param cTipo, character, Tipo do documento de entrada (F1_TIPO)
+@param cCliFor, character, Codigo do cliente/fornecedor
+@param cLoja, character, Loja do cliente/fornecedor
+@param cDoc, character, Numero do documento
+@param cSerie, character, Serie do documento
+@param cCod, character, Codigo do produto
+@param nQuant, numeric, Quantidade do item
+@param aItmSD2, array, Array com itens da SD2
+@param cLote, character, Lote do produto
+@param cSubLote, character, Sub-lote do produto
+@param lTrfil, logical, Indica se e transferencia entre filiais
+@param cItem, character, Item da nota fiscal
+@return lRet, logical, .T. = validacao OK; .F. = validacao falhou
+/*/
+//-------------------------------------------------------------------
+Function A103TrFil(cTes, cTipo, cCliFor, cLoja, cDoc, cSerie, cCod, nQuant, aItmSD2, cLote, cSubLote, lTrfil, cItem)
+
+	Local lRet       := .T. as logical
+	Local cArqCliFor := "" as character
+	Local cAchoCli   := "" as character
+	Local cAchoLoja  := "" as character
+	Local cFilBack   := cFilAnt as character
+	Local cAliasAux  := "" as character
+	Local cQuery     := "" as character
+	Local oQuery     := Nil as object
+	Local aArea      := GetArea() as array
+	Local aAreaSM0   := SM0->(GetArea()) as array
+	Local lAchoCli   := .F. as logical
+	Local lPoder3    := .F. as logical
+	Local lUsaFilTrf := UsaFilTrf() as logical
+	Local cCodFil    := "" as character
+	Local cCodFilOri := "" as character
+	Local cAchoFil   := "" as character
+	Local cIndex     := "" as character
+	Local cArqIdx    := "" as character
+	Local nIndex     := 0 as numeric
+	Local lRastro    := ValType(cLote) == "C" .And. Rastro(cCod) .And. SuperGetMV("MV_TFVLDLT",.F.,.F.) as logical
+	Local cItem2     := "" as character
+
+	Default aItmSD2  := {}
+	Default lTrfil   := .F.
+
+	If SF4->(MsSeek(xFilial("SF4")+cTes)) .And. SF4->F4_TRANFIL == "1" .And. cTipo <> "D"
+		// Verifica se utiliza poder de terceiros
+		lPoder3 := (SF4->F4_PODER3 $ "R|D")
+
+		// Itens de nota fiscal de entrada
+		If ( cTipo $ "DB" .Or. A103RtCliRT(cTipo, cTpCompl, cFormul) )
+			cArqCliFor := "SA2" // Cliente na nota fiscal de entrada fornecedor na nota de saida
+			DbSelectArea("SA1")
+			DbSetOrder(1)
+			If MsSeek(xFilial("SA1")+cCliFor+cLoja)
+				cCodFil := Iif(lUsaFilTrf, SA1->A1_FILTRF, SA1->A1_CGC)
+			EndIf
+		Else
+			cArqCliFor := "SA1" // Fornecedor na nota fiscal de entrada cliente na nota de saida
+			DbSelectArea("SA2")
+			DbSetOrder(1)
+			If MsSeek(xFilial("SA2")+cCliFor+cLoja)
+				cCodFil := Iif(lUsaFilTrf, SA2->A2_FILTRF, SA2->A2_CGC)
+			EndIf
+		EndIf
+
+		// Checa se cliente / fornecedor esta configurado como filial do sistema
+		If !Empty(cCodFil) .And. !lPoder3
+			DbSelectArea("SM0")
+			dbSeek(cEmpAnt)
+			Do While !Eof() .And. SM0->M0_CODIGO == cEmpAnt
+				// Verifica codigo da filial caso encontre
+				If (!lUsaFilTrf .And. SM0->M0_CGC == cCodFil) .Or. (lUsaFilTrf .And. Trim(SM0->M0_CODFIL) == Trim(cCodFil))
+					cAchoFil := FWCodfil()
+					Exit
+				EndIf
+				dbSkip()
+			End
+			RestArea(aAreaSM0)
+
+			// Obtem filial da nota fiscal de entrada
+			If SM0->M0_CODIGO+FWCodfil() == cEmpAnt+cFilAnt
+				cCodFilOri := Iif(lUsaFilTrf, FWCodfil(), SM0->M0_CGC)
+			Else
+				dbSeek(cEmpAnt)
+				Do While ! Eof() .And. SM0->M0_CODIGO == cEmpAnt
+					// Verifica codigo da filial caso encontre CGC
+					If FWCodfil() == cFilAnt
+						cCodFilOri := Iif(lUsaFilTrf, FWCodfil(), SM0->M0_CGC)
+						Exit
+					EndIf
+					dbSkip()
+				End
+				RestArea(aAreaSM0)
+			EndIf
+
+			// Caso achou procura documento na filial
+			If !Empty(cAchoFil)
+				// Nao valida nota de saida para credito + reducao + formulario Sim  + proprio
+				If !isCredReductionOwnForm(cTipo, cTpCompl,cFormul,"P")
+					// Muda para filial de saida do documento
+					cFilAnt := cAchoFil
+
+					// Obtem codigo do cliente/fornecedor
+					DbSelectArea(cArqCliFor)
+					If lUsaFilTrf
+						//-- Monta filtro e indice temporario na SA1 ou SA2 pelo campo FILTRF
+						If cArqCliFor == "SA1"
+							cIndex := "A1_FILIAL+A1_FILTRF"
+						Else
+							cIndex := "A2_FILIAL+A2_FILTRF"
+						EndIf
+
+						cArqIdx := CriaTrab(,.F.)
+						IndRegua(cArqCliFor, cArqIdx, cIndex,,,STR0012) //"Selecionando Registros ..."
+						nIndex := RetIndex(cArqCliFor)
+						dbSetOrder(nIndex+1) // A1_FILIAL+A1_FILTRF ou A2_FILIAL+A2_FILTRF
+					Else
+						DbSetOrder(3)
+					EndIf
+					If dbSeek(xFilial(cArqClifor)+IIf(Type("l310PODER3") == "L" .And. l310PODER3, cCodFil, cCodFilOri))
+						lAchoCli := CliForOrig(cArqClifor, @cAchoCli, @cAchoLoja, lUsaFilTrf)
+						If lAchoCli
+							// Busca pela nota de entrada - Credito + reducao + formulario Não  + Normal
+							If isCredReductionOwnForm(cTipo, cTpCompl,cFormul,"N")
+								// Pesquisa documento
+								cItem2 := CodeSoma1(cItem, TamSX3("D1_ITEM")[1])
+
+								cAliasAux := GetNextAlias()
+
+								cQuery := "SELECT SD1.D1_FILIAL, SD1.D1_COD, SD1.D1_QUANT, SD1.D1_PEDIDO, SD1.D1_ITEMPV, SD1.D1_LOTECTL "
+								cQuery += "FROM " + RetSqlName("SD1") + " SD1 "
+								cQuery += "WHERE SD1.D1_FILIAL = ? "
+								cQuery += "AND SD1.D1_DOC = ? "
+								cQuery += "AND SD1.D1_SERIE = ? "
+								cQuery += "AND SD1.D1_ITEM = ? "
+								cQuery += "AND SD1.D1_FORNECE = ? "
+								cQuery += "AND SD1.D1_LOJA = ? "
+								cQuery += "AND SD1.D_E_L_E_T_ = ? "
+								cQuery += "ORDER BY SD1.D1_ITEM, SD1.D1_COD "
+								cQuery := ChangeQuery(cQuery)
+
+								oQuery := FwExecStatement():New(cQuery)
+								oQuery:SetString(1, FWxFilial("SD1"))
+								oQuery:SetString(2, cDoc)
+								oQuery:SetString(3, cSerie)
+								oQuery:SetString(4, cItem2)
+								oQuery:SetString(5, cAchoCli)
+								oQuery:SetString(6, cAchoLoja)
+								oQuery:SetString(7, ' ')
+								oQuery:OpenAlias(cAliasAux)
+
+								If !(cAliasAux)->(Eof()) .And. If(FindFunction("A310VldPrd"), A310VldPrd(cAchoFil, (cAliasAux)->D1_COD, cFilBack, cCod), (cAliasAux)->D1_COD == cCod)
+									If QtdComp(nQuant) <> QtdComp((cAliasAux)->D1_QUANT)
+										lRet := .F.
+										// Ponto de entrada para nao validar Qtde divergente SD1 x SD2
+										If ExistBlock("A103VLQT")
+											lRet := ExecBlock("A103VLQT",.F.,.F.,{lRet})
+											If ValType(lRet) <> "L"
+												lRet := .F.
+											EndIf
+										EndIf
+										If !lRet
+											Aviso(STR0011,STR0013,{STR0014},1) //"A quantidade do Item esta divergente da informada no Documento de Saida"
+										EndIf
+									Else
+										If lRet
+											// Ponto de entrada para nao validar Qtde divergente SD1 x SD2
+											If ExistBlock("A103VLQT")
+												lRet := ExecBlock("A103VLQT",.F.,.F.,{lRet})
+												If ValType(lRet) <> "L"
+													lRet := .F.
+													lTrfil := .F.
+												EndIf
+											EndIf
+											If !lRet
+												Aviso(STR0011,STR0015,{STR0014},1)
+											EndIf
+										Else
+											Aviso(STR0011,STR0016,{STR0014},1) //O documento nao foi encontrado na filial de origem ou a ordem do Item esta divergente da informada no Documento de Saida
+										EndIf
+									EndIf
+								Else
+									lRet := .F.
+									lTrfil := .F.
+									Aviso(STR0011,STR0016,{STR0014},1)  //O documento nao foi encontrado na filial de origem ou a ordem do Item esta divergente da informada no Documento de Saida
+								EndIf
+								(cAliasAux)->(DbCloseArea())
+								oQuery:Destroy()
+
+							Else
+								// Pesquisa documento
+								cItem2 := CodeSoma1(cItem, TamSX3("D2_ITEM")[1])
+
+								cAliasAux := GetNextAlias()
+
+								cQuery := "SELECT SD2.D2_FILIAL, SD2.D2_COD, SD2.D2_QUANT, SD2.D2_PEDIDO, SD2.D2_ITEMPV, SD2.D2_LOTECTL "
+								cQuery += "FROM " + RetSqlName("SD2") + " SD2 "
+								cQuery += "WHERE SD2.D2_FILIAL = ? "
+								cQuery += "AND SD2.D2_DOC = ? "
+								cQuery += "AND SD2.D2_SERIE = ? "
+								cQuery += "AND SD2.D2_ITEM = ? "
+								cQuery += "AND SD2.D2_CLIENTE = ? "
+								cQuery += "AND SD2.D2_LOJA = ? "
+								cQuery += "AND SD2.D_E_L_E_T_ = ? "
+								cQuery += "ORDER BY SD2.D2_ITEM, SD2.D2_COD "
+								cQuery := ChangeQuery(cQuery)
+
+								oQuery := FwExecStatement():New(cQuery)
+								oQuery:SetString(1, FWxFilial("SD2"))
+								oQuery:SetString(2, cDoc)
+								oQuery:SetString(3, cSerie)
+								oQuery:SetString(4, cItem2)
+								oQuery:SetString(5, cAchoCli)
+								oQuery:SetString(6, cAchoLoja)
+								oQuery:SetString(7, ' ')
+								oQuery:OpenAlias(cAliasAux)
+
+								If !(cAliasAux)->(Eof()) .And. Iif(FindFunction("A310VldPrd"), A310VldPrd(cAchoFil, (cAliasAux)->D2_COD, cFilBack, cCod), (cAliasAux)->D2_COD == cCod)
+									If QtdComp(nQuant) <> QtdComp((cAliasAux)->D2_QUANT)
+										lRet := .F.
+										// Ponto de entrada para nao validar Qtde divergente SD1 x SD2
+										If ExistBlock("A103VLQT")
+											lRet := ExecBlock("A103VLQT",.F.,.F.,{lRet})
+											If ValType(lRet) <> "L"
+												lRet := .F.
+											EndIf
+										EndIf
+										If !lRet
+											Aviso(STR0011,STR0013,{STR0014},1) //"A quantidade do Item esta divergente da informada no Documento de Saida"
+										EndIf
+									Else
+										lRet := .F.
+										lTrfil := .F.
+
+										While !(cAliasAux)->(Eof())
+											If !lRastro .Or. (cAliasAux)->D2_LOTECTL == cLote
+												AADD(aItmSD2,{"D2_FILIAL", (cAliasAux)->D2_FILIAL})
+												AADD(aItmSD2,{"D2_PEDIDO", (cAliasAux)->D2_PEDIDO})
+												AADD(aItmSD2,{"D2_ITEMPV", (cAliasAux)->D2_ITEMPV})
+												lRet := .T.
+												lTrfil := .T.
+												Exit
+											EndIf
+											(cAliasAux)->(DbSkip())
+										End
+										If lRet
+											// Ponto de entrada para nao validar Qtde divergente SD1 x SD2
+											If ExistBlock("A103VLQT")
+												lRet := ExecBlock("A103VLQT",.F.,.F.,{lRet})
+												If ValType(lRet) <> "L"
+													lRet := .F.
+													lTrfil := .F.
+												EndIf
+											EndIf
+											If !lRet
+												Aviso(STR0011,STR0015,{STR0014},1)
+											EndIf
+										Else
+											Aviso(STR0011,STR0016,{STR0014},1) //O documento nao foi encontrado na filial de origem ou a ordem do Item esta divergente da informada no Documento de Saida
+										EndIf
+									EndIf
+								Else
+									lRet := .F.
+									lTrfil := .F.
+									Aviso(STR0011,STR0016,{STR0014},1) //O documento nao foi encontrado na filial de origem ou a ordem do Item esta divergente da informada no Documento de Saida
+								EndIf
+								(cAliasAux)->(DbCloseArea())
+								oQuery:Destroy()
+							Endif
+
+
+						Else
+							lRet := .F.
+							lTrfil := .F.
+							Aviso(STR0011,STR0016,{STR0014},1) //O documento nao foi encontrado na filial de origem ou a ordem do Item esta divergente da informada no Documento de Saida
+						EndIf
+					Else
+						lRet := .F.
+						lTrfil := .F.
+						Aviso(STR0011,STR0017,{STR0014},1)
+					EndIf
+
+					If lUsaFilTrf
+						dbSelectArea(cArqCliFor)
+						RetIndex(cArqCliFor)
+						Ferase(cArqIdx + OrdBagExt())
+					EndIf
+				Endif
+			Else
+				lRet := .F.
+				lTrfil := .F.
+				Aviso(STR0011,STR0019,{STR0014},1)
+			EndIf
+		ElseIf !lPoder3
+			lRet := .F.
+			lTrfil := .F.
+			Aviso(STR0011,STR0018,{STR0014},1)
+		EndIf
+	ElseIf SF4->(MsSeek(xFilial("SF4")+cTes)) .And. SF4->F4_TRANFIL == "1" .And. cTipo == "D"
+		lRet := .F.
+		lTrfil := .F.
+		Aviso(STR0011,STR0020,{STR0014},1) //Campo F4_TRANFIL (Transferencia Filiais) nao pode estar com conteudo 1=Sim para operacoes de devolucao, utilize um TES com conteudo 2=Nao
+	EndIf
+
+	RestArea(aArea)
+
+	cFilAnt := cFilBack
+
+Return lRet
+
+
+/*/{Protheus.doc} CodeSoma1 
+//TODO Converte o valor do campo D1_ITEM para o campo D2_ITEM. 
+Devido ao tamanho dos campos serem diferente e ter o uso da função SOMA1()
+@author reynaldo
+@since 08/05/2018
+@version 1.0
+@return ${return}, ${return_description}
+@param cItem, characters, Conteudo do campo D1_ITEM
+@param nTamanho, numeric, Tamanho do campo D2_ITEM
+@type function
+/*/
+Static Function CodeSoma1(cItem,nTamanho)
+	Local cResult := ""
+	Local nLoop   := 0
+	Local nValor  := 0
+
+	nValor := DecodSoma1(cItem)
+
+	cResult := strzero(0,nTamanho)
+	For nLoop := 1 to nValor
+		cResult := Soma1(cResult)
+	Next nLoop
+
+Return cResult
+
+/*/{Protheus.doc} utilizaCliente
+Retorna se a nota fiscal de entrada de crédito utiliza cliente
+@type function
+@version 12.1.2510
+@author squad Entradas
+@since 28/08/2026
+@param cTipo, character, tipo do Documento (D1_TIPO)
+@param cTipoDoc, character, tipo do complemento (D1_TIPODOC)
+@param cFormul, character, tipo do formulario (D1_FORMUL)
+@return logical, .T. caso utilize cliente
+/*/
+Function utilizaCliente(cTipo,cTipoDoc,cFormul)
+   Local lRet := .F. as logical
+
+   If cTipo == "5"
+      If cTipoDoc == "53" .Or. (cFormul == "S" .And. (cTipoDoc == "56" .Or. cTipoDoc == "54"))
+         lRet := .T.
+      EndIf
+   EndIf
+
+Return lRet

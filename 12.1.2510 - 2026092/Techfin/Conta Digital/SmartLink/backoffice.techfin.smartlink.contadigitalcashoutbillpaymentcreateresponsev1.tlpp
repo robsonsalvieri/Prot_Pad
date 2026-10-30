@@ -1,0 +1,174 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+
+/*/{Protheus.doc} ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader
+	Retorno do agendamento do bordero - Conta Digital
+	@type class
+	@author Squad Techfin
+	@since 20/01/2025
+/*/
+class ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader from LongNameClass
+	data jMessage  as json
+	data cMock     as character
+	data lMock     as logical
+
+	public method new() constructor
+	public method read() as logical
+	public method mock()
+end class
+
+/*/{Protheus.doc} ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad Techfin
+	@since 20/01/2025
+/*/
+method New() class ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+	::cMock     := ""
+	::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader::mock
+	Método para mockar a mensagem recebida para testes
+	@type method
+	@author Squad Techfin
+	@since 20/01/2025
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader::read
+	esponsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad Techfin
+	@since 20/01/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as Logical class ContaDigitalCashoutBillPaymentCreateResponseV1MessageReader 
+	local lSuccess := .F. as logical
+	Local aIdent   := {}  as array
+	local aSM0     := {}  as array
+	local aLogs    := {}  as array
+	local aRetJob  := {}  as array
+	local nPosFil  := 0   as numeric
+	local cPayload := ""  as character
+	local cCompany := ""  as character
+	local cBranch  := ""  as character
+	local cIdBord  := ""  as character
+	local cLog     := ""  as character
+	
+	cPayload :=  if( ::lMock, ::cMock, oLinkMessage:RawMessage() )
+
+	if ::jMessage:FromJSON(cPayload) == NIL
+		aIdent  := StrTOKArr2(::jMessage["data"]["idempotencyKey"], "|", .T.)
+		if Len(aIdent) == 3
+			aSM0 := FwLoadSM0()
+			if ( nPosFil := AScan(aSM0, { |x| Alltrim(x[1]) + Alltrim(x[2]) == Alltrim(aIdent[1]) + Alltrim(aIdent[2]) } ) ) > 0
+				cCompany := aSM0[nPosFil,1]
+				cBranch  := aSM0[nPosFil,2]
+				cIdBord  := Alltrim(aIdent[3])
+				lSuccess := StartJob( "updateStatus", GetEnvServer(), .T., cCompany, cBranch, cPayload, cIdBord )
+			else
+				aAdd(aLogs, {"error", "Company / Branch not found.", aIdent[1] + " / " + aIdent[2] })
+			endIf
+		else
+			aAdd(aLogs, {"error", "Invalid idEmpotencyKey", ::jMessage["data"]["idempotencyKey"] })
+		endIf
+
+		if Len(aLogs) > 0
+			cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+			totvs.protheus.backoffice.techfin.util.LogSmartLink( cPayload, "SEA", cIdBord, "4", "CashoutBillPayment", "T",, cLog )
+		endif
+
+	endIf
+
+	FwFreeArray( aSM0 )
+	FwFreeArray( aIdent )
+	FwFreeArray( aLogs )
+	FwFreeArray( aRetJob )
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} ContaDigitalCashoutBillPaymentCreateResponseV1::updateStatus
+	Atualiza status do bordero
+	@type method
+	@author Squad Techfin
+	@since 22/01/2025
+	@param 
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+Function updateStatus( cCompany as character, cBranch as character, cPayload as character, cIdBord as character ) as Logical
+	local jData    := JsonObject():New() as Json
+	local nRecSEA  := 0                  as Numeric
+	local cStatSEA := ""                 as Character
+	local cQuery   := ""                 as Character
+	local cLog     := ""                 as Character
+	local aLogs    := {}                 as array
+	
+	jData:FromJSON( cPayload )
+	RPCSetEnv( cCompany, cBranch )
+
+    cQuery := "SELECT R_E_C_N_O_ AS RECSEA FROM " +RetSQLName("SEA")+ " "
+    cQuery += "WHERE EA_FILIAL = ? "
+    cQuery += "AND EA_MSUID = ? "
+    cQuery += "AND EA_STTFIN <> ? "
+    cQuery += "AND D_E_L_E_T_ = ?"
+
+    oExec := FwExecStatement():New( ChangeQuery(cQuery) )
+    oExec:SetString( 1, xFilial("SEA") )
+    oExec:SetString( 2, cIdBord )
+    oExec:SetString( 3, " " )
+    oExec:SetString( 4, " " )
+
+	nRecSEA := oExec:ExecScalar("RECSEA")
+
+	oExec:Destroy()
+
+	If nRecSEA > 0
+		If jData["data"]:hasProperty("status")
+			cStatSEA := Upper(Alltrim(jData["data"]["status"]))
+			If cStatSEA == "RECEIVED"
+				cStatSEA := "2"
+			ElseIf cStatSEA == "CREATED"
+				cStatSEA := "3"
+			ElseIf cStatSEA == "ERROR"
+				cStatSEA := "9"
+			EndIf
+		EndIf
+
+		If cStatSEA $ "|2|3|9|"
+			dbSelectArea("SEA")
+			SEA->(dbGoto(nRecSEA))
+			If RecLock("SEA",.F.)
+				SEA->EA_STTFIN := cStatSEA
+				SEA->(MsUnLock())
+			EndIf
+
+			If cStatSEA == "9"
+				If jData["data"]:hasProperty("responseDetails")
+					If jData["data"]["responseDetails"]:hasProperty("message")
+						aAdd(aLogs, { "error", "Error in Techfin processing", jData["data"]["responseDetails"]["message"] })
+					EndIf
+				EndIf
+			EndIf
+		Else
+			aAdd(aLogs, { "error", "Invalid status", cStatSEA })
+		EndIf
+	Else
+		aAdd(aLogs, { "error", "Bank Slip not found", cIdBord })
+	EndIf
+
+	if Len(aLogs) > 0
+		cLog := totvs.protheus.backoffice.techfin.util.formatLog(aLogs)
+	endif
+	totvs.protheus.backoffice.techfin.util.LogSmartLink( cPayload, "SEA", cIdBord, "4", "CashoutBillPayment", "T",, cLog )
+
+	FwFreeObj(jData)
+	RpcClearEnv()
+
+Return .T.

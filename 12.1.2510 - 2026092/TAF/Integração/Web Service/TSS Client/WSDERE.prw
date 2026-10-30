@@ -1,0 +1,941 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "apwebsrv.ch"
+
+/* ===============================================================================
+WSDL Location    http://localhost:8080/TSSWSDERE.apw?WSDL
+Gerado em        03/09/26 18:36:08
+Observa��es      C�digo-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Altera��es neste arquivo podem causar funcionamento incorreto
+                 e ser�o perdidas caso o c�digo-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _UTVKPLZ ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSTSSWSDERE
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSTSSWSDERE
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD CFGDERE
+	WSMETHOD CONSULTAREVENTOSDERE
+	WSMETHOD ENVIAREVENTOS
+	WSMETHOD GRAVARTOKENDERE
+	WSMETHOD VALIDARSCHEMA
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   cUSERTOKEN                AS string
+	WSDATA   cID_ENT                   AS string
+	WSDATA   cAMBIENTEDERE             AS string
+	WSDATA   oWSCFGDERERESULT          AS TSSWSDERE_STRUCTCFGDERE
+	WSDATA   oWSDERECONSULTA           AS TSSWSDERE_DERECONSULTA
+	WSDATA   oWSCONSULTAREVENTOSDERERESULT AS TSSWSDERE_DERECONSRESULT
+	WSDATA   oWSDEREENVIO              AS TSSWSDERE_DEREENVIO
+	WSDATA   oWSENVIAREVENTOSRESULT    AS TSSWSDERE_DEREENVIORESULT
+	WSDATA   oWSDERETOKENENTRADA       AS TSSWSDERE_DERETOKENENTRADA
+	WSDATA   oWSGRAVARTOKENDERERESULT  AS TSSWSDERE_DERETOKENRETORNO
+	WSDATA   oWSDERESCHEMA             AS TSSWSDERE_DERESCHEMA
+	WSDATA   oWSVALIDARSCHEMARESULT    AS TSSWSDERE_DERERETSCHEMA
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSTSSWSDERE
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O Codigo-Fonte Client atual requer os executaveis do Protheus Build [7.00.240223P-20260715] ou superior. Atualize o Protheus ou gere o Codigo-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSTSSWSDERE
+	::oWSCFGDERERESULT   := TSSWSDERE_STRUCTCFGDERE():New()
+	::oWSDERECONSULTA    := TSSWSDERE_DERECONSULTA():New()
+	::oWSCONSULTAREVENTOSDERERESULT := TSSWSDERE_DERECONSRESULT():New()
+	::oWSDEREENVIO       := TSSWSDERE_DEREENVIO():New()
+	::oWSENVIAREVENTOSRESULT := TSSWSDERE_DEREENVIORESULT():New()
+	::oWSDERETOKENENTRADA := TSSWSDERE_DERETOKENENTRADA():New()
+	::oWSGRAVARTOKENDERERESULT := TSSWSDERE_DERETOKENRETORNO():New()
+	::oWSDERESCHEMA      := TSSWSDERE_DERESCHEMA():New()
+	::oWSVALIDARSCHEMARESULT := TSSWSDERE_DERERETSCHEMA():New()
+Return
+
+WSMETHOD RESET WSCLIENT WSTSSWSDERE
+	::cUSERTOKEN         := NIL 
+	::cID_ENT            := NIL 
+	::cAMBIENTEDERE      := NIL 
+	::oWSCFGDERERESULT   := NIL 
+	::oWSDERECONSULTA    := NIL 
+	::oWSCONSULTAREVENTOSDERERESULT := NIL 
+	::oWSDEREENVIO       := NIL 
+	::oWSENVIAREVENTOSRESULT := NIL 
+	::oWSDERETOKENENTRADA := NIL 
+	::oWSGRAVARTOKENDERERESULT := NIL 
+	::oWSDERESCHEMA      := NIL 
+	::oWSVALIDARSCHEMARESULT := NIL 
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSTSSWSDERE
+Local oClone := WSTSSWSDERE():New()
+	oClone:_URL          := ::_URL 
+	oClone:cUSERTOKEN    := ::cUSERTOKEN
+	oClone:cID_ENT       := ::cID_ENT
+	oClone:cAMBIENTEDERE := ::cAMBIENTEDERE
+	oClone:oWSCFGDERERESULT :=  IIF(::oWSCFGDERERESULT = NIL , NIL ,::oWSCFGDERERESULT:Clone() )
+	oClone:oWSDERECONSULTA :=  IIF(::oWSDERECONSULTA = NIL , NIL ,::oWSDERECONSULTA:Clone() )
+	oClone:oWSCONSULTAREVENTOSDERERESULT :=  IIF(::oWSCONSULTAREVENTOSDERERESULT = NIL , NIL ,::oWSCONSULTAREVENTOSDERERESULT:Clone() )
+	oClone:oWSDEREENVIO  :=  IIF(::oWSDEREENVIO = NIL , NIL ,::oWSDEREENVIO:Clone() )
+	oClone:oWSENVIAREVENTOSRESULT :=  IIF(::oWSENVIAREVENTOSRESULT = NIL , NIL ,::oWSENVIAREVENTOSRESULT:Clone() )
+	oClone:oWSDERETOKENENTRADA :=  IIF(::oWSDERETOKENENTRADA = NIL , NIL ,::oWSDERETOKENENTRADA:Clone() )
+	oClone:oWSGRAVARTOKENDERERESULT :=  IIF(::oWSGRAVARTOKENDERERESULT = NIL , NIL ,::oWSGRAVARTOKENDERERESULT:Clone() )
+	oClone:oWSDERESCHEMA :=  IIF(::oWSDERESCHEMA = NIL , NIL ,::oWSDERESCHEMA:Clone() )
+	oClone:oWSVALIDARSCHEMARESULT :=  IIF(::oWSVALIDARSCHEMARESULT = NIL , NIL ,::oWSVALIDARSCHEMARESULT:Clone() )
+Return oClone
+
+// WSDL Method CFGDERE of Service WSTSSWSDERE
+
+WSMETHOD CFGDERE WSSEND cUSERTOKEN,cID_ENT,cAMBIENTEDERE WSRECEIVE oWSCFGDERERESULT WSCLIENT WSTSSWSDERE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CFGDERE xmlns="http://webservices.totvs.com.br/tsswsdere.apw">'
+cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("ID_ENT", ::cID_ENT, cID_ENT , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("AMBIENTEDERE", ::cAMBIENTEDERE, cAMBIENTEDERE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CFGDERE>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://webservices.totvs.com.br/tsswsdere.apw/CFGDERE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswsdere.apw",,"1.031217",; 
+	"http://localhost:8080/TSSWSDERE.apw")
+
+::Init()
+::oWSCFGDERERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CFGDERERESPONSE:_CFGDERERESULT","STRUCTCFGDERE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method CONSULTAREVENTOSDERE of Service WSTSSWSDERE
+
+WSMETHOD CONSULTAREVENTOSDERE WSSEND oWSDERECONSULTA WSRECEIVE oWSCONSULTAREVENTOSDERERESULT WSCLIENT WSTSSWSDERE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<CONSULTAREVENTOSDERE xmlns="http://webservices.totvs.com.br/tsswsdere.apw">'
+cSoap += WSSoapValue("DERECONSULTA", ::oWSDERECONSULTA, oWSDERECONSULTA , "DERECONSULTA", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</CONSULTAREVENTOSDERE>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://webservices.totvs.com.br/tsswsdere.apw/CONSULTAREVENTOSDERE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswsdere.apw",,"1.031217",; 
+	"http://localhost:8080/TSSWSDERE.apw")
+
+::Init()
+::oWSCONSULTAREVENTOSDERERESULT:SoapRecv( WSAdvValue( oXmlRet,"_CONSULTAREVENTOSDERERESPONSE:_CONSULTAREVENTOSDERERESULT","DERECONSRESULT",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method ENVIAREVENTOS of Service WSTSSWSDERE
+
+WSMETHOD ENVIAREVENTOS WSSEND oWSDEREENVIO WSRECEIVE oWSENVIAREVENTOSRESULT WSCLIENT WSTSSWSDERE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<ENVIAREVENTOS xmlns="http://webservices.totvs.com.br/tsswsdere.apw">'
+cSoap += WSSoapValue("DEREENVIO", ::oWSDEREENVIO, oWSDEREENVIO , "DEREENVIO", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</ENVIAREVENTOS>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://webservices.totvs.com.br/tsswsdere.apw/ENVIAREVENTOS",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswsdere.apw",,"1.031217",; 
+	"http://localhost:8080/TSSWSDERE.apw")
+
+::Init()
+::oWSENVIAREVENTOSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_ENVIAREVENTOSRESPONSE:_ENVIAREVENTOSRESULT","DEREENVIORESULT",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GRAVARTOKENDERE of Service WSTSSWSDERE
+
+WSMETHOD GRAVARTOKENDERE WSSEND oWSDERETOKENENTRADA WSRECEIVE oWSGRAVARTOKENDERERESULT WSCLIENT WSTSSWSDERE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GRAVARTOKENDERE xmlns="http://webservices.totvs.com.br/tsswsdere.apw">'
+cSoap += WSSoapValue("DERETOKENENTRADA", ::oWSDERETOKENENTRADA, oWSDERETOKENENTRADA , "DERETOKENENTRADA", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GRAVARTOKENDERE>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://webservices.totvs.com.br/tsswsdere.apw/GRAVARTOKENDERE",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswsdere.apw",,"1.031217",; 
+	"http://localhost:8080/TSSWSDERE.apw")
+
+::Init()
+::oWSGRAVARTOKENDERERESULT:SoapRecv( WSAdvValue( oXmlRet,"_GRAVARTOKENDERERESPONSE:_GRAVARTOKENDERERESULT","DERETOKENRETORNO",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method VALIDARSCHEMA of Service WSTSSWSDERE
+
+WSMETHOD VALIDARSCHEMA WSSEND oWSDERESCHEMA WSRECEIVE oWSVALIDARSCHEMARESULT WSCLIENT WSTSSWSDERE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<VALIDARSCHEMA xmlns="http://webservices.totvs.com.br/tsswsdere.apw">'
+cSoap += WSSoapValue("DERESCHEMA", ::oWSDERESCHEMA, oWSDERESCHEMA , "DERESCHEMA", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</VALIDARSCHEMA>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://webservices.totvs.com.br/tsswsdere.apw/VALIDARSCHEMA",; 
+	"DOCUMENT","http://webservices.totvs.com.br/tsswsdere.apw",,"1.031217",; 
+	"http://localhost:8080/TSSWSDERE.apw")
+
+::Init()
+::oWSVALIDARSCHEMARESULT:SoapRecv( WSAdvValue( oXmlRet,"_VALIDARSCHEMARESPONSE:_VALIDARSCHEMARESULT","DERERETSCHEMA",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure STRUCTCFGDERE
+
+WSSTRUCT TSSWSDERE_STRUCTCFGDERE
+	WSDATA   cAMBIENTEDERE             AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_STRUCTCFGDERE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_STRUCTCFGDERE
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_STRUCTCFGDERE
+	Local oClone := TSSWSDERE_STRUCTCFGDERE():NEW()
+	oClone:cAMBIENTEDERE        := ::cAMBIENTEDERE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_STRUCTCFGDERE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAMBIENTEDERE      :=  WSAdvValue( oResponse,"_AMBIENTEDERE","string",NIL,"Property cAMBIENTEDERE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure DERECONSULTA
+
+WSSTRUCT TSSWSDERE_DERECONSULTA
+	WSDATA   cAMBIENTE                 AS string OPTIONAL
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   oWSEVENTOS                AS TSSWSDERE_ARRAYOFDERECONSEVENTOS
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERECONSULTA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERECONSULTA
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERECONSULTA
+	Local oClone := TSSWSDERE_DERECONSULTA():NEW()
+	oClone:cAMBIENTE            := ::cAMBIENTE
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:oWSEVENTOS           := IIF(::oWSEVENTOS = NIL , NIL , ::oWSEVENTOS:Clone() )
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DERECONSULTA
+	Local cSoap := ""
+	cSoap += WSSoapValue("AMBIENTE", ::cAMBIENTE, ::cAMBIENTE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTIDADE", ::cENTIDADE, ::cENTIDADE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EVENTOS", ::oWSEVENTOS, ::oWSEVENTOS , "ARRAYOFDERECONSEVENTOS", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DERECONSRESULT
+
+WSSTRUCT TSSWSDERE_DERECONSRESULT
+	WSDATA   oWSEVENTOS                AS TSSWSDERE_ARRAYOFDERECONSRETEVT OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERECONSRESULT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERECONSRESULT
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERECONSRESULT
+	Local oClone := TSSWSDERE_DERECONSRESULT():NEW()
+	oClone:oWSEVENTOS           := IIF(::oWSEVENTOS = NIL , NIL , ::oWSEVENTOS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DERECONSRESULT
+	Local oNode1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_EVENTOS","ARRAYOFDERECONSRETEVT",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSEVENTOS := TSSWSDERE_ARRAYOFDERECONSRETEVT():New()
+		::oWSEVENTOS:SoapRecv(oNode1)
+	EndIf
+Return
+
+// WSDL Data Structure DEREENVIO
+
+WSSTRUCT TSSWSDERE_DEREENVIO
+	WSDATA   oWSCABEC                  AS TSSWSDERE_DERECABEC
+	WSDATA   oWSEVENTOS                AS TSSWSDERE_ARRAYOFDERENVIOEVENTO
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DEREENVIO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DEREENVIO
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DEREENVIO
+	Local oClone := TSSWSDERE_DEREENVIO():NEW()
+	oClone:oWSCABEC             := IIF(::oWSCABEC = NIL , NIL , ::oWSCABEC:Clone() )
+	oClone:oWSEVENTOS           := IIF(::oWSEVENTOS = NIL , NIL , ::oWSEVENTOS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DEREENVIO
+	Local cSoap := ""
+	cSoap += WSSoapValue("CABEC", ::oWSCABEC, ::oWSCABEC , "DERECABEC", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EVENTOS", ::oWSEVENTOS, ::oWSEVENTOS , "ARRAYOFDERENVIOEVENTO", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DEREENVIORESULT
+
+WSSTRUCT TSSWSDERE_DEREENVIORESULT
+	WSDATA   oWSDERERETENVIO           AS TSSWSDERE_ARRAYOFDERERETENVIO OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DEREENVIORESULT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DEREENVIORESULT
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DEREENVIORESULT
+	Local oClone := TSSWSDERE_DEREENVIORESULT():NEW()
+	oClone:oWSDERERETENVIO      := IIF(::oWSDERERETENVIO = NIL , NIL , ::oWSDERERETENVIO:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DEREENVIORESULT
+	Local oNode1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_DERERETENVIO","ARRAYOFDERERETENVIO",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSDERERETENVIO := TSSWSDERE_ARRAYOFDERERETENVIO():New()
+		::oWSDERERETENVIO:SoapRecv(oNode1)
+	EndIf
+Return
+
+// WSDL Data Structure DERETOKENENTRADA
+
+WSSTRUCT TSSWSDERE_DERETOKENENTRADA
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   cTOKEN_DERE               AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERETOKENENTRADA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERETOKENENTRADA
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERETOKENENTRADA
+	Local oClone := TSSWSDERE_DERETOKENENTRADA():NEW()
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:cTOKEN_DERE          := ::cTOKEN_DERE
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DERETOKENENTRADA
+	Local cSoap := ""
+	cSoap += WSSoapValue("ENTIDADE", ::cENTIDADE, ::cENTIDADE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TOKEN_DERE", ::cTOKEN_DERE, ::cTOKEN_DERE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DERETOKENRETORNO
+
+WSSTRUCT TSSWSDERE_DERETOKENRETORNO
+	WSDATA   cDESCRICAO                AS string OPTIONAL
+	WSDATA   cRETORNO                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERETOKENRETORNO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERETOKENRETORNO
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERETOKENRETORNO
+	Local oClone := TSSWSDERE_DERETOKENRETORNO():NEW()
+	oClone:cDESCRICAO           := ::cDESCRICAO
+	oClone:cRETORNO             := ::cRETORNO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DERETOKENRETORNO
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cDESCRICAO         :=  WSAdvValue( oResponse,"_DESCRICAO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cRETORNO           :=  WSAdvValue( oResponse,"_RETORNO","string",NIL,"Property cRETORNO as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure DERESCHEMA
+
+WSSTRUCT TSSWSDERE_DERESCHEMA
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   cUSERTOKEN                AS string
+	WSDATA   cVERSAODERE               AS string
+	WSDATA   cXML                      AS base64Binary
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERESCHEMA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERESCHEMA
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERESCHEMA
+	Local oClone := TSSWSDERE_DERESCHEMA():NEW()
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+	oClone:cVERSAODERE          := ::cVERSAODERE
+	oClone:cXML                 := ::cXML
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DERESCHEMA
+	Local cSoap := ""
+	cSoap += WSSoapValue("ENTIDADE", ::cENTIDADE, ::cENTIDADE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VERSAODERE", ::cVERSAODERE, ::cVERSAODERE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("XML", ::cXML, ::cXML , "base64Binary", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DERERETSCHEMA
+
+WSSTRUCT TSSWSDERE_DERERETSCHEMA
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   oWSRETORNOS               AS TSSWSDERE_ARRAYOFDERERETSCHEMAEVT OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERERETSCHEMA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERERETSCHEMA
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERERETSCHEMA
+	Local oClone := TSSWSDERE_DERERETSCHEMA():NEW()
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:oWSRETORNOS          := IIF(::oWSRETORNOS = NIL , NIL , ::oWSRETORNOS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DERERETSCHEMA
+	Local oNode2
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cENTIDADE          :=  WSAdvValue( oResponse,"_ENTIDADE","string",NIL,"Property cENTIDADE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode2 :=  WSAdvValue( oResponse,"_RETORNOS","ARRAYOFDERERETSCHEMAEVT",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSRETORNOS := TSSWSDERE_ARRAYOFDERERETSCHEMAEVT():New()
+		::oWSRETORNOS:SoapRecv(oNode2)
+	EndIf
+Return
+
+// WSDL Data Structure ARRAYOFDERECONSEVENTOS
+
+WSSTRUCT TSSWSDERE_ARRAYOFDERECONSEVENTOS
+	WSDATA   oWSDERECONSEVENTOS        AS TSSWSDERE_DERECONSEVENTOS OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_ARRAYOFDERECONSEVENTOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_ARRAYOFDERECONSEVENTOS
+	::oWSDERECONSEVENTOS   := {} // Array Of  TSSWSDERE_DERECONSEVENTOS():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_ARRAYOFDERECONSEVENTOS
+	Local oClone := TSSWSDERE_ARRAYOFDERECONSEVENTOS():NEW()
+	oClone:oWSDERECONSEVENTOS := NIL
+	If ::oWSDERECONSEVENTOS <> NIL 
+		oClone:oWSDERECONSEVENTOS := {}
+		aEval( ::oWSDERECONSEVENTOS , { |x| aadd( oClone:oWSDERECONSEVENTOS , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_ARRAYOFDERECONSEVENTOS
+	Local cSoap := ""
+	aEval( ::oWSDERECONSEVENTOS , {|x| cSoap := cSoap  +  WSSoapValue("DERECONSEVENTOS", x , x , "DERECONSEVENTOS", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFDERECONSRETEVT
+
+WSSTRUCT TSSWSDERE_ARRAYOFDERECONSRETEVT
+	WSDATA   oWSDERECONSRETEVT         AS TSSWSDERE_DERECONSRETEVT OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_ARRAYOFDERECONSRETEVT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_ARRAYOFDERECONSRETEVT
+	::oWSDERECONSRETEVT    := {} // Array Of  TSSWSDERE_DERECONSRETEVT():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_ARRAYOFDERECONSRETEVT
+	Local oClone := TSSWSDERE_ARRAYOFDERECONSRETEVT():NEW()
+	oClone:oWSDERECONSRETEVT := NIL
+	If ::oWSDERECONSRETEVT <> NIL 
+		oClone:oWSDERECONSRETEVT := {}
+		aEval( ::oWSDERECONSRETEVT , { |x| aadd( oClone:oWSDERECONSRETEVT , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_ARRAYOFDERECONSRETEVT
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_DERECONSRETEVT","DERECONSRETEVT",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSDERECONSRETEVT , TSSWSDERE_DERECONSRETEVT():New() )
+			::oWSDERECONSRETEVT[len(::oWSDERECONSRETEVT)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure DERECABEC
+
+WSSTRUCT TSSWSDERE_DERECABEC
+	WSDATA   cENTIDADE                 AS string
+	WSDATA   cNRINSC                   AS string
+	WSDATA   cTOKENDERE                AS string OPTIONAL
+	WSDATA   cUSERTOKEN                AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERECABEC
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERECABEC
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERECABEC
+	Local oClone := TSSWSDERE_DERECABEC():NEW()
+	oClone:cENTIDADE            := ::cENTIDADE
+	oClone:cNRINSC              := ::cNRINSC
+	oClone:cTOKENDERE           := ::cTOKENDERE
+	oClone:cUSERTOKEN           := ::cUSERTOKEN
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DERECABEC
+	Local cSoap := ""
+	cSoap += WSSoapValue("ENTIDADE", ::cENTIDADE, ::cENTIDADE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NRINSC", ::cNRINSC, ::cNRINSC , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TOKENDERE", ::cTOKENDERE, ::cTOKENDERE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTOKEN", ::cUSERTOKEN, ::cUSERTOKEN , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFDERENVIOEVENTO
+
+WSSTRUCT TSSWSDERE_ARRAYOFDERENVIOEVENTO
+	WSDATA   oWSDERENVIOEVENTO         AS TSSWSDERE_DERENVIOEVENTO OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_ARRAYOFDERENVIOEVENTO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_ARRAYOFDERENVIOEVENTO
+	::oWSDERENVIOEVENTO    := {} // Array Of  TSSWSDERE_DERENVIOEVENTO():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_ARRAYOFDERENVIOEVENTO
+	Local oClone := TSSWSDERE_ARRAYOFDERENVIOEVENTO():NEW()
+	oClone:oWSDERENVIOEVENTO := NIL
+	If ::oWSDERENVIOEVENTO <> NIL 
+		oClone:oWSDERENVIOEVENTO := {}
+		aEval( ::oWSDERENVIOEVENTO , { |x| aadd( oClone:oWSDERENVIOEVENTO , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_ARRAYOFDERENVIOEVENTO
+	Local cSoap := ""
+	aEval( ::oWSDERENVIOEVENTO , {|x| cSoap := cSoap  +  WSSoapValue("DERENVIOEVENTO", x , x , "DERENVIOEVENTO", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFDERERETENVIO
+
+WSSTRUCT TSSWSDERE_ARRAYOFDERERETENVIO
+	WSDATA   oWSDERERETENVIO           AS TSSWSDERE_DERERETENVIO OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_ARRAYOFDERERETENVIO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_ARRAYOFDERERETENVIO
+	::oWSDERERETENVIO      := {} // Array Of  TSSWSDERE_DERERETENVIO():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_ARRAYOFDERERETENVIO
+	Local oClone := TSSWSDERE_ARRAYOFDERERETENVIO():NEW()
+	oClone:oWSDERERETENVIO := NIL
+	If ::oWSDERERETENVIO <> NIL 
+		oClone:oWSDERERETENVIO := {}
+		aEval( ::oWSDERERETENVIO , { |x| aadd( oClone:oWSDERERETENVIO , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_ARRAYOFDERERETENVIO
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_DERERETENVIO","DERERETENVIO",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSDERERETENVIO , TSSWSDERE_DERERETENVIO():New() )
+			::oWSDERERETENVIO[len(::oWSDERERETENVIO)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFDERERETSCHEMAEVT
+
+WSSTRUCT TSSWSDERE_ARRAYOFDERERETSCHEMAEVT
+	WSDATA   oWSDERERETSCHEMAEVT       AS TSSWSDERE_DERERETSCHEMAEVT OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_ARRAYOFDERERETSCHEMAEVT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_ARRAYOFDERERETSCHEMAEVT
+	::oWSDERERETSCHEMAEVT  := {} // Array Of  TSSWSDERE_DERERETSCHEMAEVT():New()
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_ARRAYOFDERERETSCHEMAEVT
+	Local oClone := TSSWSDERE_ARRAYOFDERERETSCHEMAEVT():NEW()
+	oClone:oWSDERERETSCHEMAEVT := NIL
+	If ::oWSDERERETSCHEMAEVT <> NIL 
+		oClone:oWSDERERETSCHEMAEVT := {}
+		aEval( ::oWSDERERETSCHEMAEVT , { |x| aadd( oClone:oWSDERERETSCHEMAEVT , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_ARRAYOFDERERETSCHEMAEVT
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_DERERETSCHEMAEVT","DERERETSCHEMAEVT",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSDERERETSCHEMAEVT , TSSWSDERE_DERERETSCHEMAEVT():New() )
+			::oWSDERERETSCHEMAEVT[len(::oWSDERERETSCHEMAEVT)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure DERECONSEVENTOS
+
+WSSTRUCT TSSWSDERE_DERECONSEVENTOS
+	WSDATA   cID                       AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERECONSEVENTOS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERECONSEVENTOS
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERECONSEVENTOS
+	Local oClone := TSSWSDERE_DERECONSEVENTOS():NEW()
+	oClone:cID                  := ::cID
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DERECONSEVENTOS
+	Local cSoap := ""
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DERECONSRETEVT
+
+WSSTRUCT TSSWSDERE_DERECONSRETEVT
+	WSDATA   cDESCRICAO                AS string OPTIONAL
+	WSDATA   cDESCRICAOGOV             AS string OPTIONAL
+	WSDATA   cDTHRAUT                  AS string OPTIONAL
+	WSDATA   cDTHRREC                  AS string OPTIONAL
+	WSDATA   cID                       AS string
+	WSDATA   cPROTOCOLO                AS string OPTIONAL
+	WSDATA   cRECIBO                   AS string OPTIONAL
+	WSDATA   cSTATUS                   AS string OPTIONAL
+	WSDATA   cSTATUSGOV                AS string OPTIONAL
+	WSDATA   cTIPOEVENTO               AS string OPTIONAL
+	WSDATA   cXMLRET                   AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERECONSRETEVT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERECONSRETEVT
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERECONSRETEVT
+	Local oClone := TSSWSDERE_DERECONSRETEVT():NEW()
+	oClone:cDESCRICAO           := ::cDESCRICAO
+	oClone:cDESCRICAOGOV        := ::cDESCRICAOGOV
+	oClone:cDTHRAUT             := ::cDTHRAUT
+	oClone:cDTHRREC             := ::cDTHRREC
+	oClone:cID                  := ::cID
+	oClone:cPROTOCOLO           := ::cPROTOCOLO
+	oClone:cRECIBO              := ::cRECIBO
+	oClone:cSTATUS              := ::cSTATUS
+	oClone:cSTATUSGOV           := ::cSTATUSGOV
+	oClone:cTIPOEVENTO          := ::cTIPOEVENTO
+	oClone:cXMLRET              := ::cXMLRET
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DERECONSRETEVT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cDESCRICAO         :=  WSAdvValue( oResponse,"_DESCRICAO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRICAOGOV      :=  WSAdvValue( oResponse,"_DESCRICAOGOV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDTHRAUT           :=  WSAdvValue( oResponse,"_DTHRAUT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDTHRREC           :=  WSAdvValue( oResponse,"_DTHRREC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cPROTOCOLO         :=  WSAdvValue( oResponse,"_PROTOCOLO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cRECIBO            :=  WSAdvValue( oResponse,"_RECIBO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATUS            :=  WSAdvValue( oResponse,"_STATUS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATUSGOV         :=  WSAdvValue( oResponse,"_STATUSGOV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cTIPOEVENTO        :=  WSAdvValue( oResponse,"_TIPOEVENTO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cXMLRET            :=  WSAdvValue( oResponse,"_XMLRET","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure DERENVIOEVENTO
+
+WSSTRUCT TSSWSDERE_DERENVIOEVENTO
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cID                       AS string
+	WSDATA   cVERSAODERE               AS string
+	WSDATA   cXML                      AS base64Binary
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERENVIOEVENTO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERENVIOEVENTO
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERENVIOEVENTO
+	Local oClone := TSSWSDERE_DERENVIOEVENTO():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cID                  := ::cID
+	oClone:cVERSAODERE          := ::cVERSAODERE
+	oClone:cXML                 := ::cXML
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT TSSWSDERE_DERENVIOEVENTO
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODIGO", ::cCODIGO, ::cCODIGO , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VERSAODERE", ::cVERSAODERE, ::cVERSAODERE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("XML", ::cXML, ::cXML , "base64Binary", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure DERERETSCHEMAEVT
+
+WSSTRUCT TSSWSDERE_DERERETSCHEMAEVT
+	WSDATA   cCODIGO                   AS string
+	WSDATA   cID                       AS string
+	WSDATA   cMENSAGEM                 AS string OPTIONAL
+	WSDATA   lSUCESSO                  AS boolean
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERERETSCHEMAEVT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERERETSCHEMAEVT
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERERETSCHEMAEVT
+	Local oClone := TSSWSDERE_DERERETSCHEMAEVT():NEW()
+	oClone:cCODIGO              := ::cCODIGO
+	oClone:cID                  := ::cID
+	oClone:cMENSAGEM            := ::cMENSAGEM
+	oClone:lSUCESSO             := ::lSUCESSO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DERERETSCHEMAEVT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODIGO            :=  WSAdvValue( oResponse,"_CODIGO","string",NIL,"Property cCODIGO as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cMENSAGEM          :=  WSAdvValue( oResponse,"_MENSAGEM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::lSUCESSO           :=  WSAdvValue( oResponse,"_SUCESSO","boolean",NIL,"Property lSUCESSO as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+Return
+
+
+
+// WSDL Data Structure DERERETENVIO
+// ============================================================================
+// ATENCAO - ESTRUTURA INSERIDA MANUALMENTE (02/09/2026)
+// O complexType DERERETENVIO existe no WSDL (ID:string, SUCESSO:boolean), porem
+// o ADVPL WSDL Client 1.120703 gerou o ARRAYOFDERERETENVIO referenciando esta
+// classe sem emitir a WSSTRUCT correspondente, causando "invalid class
+// TSSWSDERE_DERERETENVIO" em runtime no metodo ENVIAREVENTOS.
+// Esta struct foi adicionada a mao, fiel ao contrato do WSDL, como correcao
+// temporaria. Ao REGERAR o stub, verificar se o gerador ja emite esta estrutura;
+// caso contrario, reaplicar este bloco.
+// ============================================================================
+
+WSSTRUCT TSSWSDERE_DERERETENVIO
+	WSDATA   cID                       AS string
+	WSDATA   lSUCESSO                  AS boolean
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT TSSWSDERE_DERERETENVIO
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT TSSWSDERE_DERERETENVIO
+Return
+
+WSMETHOD CLONE WSCLIENT TSSWSDERE_DERERETENVIO
+	Local oClone := TSSWSDERE_DERERETENVIO():NEW()
+	oClone:cID                  := ::cID
+	oClone:lSUCESSO             := ::lSUCESSO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT TSSWSDERE_DERERETENVIO
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,"Property cID as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lSUCESSO           :=  WSAdvValue( oResponse,"_SUCESSO","boolean",NIL,"Property lSUCESSO as s:boolean on SOAP Response not found.",NIL,"L",NIL,NIL) 
+Return

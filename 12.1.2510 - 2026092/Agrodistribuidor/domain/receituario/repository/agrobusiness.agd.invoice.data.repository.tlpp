@@ -1,0 +1,755 @@
+#Include "totvs.ch"
+#Include "tlpp-core.th"
+#include 'agrobusiness.agd.invoice.data.repository.ch'
+#INCLUDE "FWMVCDEF.CH"
+
+#DEFINE TCO_DEPARA_SERVICE  totvs.protheus.agrobusiness.agd.TCOFromtoService
+#DEFINE TCO_RECEITUARIO_DTO	totvs.protheus.agrobusiness.agd.TCOSolicitacaoExternaReceituarioDTO
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} InvoiceDataRepository
+Repository responsável pela consulta dos dados de nota fiscal de saída
+para integração com o receituário.
+@type class
+@version 1.0
+@author rodrigo.nsoledade
+@since 19/03/2026
+/*/
+class InvoiceDataRepository FROM UtilsRepository
+
+	public method New()
+	public method findDadosNotaSaida()
+	public method saveDadosNotaSaida()
+	public method saveDadosNotaEntrada()
+
+	private method buildQueryDadosNotaSaida()
+	private method formatApiDate()
+	private Method getFields()
+	private method itensByNota()
+	private Method getFieldsNF1()
+	private Method getFieldsNF2()
+	private method formatFiltro()
+endclass
+
+/*/{Protheus.doc} New
+Construtor da classe.
+@type method
+@version 1.0
+@author rodrigo.nsoledade
+@since 19/03/2026
+@return object, instância da classe
+/*/
+method New() class InvoiceDataRepository
+	_Super:New("SF2")
+return Self
+
+/*/{Protheus.doc} findDadosNotaSaida
+Busca os dados da nota fiscal de saída conforme filtros informados
+na requisição.
+@type method
+@version 1.0
+@author rodrigo.nsoledade
+@since 19/03/2026
+@param nPage, numeric, número da página
+@param nPageSize, numeric, tamanho da página
+@param oJsonQryParam, json, parâmetros da query string
+@return nil
+/*/
+method findDadosNotaSaida(nPage, nPageSize, oJsonQryParam) class InvoiceDataRepository
+	Local cQuery    as Character
+	Local cIdNota   as Character
+	Local cDtIni    as Character
+	Local cDtFim    as Character
+	Local cOrder    as Character
+	Local aNotas	as Array
+	Local nX	    as Numeric
+	Local oJsonResp as Object
+	Local aSM0Dados as Array
+	Local oJFilial  as Object
+	Local oTCO_DTO       := TCO_RECEITUARIO_DTO():New()
+	Local cCodeInteg     := oTCO_DTO:getIdentificaoIntegracao()
+	Local oTCODEPARAServ := TCO_DEPARA_SERVICE():New()
+	Local aChaveNF       := {}
+	Local cChaveSF2	 	 := ""
+	Local cFiltroUFs     := ""
+	Local cTipoNota      As Character
+	Local lTabReceit     := TableInDic('NEP') .And. TableInDic('NET') .And. TableInDic('NEQ') .And. TableInDic('NEO') .And. TableInDic('NEU')
+
+	Default nPage       := 1
+	Default nPageSize   := 10
+	Default oJsonQryParam := nil
+
+	If !lTabReceit
+		Self:setError(STR0001, 400) // Tabelas de receituário (NEP, NET, NEQ, NEO e NEU) não encontradas no banco de dados.
+		Return nil
+	EndIf
+
+	cOrder := "F2_EMISSAO, F2_DOC, F2_SERIE "
+
+	// Lê os filtros recebidos na API
+	If ValType(oJsonQryParam) == "J" .And. oJsonQryParam:hasProperty("idNota")
+		cIdNota := AllTrim(oJsonQryParam["idNota"])
+	EndIf
+
+	If ValType(oJsonQryParam) == "J" .And. oJsonQryParam:hasProperty("dataInicial")
+		cDtIni := Self:formatApiDate(oJsonQryParam["dataInicial"])
+	EndIf
+
+	If ValType(oJsonQryParam) == "J" .And. oJsonQryParam:hasProperty("dataFinal")
+		cDtFim := Self:formatApiDate(oJsonQryParam["dataFinal"])
+	EndIf
+
+	If ValType(oJsonQryParam) == "J" .And. oJsonQryParam:hasProperty("ufs") .and. !Empty(AllTrim(oJsonQryParam["ufs"]))
+		cFiltroUFs := Self:formatFiltro(oJsonQryParam["ufs"])
+	EndIf
+
+	If ValType(oJsonQryParam) == "J" .And. oJsonQryParam:hasProperty("tipoNota") .and. !Empty(AllTrim(oJsonQryParam["tipoNota"]))
+		cTipoNota := Self:formatFiltro(oJsonQryParam["tipoNota"])
+	EndIf
+
+	If !Empty(cIdNota)
+		aChaveNF := StrTokArr2( cIdNota, "|", .t. )
+		If AllTrim(aChaveNF[1]) != AllTrim(FwGrpCompany())
+			Self:setError(STR0001, 400) // O grupo de empresas informado na chave da nota de saída é diferente do grupo logado (tenantId do header da requisição).
+			Return nil
+		EndIf
+		cChaveSF2 := PadR(rTrim(aChaveNF[2]), TamSX3("F2_FILIAL")[1]) +;
+			PadR(rTrim(aChaveNF[3]), TamSX3("F2_DOC")[1]) +;
+			PadR(rTrim(aChaveNF[4]), TamSX3("F2_SERIE")[1]) +;
+			PadR(rTrim(aChaveNF[5]), TamSX3("F2_CLIENTE")[1]) +;
+			aChaveNF[6]
+		If !Self:existsById(cChaveSF2)
+			Return nil
+		EndIf
+	EndIf
+
+	cQuery := Self:buildQueryDadosNotaSaida(aChaveNF, cDtIni, cDtFim, cFiltroUFs, cTipoNota)
+
+	Self:setFieldsConsulta(Self:getFields())
+	Self:setPage(nPage)
+	Self:setPageSize(nPageSize)
+	Self:SetQuery(Self:getQueryDefault(,cQuery))
+	Self:SetWhere("1=1")
+	Self:SetUseSpaces(.F.)
+	Self:SetOrder( cOrder )
+
+	If Self:Execute()
+		Self:FillGetResponse()
+		If Self:lOk
+			oJsonResp	:= Self:convertToJson(Self:getJSONResponse())
+
+			aNotas := oJsonResp['items']
+
+			aSM0Dados := FWSM0Util():GetSM0Data( cEmpAnt , cFilAnt , { "M0_CGC", "M0_NOMECOM", "M0_ENDENT", "M0_BAIRENT", "M0_CIDENT", "M0_ESTENT" } )
+			oJFilial := JsonObject():New()
+			oJFilial['cnpjEmissor']        := AllTrim(aSM0Dados[1][2])
+			oJFilial['razaoSocialEmissor'] := AllTrim(aSM0Dados[2][2])
+			oJFilial['enderecoEmissor']    := AllTrim(aSM0Dados[3][2])
+			oJFilial['bairroEmissor']      := AllTrim(aSM0Dados[4][2])
+			oJFilial['cidadeEmissor']      := AllTrim(aSM0Dados[5][2])
+			oJFilial['ufEmissor']          := AllTrim(aSM0Dados[6][2])
+			for nX := 1 to Len(aNotas)
+				aNotas[nX]['itensNF'] := Self:itensByNota(aNotas[nX], oTCODEPARAServ, cCodeInteg)
+				aNotas[nX]['emissor'] := oJFilial
+			next nX
+			oJsonResp['items'] := aNotas
+			Self:setSuccess(oJsonResp)
+		EndIf
+	EndIf
+
+return nil
+
+/*/{Protheus.doc} formatApiDate
+Converte data recebida da API no formato YYYY-MM-DD para YYYYMMDD.
+@type method
+@version 1.0
+@author rodrigo.nsoledade
+@since 19/03/2026
+@param cData, character, data recebida pela API
+@return character, data formatada para query
+/*/
+method formatApiDate(cData) class InvoiceDataRepository
+	If Empty(AllTrim(cData))
+		Return ""
+	EndIf
+Return StrTran(SubStr(AllTrim(cData), 1, 10), "-", "")
+
+
+/*/{Protheus.doc} buildQueryDadosNotaSaida
+Monta a query de busca dos dados da nota fiscal de saída.
+@type method
+@version 1.0
+@author rodrigo.nsoledade
+@since 19/03/2026
+@param aChaveNF, array, número da nota
+@param cDtIni, character, data inicial da emissão no formato YYYYMMDD
+@param cDtFim, character, data final da emissão no formato YYYYMMDD
+@return character, query final ajustada
+/*/
+method buildQueryDadosNotaSaida(aChaveNF, cDtIni, cDtFim, cFiltroUfs, cTipoNota) class InvoiceDataRepository
+	Local cQuery      as Character
+	Local oStatement  as Object
+	Local nParamPos   := 1
+
+	cQuery := "SELECT CONCAT('" + FwGrpCompany() + "|',"
+	cQuery += 	" CONCAT("
+	cQuery += 		" CONCAT("
+	cQuery += 			" CONCAT("
+	cQuery += 				" CONCAT(TRIM(SF2.F2_FILIAL), '|'),"
+	cQuery += 				" CONCAT(TRIM(SF2.F2_DOC), '|')),"
+	cQuery += 				" CONCAT(TRIM(SF2.F2_SERIE), '|')),"
+	cQuery += 				" CONCAT(TRIM(SF2.F2_CLIENTE), CONCAT('|', TRIM(SF2.F2_LOJA))))"
+	cQuery += " ) AS IDNF,"
+
+	cQuery += " SF2.F2_CHVNFE, SF2.F2_DOC, SF2.F2_SERIE, SF2.F2_EMISSAO, SF2.F2_TIPO, SF2.F2_EST, SF2.F2_VALFAT,"
+	cQuery += 	" CASE"
+	cQuery += 		" WHEN NEP.NEP_DESTIN IS NOT NULL AND NEP.NEP_DESTIN='2' THEN 'S'"
+	cQuery += 		" ELSE 'N'"
+	cQuery += 	" END AS REVENDA,"
+	cQuery += 	" CASE"
+	cQuery += 		" WHEN NEP.NEP_DESTIN IS NOT NULL AND NEP.NEP_DESTIN='1' THEN 'S'"
+	cQuery += 		" ELSE 'N'"
+	cQuery += 	" END AS ARMAZENADOR,"
+	cQuery += 	" CASE"
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_COD "
+	cQuery += 		" ELSE SA1.A1_COD "
+	cQuery += 	" END AS CODCLIENTE,"
+	cQuery += 	" CASE"
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_LOJA"
+	cQuery += 		" ELSE SA1.A1_LOJA "
+	cQuery += 	" END AS LOJACLIENTE,"
+	cQuery += 	" CASE"
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_NOME"
+	cQuery += 		" ELSE SA1.A1_NOME"
+	cQuery += 	" END AS NOME,"
+	cQuery += 	" CASE"
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_CGC "
+	cQuery += 		" ELSE SA1.A1_CGC "
+	cQuery += 	" END AS CGC, "
+	cQuery += 	" CASE "
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_END "
+	cQuery += 		" ELSE SA1.A1_END "
+	cQuery += 	" END AS ENDERECO, "
+	cQuery += 	" CASE "
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_BAIRRO "
+	cQuery += 		" ELSE SA1.A1_BAIRRO "
+	cQuery += 	" END AS BAIRRO, "
+	cQuery += 	" CASE "
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_MUN "
+	cQuery += 		" ELSE SA1.A1_MUN "
+	cQuery += 	" END AS MUNICIPIO, "
+	cQuery += 	" CASE "
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_COD_MUN "
+	cQuery += 		" ELSE SA1.A1_COD_MUN "
+	cQuery += 	" END AS CODMUNICIPIO, "
+
+	cQuery += 	" CASE "
+	cQuery += 		" WHEN SF2.F2_TIPO IN ('D','B') THEN SA2.A2_EST "
+	cQuery += 		" ELSE SA1.A1_EST "
+	cQuery += 	" END AS ESTADO, "
+
+	cQuery += 	" (SELECT MAX(SF3.F3_CFO)"
+	cQuery += 		" FROM " + RetSqlName("SF3") + " SF3"
+	cQuery += 		" WHERE SF3.F3_FILIAL = ?"
+	cQuery += 			" AND SF3.F3_CLIEFOR = SF2.F2_CLIENTE"
+	cQuery += 			" AND SF3.F3_LOJA    = SF2.F2_LOJA"
+	cQuery += 			" AND SF3.F3_NFISCAL = SF2.F2_DOC"
+	cQuery += 			" AND SF3.F3_SERIE   = SF2.F2_SERIE"
+	cQuery += 			" AND SF3.D_E_L_E_T_ = ' '"
+	cQuery += 	" ) AS CFOP," //Busca apenas UM CFOP (Cardinalidade)
+
+	cQuery += 	" COALESCE("
+	cQuery += 		" (SELECT MAX(NEO.NEO_CPFCGC)"
+	cQuery += 			" FROM " + RetSqlName("SD2") + " SD2"
+	cQuery += 				" INNER JOIN " + RetSqlName("NEQ") + " NEQ"
+	cQuery += 					" ON (NEQ.NEQ_FILIAL = ?"
+	cQuery += 					" AND NEQ.NEQ_NUM = SD2.D2_PEDIDO"
+	cQuery += 					" AND NEQ.D_E_L_E_T_ = ' ')"
+	cQuery += 				" INNER JOIN " + RetSqlName("NEO") + " NEO"
+	cQuery += 					" ON (NEO.NEO_FILIAL = ?"
+	cQuery += 					" AND NEO.NEO_CODIGO = NEQ.NEQ_CODDES"
+	cQuery += 					" AND NEO.D_E_L_E_T_ = ' ')"
+	cQuery += 		" WHERE SD2.D2_FILIAL    = ?"
+	cQuery += 			" AND SD2.D2_DOC     = SF2.F2_DOC"
+	cQuery += 			" AND SD2.D2_SERIE   = SF2.F2_SERIE"
+	cQuery += 			" AND SD2.D2_CLIENTE = SF2.F2_CLIENTE"
+	cQuery += 			" AND SD2.D2_LOJA    = SF2.F2_LOJA"
+	cQuery += 			" AND SD2.D_E_L_E_T_ = ' '), ' ' )"
+	cQuery += 	"  AS NOME_DESTINO" //Busca local de descarte, caso tenha relacionamento
+
+	cQuery += 	" FROM " + RetSqlName("SF2") + " SF2"
+
+	cQuery += 		" LEFT JOIN  " + RetSqlName("SA1") + " SA1"
+	cQuery += 			" ON (SA1.A1_FILIAL = ? "
+	cQuery += 			" AND SA1.A1_COD = SF2.F2_CLIENTE"
+	cQuery += 			" AND SA1.A1_LOJA = SF2.F2_LOJA"
+	cQuery += 			" AND SA1.D_E_L_E_T_  = ' ') " //Traz dados do cliente caso seja diferente de Devolucao ou Beneficiamento
+
+	cQuery += 		" LEFT JOIN  " + RetSqlName("NEP") + " NEP"
+	cQuery += 			" ON (NEP.NEP_FILIAL = ? "
+	cQuery += 			" AND NEP.NEP_CODCLI = SA1.A1_COD"
+	cQuery += 			" AND NEP.NEP_LOJCLI = SA1.A1_LOJA"
+	cQuery += 			" AND NEP.D_E_L_E_T_ = ' ')" //Faz relacionamento com engenheiro e local de descarte caso tenha sido informado
+
+	cQuery += 		" LEFT JOIN  " + RetSqlName("SA2") + " SA2"
+	cQuery += 			" ON (SA2.A2_FILIAL = ? "
+	cQuery += 			" AND SA2.A2_COD = SF2.F2_CLIENTE"
+	cQuery += 			" AND SA2.A2_LOJA = SF2.F2_LOJA"
+	cQuery += 			" AND SA2.D_E_L_E_T_  = ' ') " //Traz dados do fornecedor caso seja Devolucao ou Beneficiamento
+
+	cQuery += 	" WHERE SF2.F2_FILIAL = ? "
+	cQuery += 	  " AND SF2.F2_FIMP = 'S'"  // Autorizada
+	cQuery += 	  " AND SF2.D_E_L_E_T_ = ' '"
+
+	If !Empty(cDtIni)
+		cQuery += 	   " AND SF2.F2_EMISSAO >= ? "
+	EndIf
+	If !Empty(cDtFim)
+		cQuery += 	   " AND SF2.F2_EMISSAO <= ? "
+	EndIf
+	If !Empty(aChaveNF)
+		cQuery += 	   " AND SF2.F2_DOC  = ? "
+		cQuery += 	   " AND SF2.F2_SERIE  = ? "
+		cQuery += 	   " AND SF2.F2_CLIENTE  = ? "
+		cQuery += 	   " AND SF2.F2_LOJA  = ? "
+	EndIf
+	If !Empty(cFiltroUfs)
+		cQuery +=    " AND SF2.F2_EST IN ( ? )"
+	EndIf
+
+	If !Empty(cTipoNota)
+		cQuery +=    " AND SF2.F2_TIPO IN ( ? )"
+	EndIf
+
+
+	If FWAliasInDic("NF2")
+		cQuery += " AND NOT EXISTS ("
+		cQuery += "    SELECT 1"
+		cQuery += "    FROM " + retSqlName('NF2') + " NF2"
+		cQuery += "    WHERE NF2.NF2_FILIAL = '" + FWxFilial('NF2') + "'"
+		cQuery += "      AND NF2.NF2_DOC    = SF2.F2_DOC"
+		cQuery += "      AND NF2.NF2_SERIE  = SF2.F2_SERIE"
+		cQuery += "      AND NF2.NF2_CLIENT = SF2.F2_CLIENTE"
+		cQuery += "      AND NF2.NF2_LOJA   = SF2.F2_LOJA"
+		cQuery += "  )"
+	EndIf
+
+	cQuery += 	" AND EXISTS (" //Deve emitir receituario
+	cQuery += 		" SELECT 1"
+	cQuery += 		" FROM  " + RetSqlName("SD2") + "  SD2"
+	cQuery += 		" INNER JOIN  " + RetSqlName("NCR") + " NCR "
+	cQuery +=		 	" ON (NCR.NCR_FILIAL = ? "
+	cQuery += 			" AND NCR.NCR_PROD = SD2.D2_COD"
+	cQuery += 			" AND NCR.D_E_L_E_T_  = ' ') "
+	cQuery +=		" WHERE "
+	cQuery += 			" SD2.D2_FILIAL      = SF2.F2_FILIAL"
+	cQuery += 			" AND SD2.D2_DOC     = SF2.F2_DOC"
+	cQuery += 			" AND SD2.D2_SERIE   = SF2.F2_SERIE"
+	cQuery += 			" AND SD2.D2_CLIENTE = SF2.F2_CLIENTE"
+	cQuery += 			" AND SD2.D2_LOJA    = SF2.F2_LOJA"
+	cQuery += 			" AND SD2.D_E_L_E_T_ = ' '"
+	cQuery += 			" AND NCR.NCR_EMREC  = '1'"
+	cQuery += 			" AND NCR.NCR_MAPA   <> ' ')"
+
+	cQuery += 	" AND NOT EXISTS (" //Mas nao deve ter receita emitida
+	cQuery += 		" SELECT 1"
+	cQuery += 			" FROM  " + RetSqlName("SD2") + " SD2"
+	cQuery += 			" INNER JOIN  " + RetSqlName("NET") + " NET"
+	cQuery += 				" ON (NET.NET_FILIAL =  ? "
+	cQuery += 				" AND NET.NET_NUMPED = SD2.D2_PEDIDO"
+	cQuery += 				" AND NET.NET_CLIENT = SD2.D2_CLIENTE"
+	cQuery += 				" AND NET.NET_LOJA   = SD2.D2_LOJA"
+	cQuery += 				" AND NET.NET_STSSOL = '1'"
+	cQuery += 				" AND NET.NET_STSREC = '1'"
+	cQuery += 				" AND NET.D_E_L_E_T_ = ' ')"
+	cQuery += 		" INNER JOIN  " + RetSqlName("NEU") + " NEU"
+	cQuery += 			" ON (NEU.NEU_FILIAL = ? "
+	cQuery += 			" AND NEU.NEU_NUMPED = SD2.D2_PEDIDO"
+	cQuery += 			" AND NEU.NEU_ITEMPE = SD2.D2_ITEM"
+	cQuery += 			" AND NEU.NEU_PRODUT = SD2.D2_COD"
+	cQuery += 			" AND NEU.D_E_L_E_T_ = ' ')"
+	cQuery += 		" WHERE "
+	cQuery += 			" SD2.D2_FILIAL = SF2.F2_FILIAL"
+	cQuery += 			" AND SD2.D2_DOC = SF2.F2_DOC"
+	cQuery += 			" AND SD2.D2_SERIE = SF2.F2_SERIE"
+	cQuery += 			" AND SD2.D2_CLIENTE = SF2.F2_CLIENTE"
+	cQuery += 			" AND SD2.D2_LOJA = SF2.F2_LOJA"
+	cQuery += 			" AND SD2.D_E_L_E_T_ = ' ')"
+
+	cQuery := ChangeQuery(cQuery)
+
+	oStatement := FWPreparedStatement():New()
+	oStatement:SetQuery(cQuery)
+
+	oStatement:SetString(nParamPos++, FWXfilial("SF3"))
+	oStatement:SetString(nParamPos++, FWXfilial("NEQ"))
+	oStatement:SetString(nParamPos++, FWXfilial("NEO"))
+	oStatement:SetString(nParamPos++, FWXfilial("SD2"))
+	oStatement:SetString(nParamPos++, FWXfilial("SA1"))
+	oStatement:SetString(nParamPos++, FWXfilial("NEP"))
+	oStatement:SetString(nParamPos++, FWXfilial("SA2"))
+	oStatement:SetString(nParamPos++, FWXfilial("SF2"))
+	If !Empty(cDtIni)
+		oStatement:SetString(nParamPos++, cDtIni)
+	EndIf
+	If !Empty(cDtFim)
+		oStatement:SetString(nParamPos++, cDtFim)
+	EndIf
+	If !Empty(aChaveNF)
+		oStatement:SetString(nParamPos++, aChaveNF[3])
+		oStatement:SetString(nParamPos++, aChaveNF[4])
+		oStatement:SetString(nParamPos++, aChaveNF[5])
+		oStatement:SetString(nParamPos++, aChaveNF[6])
+	EndIf
+	If !Empty(cFiltroUfs)
+		oStatement:SetUnSafe(nParamPos++, cFiltroUfs)
+	EndIf
+	If !Empty(cTipoNota)
+		oStatement:SetUnSafe(nParamPos++, cTipoNota)
+	EndIf
+	oStatement:SetString(nParamPos++, FWXfilial("NCR"))
+	oStatement:SetString(nParamPos++, FWXfilial("NET"))
+	oStatement:SetString(nParamPos++, FWXfilial("NEU"))
+
+	cQuery := oStatement:GetFixQuery()
+
+return cQuery
+
+
+
+/*/{Protheus.doc} getFields
+Define o mapeamento dos campos retornados pela API de dados de nota de saída.
+@type method
+@version 1.0
+@author rodrigo.nsoledade
+@since 19/03/2026
+@return array, estrutura de campos
+/*/
+Method getFields() Class InvoiceDataRepository
+	Local aArrayFields := {}
+
+	// Dados da nota (SF2)
+	AAdd(aArrayFields, {'idNota'                    , 'IDNF'           , 'C', .T.})
+	AAdd(aArrayFields, {'chaveAcesso'               , 'F2_CHVNFE'      , 'C', .T.})
+	AAdd(aArrayFields, {'numeroNF'                  , 'F2_DOC'         , 'C', .T.})
+	AAdd(aArrayFields, {'serieNF'                   , 'F2_SERIE'       , 'C', .T.})
+	AAdd(aArrayFields, {'dtOperacao'                , 'F2_EMISSAO'     , 'C', .T.})
+	AAdd(aArrayFields, {'tipoNota'                  , 'F2_TIPO'        , 'C', .T.})
+	AAdd(aArrayFields, {'estado'                    , 'F2_EST'         , 'C', .T.})
+	AAdd(aArrayFields, {'valorNota'                 , 'F2_VALFAT'      , 'N', .T.})
+	AAdd(aArrayFields, {'cfop'                      , 'CFOP'           , 'C', .T.})
+	AAdd(aArrayFields, {'unidadeRecebedoraEmbalagem', 'NOME_DESTINO'   , 'C', .T.})
+
+	// Dados do cliente (SA1)
+	AAdd(aArrayFields, {'codigoCliente'             , 'CODCLIENTE'     , 'C', .T.})
+	AAdd(aArrayFields, {'lojaCliente'               , 'LOJACLIENTE'    , 'C', .T.})
+	AAdd(aArrayFields, {'nomeCliente'               , 'NOME'           , 'C', .T.})
+	AAdd(aArrayFields, {'cpfCnpjCliente'            , 'CGC'            , 'C', .T.})
+	AAdd(aArrayFields, {'enderecoCliente'           , 'ENDERECO'       , 'C', .T.})
+	AAdd(aArrayFields, {'bairroCliente'             , 'BAIRRO'         , 'C', .T.})
+	AAdd(aArrayFields, {'codigoMunicipioCliente'    , 'CODMUNICIPIO'   , 'C', .T.})
+	AAdd(aArrayFields, {'municipioCliente'          , 'MUNICIPIO'      , 'C', .T.})
+	AAdd(aArrayFields, {'estadoCliente'             , 'ESTADO'         , 'C', .T.})
+
+	// Campos fixos (vazios por regra de negócio)
+	AAdd(aArrayFields, {'destinoRevenda'            , 'REVENDA'        , 'C', .T.})
+	AAdd(aArrayFields, {'destinoArmazenador'        , 'ARMAZENADOR'    , 'C', .T.})
+
+Return aArrayFields
+
+
+/*/{Protheus.doc} itensByNota
+Obtem os itens da nota de saída.
+@type method
+@version 1.0
+@author carlos.augusto
+@since 30/04/2026
+@return array, estrutura de campos
+/*/
+method itensByNota(oItem, oTCODEPARAServ, cCodeInteg) class InvoiceDataRepository
+	Local aItensNota := {}
+	Local nParamPos  := 1
+	Local cQuery      as Character
+	Local oStatement  as Object
+	Local cIntTES     as Character
+	Local cIdExtTES   as Character
+
+	cQuery := " SELECT SB1.B1_DESC, SD2.D2_ITEM, SD2.D2_QUANT, SD2.D2_UM, SD2.D2_CF, SD2.D2_LOTECTL, SD2.D2_CF, NCR.NCR_MAPA, SB5.B5_QE1, SFT.FT_POSIPI, SD2.D2_PRCVEN, SD2.D2_TOTAL, SD2.D2_TES "
+	cQuery += 	" FROM " + RetSqlName("SD2") + " SD2 "
+	cQuery += 		" LEFT JOIN " + RetSqlName("SFT") + " SFT "
+	cQuery += 			" ON (SFT.FT_FILIAL   = ? "
+	cQuery += 			" AND SFT.FT_TIPOMOV  = 'S' "
+	cQuery += 			" AND SFT.FT_SERIE    = SD2.D2_SERIE "
+	cQuery += 			" AND SFT.FT_NFISCAL  = SD2.D2_DOC "
+	cQuery += 			" AND SFT.FT_CLIEFOR  = SD2.D2_CLIENTE "
+	cQuery += 			" AND SFT.FT_LOJA     = SD2.D2_LOJA "
+	cQuery += 			" AND SFT.FT_ITEM     = SD2.D2_ITEM "
+	cQuery += 			" AND SFT.FT_PRODUTO  = SD2.D2_COD "
+	cQuery += 			" AND SFT.D_E_L_E_T_  = ' ') "
+	cQuery += 		" INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += 			" ON (SB1.B1_FILIAL = ? "
+	cQuery += 			" AND SB1.B1_COD = SD2.D2_COD "
+	cQuery += 			" AND SB1.D_E_L_E_T_  = ' ') "
+	cQuery += 		" INNER JOIN " + RetSqlName("NCR") + " NCR "
+	cQuery += 			" ON (NCR.NCR_FILIAL = ? "
+	cQuery += 			" AND NCR.NCR_PROD = SB1.B1_COD"
+	cQuery += 			" AND NCR.D_E_L_E_T_  = ' ') "
+	cQuery += 		" LEFT JOIN " + RetSqlName("SB5") + " SB5 "
+	cQuery += 			" ON (SB5.B5_FILIAL = ? "
+	cQuery += 			" AND SB5.B5_COD = SB1.B1_COD "
+	cQuery += 			" AND SB5.D_E_L_E_T_  = ' ') "
+	cQuery += 	" WHERE SD2.D2_FILIAL    = ? "
+	cQuery += 		" AND SD2.D2_DOC     = ? "
+	cQuery += 		" AND SD2.D2_SERIE   = ? "
+	cQuery += 		" AND SD2.D2_CLIENTE = ? "
+	cQuery += 		" AND SD2.D2_LOJA    = ? "
+	cQuery += 		" AND SD2.D_E_L_E_T_ = ' '"
+	cQuery += 		" AND NCR.NCR_EMREC  = '1' "
+	cQuery += 		" AND NCR.NCR_MAPA   <> ' ' "
+
+	cQuery := ChangeQuery(cQuery)
+
+	oStatement := FWPreparedStatement():New()
+	oStatement:SetQuery(cQuery)
+
+	oStatement:SetString(nParamPos++, FWXfilial("SFT"))
+	oStatement:SetString(nParamPos++, FWXfilial("SB1"))
+	oStatement:SetString(nParamPos++, FWXfilial("NCR"))
+	oStatement:SetString(nParamPos++, FWXfilial("SB5"))
+	oStatement:SetString(nParamPos++, FWXfilial("SD2"))
+	oStatement:SetString(nParamPos++, oItem['numeroNF'])
+	oStatement:SetString(nParamPos++, oItem['serieNF'])
+	oStatement:SetString(nParamPos++, oItem['codigoCliente'])
+	oStatement:SetString(nParamPos++, oItem['lojaCliente'])
+
+	cQuery := oStatement:GetFixQuery()
+
+	cAliSD2 := GetNextAlias()
+	dbUseArea(.T.,"TOPCONN",TCGenQry(,,cQuery),cAliSD2,.T.,.T.)
+
+	While !(cAliSD2)->(Eof())
+
+		oItemNota := JsonObject():New()
+
+		oItemNota['nomeProduto'] 	 := AllTrim((cAliSD2)->B1_DESC)
+		oItemNota['ncmProduto']      := AllTrim((cAliSD2)->FT_POSIPI)
+		oItemNota['qtdeProduto']     := (cAliSD2)->D2_QUANT
+		oItemNota['unidadeMedida']   := AllTrim((cAliSD2)->D2_UM)
+		oItemNota['nrLote'] 		 := AllTrim((cAliSD2)->D2_LOTECTL)
+		oItemNota['codProdutoINDEA'] := AllTrim((cAliSD2)->NCR_MAPA)
+		oItemNota['volumeEmbalagem'] := cValToChar((cAliSD2)->B5_QE1)
+		oItemNota['valorUnitario']   := (cAliSD2)->D2_PRCVEN
+		oItemNota['valorTotal']      := (cAliSD2)->D2_TOTAL
+		oItemNota['tipoOperacao']    := (cAliSD2)->D2_TES
+
+		cIntTES   := oTCODEPARAServ:formatInternalIdTES((cAliSD2)->D2_TES)
+		cIdExtTES := RTRIM(oTCODEPARAServ:getExternalID(cCodeInteg, "SF4", "F4_CODIGO", cIntTES))
+
+		oItemNota['tipoOperacaoExterno'] := cIdExtTES
+
+		aadd(aItensNota, oItemNota)
+
+		(cAliSD2)->(DbSkip())
+	EndDo
+	(cAliSD2)->(DBCloseArea())
+
+Return aItensNota
+
+
+
+/*/{Protheus.doc} getFieldsNF1
+Define o mapeamento dos campos de payloaad de dados de nota de entrada integrada.
+@type method
+@version 1.0
+@author lindembergson.pacheco
+@since 11/05/2026
+@return array, estrutura de campos
+/*/
+Method getFieldsNF1() Class InvoiceDataRepository
+	Local aArrayFields := {}
+
+	// Dados da nota (NF1)
+	AAdd(aArrayFields, {'numero'		, 'NF1_DOC'    , 'C', .T.})
+	AAdd(aArrayFields, {'serie'			, 'NF1_SERIE'  , 'C', .T.})
+	AAdd(aArrayFields, {'fornecedor'	, 'NF1_FORNEC' , 'C', .T.})
+	AAdd(aArrayFields, {'loja'			, 'NF1_LOJA'   , 'C', .T.})
+	AAdd(aArrayFields, {'formulario'	, 'NF1_FORMUL' , 'C', .T.})
+	AAdd(aArrayFields, {'dataExport'	, 'NF1_DTEXP'  , 'D', .T.})
+	AAdd(aArrayFields, {'horaExport'	, 'NF1_HREXP'  , 'C', .T.})
+
+Return aArrayFields
+
+/*/{Protheus.doc} getFieldsNF2
+Define o mapeamento dos campos de payloaad de dados de nota de saída integrada.
+@type method
+@version 1.0
+@author lindembergson.pacheco
+@since 11/05/2026
+@return array, estrutura de campos
+/*/
+Method getFieldsNF2() Class InvoiceDataRepository
+	Local aArrayFields := {}
+
+	// Dados da nota (NF2)
+	AAdd(aArrayFields, {'numero'		, 'NF2_DOC'    , 'C', .T.})
+	AAdd(aArrayFields, {'serie'			, 'NF2_SERIE'  , 'C', .T.})
+	AAdd(aArrayFields, {'cliente'		, 'NF2_CLIENT' , 'C', .T.})
+	AAdd(aArrayFields, {'loja'			, 'NF2_LOJA'   , 'C', .T.})
+	AAdd(aArrayFields, {'dataExport'	, 'NF2_DTEXP'  , 'D', .T.})
+	AAdd(aArrayFields, {'horaExport'	, 'NF2_HREXP'  , 'C', .T.})
+
+Return aArrayFields
+
+/*/{Protheus.doc} saveDadosNotaEntrada
+Salva o modelo AGDA041
+@type method
+@version P12
+@author lindembergson.pacheco
+@since 11/05/2026
+@param aPayload, array, array com payload
+/*/
+Method saveDadosNotaEntrada(jPayload) Class InvoiceDataRepository
+	Local oModel
+	Local aPayload, aFields
+	Local cError := ""
+	Local nI	:= 0
+	Local aNota := {}
+	Local cChave := {}
+
+	If !jPayload:hasProperty("items") .Or. !ValType(jPayload["items"]) == "A"
+		Self:setDefaultError(403)
+		Return nil
+	EndIf
+
+	aNota 		:= jPayload["items"]
+	aPayload	:= Self:getFieldsNF1()
+
+	For nI := 1 To Len(aNota)
+
+		cChave := PadR( aNota[nI]['numero'], TamSX3("NF1_DOC")[1]) + PadR( aNota[nI]['serie'], TamSX3("NF1_SERIE")[1]) +  PadR( aNota[nI]['fornecedor'], TamSX3("NF1_FORNEC")[1])  +  PadR( aNota[nI]['loja'], TamSX3("NF1_LOJA")[1])  +  PadR( aNota[nI]['formulario'], TamSX3("NF1_FORMUL")[1])
+		DBSelectArea("NF1")
+		DBSetOrder(1) //NF1_FILIAL+NF1_DOC+NF1_SERIE+NF1_FORNEC+NF1_LOJA+NF1_FORMUL
+		If !dbSeek(xFilial("NF1")+cChave)
+
+			DBSelectArea("SF1")
+			DBSetOrder(12) //F1_FILIAL+F1_DOC+F1_SERIE+F1_FORNECE+F1_LOJA+F1_FORMUL
+			If dbSeek(xFilial("SF1")+cChave)
+
+				oModel := FwLoadModel("AGDA041")
+				oModel:SetOperation(MODEL_OPERATION_INSERT)
+				oModel:Activate()
+
+				aFields := Self:jsonToArrayFields(aNota[nI], aPayload)
+				Self:setValueModel(oModel:GetModel("AGDA041_NF1"), aFields)
+
+				If oModel:VldData()
+					oModel:CommitData()
+				Else
+					cError := cValToChar(oModel:GetErrorMessage()[MODEL_MSGERR_IDFIELDERR]) + " - "
+					cError += cValToChar(oModel:GetErrorMessage()[MODEL_MSGERR_ID]) + " - "
+					cError += cValToChar(oModel:GetErrorMessage()[MODEL_MSGERR_MESSAGE])
+					Self:setError(cError, 400)
+				EndIf
+
+				oModel:DeActivate()
+				oModel:Destroy()
+
+			endif
+
+
+		ENDIF
+
+	Next
+
+	oModel := Nil
+	FreeObj(oModel)
+
+Return .T.
+
+/*/{Protheus.doc} saveDadosNotaSaida
+Salva o modelo AGDA042
+@type method
+@version P12
+@author lindembergson.pacheco
+@since 11/05/2026
+@param aPayload, array, array com payload
+/*/
+Method saveDadosNotaSaida(jPayload) Class InvoiceDataRepository
+	Local oModel
+	Local aPayload, aFields
+	Local cError := ""
+	Local nI	:= 0
+	Local aNota := {}
+	Local cChave := ""
+
+	If !jPayload:hasProperty("items") .Or. !ValType(jPayload["items"]) == "A"
+		Self:setDefaultError(403)
+		Return nil
+	EndIf
+
+	aNota 		:= jPayload["items"]
+	aPayload	:= Self:getFieldsNF2()
+
+	For nI := 1 To Len(aNota)
+		cChave := PadR( aNota[nI]['numero'] , TamSX3("NF2_DOC")[1]) + PadR( aNota[nI]['serie'] , TamSX3("NF2_SERIE")[1]) +  PadR( aNota[nI]['cliente'] , TamSX3("NF2_CLIENT")[1])  +  PadR( aNota[nI]['loja'] , TamSX3("NF2_LOJA")[1])
+		DBSelectArea("NF2")
+		DBSetOrder(1) //NF2_FILIAL+NF2_DOC+NF2_SERIE+NF2_CLIENT+NF2_LOJA
+		If !dbSeek(xFilial("NF2")+ cChave)
+
+			DBSelectArea("SF2")
+			DBSetOrder(1) //F2_FILIAL+F2_DOC+F2_SDOC+F2_CLIENTE+F2_LOJA+F2_FORMUL+F2_TIPO
+			If dbSeek(xFilial("SF2")+cChave)
+				oModel := FwLoadModel("AGDA042")
+				oModel:SetOperation(MODEL_OPERATION_INSERT)
+				oModel:Activate()
+
+				aFields := Self:jsonToArrayFields(aNota[nI], aPayload)
+				Self:setValueModel(oModel:GetModel("AGDA042_NF2"), aFields)
+
+				If oModel:VldData()
+					oModel:CommitData()
+				Else
+					cError := cValToChar(oModel:GetErrorMessage()[MODEL_MSGERR_IDFIELDERR]) + " - "
+					cError += cValToChar(oModel:GetErrorMessage()[MODEL_MSGERR_ID]) + " - "
+					cError += cValToChar(oModel:GetErrorMessage()[MODEL_MSGERR_MESSAGE])
+					Self:setError(cError, 400)
+				EndIf
+
+				oModel:DeActivate()
+				oModel:Destroy()
+
+			Endif
+
+		ENDIF
+
+	Next
+
+	oModel := Nil
+
+	FreeObj(oModel)
+
+Return .T.
+
+
+/*/{Protheus.doc} InvoiceDataRepository::formatFiltro
+Formata a String de parametros de busca para uso na query 
+@type method
+@version  P12
+@author claudineia.reinert
+@since 22/05/2026
+@param cFiltro, character, String com as informacoes separadas por ";"
+@return variant, String formatada para uso na query
+/*/
+method formatFiltro(cFiltro) class InvoiceDataRepository
+	Local aItems     := StrTokArr2(cFiltro, ";")
+	Local cFiltroRet := ""
+	Local nX         := 0
+
+	for nX := 1 to Len(aItems)
+		cFiltroRet += "'" + Upper(AllTrim(aItems[nX])) + "'"
+		If nX > 0 .and. nX < Len(aItems)
+			cFiltroRet += ","
+		EndIf
+	next nX
+Return cFiltroRet

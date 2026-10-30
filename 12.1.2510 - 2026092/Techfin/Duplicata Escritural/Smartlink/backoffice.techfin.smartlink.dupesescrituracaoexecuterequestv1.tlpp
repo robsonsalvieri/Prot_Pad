@@ -1,0 +1,1038 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "fwmvcdef.ch"
+
+NAMESPACE totvs.protheus.backoffice.techfin.smartlink.dupesescrituracaoexecuterequest
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+USING NAMESPACE totvs.protheus.backoffice.techfin.duplicataescritural.config.dados
+
+Static __lLoadCfg          := .F.                    as Logical
+Static __lDupAuto          := .F.                    as Logical
+Static __lFilTit           := ExistBlock("TFDFILE1") as Logical
+Static __lFilNota          := ExistBlock("TFDFILF2") as Logical
+Static __lCustomRule       := ExistBlock("TFDPLESC") as Logical
+Static __cTipoDupMercantil := "1"                    as Character
+Static __cTipoDupServico   := "2"                    as Character
+
+#define ID_VALORFATURA  1
+#define ID_DATAVENC     2
+#define ID_JUROSMORA    3
+#define ID_MULTA        4
+#define ID_ABATIMENTO   5
+#define ID_DESCONTO     6
+#define ID_JUROSPERCENT 7
+
+/*/{Protheus.doc} escrituraTitulo()
+    Chama a classe para executar a escrituração, após a inclusão de título a receber (FINA040).
+    @type function
+    @author Squad TechFin
+    @since  02/04/2026
+/*/
+Function escrituraTitulo()
+
+    local oDupes    := Nil                  as object
+    local lExecTFD  := .T.                  as logical 
+    local cChaveTit := ""                   as character
+    local cChaveFK7 := ""                   as character
+    Local aArea     := FwGetArea()          as array
+    local jConfig   := JsonObject():new()   as jSon    
+    
+    //----------------------------------------------------------------------------
+    //-- Verifica se esta configurado com escrituração automática
+    If !__lLoadCfg
+        __lLoadCfg :=.T.
+        jConfig:fromJson(getDefault())
+        
+        If jConfig["built"]//-- Wizard ja parametrizado
+            __lDupAuto := jConfig["parametros"]["escrituracaoAutomatica"]
+        EndIf
+    EndIF
+    
+    If __lDupAuto .And. SE1->E1_MOEDA==1 .And. !(SE1->E1_TIPO $ (MVABATIM+"|"+MV_CRNEG+"|"+MVPROVIS+"|"+MVRECANT+"|"+MV_CPNEG+"|"+MVTAXA+"|"+MVTXA+"|"+MVINSS))
+
+        cChaveTit := FWxFilial("SE1", SE1->E1_FILORIG)+"|"+SE1->E1_PREFIXO+"|"+SE1->E1_NUM+"|"+SE1->E1_PARCELA+"|"+SE1->E1_TIPO+"|"+SE1->E1_CLIENTE+"|"+SE1->E1_LOJA
+        cChaveFK7 := FINBuscaFK7(cChaveTit, "SE1")
+
+        If __lFilTit//-- P.E para permitir ou nao escrituração
+            lExecTFD := ExecBlock("TFDFILE1",.F.,.F.)
+        EndIf
+        If lExecTFD
+            oDupes := DupesEscrituracaoExecuteRequest():New()
+            oDupes:addIdFK7(cChaveFK7)
+            oDupes:runByInstallment()
+            oDupes:Destroy()
+        EndIf
+    EndIf
+
+    FwRestArea(aArea)
+    FwFreeArray(aArea)
+    FwFreeObj(jConfig)
+Return
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} escrituraNota()
+    Chama a classe para executar a escrituração de notas após inclusão em documento de saída.
+    Valida configurações e dispara processo de escrituração automática por nota fiscal.
+    @type function
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Function escrituraNota()
+
+    local oDupes    := Nil                as object
+    local jConfig   := JsonObject():new() as jSon
+    local lExecTFD  := .T.                as logical 
+    local aArea     := FwGetArea()        as array
+
+    jConfig:fromJson(getDefault())
+
+    If  jConfig["built"] .And. jConfig["parametros"]["escrituracaoAutomatica"]//Wizard ja parametrizado
+        If SF2->F2_TIPO $ 'N|C'//N=Normal;C=Compl.Preco/Quantidade
+            If __lFilNota
+                lExecTFD := ExecBlock("TFDFILF2",.F.,.F.)
+            EndIf
+
+            If lExecTFD
+                oDupes := DupesEscrituracaoExecuteRequest():New()            
+                oDupes:setIdInvoice( SF2->(Recno() ))
+                oDupes:runByInvoice() 
+                oDupes:Destroy()
+            EndIf
+        EndIf
+    EndIF
+
+    FwRestArea(aArea)
+    FwFreeArray(aArea)
+    FwFreeObj(jConfig)
+Return
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest
+    Envio de títulos para escrituração
+    @type       Class
+    @author     Totvs
+    @since      02/04/2026
+    @version    P12.1.2510  
+/*/
+//--------------------------------------------------------------------------------------------------
+Class DupesEscrituracaoExecuteRequest
+
+    data nRecnoNF           as numeric
+    data jConfig            as json
+    data jPayload           as json
+    data aIdsPLoad          as array
+    data aIdsList           as array
+    data aFilterId          as array
+    data lPermiteNotaFiscal as logical
+    data lRespLegal         as logical
+    data lEscritAvulsa      as logical
+    data cIdentRespLegal    as character    
+    data cNomeFil           as character
+    data cCnpjFil           as character    
+    data oRespLegal         as object
+    data oIdList            as object
+    data lSetMsgToFront     as logical
+    data cModNota           as character
+    data cDupMercantil      as character
+    data cDupServico        as character
+    data cTipoDuplicata     as character
+    data cTipoDocFiscal     as character
+    data aDupMercantil      as array
+    data aDupServico        as array
+
+    public method new()  constructor    
+    public method Destroy()
+    public method setIdInvoice()
+    public method addIdFK7()
+    public method loadIdList()    
+    public method setFilterId()
+    public method runByInvoice()
+    public method runByInstallment()
+    public method SetMsgToFront()
+
+    //Métodos construtores do payload
+    private method payloadIni()        
+    private method payloadDbArea()
+    private method payloadDuplicatas()
+    private method payloadDadosDuplicata()
+    private method payloadDadosSacador()
+    private method payloadDadosSacado()
+    private method payloadDuplicatasNota()
+    
+    private method commitDuplicatas()  
+    private method loadCustomRule()
+    
+    private method setIdsList(cIdDoc as character)
+    private method getIdsList() as Array    
+
+    private method setModNota(cEspecie as character)
+    private method setTipoDuplicata(cTipoDuplicata as character)
+    private method setTipoDocFiscal(cModNota as character)
+    private method getModNota() as character
+    private method getTipoDuplicata() as character
+    private method getTipoDocFiscal() as character
+    private method loadParametroDuplicata() as logical
+    
+End Class 
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::new
+    Construtor da classe DupesEscrituracaoExecuteRequest.
+    Inicializa arrays, variáveis e objetos necessários para execução do processo de escrituração.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method New() class DupesEscrituracaoExecuteRequest
+    ::nRecnoNF          := 0    
+    ::aIdsPLoad         := {}
+    ::aIdsList          := {}
+    ::aFilterId         := {}
+    ::lPermiteNotaFiscal:= .F.
+    ::lRespLegal        := .F.    
+    ::lEscritAvulsa     := .T.
+    ::lSetMsgToFront    := .F.
+    ::cIdentRespLegal   := SuperGetMv( "MV_TFDIDRL", .F., " ")    
+    ::cModNota          := ''
+    ::cDupMercantil     := SuperGetMv( "MV_TFDUPM", .F., "1|NFEL=55|NFCE=65")
+    ::cDupServico       := SuperGetMv( "MV_TFDUPS", .F., "2|CTEL=07|CTEL=57|NFSE=99")
+    ::aDupMercantil     := StrTokArr2(::cDupMercantil, "|")
+    ::aDupServico       := StrTokArr2(::cDupServico, "|")
+    ::cTipoDuplicata    := __cTipoDupMercantil
+    ::cTipoDocFiscal    := ''
+    ::cNomeFil          := ''
+    ::cCnpjFil          := ''
+    ::oRespLegal        := Nil
+    ::oIdList           := Nil
+    ::jPayload          := JsonObject():new()   
+    ::jConfig           := JsonObject():new()       
+    ::jConfig:fromJson(getDefault())
+Return self
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::SetMsgToFront
+    Indica se deve apresentar mensagens de erro
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method SetMsgToFront(lSet as logical) class DupesEscrituracaoExecuteRequest
+    ::lSetMsgToFront := lSet
+Return
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::setIdInvoice
+    Na escrituração por NF, indica o Recno da SF2 a ser processado
+    @type method
+    @param nRecno Número do registro da nota fiscal a processar
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method setIdInvoice(nRecno as numeric) class DupesEscrituracaoExecuteRequest
+    ::nRecnoNF := nRecno
+Return
+
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::addIdFK7
+    Adiciona o identificador FK7_IDDOC à lista de títulos a serem processados.
+    @type method
+    @param cIdDoc Identificador do documento na tabela FK7
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method addIdFK7(cIdDoc as character) class DupesEscrituracaoExecuteRequest 
+    Aadd(::aIdsPLoad, cIdDoc)
+Return
+
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::runByInvoice
+    Processa a escrituração de títulos agrupados por nota fiscal.
+    Carrega lista de IDs, aplica filtros quando necessário e executa escrituração.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method runByInvoice() class DupesEscrituracaoExecuteRequest
+    
+    Local aArea := FwGetArea()    
+
+    If  ::jConfig["built"] 
+         
+        ::lPermiteNotaFiscal := ::jConfig["parametros"]["permiteNotaFiscal"]
+
+        ::loadIdList()// lista Ids da FK7 de todas parcelas da nota para mandar no mesmo payload          
+        ::aIdsPLoad := aClone( ::aIdsList )
+            
+        //Mantem em self:aIdsPLoad somente IDs marcados na tela de Seleção (escrituração manual)
+        If !Empty( ::aFilterId )            
+            ::aIdsPLoad := aClone(::aFilterId)
+        EndIF
+    
+        If !::lPermiteNotaFiscal//-- Se não permite NF, limpa a lista para não enviar no payload e forçar agrupamento por título
+            ::aIdsList := {}
+        EndIf
+
+        If len(::aIdsPLoad) > 0
+            ::lEscritAvulsa := .F.
+            ::runByInstallment()   
+        EndIf     
+    EndIf
+
+    FwRestArea(aArea)
+    FwFreeArray(aArea)
+Return 
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::setFilterId
+    Define filtro de IDs para escrituração manual, limpando documentos não selecionados.
+    Aplicável quando o título possui nota fiscal vinculada.
+    @type method
+    @param aFilterId Array com IDs dos documentos selecionados para escrituração
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method setFilterId(aFilterId as array) class DupesEscrituracaoExecuteRequest
+    ::aFilterId := aClone(aFilterId)
+Return
+
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::loadIdList
+    Carrega lista de IDs FK7 de todas as parcelas vinculadas a uma nota fiscal.
+    Executa query com joins entre FK7, SE1 e SF2 para consolidar informações.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method loadIdList() class DupesEscrituracaoExecuteRequest
+    local cAlias := ""      as character
+    local cQuery := ""      as character
+
+    If ::oIdList == NIL 
+        cQuery := "SELECT FK7_IDDOC "
+        cQuery += "FROM " + RetSqlName("FK7") + " FK7 "    
+        cQuery += "     Inner Join " + RetSqlName("SE1") + " SE1 ON "
+        cQuery += "FK7.FK7_ALIAS = ? "
+        cQuery += "And FK7.FK7_FILTIT = SE1.E1_FILIAL "
+        cQuery += "And FK7.FK7_PREFIX = SE1.E1_PREFIXO "
+        cQuery += "And FK7.FK7_NUM = SE1.E1_NUM "
+        cQuery += "And FK7.FK7_PARCEL = SE1.E1_PARCELA "
+        cQuery += "And FK7.FK7_TIPO = SE1.E1_TIPO "
+        cQuery += "And FK7.FK7_CLIFOR = SE1.E1_CLIENTE "
+        cQuery += "And FK7.FK7_LOJA = SE1.E1_LOJA "
+        cQuery += "And SE1.D_E_L_E_T_ = ? "    
+        cQuery += "     Inner Join  " + RetSqlName("SF2") + " SF2 ON "
+        cQuery += "SF2.F2_FILIAL = ? "
+        cQuery += "And SF2.F2_DUPL = SE1.E1_NUM "
+        cQuery += "And SF2.F2_SERIE = SE1.E1_SERIE "
+        cQuery += "And SF2.F2_CLIENTE = SE1.E1_CLIENTE "
+        cQuery += "And SF2.F2_LOJA = SE1.E1_LOJA "
+        cQuery += "And SF2.F2_PREFIXO = SE1.E1_PREFIXO "
+        cQuery += "And SF2.D_E_L_E_T_ = ? "
+        cQuery += "WHERE "
+        cQuery += "SF2.R_E_C_N_O_ = ?  And FK7.D_E_L_E_T_ = ? "
+        cQuery += "Order By SE1.R_E_C_N_O_ "//-- Ordena conforme a criação do registro, para que a lista do payload seja o sequencial das parcelas
+        cQuery := ChangeQuery(cQuery)
+        ::oIdList := FWExecStatement():New(cQuery)
+    EndIf
+   
+    ::oIdList:setString(1, 'SE1')
+    ::oIdList:setString(2, ' ')
+    ::oIdList:setString(3, FwxFilial('SF2') )
+    ::oIdList:setString(4, ' ')
+    ::oIdList:setNumeric(5, ::nRecnoNF )
+    ::oIdList:setString(6, ' ')
+    cAlias := ::oIdList:OpenAlias()
+    While (cAlias)->(!Eof())
+
+        ::setIdsList((cAlias)->FK7_IDDOC)
+
+        (cAlias)->(dbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())    
+    
+Return
+
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::runByInstallment
+    Processa a escrituração de títulos individuais (parcelas).
+    Constrói payload completo e dispara gravação de ARP com mensagem smartlink.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method runByInstallment() class DupesEscrituracaoExecuteRequest
+    local nX    := 0     as numeric
+    local nTotal:= 0     as numeric
+    local aArea := {SE1->(FwGetArea()), SA1->(FwGetArea()),FK7->(FwGetArea()), FwGetArea()} as array
+       
+    //-- Construção do payload                      
+    If ::jConfig["built"]//Wizard parametrizado                
+        ::payloadIni()
+        nTotal := Len(::aIdsPLoad)
+        For nX:=1 to nTotal
+            ::payloadDbArea( ::aIdsPLoad[nX] )
+            ::payloadDuplicatas()
+            ::payloadDadosDuplicata()
+            ::payloadDadosSacador()
+            ::payloadDadosSacado()
+        Next nX                
+        ::payloadDuplicatasNota()//-- Monta atributo com lista de ::aIdsList        
+        ::commitDuplicatas()//-- Grava ARP e envia mensagem 
+    EndIF    
+    aEval(aArea,{|x| FwRestArea(x)})
+    FwFreeArray(aArea)
+Return
+
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::commitDuplicatas
+    Inclui registros ARP para os títulos carregados e dispara mensagem via smartlink.
+    Executa transação com validação de dados e envia payload para servidor.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method commitDuplicatas() class DupesEscrituracaoExecuteRequest
+    local oModelARP  := Nil as object
+    local oModelARQ  := Nil as object
+    local oModel     := Nil as Object
+    local oSmartUtil := Nil as object
+    local nX :=0            as numeric
+    local cBloqueio := "2"  as character
+    local lProcess := .T.   as logical
+
+    If ::jConfig["parametros"]["bloqueiaTitulos"]
+        cBloqueio := "1"
+    EndIf
+
+    Begin Transaction
+        For nX:=1 to Len( ::jPayload['duplicatas'] )
+
+            dbSelectArea('FK7')
+            dbSetOrder(1)
+            msSeek(FwxFilial('FK7')+::jPayload["duplicatas"][nX]["erpInstallmentId"])
+            dbSelectArea('SE1')
+            dbSetOrder(1)
+            msSeek(FK7->(FK7_FILTIT+FK7_PREFIX+FK7_NUM+FK7_PARCEL+FK7_TIPO+FK7_CLIFOR+FK7_LOJA))
+            
+            If oModel == Nil
+                oModel := FWLoadModel("totvs.protheus.backoffice.techfin.duplicataescritural.monitor.duplicatasMonitor")
+            EndIf
+
+            oModelARP := oModel:GetModel("ARPMASTER")
+            oModelARQ := oModel:GetModel("ARQDETAIL")
+            oModelARQ:SetOptional(.T.)
+
+            //-- Verifica se já existe registro ARP para o título (re-escrituração de Erro/Cancelado)
+            dbSelectArea('ARP')
+            dbSetOrder(1)
+            If dbSeek(FwxFilial('ARP') + FK7->FK7_IDDOC) .And. !Empty(ARP->ARP_IDDOC)
+                //-- Registro existente: apenas atualiza status para Processando
+                oModel:SetOperation(MODEL_OPERATION_UPDATE)
+                oModel:Activate()
+                oModelARP:setValue("ARP_STATUS", "1")
+            Else
+                //-- Novo registro: INSERT completo
+                oModel:SetOperation(MODEL_OPERATION_INSERT)
+                oModel:Activate()
+                oModelARP:setValue("ARP_IDDOC" , FK7->FK7_IDDOC)
+                oModelARP:setValue("ARP_STATUS", "1")
+                oModelARP:setValue("ARP_FILTIT", SE1->E1_FILORIG)
+                oModelARP:setValue("ARP_PREFIX", SE1->E1_PREFIXO)
+                oModelARP:setValue("ARP_NUMTIT", SE1->E1_NUM)
+                oModelARP:setValue("ARP_PARCEL", SE1->E1_PARCELA)
+                oModelARP:setValue("ARP_TIPO"  , SE1->E1_TIPO)
+                oModelARP:setValue("ARP_CLIENT", SE1->E1_CLIENTE)
+                oModelARP:setValue("ARP_LOJA"  , SE1->E1_LOJA)
+                oModelARP:setValue("ARP_VENCRE", SE1->E1_VENCREA)
+                oModelARP:setValue("ARP_VALOR" , SE1->E1_VALOR)
+                oModelARP:setValue("ARP_DATA"  , Date())
+                oModelARP:setValue("ARP_SITUAC", cBloqueio)
+            EndIf
+
+            If !(oModel:vldData() .and. oModel:commitData())
+                lProcess := .F.
+                Exit
+            EndIf
+            
+            oModel:DeActivate()
+        Next nX     
+        
+        If lProcess
+            oSmartUtil := SmartLinkUtil():new()
+            If !oSmartUtil:send('DupesEscrituracaoExecuteRequestV1', ::jPayload:ToJson(), .T./*lReqID*/, ''/*cReqKey*/, ::lSetMsgToFront/*lHelp*/)
+                FwLogMsg("ERROR",,"TECHFIN",FunName(),"","SendAudience", "Class DupesEscrituracaoExecuteRequest Method commitDuplicatas: Failed to send FK7_IDDOC "+FK7->FK7_IDDOC)
+                DisarmTransaction()
+                Break
+            EndIF
+        Else
+            DisarmTransaction()
+            Break
+        EndIf
+    End Transaction
+
+    If oModel != Nil
+        FwFreeObj(oModel)
+    EndIf
+    If oSmartUtil != Nil
+        FwFreeObj(oSmartUtil)
+    EndIf
+Return
+
+//--------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::Destroy
+    Destrói a instância da classe, liberando memória de arrays e objetos.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//--------------------------------------------------------------------------------------------------
+Method Destroy() class DupesEscrituracaoExecuteRequest
+    If ::oRespLegal<> Nil 
+        FwFreeObj(::oRespLegal)
+    EndIf    
+    If ::oIdList <> Nil          
+        FwFreeObj(::oIdList)
+    EndIf
+    FwFreeArray(::aIdsPLoad)
+    FwFreeArray(::aIdsList)
+    FwFreeArray(::aFilterId)
+    FwFreeObj(::jConfig)
+    FwFreeObj(::jPayload)    
+Return
+
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadIni
+    Inicializa estrutura do payload com informações da filial e respondTo.
+    Define CNPJ solicitante e prepara array de duplicatas.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadIni() class DupesEscrituracaoExecuteRequest
+    
+    Local aFil := FWArrFilAtu( cEmpAnt, cFilAnt ) as array
+    
+    ::jPayload := JsonObject():new()   
+    ::cNomeFil := aFil[17]
+    ::cCnpjFil := aFil[18]        
+    ::jPayload["respondTo"]         := "DupesEscrituracaoExecuteResponseV1"
+    ::jPayload["cnpjSolicitante"]   := ::cCnpjFil
+    ::jPayload["duplicataAvulsa"]   := ::lEscritAvulsa
+    ::jPayload["duplicatas"]        := {}
+
+    FwFreeArray(aFil)
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadDbArea
+    Posiciona nas tabelas necessárias (FK7, SE1, SA1, SF2) para dados do payload.
+    Busca responsável legal se configurado e valida informações de contato.
+    @type method
+    @param cIdDoc Identificador do documento FK7 a posicionar
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadDbArea( cIdDoc as character ) class DupesEscrituracaoExecuteRequest
+    local cAlias := ""      as character
+    local cQuery := ""      as character
+    
+    dbSelectArea('FK7')
+    dbSetOrder(1)
+    msSeek(FwxFilial('FK7')+cIdDoc)
+
+    dbSelectArea('SE1')
+    dbSetOrder(1)
+    msSeek(FK7->(FK7_FILTIT+FK7_PREFIX+FK7_NUM+FK7_PARCEL+FK7_TIPO+FK7_CLIFOR+FK7_LOJA))
+
+    dbSelectArea('SA1')
+    dbSetOrder(1)
+    msSeek(FwxFilial('SA1')+FK7->(FK7_CLIFOR+FK7_LOJA))
+
+    If ::nRecnoNF > 0 //Escrituração por NF
+        dbSelectArea('SF2')
+        msGoTo(::nRecnoNF)
+    EndIf
+
+    //o Responsável Legal deve ser um Contato (SU5) vinculado ao sacado (SA1), e que esteja classificado como tal (U5_NIVEL = MV_TFDIDRL)
+    ::lRespLegal := .F.
+    If !Empty( ::cIdentRespLegal )
+        If ::oRespLegal == NIL 
+            cQuery := "Select SU5.R_E_C_N_O_ From " + RetSqlName("SU5") + " SU5 "
+            cQuery += " Inner Join " + RetSqlName("AC8") + " AC8 "
+            cQuery += " ON U5_FILIAL=AC8_FILIAL "
+            cQuery += " And U5_CODCONT=AC8_CODCON "
+            cQuery += " WHERE "
+            cQuery += " AC8_FILIAL = ? "
+            cQuery += " And AC8_CODENT = ? "
+            cQuery += " And U5_NIVEL = ? "
+            cQuery += " And AC8.D_E_L_E_T_ = ? "
+            cQuery += " And SU5.D_E_L_E_T_ = ? "
+            cQuery := ChangeQuery(cQuery)
+            ::oRespLegal := FWExecStatement():New(cQuery)
+        EndIf
+        ::oRespLegal:setString(1, FwXFilial("AC8"))
+        ::oRespLegal:setString(2, SA1->(A1_COD+A1_LOJA) )        
+        ::oRespLegal:setString(3, ::cIdentRespLegal  )        
+        ::oRespLegal:setString(4, ' ')
+        ::oRespLegal:setString(5, ' ')
+        cAlias := ::oRespLegal:OpenAlias()
+
+        If (cAlias)->(!Eof())
+            dbSelectArea('SU5')
+            msGoTo( (cAlias)->R_E_C_N_O_ )
+            ::lRespLegal := .T.
+        EndIF
+        (cAlias)->(DbCloseArea())
+    EndIf
+    
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadDuplicatas
+    Monta atributo 'duplicatas' com identificação e flag de escrituração.
+    Define valores totais conforme tipo de escrituração (NF ou título).
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadDuplicatas() class DupesEscrituracaoExecuteRequest
+    local nLen :=0 as numeric
+
+    Aadd(::jPayload["duplicatas"], JsonObject():new() )
+    nLen := Len(::jPayload["duplicatas"])
+
+    ::jPayload["duplicatas"][nLen]["erpInstallmentId"] := FK7->FK7_IDDOC
+    ::jPayload["duplicatas"][nLen]["automatico"]       := ::jConfig["parametros"]["escrituracaoAutomatica"]  
+
+    // Indica se permite escrituração por NF
+    If ::nRecnoNF > 0  .And. ::lPermiteNotaFiscal
+        ::jPayload["duplicatas"][nLen]["tipoEscrituracaoAlternativa"] := .T.
+        ::jPayload["duplicatas"][nLen]["valor_total_fatura"]          := SF2->F2_VALFAT
+    Else
+        ::jPayload["duplicatas"][nLen]["tipoEscrituracaoAlternativa"] := .F.
+        ::jPayload["duplicatas"][nLen]["valor_total_fatura"]          := SE1->E1_VALOR
+    EndIF
+    
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadDadosDuplicata
+    Monta atributo 'dadosDuplicata' com informações completas do título.
+    Inclui dados de fatura, vencimento, juros, multa, abatimento e documentos fiscais.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadDadosDuplicata() class DupesEscrituracaoExecuteRequest
+    local nLen      := 0   as numeric
+    local nVal      := 0   as numeric
+    local cVenc     := ''  as character
+    local cLiberado := "S" as character
+
+    If ::nRecnoNF > 0  .And. ::lPermiteNotaFiscal
+        ::setModNota(SF2->F2_ESPECIE)//-- Define modelo da nota para controle de tipo de duplicata e documento fiscal
+        ::loadParametroDuplicata()//-- Carrega parâmetros para controle de campos da duplicata
+    EndIf
+
+    If ::jConfig["parametros"]["bloqueiaTitulos"]
+        cLiberado := "N"
+    Endif
+
+    cVenc := DtoS(SE1->E1_VENCREA)
+    cVenc := Substr(cVenc,1,4)+'-'+Substr(cVenc,5,2)+'-'+Substr(cVenc,7,2)
+
+    nLen := Len(::jPayload["duplicatas"])
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"] := JsonObject():new()
+
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["tipoDuplicata"]       := ::getTipoDuplicata()
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["identificacaoSacador"]:= ''
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["liberadoNegociacao"]  := cLiberado
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["numeroFatura"]        := Alltrim(SE1->E1_NUM)
+    If ::nRecnoNF > 0  .And. ::lPermiteNotaFiscal
+        //::jPayload["duplicatas"][nLen]["dadosDuplicata"]["valorFatura"]     := SF2->F2_VALFAT
+        nVal := ::loadCustomRule(ID_VALORFATURA, SF2->F2_VALFAT, "I")
+    Else
+        //::jPayload["duplicatas"][nLen]["dadosDuplicata"]["valorFatura"]     := SE1->E1_VALOR    
+        nVal := ::loadCustomRule(ID_VALORFATURA, SE1->E1_VALOR, "I")
+    EndIF
+
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["valorFatura"]     := nVal
+
+    nVal := (SE1->E1_DESCFIN/100) * SE1->E1_VALOR
+    nVal := ::loadCustomRule( ID_DESCONTO, nVal, "I") 
+    If nVal > 0
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["valorDesconto"]   := nVal
+    EndIf
+
+    cVenc := SubStr(FWTimeStamp(5,::loadCustomRule( ID_DATAVENC, SToD(StrTran(cVenc,'-','')),"I")),1,10)
+
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dataVencimento"]      := cVenc
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["valorDuplicata"]      := SE1->E1_VALOR
+    ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["pcaPagtoSacado"]      := ''
+    
+    nVal := ::loadCustomRule( ID_ABATIMENTO, 0, "I") //-- Não há abatimento percentual no padrão 
+    If nVal > 0
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["abatimento"] := JsonObject():new() 
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["abatimento"]["percentual"] := nVal 
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["abatimento"]["motivoAbatimento"] := "N" //-- Motivo: N = Condição comercial/regra de negócio
+    EndIf
+
+    nVal := ::loadCustomRule( ID_JUROSMORA, SE1->E1_VALJUR, "I")
+    If nVal > 0
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["atraso"] := JsonObject():new()
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["atraso"]["jurosMora"] := nVal
+        nVal := ::loadCustomRule( ID_MULTA, 0, "I") 
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["atraso"]["multa"] := nVal
+    EndIF
+
+    nVal := ::loadCustomRule( ID_JUROSPERCENT, SE1->E1_PORCJUR, "I")
+    If nVal > 0
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["juros"] := JsonObject():new()
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["juros"]["percentual"] := nVal
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["juros"]["indexador"] := 8 //-- Indexador: 8 = Outros
+    EndIF
+
+    If ::nRecnoNF > 0  .And. ::lPermiteNotaFiscal
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dadosDocFiscal"] := JsonObject():new()
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dadosDocFiscal"]["tipoDocFiscal"]  := ::getTipoDocFiscal()
+         If ::getModNota() == "99" //Convenção entre Techfin e Protheus para identificação da NF de serviço  
+            ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dadosDocFiscal"]["chaveNota"]      := Alltrim(SF2->F2_CODNFE)
+         Else 
+            ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dadosDocFiscal"]["chaveNota"]      := Alltrim(SF2->F2_CHVNFE)
+        EndIF
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dadosDocFiscal"]["numeroDocFiscal"]:= Alltrim(SF2->F2_DOC)
+        ::jPayload["duplicatas"][nLen]["dadosDuplicata"]["dadosDocFiscal"]["serieDocFiscal"] := Alltrim(SF2->F2_SERIE)
+    EndIf
+
+Return
+
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadDadosSacador
+    Monta atributo 'dadosSacador' com informações da filial emissora.
+    Define tipo documento (CNPJ), número e nome da empresa.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadDadosSacador() class DupesEscrituracaoExecuteRequest
+    local nLen :=0 as numeric
+
+    nLen := Len(::jPayload["duplicatas"])
+
+    ::jPayload["duplicatas"][nLen]["dadosSacador"] := JsonObject():new()
+    ::jPayload["duplicatas"][nLen]["dadosSacador"]["tipoDocumentoSacador"] := "CNPJ"
+    ::jPayload["duplicatas"][nLen]["dadosSacador"]["numeroDocumentoSacador"]:= Alltrim(::cCnpjFil)
+    ::jPayload["duplicatas"][nLen]["dadosSacador"]["nomeSacador"] := Alltrim(::cNomeFil)
+    
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadDadosSacado
+    Monta atributo 'dadosSacado' com informações completas do cliente devedor.
+    Inclui identificação, endereço, contatos e dados do responsável legal quando Aplicável.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadDadosSacado() class DupesEscrituracaoExecuteRequest
+    local nLen      := 0      as numeric
+    local aEnd      := {}     as array
+    local cTipo     := 'CNPJ' as character
+    local cCelular  := ""     as character
+
+    If SA1->A1_PESSOA == 'F'
+        cTipo := 'CPF'
+    EndIf
+    nLen := Len(::jPayload["duplicatas"])
+
+    ::jPayload["duplicatas"][nLen]["dadosSacado"] := JsonObject():new()
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["tipoDocumentoSacado"]    := cTipo
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["numeroDocumentoSacado"]  := Alltrim(SA1->A1_CGC)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["nome_razao_social"]      := Alltrim(SA1->A1_NOME)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["inscricao_estadual"]     := Alltrim(SA1->A1_INSCR)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["email_sacado"]           := Alltrim(SA1->A1_EMAIL)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["telefone_sacado"]        := Alltrim(RTrim(SA1->A1_DDD)+SA1->A1_TEL)
+    
+    aEnd := FisGetEnd(SA1->A1_END)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"] := JsonObject():new()
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["logradouro"]  := Alltrim(aEnd[1])
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["numero"]      := Alltrim(aEnd[3])
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["complemento"] := Alltrim(SA1->A1_COMPLEM)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["bairro"]      := Alltrim(SA1->A1_BAIRRO)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["cep"]         := Alltrim(SA1->A1_CEP)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["estado"]      := Alltrim(SA1->A1_EST)
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["endereco"]["municipio"]   := Alltrim(SA1->A1_MUN)     
+
+    ::jPayload["duplicatas"][nLen]["dadosSacado"]["responsavel_legal"] := JsonObject():new()
+    If ::lRespLegal 
+        cCelular := Alltrim(SU5->U5_CELULAR)     
+        If !Empty(cCelular) .And. Len(Alltrim(cCelular)) < 9
+            cCelular := "9" + cCelular
+        EndIf
+        ::jPayload["duplicatas"][nLen]["dadosSacado"]["responsavel_legal"]["nome"]      := Alltrim(SU5->U5_CONTAT)
+        ::jPayload["duplicatas"][nLen]["dadosSacado"]["responsavel_legal"]["documento"] := Alltrim(SU5->U5_CPF)
+        ::jPayload["duplicatas"][nLen]["dadosSacado"]["responsavel_legal"]["email"]     := Alltrim(SU5->U5_EMAIL)
+        ::jPayload["duplicatas"][nLen]["dadosSacado"]["responsavel_legal"]["telefone"]  := Alltrim(RTrim(SU5->U5_DDD)+SU5->U5_FCOM1)
+        ::jPayload["duplicatas"][nLen]["dadosSacado"]["responsavel_legal"]["celular"]   := Alltrim(RTrim(SU5->U5_DDD)+cCelular)
+    EndIf
+
+    FwFreeArray(aEnd)
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::payloadDuplicatasNota
+    Monta atributo 'duplicatasDaNota' com IDs de todas parcelas da nota fiscal.
+    Aplicável apenas na escrituração por nota fiscal.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method payloadDuplicatasNota() class DupesEscrituracaoExecuteRequest 
+    local aIdsList        := ::getIdsList()     as array
+    local aDuplicatasNota := {}                 as array
+    local jDuplicatasNota := JsonObject():new() as json
+    local nX              := 0                  as numeric
+    local nTotal          := Len(aIdsList)      as numeric
+
+    If nTotal > 0
+        For nX:=1 to nTotal
+            jDuplicatasNota := JsonObject():new()
+            jDuplicatasNota["erpInstallmentId"] := aIdsList[nX]
+            Aadd(aDuplicatasNota, jDuplicatasNota)
+        Next
+        
+        ::jPayload["duplicatasDaNota"] := aClone(aDuplicatasNota)
+    EndIf
+    
+    FwFreeArray(aIdsList)
+    FwFreeArray(aDuplicatasNota)
+    FwFreeObj(jDuplicatasNota)     
+Return 
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::loadCustomRule
+    Executa ponto de entrada para aplicar regras customizadas de valores.
+    Permite ajustes em desconto, abatimento, juros e multa conforme regra do cliente.
+    @type method
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+    @param nField Campo a ser ajustado (1 = Valor do desconto, 2 = Abatimento, 3 = Juros mora, 4 = Juros percentual)
+    @param nValueDefault Valor padrão do campo
+    @param cOpc Opção adicional para a regra customizada
+    @return xValue, variant,
+/*/
+//-----------------------------------------------------------------------
+Method loadCustomRule(nField as numeric, xValueDefault as variant, cOpc as character) class DupesEscrituracaoExecuteRequest
+    local aArea := {}    as array
+        
+    /*---------------------------------------------------------------------------------
+    nField: 
+    1 = Valor Fatura
+    2 = Data de vencimento
+    3 = Juros mora
+    4 = Multa / Acrescimo
+    5 = Valor do abatimento (percentual)
+    6 = Valor do desconto
+    7 = Juros (percentual)
+    ---------------------------------------------------------------------------------*/
+    If __lCustomRule
+        aArea := {SE1->(FwGetArea()), SA1->(FwGetArea()),SF2->(FwGetArea())}        
+        
+        xValueDefault := ExecBlock("TFDPLESC",.F.,.F.,{ nField, cOpc, xValueDefault})
+
+        aEval(aArea,{|x| FwRestArea(x)})        
+    EndIf
+    
+    FwFreeArray(aArea)
+Return xValueDefault
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::setIdsList
+    Adiciona identificador à lista interna de IDs de documentos FK7.
+    @type method
+    @param cIdDoc Identificador do documento a adicionar
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method setIdsList(cIdDoc as character) class DupesEscrituracaoExecuteRequest
+    Aadd(::aIdsList, cIdDoc)
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::getIdsList
+    Retorna clone da lista interna de IDs de documentos FK7.
+    @type method
+    @return Array Array com IDs dos documentos
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method getIdsList() as Array class DupesEscrituracaoExecuteRequest
+Return aClone(::aIdsList)
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::setModNota
+    Define o modelo/modalidade da nota fiscal para composição de payload.
+    @type method
+    @param cEspecie Espécie do documento fiscal
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method setModNota(cEspecie as character) class DupesEscrituracaoExecuteRequest
+    ::cModNota := aModNot(cEspecie)
+    If Empty( ::cModNota )
+        ::cModNota := "99" //99 = Definição Techfin para serviço 
+    EndIf
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::getModNota
+    Retorna o modelo/modalidade da nota fiscal armazenado.
+    @type method
+    @return character Modelo/modalidade do documento fiscal
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method getModNota() as character class DupesEscrituracaoExecuteRequest
+Return ::cModNota
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::loadParametroDuplicata
+    Carrega os parâmetros de duplicata conforme a modalidade da nota fiscal.
+    @type method
+    @param cModNota Modelo/modalidade da nota fiscal
+    @return logical Verdadeiro se parametros foram encontrados e carregados
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method loadParametroDuplicata() as logical class DupesEscrituracaoExecuteRequest
+    Local aDocFiscal    := {}                      as array
+    Local lProcess      := .F.                     as logical
+    Local aDupMercantil := aClone(::aDupMercantil) as array
+    Local aDupServico   := aClone(::aDupServico)   as array
+    Local nPos          := 0                       as numeric
+    Local cModNota      := ::getModNota()
+   
+    If ((nPos := aScan(aDupMercantil, {|x| cModNota $ x})) > 0)
+        ::setTipoDuplicata(__cTipoDupMercantil)
+        aDocFiscal := StrTokArr2(aDupMercantil[nPos], "=")
+        lProcess := .T.
+    ElseIf ((nPos := aScan(aDupServico, {|x| cModNota $ x})) > 0)
+        ::setTipoDuplicata(__cTipoDupServico)
+        aDocFiscal := StrTokArr2(aDupServico[nPos], "=")
+        lProcess := .T.
+    EndIf
+    If lProcess
+        If Len(aDocFiscal) > 1 .And. Alltrim(aDocFiscal[2]) == Alltrim(cModNota)
+            ::setTipoDocFiscal(aDocFiscal[1])
+        EndIf
+    EndIf
+   
+    FwFreeArray(aDocFiscal)
+    FwFreeArray(aDupMercantil)
+    FwFreeArray(aDupServico)
+Return lProcess
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::setTipoDuplicata
+    Define o tipo de duplicata conforme modalidade da nota fiscal.
+    @type method
+    @param cTipoDuplicata Tipo de duplicata
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method setTipoDuplicata(cTipoDuplicata as character) class DupesEscrituracaoExecuteRequest
+    ::cTipoDuplicata := cTipoDuplicata
+Return
+
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::getTipoDuplicata
+    Retorna o tipo de duplicata armazenado.
+    @type method
+    @return character Tipo de duplicata
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+Method getTipoDuplicata() as character class DupesEscrituracaoExecuteRequest
+Return ::cTipoDuplicata
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::setTipoDocFiscal
+    Define o tipo de documento fiscal.
+    @type method
+    @param cTipoDocFiscal Tipo de documento fiscal
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method setTipoDocFiscal(cTipoDocFiscal as character) class DupesEscrituracaoExecuteRequest
+    ::cTipoDocFiscal := cTipoDocFiscal
+Return
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesEscrituracaoExecuteRequest::getTipoDocFiscal
+    Retorna o tipo de documento fiscal armazenado.
+    @type method
+    @return character Tipo de documento fiscal
+    @author Squad TechFin
+    @since  02/04/2026
+    @version P12.1.2510
+/*/
+//-----------------------------------------------------------------------
+Method getTipoDocFiscal() as character class DupesEscrituracaoExecuteRequest
+Return ::cTipoDocFiscal

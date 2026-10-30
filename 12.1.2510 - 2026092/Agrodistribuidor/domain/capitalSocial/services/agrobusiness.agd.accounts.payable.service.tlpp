@@ -1,0 +1,256 @@
+#include 'tlpp-core.th'
+#include 'totvs.ch'
+#include 'fwmvcdef.ch'
+#include 'agrobusiness.agd.accounts.payable.service.ch'
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} AccountsPayableService
+Classe de serviço de contas a pagar
+@type class
+@version 12
+@author jc.maldonado
+@since 02/07/2026
+/*/
+class AccountsPayableService FROM UtilsService
+	public method new()
+	public method gerarTitulos()
+	public method realizarBaixaTitulos() as logical
+
+	private method buildListTitulos() as array
+	private method buildPayloadFina050() as array
+endclass
+
+/*/{Protheus.doc} new
+Construtor
+@type method
+@version 12
+@author jc.maldonado
+@since 02/07/2026
+@return object, Instancia da classe
+/*/
+method new() class AccountsPayableService
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} gerarTitulos
+Cria um titulo a pagar
+@type method
+@version 12
+@author jc.maldonado
+@since 02/07/2026
+@param jPayable, json, Informacoes para criação do(s) titulo(s) a pagar
+/*/
+method gerarTitulos(jPayable as json) class AccountsPayableService
+	local aArea                := FWGetArea() 
+	local aTitulos			   := {} 
+	local nX                   as integer
+	local cMsErroLog           as character
+
+	private lMsErroAuto    := .f. as logical
+	private lMsHelpAuto    := .t. as logical
+	private lAutoErrNoFile := .t. as logical
+
+
+	aTitulos   := Self:buildListTitulos(jPayable) 
+
+	SaveInter() // Salva variaveis publicas
+
+	Begin Transaction
+		for nX := 1 to len(aTitulos)
+
+			MSExecAuto({|x, y| FINA050(x, y)}, Self:buildPayloadFina050(aTitulos[nX]), OP_INCLUIR)
+
+			if lMsErroAuto
+				aEval(GetAutoGRLog(), {|xIt| cMsErroLog += xIt + CRLF })
+				Self:setError(pcErrorMessage=STR0001, pcDetailedMessage=cMsErroLog) //"Falha ao gerar título financeiro a pagar."
+				FWFreeArray(aTitulos)
+				FWRestArea(aArea)
+				disarmTransaction()
+				Break
+			endIf
+
+			if aTitulos[nX]['baixaAutomatica'] == "1" 
+				
+				if !Self:realizarBaixaTitulos(SE2->(E2_FILIAL+E2_PREFIXO+E2_NUM+E2_PARCELA+E2_TIPO+E2_FORNECE+E2_LOJA), aTitulos[nX]['motivoBaixa'])
+					FWFreeArray(aTitulos)
+					FWRestArea(aArea)
+					disarmTransaction()
+					Break
+				endIf
+
+			endIf
+		next nX
+	End Transaction
+
+	RestInter()//Recupera as variaveis pulicas
+
+	if !empty(aTitulos)
+		Self:setSuccess(aTitulos) //"retorna a lista de titulos a pagar gerados"
+	endif
+
+	FWRestArea(aArea) 
+return
+
+
+
+/*/{Protheus.doc} realizarBaixaTitulos
+Realiza a baixa total do titulo financeiro a pagar.
+@type method
+@version 12
+@author jc.maldonado
+@since 03/07/2026
+@param cCompositeKey, character, Chave composta para o titulo
+@param cPostingPurposes, character, Código do motivo da baixa (F7G_SIGLA)
+@param cPaymentNotes, character, (Opcional) Historico de pagamento
+@return logical, Dados do titulo baixado
+/*/
+method realizarBaixaTitulos(cCompositeKey as character, cPostingPurposes as character, cPaymentNotes as character) as logical class AccountsPayableService
+	local aArea    		:= FWGetArea()        
+	local aAreaSE2 		:= SE2->(FWGetArea()) 
+	local aAreaSA2      as array
+	local aAreaF7G      as array
+	local aFieldValue   as array
+	local cMsErroLog    as character
+
+	private lMsErroAuto    := .f. as logical
+	private lMsHelpAuto    := .t. as logical
+	private lAutoErrNoFile := .t. as logical
+
+	default cPaymentNotes := ""
+
+	DbSelectArea("SE2")
+	SE2->(dbSetOrder(1))
+	if ! SE2->(dbSeek(cCompositeKey))
+		Self:setError(i18N(STR0004, {cCompositeKey})) //"Título a pagar não encontrado. chave: #1[CHAVE_TITULO]#"
+		FWRestArea(aAreaSE2); FWRestArea(aArea)
+		return .f.
+	endIf
+
+	if SE2->E2_SALDO <= 0
+		Self:setError(i18N(STR0005, {cCompositeKey})) //"O título não possui saldo a pagar em aberto. chave: #1[CHAVE_TITULO]#"
+		FWRestArea(aAreaSE2); FWRestArea(aArea)
+		return .f.
+	endIf
+
+	aFieldValue := {}
+	aadd(aFieldValue, {"E2_FILIAL" , SE2->E2_FILIAL , nil})
+	aadd(aFieldValue, {"E2_PREFIXO", SE2->E2_PREFIXO, nil})
+	aadd(aFieldValue, {"E2_NUM"    , SE2->E2_NUM    , nil})
+	aadd(aFieldValue, {"E2_PARCELA", SE2->E2_PARCELA, nil})
+	aadd(aFieldValue, {"E2_TIPO"   , SE2->E2_TIPO   , nil})
+	aadd(aFieldValue, {"E2_FORNECE", SE2->E2_FORNECE, nil})
+	aadd(aFieldValue, {"E2_LOJA"   , SE2->E2_LOJA   , nil})
+	aFieldValue := FWVetByDic(aFieldValue, "SE2")
+
+	aadd(aFieldValue, {"AUTMOTBX"  , cPostingPurposes, nil})
+
+	aAreaF7G := F7G->(FWGetArea())
+	if posicione("F7G", 1, FWXFilial("F7G") + cPostingPurposes, "F7G->F7G_SIGLA") == cPostingPurposes;
+			.and. F7G->F7G_MOVBCO == "S"
+
+		aAreaSA2 := SA2->(FWGetArea())
+		posicione("SA2", 1, FWXFilial("SA2") + SE2->E2_FORNECE + SE2->E2_LOJA, "SA2->A2_COD")
+
+		aadd(aFieldValue, {"AUTBANCO"  , SA2->A2_BANCO  , nil})
+		aadd(aFieldValue, {"AUTAGENCIA", SA2->A2_AGENCIA, nil})
+		aadd(aFieldValue, {"AUTCONTA"  , SA2->A2_NUMCON , nil})
+		FWRestArea(aAreaSA2)
+	endIF
+	FWRestArea(aAreaF7G)
+
+	aadd(aFieldValue, {"AUTDTBAIXA", dDataBase    , nil})
+	aadd(aFieldValue, {"AUTDTDEB"  , dDataBase    , nil})
+	aadd(aFieldValue, {"AUTHIST"   , cPaymentNotes, nil})
+
+	SaveInter() // Salva variaveis publicas
+
+	AcessaPerg("FINA080", .F.)
+
+	MsExecauto({|a,b,c,d,e,f,| FINA080(a,b,c,d,e,f)}, aFieldValue, 3 /*3=Baixa*/)
+
+	FWFreeArray(aFieldValue)
+
+	if lMsErroAuto
+		aEval(GetAutoGRLog(), {|xIt| cMsErroLog += xIt + CRLF })
+		Self:setError(pcErrorMessage=STR0006, pcDetailedMessage=cMsErroLog) //"Falha ao baixar título financeiro a pagar."
+		return .f.
+	endIf
+
+	F080ClearM()
+
+	FWRestArea(aAreaSE2); FWRestArea(aArea)
+	RestInter()//Recupera as variaveis pulicas
+return .t.
+
+
+/*/{Protheus.doc} buildListTitulos
+Gera a lista de Titulos a pagar a partir das informações recebidas
+@type method
+@version 12
+@author jean.schulze
+@since 7/13/2026
+@param jPayable, json, Informacoes para criação do(s) titulo(s) a pagar
+@return array, Lista de titulos a pagar gerados
+/*/
+method buildListTitulos(jPayable) as array class AccountsPayableService
+	local aTitulosGerados := {} as array
+	local nX		as integer
+
+	jPayable['filial']  := FWXFilial("SE2")
+	aCondicoesPagamento := Condicao(jPayable['valorTotal'], jPayable['condicaoPagamento'], jPayable['emissao'])
+	if empty(aCondicoesPagamento) 
+		Self:setError(pcErrorMessage=STR0001, pcDetailedMessage=i18N(STR0003, {jPayable['condicaoPagamento']})) //"Falha ao gerar título financeiro a pagar.", "Não foi possível gerar as parcelas com a condição de pagamento #1[CODIGO]#."
+		return aTitulosGerados
+	endIf
+
+	if !jPayable:hasProperty('numeroTitulo') .or. empty(jPayable['numeroTitulo'])
+		oAccountsPayableRepository := AccountsPayableRepository():new()
+		jPayable['numeroTitulo']   := oAccountsPayableRepository:getNewBillNumber(jPayable['prefixo'])
+		FWFreeObj(oAccountsPayableRepository)
+	endIf
+
+	if !jPayable:hasProperty('parcela') .or. empty(jPayable['parcela'])
+		jPayable['parcela'] := SOMA1(CriaVar('E2_PARCELA'))
+	endIf
+	
+	for nX := 1 to len(aCondicoesPagamento)
+		aadd(aTitulosGerados, JsonObject():New())
+		aTitulosGerados[nX]:fromJson(jPayable:toJson())
+		aTitulosGerados[nX]['vencimento'] := aCondicoesPagamento[nX][1]
+		aTitulosGerados[nX]['valor']      := aCondicoesPagamento[nX][2]
+		aTitulosGerados[nX]['emissao']    := dDataBase
+		jPayable['parcela'] := SOMA1(jPayable['parcela'])
+	next nX
+
+return aTitulosGerados
+
+/*/{Protheus.doc} buildPayloadFina050
+A partir das informações recebidas gera uma lista formatada para a 
+rotina automatica FINA050 incluir o titulo a pagar
+@type method
+@version 12
+@author jc.maldonado
+@since 02/07/2026
+@param jPayable, json, Informacoes para criação do(s) titulo(s) a pagar
+@return array, Lista formatada para a rotina automatica FINA050
+/*/
+method buildPayloadFina050(jPayable as json) as array class AccountsPayableService
+	local aFieldValue := {}          as array
+
+	aadd(aFieldValue, {"E2_PREFIXO", jPayable['prefixo']     , nil})
+	aadd(aFieldValue, {"E2_NUM"    , jPayable['numeroTitulo'], nil})
+	aadd(aFieldValue, {"E2_TIPO"   , jPayable['tipoTitulo']  , nil})
+	aadd(aFieldValue, {"E2_NATUREZ", jPayable['natureza']    , nil})
+	aadd(aFieldValue, {"E2_FORNECE", jPayable['fornecedor']  , nil})
+	aadd(aFieldValue, {"E2_LOJA"   , jPayable['loja']        , nil})
+	aadd(aFieldValue, {"E2_EMISSAO", jPayable['emissao']     , nil})
+	aadd(aFieldValue, {"E2_FLUXO"  , jPayable['fluxoCaixa']  , nil})
+	aadd(aFieldValue, {"E2_PARCELA", jPayable['parcela']     , nil})
+	aadd(aFieldValue, {"E2_VENCTO" , jPayable['vencimento']  , nil})
+	aadd(aFieldValue, {"E2_VENCREA", jPayable['vencimento']  , nil})
+	aadd(aFieldValue, {"E2_VALOR"  , jPayable['valor']       , nil})
+
+	aFieldValue := FWVetByDic(aFieldValue, "SE2")
+
+return aFieldValue

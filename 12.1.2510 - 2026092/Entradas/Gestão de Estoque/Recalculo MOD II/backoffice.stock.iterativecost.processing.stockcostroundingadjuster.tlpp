@@ -1,0 +1,383 @@
+#Include 'Totvs.ch'
+#Include 'tlpp-core.th'
+
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.manager
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.balancebywarehouse
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.processingtable
+using namespace totvs.protheus.backoffice.stock.iterativecost.table.analyticalmovementtable
+
+namespace totvs.protheus.backoffice.stock.iterativecost.processing.stockcostroundingadjuster
+
+/*/{Protheus.doc} StockCostRoundingAdjuster
+    Classe responsável por criar os movimentos do tipo REC/DEC para ajuste de arredondamento
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Class StockCostRoundingAdjuster From TableManager
+
+    public method New()
+
+    public method fetchProductsForProcessing()
+    public method compareBalances()
+    public method recordSD3AdjustmentMovements()
+    public method deleteRecDecRecordsForPeriod()
+    public method getNextSeqcalc()
+
+    method addFieldsForBulk()
+    method setFieldsForBulk()
+    method initializeArrays()
+
+    Data cAlias     as character
+    Data cFilProc   as character
+    Data cDataIni   as character
+    Data dDataFim   as date
+    Data oBulkSD3   as object
+    Data oQuery     as object
+    Data aMoedas    as array
+
+    Public Data cDocumento as character
+    Public Data cSeqCalc   as character
+    Public Data nCountNFs  as numeric
+
+endclass
+
+/*/{Protheus.doc} New
+    Instância da classe
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method new(cFilProc,aMoedas,dDataIni,dDataFim,nCountNFs) Class StockCostRoundingAdjuster
+
+    //Inicia as propriedades da classe TableManager para utilizar os seus métodos de query
+    _Super:New({})
+
+    ::cFilProc := cFilProc
+    ::aMoedas  := aMoedas
+    ::cDataIni := dToS(dDataIni)
+    ::dDataFim := dDataFim
+    ::nCountNFs:= nCountNFs
+
+Return
+
+/*/{Protheus.doc} fetchProductsForProcessing
+    Busca os movimentos do período para comparação dos saldos
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method fetchProductsForProcessing() Class StockCostRoundingAdjuster
+    local cQuery      as character
+    local cTableMov   := AnalyticalMovementTable():TableName() as character
+    local nX          as integer
+    Local nY          := 1 as integer
+
+    If ::oQuery == Nil
+        cQuery := " SELECT TRG.FILPROC,TRG.FILIAL,TRG.COD,TRG.LOCARM "
+        For nX := 1 to Len(::aMoedas)
+            cQuery += " ,MAX(SB2.B2_VFIM?) CUSTO? "
+        Next nX
+        cQuery += " FROM "+cTableMov+" TRG "
+        cQuery += " INNER JOIN "+RetSQLName("SB2")+" SB2 ON "
+        cQuery += " SB2.B2_FILIAL = TRG.FILIAL "
+        cQuery += " AND SB2.B2_COD = TRG.COD "
+        cQuery += " AND SB2.B2_LOCAL = TRG.LOCARM "
+        cQuery += " AND SB2.D_E_L_E_T_ = ? "
+        cQuery += " WHERE TRG.FILPROC = ? "
+        cQuery += " GROUP BY TRG.FILPROC,TRG.FILIAL,TRG.COD,TRG.LOCARM "
+        cQuery += " ORDER BY TRG.FILPROC,TRG.FILIAL,TRG.COD,TRG.LOCARM "
+        cQuery := ChangeQuery(cQuery)
+
+        ::oQuery := FWExecStatement():New(cQuery)
+    EndIf
+
+    For nX := 1 to Len(::aMoedas)
+        ::oQuery:SetUnsafe(nY++,::aMoedas[nX])
+        ::oQuery:SetUnsafe(nY++,::aMoedas[nX])
+    Next nX
+    ::oQuery:SetString(nY++,' ')
+    ::oQuery:SetString(nY++,::cFilProc)
+
+    ::cAlias := ::oQuery:OpenAlias()
+
+Return
+
+/*/{Protheus.doc} compareBalances
+    Compara o custo calculado com o custo contabil 
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method compareBalances() Class StockCostRoundingAdjuster
+    local cFilAtu    as character
+    local aSaldo     as array
+    local aFields    as array
+    local aCustoReq  := {} as array
+    local aCustoDev  := {} as array
+    local lCanBulk   as logical
+    local aMaxLimit  as array
+    local nDif       as numeric
+    local nX         as integer
+    local cMoeda     as character
+    local nDecimal   as numeric
+
+    // Obtem o proximo seqcalc para utilizar na geracao dos movimentos de ajuste, garantindo a sequencia dos movimentos
+    ::getNextSeqcalc()
+
+    ::oBulkSD3 := FWBulk():New(RetSqlName("SD3"), 500)
+    ::oBulkSD3:SetOption(1)
+    lCanBulk   := ::oBulkSD3:CanBulk()
+
+    If lCanBulk
+        // Define os campos que serão utilizados no FWBulk
+        aFields := ::addFieldsForBulk()
+        ::oBulkSD3:SetFields(aFields) 
+
+        //Posiciona no primeiro índice da SB1
+        SB1->(dbSetOrder(1))
+
+        (::cAlias)->(DbGoTop())
+        Do While (::cAlias)->(!Eof())
+
+            //Atualiza os limites com a configuração da filial
+            If cFilAtu <> (::cAlias)->FILIAL
+                cFilAtu   := (::cAlias)->FILIAL
+                aMaxLimit := {}
+                For nX := 1 to Len(::aMoedas)
+                    AAdd(aMaxLimit,SuperGetMv("MV_E330AJ"+::aMoedas[nX],.F.,1,cFilAtu))
+                Next nX
+            EndIf
+
+            //Compara o custo por movimento com o custo calculado
+            aSaldo := CalcEst((::cAlias)->COD,(::cAlias)->LOCARM,::dDataFim+1)
+            For nX := 1 to Len(::aMoedas)
+                nDif := aSaldo[Val(::aMoedas[nX])+1] - (::cAlias)->&("CUSTO"+cValtoChar(::aMoedas[nX]))
+                cMoeda   := ::aMoedas[nX]
+                nDecimal := TamSX3("D3_CUSTO"+cMoeda)[2]
+                nDif     := Round(nDif, nDecimal)
+                If aSaldo[1] >= 0 .And. Abs(nDif) > 0 .And. nDif <= aMaxLimit[nX]
+                    ::initializeArrays(@aCustoReq,@aCustoDev)
+                    If nDif > 0
+                        aCustoReq[nX] := nDif
+                    Else
+                        aCustoDev[nX] := Abs(nDif)
+                    EndIf 
+                EndIf
+            Next nX
+
+            //Gera o movimento de reajuste caso tenha divergências
+            If !Empty(aCustoReq) .Or. !Empty(aCustoDev)
+                If Empty(::cDocumento)
+                    ::cDocumento := NextNumero("SD3",2,"D3_DOC",.T.)
+                    ::cDocumento := A261RetINV(::cDocumento)
+                EndIf
+                ::recordSD3AdjustmentMovements(aCustoReq,aCustoDev)
+                aCustoReq := {}
+                aCustoDev := {}
+            EndIf
+
+            (::cAlias)->(DbSkip())
+        EndDo
+
+        If !::oBulkSD3:Close()
+            UserException(::oBulkSD3:GetError())
+        EndIf
+    EndIf
+
+    If Select(::cAlias) > 0
+        (::cAlias)->(DbCloseArea())
+    EndIf
+
+    ::oBulkSD3:Destroy()
+	FreeObj(::oBulkSD3)
+
+Return
+
+/*/{Protheus.doc} recordSD3AdjustmentMovements
+    Adiciona o registro para gravação
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method recordSD3AdjustmentMovements(aCustoReq,aCustoDev) Class StockCostRoundingAdjuster
+    local aCusto  := {aCustoReq,aCustoDev} as array
+    local aData   as array
+    local cNumSeq as character
+    local lReq    := .T. as logical
+    local nY      as integer
+
+    For nY := 1 to Len(aCusto)
+        If aScan(aCusto[nY], {|x| x > 0 }) > 0
+
+            //Se estiver vazio, obtem a proxima numeração disponível
+            If Empty(cNumSeq)
+                cNumSeq := ProxNum()
+            EndIf
+
+            //Altera o flag para gravação das movimentações de devolução
+            If nY == 2
+                lReq := .F.
+            EndIf
+
+            //Adiciona os registros
+            aData := ::setFieldsForBulk(lReq,aCusto[nY],cNumSeq)
+
+            If !::oBulkSD3:AddData(aData)
+                UserException(::oBulkSD3:GetError())
+            EndIf
+        EndIf
+    Next nY
+
+Return
+
+/*/{Protheus.doc} deleteRecDecRecordsForPeriod
+    Deleta os movimentos REC/DEC existentes no período
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method deleteRecDecRecordsForPeriod(aFiliais) Class StockCostRoundingAdjuster
+    local oDelSD3  as object
+    local cDataFim := dToS(::dDataFim) as character
+    local cQuery   as character
+    local nX       as integer
+
+    For nX := 1 to Len(aFiliais)
+        If oDelSD3 == Nil
+            cQuery := " DELETE FROM "+RetSQLName("SD3")
+            cQuery += " WHERE D3_FILIAL = ? AND "
+            cQuery += " D3_EMISSAO >= ? AND "
+            cQuery += " D3_EMISSAO <= ? AND "
+            cQuery += " D3_CF IN (?) "
+
+            oDelSD3 := FWExecStatement():New(cQuery)
+        EndIf
+
+        If nX == 1
+            oDelSD3:SetString(1,aFiliais[nX])
+            oDelSD3:SetString(2,::cDataIni)
+            oDelSD3:SetString(3,cDataFim)
+            oDelSD3:SetIn(4,{'REC','DEC'})
+        Else
+            oDelSD3:SetString(1,aFiliais[nX])
+        EndIf
+
+        cQuery := oDelSD3:GetFixQuery()
+
+        ::RunQuery(cQuery)
+    Next nX
+
+Return
+
+/*/{Protheus.doc} addFieldsForBulk
+    Adiciona os campos para o Bulk
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method addFieldsForBulk() Class StockCostRoundingAdjuster
+    local aFields := {} as array
+    local nX      as integer
+    
+    AAdd(aFields, {"D3_FILIAL"})
+    AAdd(aFields, {"D3_COD"})
+    AAdd(aFields, {"D3_LOCAL"}) 
+    AAdd(aFields, {"D3_DOC"})
+    AAdd(aFields, {"D3_TM"})
+    AAdd(aFields, {"D3_CF"}) 
+    AAdd(aFields, {"D3_EMISSAO"})
+    AAdd(aFields, {"D3_NUMSEQ"})
+    AAdd(aFields, {"D3_USUARIO"})
+    AAdd(aFields, {"D3_TIPO"})
+    AAdd(aFields, {"D3_GRUPO"})
+    AAdd(aFields, {"D3_UM"})
+    AAdd(aFields, {"D3_SEQCALC"})
+    For nX := 1 to Len(::aMoedas)
+        AAdd(aFields, {"D3_CUSTO"+::aMoedas[nX]})
+    Next nX
+
+Return aFields
+
+/*/{Protheus.doc} initializeArrays
+    Inicializa os arrays com os movimentos de Requisição e Devolução
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method initializeArrays(aCustoReq,aCustoDev) Class StockCostRoundingAdjuster
+    
+    //Inicializa os arrays aCustoReq e aCustoDev
+    If Empty(aCustoReq) .And. Empty(aCustoDev)
+        aSize(aCustoReq,Len(::aMoedas))
+        aFill(aCustoReq,0)
+        aSize(aCustoDev,Len(::aMoedas))
+        aFill(aCustoDev,0)
+    EndIf
+
+Return
+
+/*/{Protheus.doc} setFieldsForBulk
+    Adiciona o conteúdo para os campos do Bulk
+    @type Method
+    @author Squad Entradas
+    @since 18/12/2025
+/*/
+Method setFieldsForBulk(lReq,aCusto,cNumSeq) Class StockCostRoundingAdjuster
+    local aData as array
+    local cCod  := (::cAlias)->COD as character
+    local nX    as integer
+
+    // Posiciona no Produto
+    SB1->(MsSeek(xFilial("SB1")+cCod))
+
+    aData := {}
+    AAdd(aData, FWxFilial("SD3",(::cAlias)->FILIAL)) //1 - FILIAL
+    AAdd(aData, cCod)                                //2 - COD
+    AAdd(aData, (::cAlias)->LOCARM)                  //3 - LOCAL
+    AAdd(aData, ::cDocumento)                        //4 - DOC
+    If lReq
+        AAdd(aData, "999")                           //5 - TM
+        AAdd(aData, "REC")                           //6 - CF
+    Else
+        AAdd(aData, "499")                           //5 - TM
+        AAdd(aData, "DEC")                           //6 - CF
+    EndIf
+    AAdd(aData, ::dDataFim)                          //7 - EMISSAO
+    AAdd(aData, cNumSeq)                             //8 - NUMSEQ
+    AAdd(aData, cUserName)                           //9 - USUARIO
+    AAdd(aData, SB1->B1_TIPO)                        //10 - TIPO
+    AAdd(aData, SB1->B1_GRUPO)                       //11 - GRUPO
+    AAdd(aData, SB1->B1_UM)                          //12 - UM
+    AAdd(aData, ::cDataIni+::cSeqCalc)               //13 - SEQCALC
+    For nX := 1 to Len(::aMoedas)
+        AAdd(aData,aCusto[nX])                       //14 - CUSTO
+    Next nX
+    ::cSeqCalc := Soma1(::cSeqCalc)
+
+Return aData
+
+/*/{Protheus.doc} getNextSeqcalc
+    Obtem o proximo seqcalc para utilizar na geracao dos movimentos de ajuste
+    @author Squad.Entradas
+    @since 08/06/2026
+    @version 1.0
+    /*/
+Method getNextSeqcalc() Class StockCostRoundingAdjuster
+    Local olastSeqCalc as object
+    Local cQuery       as character
+    Local nMaxSeqCalc  as numeric
+
+    cQuery := "SELECT MAX(SEQCALC) SEQCALC FROM " + AnalyticalMovementTable():TableName()
+    olastSeqCalc := FWExecStatement():New(cQuery)
+
+    // Obtem o maior seqcalc gravado na tabela de movimentos analiticos
+    nMaxSeqCalc := olastSeqCalc:ExecScalar("SEQCALC")
+
+    // Soma a quantidade de NFs de aquisicao para obter o proximo seqcalc
+    nMaxSeqCalc := nMaxSeqCalc + ::nCountNFs
+
+    // Converte valor para Base36
+    ::cSeqCalc := TableManager():IntToB36(nMaxSeqCalc + 1)
+
+Return

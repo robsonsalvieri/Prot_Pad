@@ -1,0 +1,482 @@
+#include "msobject.ch"
+#include "backoffice.sv.est.inventoryanalysis.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+
+#DEFINE SX1GRUPO "MTR290"
+
+namespace totvs.protheus.backoffice.est.inventoryanalysis.integratedprovider
+using namespace totvs.protheus.backoffice.est.smartView.integratedProvider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T.,team="SIGAEST",tables="SB1,SB2,SB3",name="Análise de Estoque",country="ALL",customTables="ALL")
+
+class InventoryAnalysisSmartViewBusinessObject from totvs.protheus.backoffice.est.smartView.integratedProvider.EstIntegratedProvider
+    public method new() as object
+    public method getData() as object
+
+	Protected Method oNGetSchema()
+
+    Protected data cAlias       as character
+    Protected data cWhere       as character
+    Protected data aFieldsSB1   as array
+    Protected data aAllFields   as array
+    Protected data jItens       as json
+    Protected data lExistDic    as logical
+
+endclass
+
+/*/{Protheus.doc} New
+Metodo de instancia da classe.
+@type  Metodo
+@author Squad Entradas
+@since  Abril 19,2023
+/*/
+method new() class InventoryAnalysisSmartViewBusinessObject
+    _Super:new()
+
+    //Define a Área
+    self:appendArea(STR0001) // Estoque/Custos
+    
+    //Define o nome do Objeto de Negócio
+    self:setDisplayName(STR0002) // Relação para Análise do Estoque
+
+    //Define a descrição do Objeto de Negócio
+	self:setDescription( STR0003 )//Demonstra a situação de cada item em relação ao seu saldo, empenho e entradas previstas
+
+    //Indica o pergunte que será utilizado no relatório
+    self:lExistDic := .T.
+	If !self:setPergunte(SX1GRUPO)
+		self:setErrorStatus(400,STR0014,i18n(STR0015,{SX1GRUPO}))//Grupo de pergunte não existe		
+		FWLogMsg('WARN', , 'SmartView', , , , i18n(STR0015,{SX1GRUPO}), , , )//O Grupo de perguntas #1 não existe
+		self:lExistDic := .F.
+	EndIf
+
+    //Indica que o LookUp será do tipo padrão LookUp
+    self:setIsLookUp(.T.)
+
+return self
+
+/*/{Protheus.doc} getData
+Metodo que retorna o Objeto de dados.
+@type  Metodo
+@author Squad Entradas
+@since  Abril 19,2023
+/*/
+method getData(nPage as numeric, oFilter as object) as object class InventoryAnalysisSmartViewBusinessObject
+
+local oQuery	as object
+local jParams	as json
+local cQuery	as character
+local cFilAux	as character
+Local dDataRef	as date
+local nBind		as numeric
+local nEmpenho	as numeric
+local nSaldo	as numeric
+Local nEstMes	as numeric
+local nX		as numeric
+local nFil		as numeric
+local nDecimal	as numeric
+local lPerdInf	as logical
+local lVeic		as logical
+local cLocProc	as character
+local cDescEmp	as character  // PERF: cache nome empresa por filial (evita getInfoEmp por linha)
+local cDescFil	as character  // PERF: cache nome filial por filial (evita getInfoEmp por linha)
+local aFieldTypes as array    // PERF: cache tipos de campo (evita FWSX3Util() por linha)
+local nTipoOP   as numeric    // PERF: cache MV_PAR16 - constante por execucao
+
+    If !self:lExistDic
+	   Return self:oData 
+	EndIf 
+    
+    self:cAlias := GetNextAlias()
+
+    //Metodo para retorno do json dos parametros
+    jParams := oFilter:getParameters()
+
+    //Retorno da tela de multi filiais com as filiais selecionadas ou somente a filial corrente
+    self:aFils := self:retFils(jParams['SV_MULTBRANCH'])
+
+    dDataRef   := if(!empty(jParams['MV_PAR12'][1]), FwDateTimeToLocal(jParams['MV_PAR12'][1])[1], FirstDate(dDataBase))
+
+    cLocProc := SuperGetMV("MV_LOCPROC")
+    lPerdInf := SuperGetMV('MV_PERDINF',.F.,.F.)
+    lVeic    := SuperGetMV("MV_VEICULO") == "S"
+    nDecimal := FWSX3Util():GetFieldStruct("C2_QUANT")[4]
+
+	// PERF: nTipoOP - constante por execucao; substitui hash lookups em jParams por execucao
+	nTipoOP := jParams['MV_PAR16'][1]
+
+	cQuery := " SELECT " + self:getSQLFields(.T.)
+
+	// Os saldos abaixo sao lidos de subqueries ja pre-agregadas por filial+produto+local
+	// (LEFT JOIN 1:1 com a SB2). Como cada subquery devolve no maximo uma linha por grupo,
+	// o SUM externo apenas repassa o valor agregado, sem multiplicacao cartesiana (fan-out).
+	cQuery += " ,COALESCE(ROUND(SUM(SC2.OPSALDO),"+str(nDecimal)+"),0) OPCOLOCADO "
+	cQuery += " ,COALESCE(ROUND(SUM(SC1.SCSALDO),"+str(nDecimal)+"),0) SCCOLOCADA "
+	cQuery += " ,COALESCE(ROUND(SUM(SC7.PCSALDO),"+str(nDecimal)+"),0) PCCOLOCADO "
+	cQuery += " ,COALESCE(ROUND(SUM(SC6.PVSALDO),"+str(nDecimal)+"),0) PVCOLOCADO "
+
+    cQuery += " FROM " + RetSQLName("SB2") + " SB2 "
+
+    cQuery += " INNER JOIN " + RetSQLName("SB1") + " SB1 "
+    cQuery += " ON " + FwJoinFilial("SB1","SB2")
+    cQuery += " AND SB1.B1_COD = SB2.B2_COD "
+	if !lVeic
+		cQuery += " AND SB1.B1_COD BETWEEN ? AND ? "
+	else
+    	cQuery += " AND SB1.B1_CODITE BETWEEN ? AND ? "
+	endif
+    cQuery += " AND SB1.B1_TIPO BETWEEN ? AND ? "
+    cQuery += " AND SB1.B1_GRUPO BETWEEN ? AND ? "
+    cQuery += " AND SB1.B1_DESC BETWEEN ? AND ? "
+    cQuery += " AND SB1.D_E_L_E_T_ = ? "
+    
+    cQuery += " LEFT JOIN " + RetSQLName("SB3") + " SB3 "
+    cQuery += " ON " + FwJoinFilial("SB3","SB2")
+    cQuery += " AND SB3.B3_COD = SB2.B2_COD "
+    cQuery += " AND SB3.D_E_L_E_T_ = ? "
+
+	// Saldo de Ordens de Producao (SC2) pre-agregado por filial+produto+local.
+	// Considera apenas OP em aberto (C2_DATRF vazia) e com saldo a produzir, conforme MATR290.
+	cQuery += " LEFT JOIN ( "
+	cQuery += " SELECT SC2.C2_FILIAL, SC2.C2_PRODUTO, SC2.C2_LOCAL, "
+	if lPerdInf
+		cQuery += " SUM(SC2.C2_QUANT - SC2.C2_QUJE) OPSALDO "
+	else
+		cQuery += " SUM(SC2.C2_QUANT - SC2.C2_QUJE - SC2.C2_PERDA) OPSALDO "
+	endif
+	cQuery += " FROM " + RetSQLName("SC2") + " SC2 "
+	cQuery += " WHERE (SC2.C2_QUANT - SC2.C2_QUJE) > 0 "
+	cQuery += " AND SC2.C2_DATRF = ? "
+	if nTipoOP <> 3
+		cQuery += " AND SC2.C2_TPOP IN (?) "
+	endif
+	cQuery += " AND SC2.D_E_L_E_T_ = ? "
+	cQuery += " GROUP BY SC2.C2_FILIAL, SC2.C2_PRODUTO, SC2.C2_LOCAL "
+	cQuery += " ) SC2 ON " + FwJoinFilial("SC2","SB2")
+	cQuery += " AND SC2.C2_PRODUTO = SB2.B2_COD "
+	cQuery += " AND SC2.C2_LOCAL = SB2.B2_LOCAL "
+
+	// Saldo de Solicitacoes de Compra (SC1) pre-agregado por filial+produto+local.
+	cQuery += " LEFT JOIN ( "
+	cQuery += " SELECT SC1.C1_FILIAL, SC1.C1_PRODUTO, SC1.C1_LOCAL, "
+	cQuery += " SUM(SC1.C1_QUANT - SC1.C1_QUJE) SCSALDO "
+	cQuery += " FROM " + RetSQLName("SC1") + " SC1 "
+	cQuery += " WHERE SC1.C1_QUANT > SC1.C1_QUJE "
+	cQuery += " AND SC1.C1_RESIDUO <> ? "
+	if nTipoOP <> 3
+		cQuery += " AND SC1.C1_TPOP IN (?) "
+	endif
+	cQuery += " AND SC1.D_E_L_E_T_ = ? "
+	cQuery += " GROUP BY SC1.C1_FILIAL, SC1.C1_PRODUTO, SC1.C1_LOCAL "
+	cQuery += " ) SC1 ON " + FwJoinFilial("SC1","SB2")
+	cQuery += " AND SC1.C1_PRODUTO = SB2.B2_COD "
+	cQuery += " AND SC1.C1_LOCAL = SB2.B2_LOCAL "
+
+	// Saldo de Pedidos de Compra (SC7) pre-agregado por filial+produto+local.
+	cQuery += " LEFT JOIN ( "
+	cQuery += " SELECT SC7.C7_FILIAL, SC7.C7_PRODUTO, SC7.C7_LOCAL, "
+	cQuery += " SUM(SC7.C7_QUANT - SC7.C7_QUJE) PCSALDO "
+	cQuery += " FROM " + RetSQLName("SC7") + " SC7 "
+	cQuery += " WHERE SC7.C7_QUANT > SC7.C7_QUJE "
+	cQuery += " AND SC7.C7_RESIDUO = ? "
+	if nTipoOP <> 3
+		cQuery += " AND SC7.C7_TPOP IN (?) "
+	endif
+	cQuery += " AND SC7.D_E_L_E_T_ = ? "
+	cQuery += " GROUP BY SC7.C7_FILIAL, SC7.C7_PRODUTO, SC7.C7_LOCAL "
+	cQuery += " ) SC7 ON " + FwJoinFilial("SC7","SB2")
+	cQuery += " AND SC7.C7_PRODUTO = SB2.B2_COD "
+	cQuery += " AND SC7.C7_LOCAL = SB2.B2_LOCAL "
+
+	// Saldo de Pedidos de Venda (SC6) pre-agregado por filial+produto+local.
+	// A liberacao (SC9) e' somada por pedido/item ANTES da subtracao, evitando
+	// duplicar C6_QTDVEN quando ha' mais de uma liberacao (ex.: faturamento parcial
+	// + liberacao do saldo). O saldo negativo e' zerado por item (CASE WHEN),
+	// reproduzindo a regra Max(0,..) do relatorio legado MATR290 (AglutPV).
+	cQuery += " LEFT JOIN ( "
+	cQuery += " SELECT SC6.C6_FILIAL, SC6.C6_PRODUTO, SC6.C6_LOCAL, "
+	cQuery += " SUM(CASE WHEN (SC6.C6_QTDVEN - COALESCE(SC9.C9_QTDLIB, 0)) > 0 "
+	cQuery += " THEN (SC6.C6_QTDVEN - COALESCE(SC9.C9_QTDLIB, 0)) ELSE 0 END) PVSALDO "
+	cQuery += " FROM " + RetSQLName("SC6") + " SC6 "
+	if jParams['MV_PAR14'][1] == 1
+		// Desconsidera PV cujo TES nao atualiza estoque: mantem apenas F4_ESTOQUE='S'
+		cQuery += " INNER JOIN " + RetSQLName("SF4") + " SF4 "
+		cQuery += " ON " + FwJoinFilial("SF4","SC6")
+		cQuery += " AND SF4.F4_CODIGO = SC6.C6_TES "
+		cQuery += " AND SF4.F4_ESTOQUE = ? "
+		cQuery += " AND SF4.D_E_L_E_T_ = ? "
+	endif
+	cQuery += " LEFT JOIN ( "
+	cQuery += " SELECT SC9.C9_FILIAL, SC9.C9_PEDIDO, SC9.C9_ITEM, SC9.C9_PRODUTO, "
+	cQuery += " SUM(SC9.C9_QTDLIB) C9_QTDLIB "
+	cQuery += " FROM " + RetSQLName("SC9") + " SC9 "
+	cQuery += " WHERE (SC9.C9_BLEST = ? OR (SC9.C9_BLEST = ? AND SC9.C9_BLCRED = ?)) "
+	cQuery += " AND SC9.C9_LOCAL BETWEEN ? AND ? "
+	cQuery += " AND SC9.D_E_L_E_T_ = ? "
+	cQuery += " GROUP BY SC9.C9_FILIAL, SC9.C9_PEDIDO, SC9.C9_ITEM, SC9.C9_PRODUTO "
+	cQuery += " ) SC9 ON SC9.C9_FILIAL = SC6.C6_FILIAL "
+	cQuery += " AND SC9.C9_PEDIDO = SC6.C6_NUM "
+	cQuery += " AND SC9.C9_ITEM = SC6.C6_ITEM "
+	cQuery += " AND SC9.C9_PRODUTO = SC6.C6_PRODUTO "
+	cQuery += " WHERE SC6.D_E_L_E_T_ = ? "
+	if jParams['MV_PAR19'][1] == 2
+		cQuery += " AND SC6.C6_BLQ <> ? "
+	endif
+	cQuery += " GROUP BY SC6.C6_FILIAL, SC6.C6_PRODUTO, SC6.C6_LOCAL "
+	cQuery += " ) SC6 ON " + FwJoinFilial("SC6","SB2")
+	cQuery += " AND SC6.C6_PRODUTO = SB2.B2_COD "
+	cQuery += " AND SC6.C6_LOCAL = SB2.B2_LOCAL "
+
+	cQuery += " WHERE "
+    cQuery += " SB2.B2_FILIAL = ? "
+	cQuery += " AND SB2.B2_LOCAL BETWEEN ? AND ? "
+	
+	if jParams['MV_PAR13'][1] == 2
+    	cQuery += " AND SB2.B2_LOCAL <> ? "
+	endif
+
+	if jParams['MV_PAR15'][1] == 2
+    	cQuery += " AND SB2.B2_QATU > ? "
+	endif
+
+	if jParams['MV_PAR11'][1] == 1
+		cQuery += " AND SB2.B2_USAI > ? "
+		cQuery += " AND SB2.B2_USAI <> ? "
+	endif
+
+    cQuery += " AND SB2.D_E_L_E_T_  = ? "
+	cQuery += self:cWhere
+
+	if oFilter:hasFilter()
+		cQuery += " AND ? "
+	endif
+
+	cQuery += " GROUP BY " + self:getSQLFields(.T.)
+
+	cQuery += " ORDER BY " + SqlOrder(SB2->(IndexKey(1)))
+
+	cQuery := ChangeQuery(cQuery)
+
+    oQuery := FwExecStatement():New(cQuery)
+
+	// PERF: aFieldTypes - cache tipos de campo; evita FWSX3Util() por linha x por campo
+	// Guarda: aAllFields e populado por oNGetSchema(); se vazio o For nX nao itera.
+	aFieldTypes := {}
+	If Len(self:aAllFields) > 0
+		For nX := 1 To Len(self:aAllFields)
+			aAdd(aFieldTypes, FWSX3Util():GetFieldType(self:aAllFields[nX]:getName()))
+		Next nX
+	EndIf
+
+	// Executa a query e processa os registros por filial
+	For nFil := 1 to len(self:aFils)
+
+		nBind := 1
+		cFilAux := self:aFils[nFil]
+
+		// JOIN SB1
+		oQuery:setString(nBind++, jParams['MV_PAR01'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR02'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR03'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR04'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR05'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR06'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR07'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR08'][1])
+		oQuery:setString(nBind++, ' ')
+
+		// JOIN SB3
+		oQuery:setString(nBind++, ' ')
+
+		// SUBQUERY SC2 (OPs colocadas) - ordem: C2_DATRF, [C2_TPOP], D_E_L_E_T_
+		oQuery:setString(nBind++, ' ')
+		if nTipoOP == 1
+			oQuery:setIn(nBind++, {' ','F'})
+		elseif nTipoOP == 2
+			oQuery:setIn(nBind++, {'P'})
+		endif
+		oQuery:setString(nBind++, ' ')
+
+		// SUBQUERY SC1 (SCs colocadas) - ordem: C1_RESIDUO, [C1_TPOP], D_E_L_E_T_
+		oQuery:setString(nBind++, 'S')
+		if nTipoOP == 1
+			oQuery:setIn(nBind++, {' ','F'})
+		elseif nTipoOP == 2
+			oQuery:setIn(nBind++, {'P'})
+		endif
+		oQuery:setString(nBind++, ' ')
+
+		// SUBQUERY SC7 (PCs colocados) - ordem: C7_RESIDUO, [C7_TPOP], D_E_L_E_T_
+		oQuery:setString(nBind++, ' ')
+		if nTipoOP == 1
+			oQuery:setIn(nBind++, {' ','F'})
+		elseif nTipoOP == 2
+			oQuery:setIn(nBind++, {'P'})
+		endif
+		oQuery:setString(nBind++, ' ')
+
+		// SUBQUERY SC6/SC9 (PVs colocados)
+		if jParams['MV_PAR14'][1] == 1
+			oQuery:setString(nBind++, 'S') // SF4.F4_ESTOQUE
+			oQuery:setString(nBind++, ' ') // SF4.D_E_L_E_T_
+		endif
+		oQuery:setString(nBind++, '10')                     // SC9.C9_BLEST
+		oQuery:setString(nBind++, ' ')                      // SC9.C9_BLEST
+		oQuery:setString(nBind++, ' ')                      // SC9.C9_BLCRED
+		oQuery:setString(nBind++, jParams['MV_PAR17'][1])   // SC9.C9_LOCAL de
+		oQuery:setString(nBind++, jParams['MV_PAR18'][1])   // SC9.C9_LOCAL ate
+		oQuery:setString(nBind++, ' ')                      // SC9.D_E_L_E_T_
+		oQuery:setString(nBind++, ' ')                      // SC6.D_E_L_E_T_
+		if jParams['MV_PAR19'][1] == 2
+			oQuery:setString(nBind++, 'R')                  // SC6.C6_BLQ
+		endif
+
+		// WHERE
+		oQuery:setString(nBind++, FWxFilial("SB2",cFilAux))
+		oQuery:setString(nBind++, jParams['MV_PAR17'][1])
+		oQuery:setString(nBind++, jParams['MV_PAR18'][1])
+
+		if jParams['MV_PAR13'][1] == 2
+			oQuery:setString(nBind++, cLocProc)
+		endif
+
+		if jParams['MV_PAR15'][1] == 2
+			oQuery:setNumeric(nBind++, 0)
+		endif
+
+		if jParams['MV_PAR11'][1] == 1
+			oQuery:setDate(nBind++, dDataRef)
+			oQuery:setString(nBind++, ' ')
+		endif
+
+		oQuery:setString(nBind++, ' ')
+
+		if oFilter:hasFilter()
+			oQuery:setUnsafe(nBind++, oFilter:getSQLExpression())  // CA2050:SUPPRESS - expressao SQL gerada pelo framework, nao input de usuario
+		endif
+
+		oQuery:OpenAlias(self:cAlias)
+
+		// PERF: Cache do nome empresa e filial  constantes por filial; evita 2x getInfoEmp() por linha
+		cDescEmp := self:getInfoEmp("M0_NOME",   cFilAux)
+		cDescFil := self:getInfoEmp("M0_FILIAL", cFilAux)
+
+		Do While !(self:cAlias)->(Eof())
+
+			nEstMes		:= 0
+			nEmpenho	:= (self:cAlias)->(B2_QEMPSA)
+			nSaldo		:= (self:cAlias)->(B2_QATU - B2_RESERVA - B2_QEMPSA)
+    
+			if jParams['MV_PAR10'][1] == 1
+				if nTipoOP == 1
+					nSaldo -= (self:cAlias)->B2_QEMP
+					nEmpenho += (self:cAlias)->B2_QEMP
+				elseif nTipoOP == 2
+					nSaldo -= (self:cAlias)->B2_QEMPPRE
+					nEmpenho += (self:cAlias)->B2_QEMPPRE
+				else
+					nSaldo -= (self:cAlias)->(B2_QEMP - B2_QEMPPRE)
+					nEmpenho += (self:cAlias)->(B2_QEMP - B2_QEMPPRE)
+				endif
+			endif
+
+			if jParams['MV_PAR20'][1] == 1
+				nSaldo -= (self:cAlias)->B2_QEMPPRJ
+				nEmpenho += (self:cAlias)->B2_QEMPPRJ
+			endif
+
+			if jParams['MV_PAR09'][1] == 2
+				nSaldo += (self:cAlias)->(OPCOLOCADO + SCCOLOCADA + PCCOLOCADO)
+                if (nSaldo > (self:cAlias)->B1_EMIN) .Or. ((self:cAlias)->B1_EMIN == 0 .And. nSaldo == 0)
+                    (self:cAlias)->( dbSkip() )
+                    Loop
+                endif
+            endif
+
+			if (self:cAlias)->B3_MEDIA > 0
+                nEstMes := nSaldo / (self:cAlias)->B3_MEDIA
+            endif
+
+			self:jItens := JsonObject():New()
+			self:jItens["CODEMP"	] := cEmpAnt
+            self:jItens["DESCEMP"	] := cDescEmp
+            self:jItens["FILIAL"	] := (self:cAlias)->B2_FILIAL
+            self:jItens["DESCFIL"	] := cDescFil
+            self:jItens["SALDOATUAL"] := nSaldo
+            self:jItens["EMPENHO"	] := nEmpenho
+            self:jItens["SCCOLOCADA"] := (self:cAlias)->SCCOLOCADA
+            self:jItens["PCCOLOCADO"] := (self:cAlias)->PCCOLOCADO
+            self:jItens["OPCOLOCADO"] := (self:cAlias)->OPCOLOCADO
+            self:jItens["PVCOLOCADO"] := (self:cAlias)->PVCOLOCADO
+            self:jItens["ESTMES"	] := nEstMes
+			   
+            if !Empty((self:cAlias)->B2_USAI)
+                self:jItens["DTULTSAI"] := totvs.framework.treports.date.dateToTimeStamp(StoD((self:cAlias)->B2_USAI))
+            endif
+
+			For nX := 1 To Len(self:aAllFields)
+				if (self:cAlias)->(FieldPos( self:aAllFields[nX]:getRealName() )) > 0
+					if aFieldTypes[nX] == "D" //Campo tipo data tem um tratamento diferente para envio
+						If !Empty( (self:cAlias)->&(self:aAllFields[nX]:GetName()) )
+							self:jItens[self:aAllFields[nX]:getName()] := totvs.framework.treports.date.dateToTimeStamp(StoD((self:cAlias)->&(self:aAllFields[nX]:getRealName())))
+						EndIf
+					else
+						self:jItens[self:aAllFields[nX]:getName()] := (self:cAlias)->&(self:aAllFields[nX]:getRealName())
+					endif
+				endif
+            Next nX
+            
+            self:processData()
+            self:oData:appendData(self:jItens)
+
+			(self:cAlias)->( dbSkip() )
+
+        EndDo
+
+	Next nFil
+
+    (self:cAlias)->( DBCloseArea() )
+
+	oQuery:Destroy()
+
+return self:oData
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} oNGetSchema
+    Metodo que retorna a Estrutura de dados.
+    @type  Metodo
+    @author Squad Entradas
+	@since 09/2024
+	@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method oNGetSchema() Class InventoryAnalysisSmartViewBusinessObject
+
+local aFieldsSB1 as array
+local aFieldsSB2 as array
+local aFieldsSB3 as array
+
+    aFieldsSB1 := {"B1_CODITE","B1_DESC","B1_TIPO","B1_GRUPO","B1_UM","B1_EMIN","B1_LE","B1_PE"}
+    aFieldsSB2 := {"B2_FILIAL","B2_COD","B2_LOCAL","B2_USAI","B2_QATU","B2_RESERVA","B2_QEMPSA","B2_QEMP","B2_QEMPPRE","B2_QEMPPRJ"}
+    aFieldsSB3 := {"B3_MEDIA"}
+
+    self:addProperty("CODEMP"    , STR0016, "string", STR0016, "CODEMP"		) // Empresa
+    self:addProperty("DESCEMP"   , STR0017, "string", STR0017, "DESCEMP"	) // Desc.Empresa
+    self:addProperty("FILIAL"    , STR0018, "string", STR0018, "FILIAL"		) // Filial
+    self:addProperty("DESCFIL"   , STR0019, "string", STR0019, "DESCFIL"	) // Desc.Filial
+    self:addProperty("EMPENHO"   , STR0006, "number", STR0006, "EMPENHO"	) // Empenho
+    self:addProperty("SCCOLOCADA", STR0007, "number", STR0007, "SCCOLOCADA"	) // SCs Colocadas
+    self:addProperty("PCCOLOCADO", STR0008, "number", STR0008, "PCCOLOCADO"	) // PCs Colocados
+    self:addProperty("OPCOLOCADO", STR0009, "number", STR0009, "OPCOLOCADO"	) // OPs Colocados
+    self:addProperty("PVCOLOCADO", STR0010, "number", STR0010, "PVCOLOCADO"	) // PVs Colocados
+    self:addProperty("SALDOATUAL", STR0011, "number", STR0011, "SALDOATUAL"	) // Saldo Atual
+    self:addProperty("DTULTSAI"  , STR0012, "date"  , STR0012, "DTULTSAI"	) // DT.Ult.Saida
+    self:addProperty("ESTMES"    , STR0013, "number", STR0013, "ESTMES"		) // Estoque em Meses
+
+	self:AliasToSchema("SB2",aFieldsSB2)
+    self:AliasToSchema("SB1",aFieldsSB1)
+    self:AliasToSchema("SB3",aFieldsSB3)
+
+    self:aAllFields := self:getStructFields()
+	
+return

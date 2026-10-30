@@ -1,0 +1,396 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "totvs.ch"
+#include "backoffice.taf.dere.events.ch"
+
+namespace backoffice.taf.dere.events
+
+#DEFINE CONTENT_TYPE        "application/json"
+#DEFINE HEADER_CONTENT_TYPE "Content-Type"
+#DEFINE STATUS_CODE_SUCCESS 200
+#DEFINE STATUS_CODE_ERROR   400
+#DEFINE STATUS_CODE_FAIL    500
+
+#DEFINE DERE_STATUS_PREVALID     "0"
+#DEFINE DERE_STATUS_WAITING      "1"
+#DEFINE DERE_STATUS_REJECTED_TSS "2"
+#DEFINE DERE_STATUS_REJECTED     "3"
+#DEFINE DERE_STATUS_VALIDATED    "4"
+#DEFINE DERE_RECORD_ACTIVE    "1"
+
+/*/{Protheus.doc} TAFDereGetEvents
+API para retorno dos eventos fixos da DeRE.
+
+@endpoint  /api/taf/dere/events/fixedEvents
+@method    GET
+@type      function
+@author    Rafael de Paula Leme
+@since     27/02/2026
+@version   1.0
+@return    Nil, a resposta é devolvida ao cliente pelo objeto oRest. O corpo contém a
+           propriedade "events", com um objeto por evento composto por "event" (código
+           do evento), "description" (descrição) e "briefDescription" (descrição resumida).
+/*/
+@GET(endpoint="/api/taf/dere/events/fixedEvents", description="Eventos fixos da DeRE")
+Function TAFDereGetEvents()
+    Local jItem     := Nil as json
+    Local jResponse := Nil as json
+    Local aEventos  := {}  as array
+    Local aEvents   := {}  as array
+    Local nX        := 0   as numeric
+    Local nTotal    := 0   as numeric
+
+    aEventos := TAFDereEvents()
+    nTotal   := Len(aEventos)
+
+    For nX := 1 To nTotal
+        jItem := JsonObject():New()
+        jItem["event"]            := aEventos[nX][1] //Código do evento
+        jItem["description"]      := aEventos[nX][2] //Descrição
+        jItem["briefDescription"] := aEventos[nX][3] //Descrição resumida
+
+        Aadd(aEvents, jItem)
+    Next nX
+
+    jResponse           := JsonObject():New()
+    jResponse['events'] := aEvents
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetStatusCode(STATUS_CODE_SUCCESS)
+    oRest:SetResponse(jResponse)
+
+Return Nil
+
+/*/{Protheus.doc} TAFDereEvents
+Função responsável por retornar os eventos fixos da DeRE.
+
+Concentra o registro único dos eventos suportados pela DeRE. Para habilitar um novo
+evento basta acrescentar uma linha neste array, informando também a tabela que
+armazena os seus registros.
+
+@type      function
+@author    Rafael de Paula Leme
+@since     11/03/2026
+@version   1.0
+@return    array, matriz com uma linha por evento e quatro colunas:
+           [n][1] character - código do evento (ex.: "D-1001")
+           [n][2] character - descrição do evento
+           [n][3] character - descrição resumida do evento
+           [n][4] character - alias da tabela que armazena os registros do evento
+           As colunas 1 a 3 são expostas pela API; a coluna 4 é de uso interno.
+/*/
+Function TAFDereEvents()
+    Local aEventos := {} as array
+
+    //Eventos fixos da Dere
+    Aadd(aEventos, {"D-1001", STR0002, STR0003, "T7T"}) //"Informações do Contribuinte" / "contribuintes"
+    Aadd(aEventos, {"D-1011", STR0004, STR0005, "T7Z"}) //"Plano Geral de Contas" / "PGCC" 
+
+Return aEventos
+
+/*/{Protheus.doc} TAFDereEventDetail
+Detalhes dos registros por evento e status.
+
+@endpoint  /api/taf/dere/events/eventDetail
+@method    GET
+@type      function
+@author    Rafael de Paula Leme
+@since     12/03/2026
+@version   1.0
+@return    Nil, a resposta é devolvida ao cliente pelo objeto oRest.
+           Sucesso (200): propriedade "eventDetail" com a lista de registros do evento.
+           Requisição inválida (400): propriedade "message" com o motivo da recusa.
+           Falha de ambiente ou de consulta (500): propriedade "message" com o erro.
+           Parâmetros de query string: "event" (código do evento, obrigatório) e
+           "status" (pending, waiting, rejected ou validated, obrigatório).
+/*/
+@GET(endpoint="/api/taf/dere/events/eventDetail", description="Detalhe dos registros por evento e status")
+Function TAFDereEventDetail()
+    Local jParams   := oRest:getQueryRequest() as json
+    Local jResponse := JsonObject():New()      as json
+    Local cMessage  := ""                      as character
+    Local cEvento   := ""                      as character
+    Local cStatus   := ""                      as character
+    Local nStatus   := STATUS_CODE_SUCCESS     as numeric
+
+    If jParams:HasProperty("event")
+        cEvento := AllTrim(jParams:GetJsonText("event"))
+    EndIf
+
+    If jParams:HasProperty("status")
+        cStatus := AllTrim(jParams:GetJsonText("status"))
+    EndIf
+
+    If Empty(cEvento) .or. Empty(cStatus)
+        cMessage := STR0008 // "Parâmetros não enviados na requisição."
+        nStatus  := STATUS_CODE_ERROR
+    Else
+        cMessage := EventDetail(jResponse, cEvento, cStatus, @nStatus)
+    EndIf
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetStatusCode(nStatus)
+
+    If !Empty(cMessage)
+        jResponse['message'] := cMessage
+    EndIf
+
+    oRest:SetResponse(jResponse)
+
+Return Nil
+
+
+/*/{Protheus.doc} EventDetail
+Detalhe dos registros dos eventos da DeRE.
+
+Valida o evento contra o registro de eventos suportados (TAFDereEvents), confirma a
+existência da tabela do evento no dicionário, traduz o status recebido e delega a
+consulta dos registros.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     17/03/2026
+@version   1.0
+@param     jResponse, json     , objeto de resposta que recebe a propriedade "eventDetail"
+@param     cEvento  , character, código do evento solicitado (ex.: "D-1001")
+@param     cStatus  , character, status solicitado (pending, waiting, rejected, validated)
+@param     nStatus  , numeric  , recebido por referência, retorna o status HTTP da operação
+@return    character, vazio em caso de sucesso ou a mensagem do motivo da falha
+/*/
+Static Function EventDetail(jResponse as json, cEvento as character, cStatus as character, nStatus as numeric) as character
+    Local aEventos  := {} as array
+    Local cMessage  := "" as character
+    Local cAlias    := "" as character
+    Local aIdStatus := {} as array
+    Local nPos      := 0  as numeric
+
+    jResponse["eventDetail"] := {}
+
+    aEventos := TAFDereEvents()
+    nPos     := aScan(aEventos, {|aEvent| AllTrim(Upper(aEvent[1])) == AllTrim(Upper(cEvento))})
+
+    If nPos == 0
+        cMessage := STR0009 + cEvento + "." //"Evento não suportado: "
+        nStatus  := STATUS_CODE_ERROR
+    Else
+        cAlias := aEventos[nPos][4]
+
+        If !TAFAlsInDic(cAlias)
+            cMessage := STR0010 + cAlias + "." //"Dicionário de dados desatualizado. Verifique a tabela "
+            nStatus  := STATUS_CODE_FAIL
+        ElseIf !DereStatusId(cAlias, cStatus, @aIdStatus)
+            cMessage := STR0011 + cStatus + "." //"Status não suportado: "
+            nStatus  := STATUS_CODE_ERROR
+        Else
+            DereEventData(jResponse, cAlias, cStatus, aIdStatus)
+        EndIf
+    EndIf
+
+Return cMessage
+
+/*/{Protheus.doc} DereStatusId
+Traduz o status recebido na requisição para o conteúdo gravado no campo de status.
+
+Agrupamento aplicado ao filtro:
+pending   - status em branco e "2"
+waiting   - status "0" e "1"
+rejected  - status "2" e "3"
+validated - status "4"
+
+O status "2" pertence a dois grupos por definicao da regra de negocio: o mesmo registro
+e listado em "pending" e em "rejected".
+
+O grupo "pending" abrange o campo em branco e o status "2". O filtro é montado com o campo
+preenchido de espaços conforme o tamanho declarado no dicionário, e não com string
+vazia, porque em Oracle uma string vazia em bind é convertida para NULL e a
+comparação nunca seria satisfeita.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     03/09/2026
+@version   1.0
+@param     cAlias   , character, alias da tabela do evento (ex.: "T7T")
+@param     cStatus  , character, status solicitado na requisição
+@param     aIdStatus, array    , recebido por referência, retorna o conteúdo do filtro
+@return    logical, .T. quando o status informado pertence ao domínio suportado
+/*/
+Static Function DereStatusId(cAlias as character, cStatus as character, aIdStatus as array) as logical
+    Local lValid   := .T. as logical
+    Local cStatAux := ""  as character
+
+    cStatAux := Lower(AllTrim(cStatus))
+
+    Do Case
+        Case cStatAux == 'pending'
+            aIdStatus := {Space(TamSX3(cAlias + "_STATUS")[1]), DERE_STATUS_REJECTED_TSS}
+        Case cStatAux == 'waiting'
+            aIdStatus := {DERE_STATUS_PREVALID, DERE_STATUS_WAITING}
+        Case cStatAux == 'rejected'
+            aIdStatus := {DERE_STATUS_REJECTED_TSS, DERE_STATUS_REJECTED}
+        Case cStatAux == 'validated'
+            aIdStatus := {DERE_STATUS_VALIDATED}
+        OtherWise
+            lValid := .F.
+    EndCase
+
+Return lValid
+
+/*/{Protheus.doc} DereEventData
+Consulta e monta os registros do evento informado.
+
+Atende qualquer evento da DeRE, resolvendo os campos pelo alias da tabela recebida.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     03/09/2026
+@version   1.0
+@param     jResponse, json     , objeto de resposta que recebe a propriedade "eventDetail"
+@param     cAlias   , character, alias da tabela do evento (ex.: "T7T")
+@param     cStatus  , character, status solicitado, devolvido em cada registro
+@param     aIdStatus, array    , conteúdo do filtro aplicado ao campo de status
+/*/
+Static Function DereEventData(jResponse as json, cAlias as character, cStatus as character, aIdStatus as array)
+    Local oPrepare  := Nil            as object
+    Local jItem     := Nil            as json
+    Local aProvider := {}             as array
+    Local aDetail   := {}             as array
+    Local cAliasQry := GetNextAlias() as character
+    Local cQuery    := ""             as character
+    Local cBinds    := ""             as character
+    Local lOpened   := .F.            as logical
+    Local nX        := 0              as numeric
+
+    aProvider := DereProvider()
+
+    //Um coringa por status do grupo. O conteudo segue em bind, e nao concatenado na
+    //query, para manter o tratamento de SQL injection do FwExecStatement.
+    For nX := 1 To Len(aIdStatus)
+        If nX > 1
+            cBinds += ", "
+        EndIf
+
+        cBinds += "?"
+    Next nX
+
+    cQuery += "SELECT "
+    cQuery += cAlias + "_ID, "
+    cQuery += cAlias + "_VERSAO, "
+    cQuery += cAlias + "_EVENTO, "
+    cQuery += cAlias + "_DTINVA, "
+    cQuery += cAlias + "_DTFIVA, "
+    cQuery += cAlias + "_RECIBO "
+    cQuery += "FROM " + RetSqlName(cAlias) + " "
+    cQuery += "WHERE " + cAlias + "_FILIAL = ? AND "
+    cQuery += cAlias + "_STATUS IN (" + cBinds + ") AND "
+    cQuery += cAlias + "_ATIVO = ? AND "
+    cQuery += "D_E_L_E_T_ = ? "
+
+    cQuery := ChangeQuery(cQuery)
+
+    oPrepare := FwExecStatement():New(cQuery)
+
+    oPrepare:SetString(1, xFilial(cAlias))
+
+    For nX := 1 To Len(aIdStatus)
+        oPrepare:SetString(nX + 1, aIdStatus[nX])
+    Next nX
+
+    oPrepare:SetString(Len(aIdStatus) + 2, DERE_RECORD_ACTIVE)
+    oPrepare:SetString(Len(aIdStatus) + 3, Space(1))
+
+    oPrepare:OpenAlias(cAliasQry)
+    lOpened := .T.
+
+    While !(cAliasQry)->(EoF())
+        jItem := JsonObject():New()
+
+        jItem["status"]          := cStatus
+        jItem["providerCNPJ"]    := aProvider[1]
+        jItem["providerName"]    := aProvider[2]
+        jItem["id"]              := (cAliasQry)->&(cAlias + "_ID")
+        jItem["version"]         := (cAliasQry)->&(cAlias + "_VERSAO")
+        jItem["typeOfOperation"] := (cAliasQry)->&(cAlias + "_EVENTO")
+        jItem["initialDate"]     := DereConvData((cAliasQry)->&(cAlias + "_DTINVA"))
+        jItem["finalDate"]       := DereConvData((cAliasQry)->&(cAlias + "_DTFIVA"))
+        jItem["receipt"]         := (cAliasQry)->&(cAlias + "_RECIBO")
+
+        Aadd(aDetail, jItem)
+
+        (cAliasQry)->(DBSkip())
+    EndDo
+
+    If lOpened
+        (cAliasQry)->(DBCloseArea())
+    EndIf
+
+    If oPrepare != Nil
+        oPrepare:Destroy()
+        oPrepare := Nil
+    EndIf
+
+    jResponse["eventDetail"] := aDetail
+
+Return
+
+/*/{Protheus.doc} DereProvider
+Retorna os dados do declarante utilizados na resposta da API.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     03/09/2026
+@version   1.0
+@return    array, vetor de duas posições:
+           [1] character - CNPJ do declarante (M0_CGC)
+           [2] character - nome da filial do declarante (M0_FILIAL)
+/*/
+Static Function DereProvider() as array
+    Local aSM0 := {}       as array
+    Local aRet := {"", ""} as array
+    Local nPos := 0        as numeric
+
+    aSM0 := FWSM0Util():GetSM0Data(cEmpAnt, cFilAnt, {"M0_CGC", "M0_FILIAL"})
+
+    If ValType(aSM0) == "A"
+        nPos := aScan(aSM0, {|aField| AllTrim(Upper(aField[1])) == "M0_CGC"})
+
+        If nPos > 0
+            aRet[1] := AllTrim(cValToChar(aSM0[nPos][2]))
+        EndIf
+
+        nPos := aScan(aSM0, {|aField| AllTrim(Upper(aField[1])) == "M0_FILIAL"})
+
+        If nPos > 0
+            aRet[2] := AllTrim(cValToChar(aSM0[nPos][2]))
+        EndIf
+    EndIf
+
+Return aRet
+
+/*/{Protheus.doc} DereConvData
+Converte o campo data antes de retornar ao front.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     03/09/2026
+@version   1.0
+@param     xDate, variant, conteúdo do campo de data, caractere (AAAAMMDD) ou data
+@return    character, data no formato DD/MM/AAAA ou vazio quando não houver data
+/*/
+Static Function DereConvData(xDate) as character
+    Local cRet   := ""       as character
+    Local cValue := ""       as character
+    Local dDate  := CToD("") as date
+
+    If ValType(xDate) == "C"
+        cValue := AllTrim(xDate)
+
+        If !Empty(cValue)
+            dDate := StoD(cValue)
+        EndIf
+
+        If !Empty(dDate)
+            cRet := StrZero(Day(dDate), 2) + "/" + StrZero(Month(dDate), 2) + "/" + StrZero(Year(dDate), 4)
+        EndIf
+    EndIf
+
+Return cRet

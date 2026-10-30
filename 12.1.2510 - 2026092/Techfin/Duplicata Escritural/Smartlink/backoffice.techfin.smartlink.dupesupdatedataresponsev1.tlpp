@@ -1,0 +1,157 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "tbiconn.ch"
+
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+
+/*/{Protheus.doc} DupesUpdateDataResponseV1MessageReader
+	Classe de Integração Duplicata Escritural
+	Retorno da atualização de dados da duplicata escritural.
+	@type class
+	@author Squad TechFin
+	@since 22/06/2026
+    
+/*/
+class DupesUpdateDataResponseV1MessageReader
+	data jMessage  as json
+	data cMock     as character
+	data lMock     as logical
+
+	public method new()  constructor
+	public method read() as logical
+	public method mock()
+end class
+
+/*/{Protheus.doc} DupesUpdateDataResponseV1 MessageReader::New
+	Métoodo construtor da classe
+	@type method
+	@author squad TechFin
+	@since 22/06/2026
+/*/
+method New() class DupesUpdateDataResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+	::cMock     := ""
+	::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} DupesUpdateDataResponseV1MessageReader::mock
+	Métoodo para mockar a mensagem recebida para testes
+	@type method
+	@author Squad TechFin
+	@since 22/06/2026
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class DupesUpdateDataResponseV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} DupesUpdateDataResponseV1 MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 22/06/2026
+	@param oLinkMessage, object, Instancia de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as Logical class DupesUpdateDataResponseV1MessageReader 
+    local lSuccess := .F. as logical
+    local cCompany := ""  as character
+    local cBranch  := ""  as character
+    local cPayload := ""  as character
+    local cDecoded := ""  as character
+    local aIdent   := {}  as array
+
+    If ::lMock
+        cPayload :=  ::cMock
+    Else 
+        cPayload :=  oLinkMessage:RawMessage()
+    EndIf
+
+	cDecoded := DecodeUTF8(cPayload)
+
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+    if ::jMessage:FromJSON(cPayload) == NIL
+        aIdent := StrTOKArr2(::jMessage["data"]["erpRequestId"], "|", .T.)//"erpRequestId": "cEmpAnt|cFilAnt|requestId"
+        if Len(aIdent) == 3
+            cCompany := aIdent[1]
+            cBranch  := aIdent[2]
+            
+            lSuccess := StartJob("TFDUpdate", GetEnvServer(), .T., cCompany, cBranch, cPayload, ::jMessage["data"]:toJson())
+        endIF
+    endIf
+    FwFreeObj(::jMessage)
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} TFDUpdate
+    Gera registro no Histórico de Eventos sobre sucesso ou falha na alteração de dados do título
+    @type function
+    @author Squad TechFin
+    @since 22/06/2026
+    @param cCompany, character, Grupo Empresa
+    @param cBranch , character, Filial
+    @param cPayload, character, mensagem recebida        
+/*/
+function TFDUpdate(cCompany as character, cBranch as character, cPayload as character, cData as character)
+    local nX            := 0                    as numeric
+    local nY            := 0                    as numeric
+    local cErroMsg      := ""                   as character    
+    local cOcorrencia   := ""                   as character
+    Local cLista        := ""                   as character
+    local oOcorrencia   := nil                  as object
+    local oSmartUtil    := nil                  as object
+    local jData         := JsonObject():New()   as json
+    local jAux          := JsonObject():New()   as json
+    local cMotBrowse    := ""                   as character
+    local aErros        := {}                   as array
+    
+    RPCSetType(3)
+    RPCSetEnv(cCompany, cBranch,,,'FIN') 
+    
+    jData:fromJson(cData)
+    oSmartUtil 	:= SmartlinkUtil():new()
+
+    For nX:=1 to 2                
+        If nX==1
+            cLista      := 'lista_itens_processados'                            
+            cOcorrencia := '013'                
+        Else
+            cLista      := 'lista_itens_invalidos'                  
+            cOcorrencia := '014'
+        endIf
+
+        If jData:hasProperty(cLista)
+            jAux := jData[cLista]
+
+            ARP->(dbSetOrder(1))
+            For nY:=1 to Len(jAux)
+                If !ARP->(dbSeek(FwxFilial('ARP')+jAux[nY]["erpInstallmentId"]))
+                    oSmartUtil:addLogMSG("error", "Parcela ARP não localizada (ARP_IDDOC): " + jAux[nY]["erpInstallmentId"])
+                    Loop
+                EndIf
+
+                //-- Grava Histórico de Ocorrências
+                aErros      := TFGetError( jAux[nY] )
+                cErroMsg    := aErros[1]
+                cMotBrowse  := aErros[2]
+                oOcorrencia:= TechfinOccurrences():New()
+                oOcorrencia:setProduct("5")
+                oOcorrencia:setIdDoc(jAux[nY]["erpInstallmentId"])                    
+                oOcorrencia:makeBrowseUpdated(cMotBrowse)
+                oOcorrencia:setLog(cErroMsg)                    
+                oOcorrencia:Register(cOcorrencia)                
+            Next nY
+        EndIf
+    Next nX
+	
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oSmartUtil)
+	If !( oOcorrencia == NIL )
+		FwFreeObj(oOcorrencia)
+	EndIf
+	FwFreeArray(aErros)
+
+    RpcClearEnv()
+return

@@ -1,0 +1,224 @@
+#include "tlpp-core.th"
+#include "tbiconn.ch"
+#include "totvs.ch"
+#include "fwmvcdef.ch"
+
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+
+/*/{Protheus.doc} DupesSettlementResponseV1MessageReader
+	Processa retorno de baixa de duplicata escritural (Settlement Response)
+	@type class
+	@author Squad TechFin
+	@since 05/05/2026
+    
+/*/
+class DupesSettlementResponseV1MessageReader
+	data jMessage  as json
+	data cMock     as character
+	data lMock     as logical
+
+	public method new() constructor
+	public method read() as logical
+	public method mock()
+end class
+
+/*/{Protheus.doc} DupesSettlementResponseV1 MessageReader::New
+	Método construtor da classe
+	@type method
+	@author squad TechFin
+	@since 05/05/2026
+/*/
+method New() class DupesSettlementResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+	::cMock     := ""
+	::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} DupesSettlementResponseV1MessageReader::mock
+	Método para mockar a mensagem recebida para testes
+	@type method
+	@author Squad TechFin
+	@since 05/05/2026
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class DupesSettlementResponseV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+
+/*/{Protheus.doc} DupesSettlementResponseV1 MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 05/05/2026
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as Logical class DupesSettlementResponseV1MessageReader 
+    local lSuccess := .F. as logical
+    local cCompany := ""  as character
+    local cBranch  := ""  as character
+    local cPayload := ""  as character
+    local cDecoded := ""  as character
+    local cIdMsg   := ""  as character
+    local aIdent   := {}  as array
+
+    If ::lMock
+        cPayload :=  ::cMock
+    Else 
+        cPayload :=  oLinkMessage:RawMessage()
+    EndIf
+
+	cDecoded := DecodeUTF8(cPayload)
+
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+    if ::jMessage:FromJSON(cPayload) == NIL
+        aIdent := StrTOKArr2(::jMessage["data"]["erpRequestId"], "|", .T.)//"erpRequestId": "cEmpAnt|cFilAnt|requestId"
+        if Len(aIdent) == 3
+            cCompany := aIdent[1]
+            cBranch  := aIdent[2]    
+            cIdMsg   := aIdent[3]                 
+            lSuccess := StartJob("TFDRetBx", GetEnvServer(), .T., cCompany, cBranch, cPayload, ::jMessage["data"]:toJson(), cIdMsg)
+        endIF
+    endIf
+    FwFreeObj(::jMessage)
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} TFDRetBx
+    Atualiza status da Escrituração e transfere título de carteira
+    @type function
+    @author Squad TechFin
+    @since 3/28/2026
+    @param cCompany, character, Grupo Empresa
+    @param cBranch , character, Filial
+    @param cPayload, character, mensagem recebida    
+    @param cIdMsg, character, Id da mensagem de original
+    @return logical , indica que processo foi realizado
+/*/
+function TFDRetBx(cCompany as character, cBranch as character, cPayload as character, cData as character, cIdMsg as character) as logical    
+    local nX            := 0                    as numeric
+    local nY            := 0                    as numeric
+    local cLogModel     := ""                   as character    
+    local cErroMsg      := ""                   as character
+    local cMotBrowse    := ""                   as character
+    local cStatus       := ""                   as character    
+    local cOcorrencia   := ""                   as character
+    Local cLista        := ""                   as character
+    local oModel        := nil                  as object
+    local oMdlMaster    := nil                  as object
+    local oOcorrencia   := nil                  as object
+    local oSmartUtil    := nil                  as object
+    local jData         := JsonObject():New()   as json
+    local jAux          := JsonObject():New()   as json
+    local lGrvARQ       := .T.                  as logical
+    local aErros        := {}                   as array
+    
+    RPCSetType(3)
+    RPCSetEnv(cCompany, cBranch,,,'FIN') 
+    
+    jData:fromJson(cData)
+    oSmartUtil 	:= SmartlinkUtil():new()
+
+    For nX:=1 to 2                
+        If nX==1
+            cLista      := 'lista_itens_processados'                
+            cOcorrencia := '020'                
+        Else
+            cLista      := 'lista_itens_invalidos'      
+            cOcorrencia := '021'
+        endIf
+
+        If jData:hasProperty(cLista)
+            jAux := jData[cLista]
+
+            ARP->(dbSetOrder(1))
+            For nY:=1 to Len(jAux)
+                cLogModel := ""
+                cErroMsg  := ""
+                
+                If !ARP->(dbSeek(FwxFilial('ARP')+jAux[nY]["erpInstallmentId"]))
+                    oSmartUtil:addLogMSG("error", "Parcela ARP não localizada (ARP_IDDOC): " + jAux[nY]["erpInstallmentId"])
+                    Loop
+                EndIf
+                
+                //----------------------------------------------------------------------------------------------
+                //-- Atualiza status: 1=Processando;2=Escriturado;3=Baixado;4=Baixa Parcial;5=Erro;6=Cancelado
+                If cLista == 'lista_itens_processados'
+                    If oModel == Nil
+                        oModel := FWLoadModel("totvs.protheus.backoffice.techfin.duplicataescritural.monitor.duplicatasMonitor")
+                    EndIf
+                    lGrvARQ := .T.
+                    oModel:SetOperation(MODEL_OPERATION_UPDATE)
+                    oModel:GetModel('ARQDETAIL'):SetOptional(.T.)
+                    oModel:Activate()
+                    oMdlMaster := oModel:GetModel('ARPMASTER')
+                    cStatus := TFDRetStat()
+                    
+                    If cStatus $ "3;4"
+                        oMdlMaster:SetValue("ARP_STATUS", cStatus)
+                        If !(oModel:VldData() .and. oModel:CommitData())
+                            cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+                            cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+                            cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+                            oSmartUtil:addLogMSG("error", "Model validation (ARP_IDDOC):" + jAux[nY]["erpInstallmentId"], cLogModel)
+                            lGrvARQ := .F.
+                        EndIf
+                    EndIf
+                    
+                    oModel:DeActivate()
+                Else
+                    lGrvARQ := .T.
+                EndIf
+                
+                If lGrvARQ
+                    //--------------------------------------------------------------
+                    //-- Grava Histórico de Ocorrências
+                    aErros      := TFGetError( jAux[nY] )
+                    cErroMsg    := aErros[1]
+                    cMotBrowse  := aErros[2]
+                    oOcorrencia:= TechfinOccurrences():New()
+                    oOcorrencia:setProduct("5")
+                    oOcorrencia:setIdDoc(jAux[nY]["erpInstallmentId"])
+                    oOcorrencia:makeBrowseUpdated(cMotBrowse)
+                    oOcorrencia:setLog(cErroMsg)                    
+                    oOcorrencia:Register(cOcorrencia)
+                EndIf
+            Next nY
+        EndIf
+    Next nX
+    If oModel <> Nil
+        oModel:Destroy()
+    EndIF
+
+	oSmartUtil:setAliasMSUID("ARP",.F.)
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oSmartUtil)
+    FwFreeObj(oOcorrencia)
+    FwFreeArray(aErros)
+
+    RpcClearEnv()
+return .T.
+
+/*/{Protheus.doc} TFDRetStat
+    Transfere título de carteira
+    @type function
+    @author Squad TechFin
+    @since 3/28/2026
+    @param cCarteira, character, código da carteira de cobrança (FRV)
+    @return cErroRet,character, motivo da falha da execução da transferência
+/*/
+Static function TFDRetStat() as character
+    local cStatus   := "" as character
+    
+    SE1->(dbSetOrder(1))
+    If SE1->(dbSeek(FwxFilial('SE1',ARP->ARP_FILTIT)+ARP->ARP_PREFIX+ARP->ARP_NUMTIT+ARP->ARP_PARCEL+ARP->ARP_TIPO))
+        If SE1->E1_SALDO == 0 
+            cStatus := "3" // Baixado
+        Else
+            cStatus := "4" // Baixa Parcial
+        EndIf
+    EndIf
+Return(cStatus)

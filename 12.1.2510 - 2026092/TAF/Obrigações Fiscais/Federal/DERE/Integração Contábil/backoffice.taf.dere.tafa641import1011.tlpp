@@ -1,0 +1,876 @@
+#include 'tlpp-core.th'
+#include 'tlpp-object.th'
+#include 'backoffice.taf.dere.tafa641import1011.ch'
+#include 'totvs.ch'
+
+#define DEF_ROTINA_INTEG "integracao"
+
+NameSpace backoffice.taf.dere.tafa641import1011
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} T641IntCls
+Classe responsavel pelo fluxo de integracao do plano de contas
+contabil (SIGACTB) ou de arquivo JSON para as tabelas T7Z/T8A
+da DeRE (evento D-1011 evtPGCC). Consumida pelo entry point
+TAF641Int no TAFA641.prw.
+
+@namespace taf641
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+/*/
+//-------------------------------------------------------------------
+Class T641IntCls
+
+    Private Data cT7ZId  as Character // T7Z_ID
+    Private Data cT7ZVer as Character // T7Z_VERSAO
+    Private Data cFil    as Character // T7Z_FILIAL
+    Private Data cStat   as Character // T7Z_STATUS
+    Private Data cCodPla as Character // T7Z_CODPLA / T7Z_PLANCT
+    Private Data cVerPla as Character // T7Z_VERPLA
+    Private Data cProtul as Character // T7Z_PROTUL
+    Private Data cRecibo as Character // T7Z_RECIBO
+    Private Data lConfirm as Logical
+
+    Private Data oStmtCnt as Object
+    Private Data oDelT8A  as Object
+
+    Private Data oJsonContas as json
+    Private Data aInconsis   as Array
+
+    Public Method New(cT7ZId , cT7ZVer, cFil, cStat, cCodPla, cVerPla, cProtul, cRecibo) Constructor
+    Public Method ConfirmarCarga(cRotina as character) as Logical
+    Public Method ExecSgActb() as json
+    Public Method ExecJson() as Object
+    Public Method ProcLoad(oJsonContas) as Array
+
+    Public Method ExibLog(nGrav as Numeric, aDup as Array, aInc as Array)
+    Public Method GetInconsis() as Array
+    Public Method SalvaLog(cLog as Character)
+
+    Public Method GravBulk(aDataBulk as Array, aStru as Array, lAuto as Logical) as Array
+    Private Method DeleteT8A() as Logical
+    Private Method BuildBulkRows(aInfoConta as Array) as Array
+    Private Method LoadTransm(aDataBulk as Array, aStru as Array) as Array
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Construtor da classe T641IntCls. Recebe o contexto do registro T7Z
+posicionado no browse do TAFA641.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param cT7ZId, Character, T7Z_ID do registro posicionado
+@param cT7ZVer, Character, T7Z_VERSAO do registro posicionado
+@param cFil, Character, T7Z_FILIAL do registro posicionado
+@param cStat, Character, T7Z_STATUS do registro posicionado
+@param cCodPla, Character, codigo do plano de contas referencial
+@param cVerPla, Character, versao do plano de contas referencial
+@param cProtul, Character, T7Z_PROTUL do registro posicionado
+@param cRecibo, Character, T7Z_RECIBO do registro posicionado
+@return Self, Object, instancia da classe
+/*/
+//-------------------------------------------------------------------
+Method New(cT7ZId, cT7ZVer, cFil, cStat, cCodPla, cVerPla, cProtul, cRecibo) Class T641IntCls
+
+    Default cT7ZId  := ""
+    Default cT7ZVer := ""
+    Default cFil    := xFilial("T7Z")
+    Default cStat   := ""
+    Default cCodPla := ""
+    Default cVerPla := ""
+    Default cProtul := ""
+    Default cRecibo := ""
+
+    ::cT7ZId    := AllTrim(cT7ZId)
+    ::cT7ZVer   := AllTrim(cT7ZVer)
+    ::cFil      := AllTrim(cFil)
+    ::cStat     := AllTrim(cStat)
+    ::cCodPla   := AllTrim(cCodPla)
+    ::cVerPla   := AllTrim(cVerPla)
+    ::cProtul   := AllTrim(cProtul)
+    ::cRecibo   := AllTrim(cRecibo)
+    ::aInconsis := {}
+    ::lConfirm  := .F.
+    ::oStmtCnt  := Nil
+    ::oDelT8A   := Nil
+
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ConfirmarCarga
+Executa antecipadamente as confirmacoes do usuario que dependem
+apenas de dados do TAF (STATUS do T7Z e COUNT do T8A), sem precisar
+aguardar o processamento pesado do SIGACTB.
+
+Fluxo:
+  - Registro nao transmitido (STATUS <> 4):
+      * Se T8A ja possui registros: pergunta se deseja sobrescrever.
+      * Se T8A esta vazio: confirma apenas o inicio da integracao.
+  - Registro transmitido (STATUS = 4):
+      * Informa que sera gerado evento de ALTERACAO e pede confirmacao.
+
+Retorna .T. se o usuario confirmou, .F. se cancelou.
+O resultado e armazenado em ::lConfirm para que ProcLoad
+pule os MsgYesNo que ja foram respondidos aqui.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@return lRet, Logical, .T. = usuario confirmou, .F. = cancelou
+/*/
+//-------------------------------------------------------------------
+Method ConfirmarCarga(cRotina as character) as Logical Class T641IntCls
+
+Local cTblT8A   := ""  as Character
+Local cSqlCnt   := ""  as Character
+Local cAliasCnt := ""  as Character
+Local cMsg      := ""  as Character
+Local oStmt     := Nil as Object
+Local nCntT8A   := 0   as Numeric
+Local lRet      := .F. as Logical
+
+cTblT8A := RetSqlName("T8A")
+
+cSqlCnt := "SELECT COUNT(*) AS QTD FROM " + cTblT8A + " T8A WHERE T8A.T8A_FILIAL = ? AND T8A.T8A_ID = ? AND T8A.T8A_VERSAO = ? AND T8A.D_E_L_E_T_ = ? "
+oStmt := FWExecStatement():New(cSqlCnt)
+oStmt:SetString(1, xFilial("T8A"))
+oStmt:SetString(2, ::cT7ZId)
+oStmt:SetString(3, ::cT7ZVer)
+oStmt:SetString(4, Space(1))
+cAliasCnt := oStmt:OpenAlias(GetNextAlias())
+
+If !Empty(cAliasCnt) .And. Select(cAliasCnt) > 0 .And. !(cAliasCnt)->(EoF())
+    nCntT8A := (cAliasCnt)->QTD
+    (cAliasCnt)->(DbCloseArea())
+EndIf
+If !(oStmt == Nil)
+    oStmt:Destroy()
+    oStmt := Nil
+EndIf
+
+If ::cStat == "4" // Registro transmitido sempre avisa sobre evento de ALTERACAO
+    cMsg := STR0019 + CRLF + CRLF   //"Este registro ja foi transmitido (STATUS = 4)."
+    cMsg += STR0020 + CRLF          //"Ao continuar, sera gerado um evento de ALTERACAO:"
+    cMsg += STR0021 + CRLF          //"  - O registro atual sera inativado"
+    cMsg += STR0022 + CRLF          //"  - Um novo cabecalho (EVENTO = A) sera criado"
+    cMsg += STR0023 + CRLF + CRLF   //"  - Os itens da nova carga serao vinculados ao novo ID/Versao"
+    cMsg += STR0017                 //"Deseja continuar?"
+    lRet := MsgYesNo(cMsg, STR0004) //"Integracao"
+ElseIf nCntT8A > 0 // Registro nao transmitido, mas ja tem contas no T8A
+    cMsg := STR0014 + CRLF + STR0015 + CRLF + STR0016 + CRLF + CRLF + STR0017 //"Este plano ja possui contas carregadas"##...##"Deseja continuar?"
+    lRet := MsgYesNo(cMsg, STR0004) //"Integracao"
+Else // T8A vazio — confirma apenas o inicio
+    lRet := .T. //Para Importação não exibe continue, pois renderiza o diretório.
+    if AllTrim(Lower(cRotina)) == DEF_ROTINA_INTEG
+        lRet := MsgYesNo(STR0058,STR0059) //"Deseja continuar com a integração das contas do contábil (SIGACTB)?"#"Integração"
+    endif
+EndIf
+
+::lConfirm := lRet
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ExecSgActb
+Extrai o plano de contas da Controladoria (SIGACTB) via classe
+backoffice.ctb.dere.d1011.DeReD1011PGCC. Valida pre-condicoes,
+executa a extracao e acumula inconsistencias nao fatais.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@return oJsonContas, Object, JsonObject com chave infoContas em caso de
+        sucesso; Nil em caso de falha ou pre-condicao nao atendida
+/*/
+//-------------------------------------------------------------------
+Method ExecSgActb() as json Class T641IntCls
+
+    Local oD1011   := Nil as Object
+    Local lRet     := .F. as Logical
+    Local lCtbDere := .F. as Logical
+    Local lOk      := .T. as Logical
+
+    lCtbDere := FindClass("backoffice.ctb.dere.d1011.DeReD1011PGCC")
+
+    if lCtbDere
+        If Empty(::cCodPla) .Or. Empty(::cVerPla)
+            MsgStop(STR0001, STR0002) //"Preencha os campos 'Plano Ref.' e 'Versão Plan.' no Plano Geral de Contas para integrar com o módulo contábil."##"Integração contábil"
+			lOk := .F.
+        EndIf
+        if lOk
+            oD1011 := backoffice.ctb.dere.d1011.DeReD1011PGCC():New(::cCodPla, ::cVerPla, ::cFil)
+            lRet := oD1011:Execute()
+            ::aInconsis := oD1011:GetInconsistencias()
+            If !lRet
+				MsgStop(STR0003 + CRLF + oD1011:GetError(), STR0004 ) //"Falha ao extrair o Plano Geral de Contas do SIGACTB. "##"Integração"
+                lOk := .F.
+            EndIf
+            if lOk
+                ::oJsonContas := oD1011:GetJson()
+            endif
+            if valtype(oD1011) == "O"
+                FreeObj(oD1011)
+                oD1011 := Nil
+            endif
+        endif
+    else
+		MsgStop(STR0005,STR0006) //"A rotina backoffice.ctb.dere.d1011.tlpp não foi encontrada."##"Atualize o seu repositório"
+    endif
+
+Return ::oJsonContas
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ExecJson
+Importa plano de contas a partir de arquivo JSON local selecionado
+pelo usuario via cGetFile. Valida estrutura minima (infoContas ->
+infoConta) antes de retornar.
+
+Nota de compatibilidade: em ambiente SmartClient classico, cGetFile
+retorna o path no cliente — pode ser necessario usar GetFile() para
+transferir ao servidor antes de MemoRead(). No Webapp, o path ja
+aponta para o servidor. O bloco GetFile esta disponivel como comentario.
+
+@author Denis Souza / Jose Felipe
+@since  19/08/2026
+@version 1.0
+@return oJson, Object, JsonObject com chave infoContas ou Nil
+        (Nil = usuario cancelou ou arquivo invalido)
+/*/
+//-------------------------------------------------------------------
+Method ExecJson() as Object Class T641IntCls
+
+Local cArquivo  := ""  as Character
+Local oJson     := Nil as Object
+Local oContas   := Nil as Object
+Local cErrJson  := ""  as Character
+Local lOk       := .F. as logical
+
+cArquivo := cGetFile("*.json", STR0007, 1, GetTempPath(), .T.) //"Selecione o arquivo JSON do plano de contas"
+
+If !Empty(cArquivo)
+    lOk := .T.
+EndIf
+If lOk
+    oJson    := JsonObject():New()
+    cErrJson := oJson:fromJsonFile(cArquivo)
+    If !Empty(cErrJson)
+        MsgStop(STR0009 + CRLF + STR0010 + CRLF + STR0050, STR0004)
+        FreeObj(oJson)
+        oJson := Nil
+        lOk   := .F.
+    EndIf
+    If lOk
+        oContas := oJson["infoContas"]
+        If !(oContas == Nil) .And. ValType(oContas["infoConta"]) != "A"
+            MsgStop(STR0012, STR0004)
+            FreeObj(oJson)
+            oJson := Nil
+        EndIf
+    EndIf
+EndIf
+
+Return oJson
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} T641AStru
+Retorna a estrutura de campos da tabela T8A para uso com FWBulk.
+A ordem deve ser identica a dos dados passados ao AddData().
+
+@type function
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@return aStru, Array, estrutura de campos no formato {nome,tipo,tam,dec}
+/*/
+//-------------------------------------------------------------------
+Static Function T641AStru()
+
+    Local aStru as Array
+
+    aStru := {}
+
+    AAdd(aStru, {"T8A_FILIAL", "C", FWSX3Util():GetFieldStruct("T8A_FILIAL")[3], 0})
+    AAdd(aStru, {"T8A_ID"    , "C", FWSX3Util():GetFieldStruct("T8A_ID"    )[3], 0})
+    AAdd(aStru, {"T8A_VERSAO", "C", FWSX3Util():GetFieldStruct("T8A_VERSAO")[3], 0})
+    AAdd(aStru, {"T8A_ATIVO" , "C", FWSX3Util():GetFieldStruct("T8A_ATIVO" )[3], 0})
+    AAdd(aStru, {"T8A_CONTA" , "C", FWSX3Util():GetFieldStruct("T8A_CONTA" )[3], 0})
+    AAdd(aStru, {"T8A_DESDCT", "C", FWSX3Util():GetFieldStruct("T8A_DESDCT")[3], 0})
+    AAdd(aStru, {"T8A_DESCCT", "C", FWSX3Util():GetFieldStruct("T8A_DESCCT")[3], 0})
+    AAdd(aStru, {"T8A_INDCTA", "C", FWSX3Util():GetFieldStruct("T8A_INDCTA")[3], 0})
+    AAdd(aStru, {"T8A_DESNAT", "M", FWSX3Util():GetFieldStruct("T8A_DESNAT")[3], 0})
+    AAdd(aStru, {"T8A_CNTSUP", "C", FWSX3Util():GetFieldStruct("T8A_CNTSUP")[3], 0})
+    AAdd(aStru, {"T8A_CODREF", "C", FWSX3Util():GetFieldStruct("T8A_CODREF")[3], 0})
+    AAdd(aStru, {"T8A_NIVCTA", "C", FWSX3Util():GetFieldStruct("T8A_NIVCTA")[3], 0})
+    AAdd(aStru, {"T8A_NATCTA", "C", FWSX3Util():GetFieldStruct("T8A_NATCTA")[3], 0})
+    AAdd(aStru, {"T8A_CODNAT", "C", FWSX3Util():GetFieldStruct("T8A_CODNAT")[3], 0})
+    AAdd(aStru, {"T8A_CODTRI", "C", FWSX3Util():GetFieldStruct("T8A_CODTRI")[3], 0})
+    AAdd(aStru, {"T8A_INDTIS", "C", FWSX3Util():GetFieldStruct("T8A_INDTIS")[3], 0})
+    AAdd(aStru, {"T8A_IDLEID", "C", FWSX3Util():GetFieldStruct("T8A_IDLEID")[3], 0})
+    AAdd(aStru, {"T8A_INIVIG", "D", FWSX3Util():GetFieldStruct("T8A_INIVIG")[3], 0})
+    AAdd(aStru, {"T8A_FIMVIG", "D", FWSX3Util():GetFieldStruct("T8A_FIMVIG")[3], 0})
+
+Return aStru
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} T641FmtDt
+Normaliza uma string de data para o formato YYYYMMDD aceito por STOD().
+Aceita tanto "AAAA-MM-DD" (com hifens) quanto "YYYYMMDD" (sem hifens).
+Retorna string vazia se a entrada for vazia ou invalida.
+
+@type function
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param cDt, Character, data no formato com ou sem hifens
+@return cRet, Character, data no formato YYYYMMDD ou ""
+/*/
+//-------------------------------------------------------------------
+Static Function T641FmtDt(cDt as Character)
+    Local cRet as Character    
+    cRet := StrTran( AllTrim(cDt), "-", "") // Remove hifens se presentes: "1980-01-01" -> "19800101"
+    If Len(cRet) <> 8 // Valida que tem 8 chars numericos
+       cRet := ""
+    EndIf
+Return cRet
+
+/*/{Protheus.doc} ProcLoad
+Orquestra o processamento do JsonObject retornado por ExecSgActb ou
+ExecJson: valida a entrada, delega a construcao das linhas para
+BuildBulkRows, e despacha para o fluxo correto conforme o STATUS do
+registro T7Z (nao-transmitido ou transmitido).
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param oJsonContas, Object, JsonObject com chave infoContas retornado por
+       ExecSgActb() ou ExecJson()
+@return aRet, Array, { nGravados, aDuplicados, lExibLog, cInfo }
+/*/
+//-------------------------------------------------------------------
+Method ProcLoad(oJsonContas as json) as Array Class T641IntCls
+
+    Local oInfoCt    := Nil as Object
+    Local aInfoConta := {}  as Array
+    Local aStru      := {}  as Array
+    Local aDataBulk  := {}  as Array
+    Local aDup       := {}  as Array
+    Local aBuildRet  := {}  as Array
+    Local aBulkRet   := {}  as Array
+    Local cInfo      := ""  as Character
+    Local lExibLog   := .T. as Logical
+    Local nGrav      := 0   as Numeric
+
+    If !(oJsonContas == Nil)
+        oInfoCt := oJsonContas["infoContas"]
+        If ( ValType(oInfoCt) == "J" .Or. ValType(oInfoCt) == "O" ) .And. ValType(oInfoCt["infoConta"]) == "A"
+            aInfoConta := oInfoCt["infoConta"]
+        EndIf
+    EndIf
+
+    // Monta rows deduplicados a partir do JSON
+    aStru     := T641AStru()
+    aBuildRet := ::BuildBulkRows(aInfoConta)
+    aDataBulk := aBuildRet[1]
+    aDup      := aBuildRet[2]
+
+    If !( ::cStat == "4" )
+        // Fluxo: nao transmitido
+        If ::lConfirm .And. Len(aDataBulk) > 0 .And. ::DeleteT8A()
+            aBulkRet := ::GravBulk(aDataBulk, aStru)
+            nGrav    := aBulkRet[1]
+            cInfo    := aBulkRet[2]
+            If Empty(cInfo)
+                cInfo := STR0027 //"Integracao Contabil Realizada com Sucesso."
+            EndIf
+        EndIf
+    Else
+        // Fluxo: transmitido (STATUS = 4) — inativa cabecalho e cria novo
+        If ::lConfirm
+            aBulkRet := ::LoadTransm(aDataBulk, aStru)
+            nGrav    := aBulkRet[1]
+            cInfo    := aBulkRet[2]
+            If Empty(cInfo)
+                cInfo := STR0027 //"Integracao Contabil Realizada com Sucesso."
+            EndIf
+        EndIf
+    EndIf
+
+Return { nGrav, aDup, lExibLog, cInfo }
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GravBulk
+Encapsula a gravacao massiva de registros na T8A via FWBulkInsert.
+Instancia o FWBulk fora da transacao, executa AddData/Close dentro
+e libera o objeto apos a transacao (Destroy fora).
+Retorna array { nGravados, cMsgErro }: nGravados > 0 e cMsgErro
+vazia indica sucesso; cMsgErro preenchida indica falha no Bulk.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param aDataBulk, Array, array de rows no formato de T641AStru()
+@param aStru, Array, estrutura de campos retornada por T641AStru()
+@param lAuto, Logical, indica execucao via automacao (Default: .F.).
+       Quando .T., sobrescreve cMsgErro com mensagem padrao de falha,
+       ignorando o erro original retornado por FWBulk:GetError().
+@return aRet, Array, { nGravados, cMsgErro }
+/*/
+//-------------------------------------------------------------------
+Method GravBulk( aDataBulk as Array, aStru as Array, lAuto as Logical ) as Array Class T641IntCls
+
+    Local oBulk   := Nil  as Object
+    Local nGrav   := 0    as Numeric
+    Local cErrMsg := ""   as Character
+    Local nI      := 0    as Numeric
+    Local lClose  := .F.  as Logical
+
+    Default lAuto := .F.
+
+    oBulk := FWBulk():New(RetSqlName("T8A"),1000)
+
+    oBulk:SetFields(aStru)
+
+    For nI := 1 To Len(aDataBulk)
+        If oBulk:AddData(aDataBulk[nI])
+            nGrav++
+        EndIf
+    Next nI
+
+    // Verifica erros acumulados pelo AddData antes do Close
+    cErrMsg := oBulk:GetError()
+
+    lClose := oBulk:Close()
+
+    if lAuto
+        cErrMsg := STR0060 + cErrMsg //"Falha no bulk via automação. "
+    endif
+
+    If !Empty(cErrMsg) .Or. !lClose
+        cErrMsg := STR0026 + cErrMsg
+    EndIf
+
+    // Destroy sempre executado independente de sucesso ou falha
+    oBulk:Destroy()
+    oBulk := Nil
+
+Return {nGrav, cErrMsg}
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ExibLog
+Exibe tela de feedback com resumo da importacao via FWDialogModal.
+Apresenta totais (gravados/descartados) num painel de cabeçalho e a
+lista de itens (duplicidade e inconsistências) em um LISTBOX com
+colunas, o que garante alinhamento correto independente de fonte.
+Oferece botoes para copiar o log (texto tabulado) para clipboard e
+para salvar como arquivo TXT.
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param nGrav, Numeric, quantidade de registros gravados com sucesso
+@param aDup, Array, {cConta, cDesdct, cMotivo} para cada descartado
+@param aInc, Array, array de strings; cada elemento eh uma mensagem de inconsistencia nao fatal retornada por ExecSgActb():GetInconsistencias()
+/*/
+//-------------------------------------------------------------------
+Method ExibLog(nGrav as Numeric, aDup as Array, aInc as Array) Class T641IntCls
+
+    Local oModal      as Object
+    Local oPanelTop   as Object
+    Local oPanelList  as Object
+    Local oList       as Object
+    Local aLinhas     as Array
+    Local cResumo     as Character
+    Local cLog        as Character
+    Local cLogCopia   as Character
+    Local cSec        as Character
+    Local nI          as Numeric
+    Local nTmConta    as Numeric
+    Local nTmDesdct   as Numeric
+
+    Default nGrav := 0
+    Default aDup  := {}
+    Default aInc  := {}
+
+    oModal      := Nil
+    oPanelTop   := Nil
+    oPanelList  := Nil
+    oList       := Nil
+    aLinhas     := {}
+    cResumo     := ""
+    cLog        := ""
+    cLogCopia   := ""
+    cSec        := ""
+    nI          := 0
+    nTmConta    := FWSX3Util():GetFieldStruct("T8A_CONTA" )[3]
+    nTmDesdct   := FWSX3Util():GetFieldStruct("T8A_DESDCT")[3]
+
+    // ---------------------------------------------------------------
+    // Monta o array de linhas para o LISTBOX — 3 colunas:
+    // [1] Seção (ex: "Duplicado" / "Inconsistência") [2] Conta (ou mensagem livre para inconsistências) [3] Detalhe (desdobramento + motivo, ou vazio)
+    // ---------------------------------------------------------------
+    If Len(aDup) > 0
+        cSec := STR0051 //"Duplicidade"
+        For nI := 1 To Len(aDup)
+            AAdd(aLinhas, {cSec, AllTrim(aDup[nI][1]), AllTrim(aDup[nI][2]) + " - " + AllTrim(aDup[nI][3])})
+        Next nI
+    EndIf
+
+    If Len(aInc) > 0
+        cSec := STR0052 //"Inconsistência"
+        For nI := 1 To Len(aInc)
+            AAdd(aLinhas, {cSec, AllTrim(aInc[nI]), ""})
+        Next nI
+    EndIf
+
+    If Len(aLinhas) == 0
+        AAdd(aLinhas, {STR0053, STR0027, ""}) //Êxito#"Integração Contábil Realizada com Sucesso."
+    EndIf
+
+    // ---------------------------------------------------------------
+    // Monta o texto do log (para Copiar/Salvar) — mantido separado
+    // ---------------------------------------------------------------
+    cLog := STR0028 + CRLF //"=== Resultado da importação ==="
+    cLog += STR0029 + cValToChar(nGrav) + CRLF //"Gravados   : "
+    cLog += STR0030 + cValToChar(Len(aDup)) + CRLF //"Descartados: "
+
+    If Len(aDup) > 0
+        cLog += CRLF + STR0031 + CRLF //"--- Contas descartadas (duplicidade) ---"
+        cLog += PadR(STR0054, nTmConta ) + " | " + PadR(STR0055, nTmDesdct) + " | " + STR0056 + CRLF //"Conta"#"Desdob"#"Motivo"
+        cLog += Replicate("-", nTmConta) + "-+-" + Replicate("-", nTmDesdct) + "-+-" + Replicate("-", 40) + CRLF
+        For nI := 1 To Len(aDup)
+            cLog += PadR(AllTrim(aDup[nI][1]), nTmConta)  + " | " ;
+                  + PadR(AllTrim(aDup[nI][2]), nTmDesdct) + " | " ;
+                  + AllTrim(aDup[nI][3]) + CRLF
+        Next nI
+    EndIf
+
+    If Len(aInc) > 0
+        cLog += CRLF + STR0032 + CRLF //"--- Inconsistências ---"
+        For nI := 1 To Len(aInc)
+            cLog += "  " + AllTrim(aInc[nI]) + CRLF
+        Next nI
+    EndIf
+
+    cLogCopia := cLog
+
+    // ---------------------------------------------------------------
+    // Monta o dialogo
+    // ---------------------------------------------------------------
+    oModal := FWDialogModal():New()
+    oModal:SetTitle(STR0033) //"Log de gravação"
+    oModal:SetFreeArea(450, 220)
+    oModal:SetEscClose(.T.)
+    oModal:CreateDialog()
+
+    // Painel de cabecalho (resumo fixo no topo)
+    cResumo := STR0034 + cValToChar(nGrav) + STR0035 + cValToChar(Len(aDup)) + STR0036 + cValToChar(Len(aInc)) //"Gravados: "##"   |   Descartados: "##"   |   Inconsistências: "
+    oPanelTop := TPanel():New(,,, oModal:GetPanelMain())
+    oPanelTop:nHeight := 020
+    oPanelTop:Align   := CONTROL_ALIGN_TOP
+    @ 004, 006 SAY cResumo SIZE 440, 012 OF oPanelTop PIXEL
+
+    // Painel de lista (ocupa o restante da area util)
+    oPanelList := TPanel():New(,,, oModal:GetPanelMain())
+    oPanelList:Align := CONTROL_ALIGN_ALLCLIENT
+
+    // LISTBOX com 3 colunas: Secao | Conta / Mensagem | Detalhe
+    @ 000, 000 LISTBOX oList FIELDS HEADER STR0037, STR0038, STR0039 FIELDSIZES 80, 120, 200 SIZE 000, 000 PIXEL OF oPanelList //"Seção"#"Conta / Mensagem"#"Detalhe"
+    oList:Align := CONTROL_ALIGN_ALLCLIENT
+    oList:SetArray(aLinhas)
+    oList:bLine := {|| {aLinhas[oList:nAt][1], aLinhas[oList:nAt][2], aLinhas[oList:nAt][3]}}
+    //Botoes: Copiar, Salvar, Fechar Salvar passa @cLogCopia por referencia — SalvaLog acrescenta o caminho ao texto    
+    oModal:AddButtons({{0,STR0042,{||::SalvaLog(@cLogCopia)},STR0043,0,.T.,.T.}}) //#"Salvar"#"Salvar log como .TXT"
+    oModal:AddCloseButton(Nil, STR0044) //"Fechar"
+
+    oModal:Activate()
+    FreeObj(oModal)
+    oModal := Nil
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} SalvaLog
+Abre dialogo "salvar como" no cliente e grava o conteudo do log
+em arquivo TXT via PutFile + MemoWrite.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param cLog, Character, conteudo textual do log a ser salvo
+/*/
+//-------------------------------------------------------------------
+Method SalvaLog(cLog as Character) Class T641IntCls
+
+Local cArq     := ""  as Character
+Local cNomeSug := ""  as Character
+
+Default cLog := ""
+
+//Nome sugerido com data/hora para facilitar identificacao
+cNomeSug := STR0045 + DToS(Date()) + "_" + StrTran(Time(), ":", "") + ".txt" //"integrar_log_"
+
+//cGetFile em modo gravacao: usuario escolhe onde salvar no servidor/Webapp
+cArq := cGetFile("*.txt", STR0046, 1, GetTempPath() + cNomeSug, .F.) //"Selecione um local e digite o nome do arquivo..."
+
+If !Empty(cArq)
+    If MemoWrite(cArq, cLog)
+        //Acrescenta o caminho ao final do log (por referência) para que o chamador possa usar o valor atualizado se necessario, ex: exibir em MsgInfo ou registrar auditoria.
+        cLog += CRLF + "===" + CRLF + STR0047 + CRLF + cArq //"Salvo em:"
+        MsgInfo( STR0057 + CRLF + cArq ) //"Arquivo Salvo em: "
+    Else
+        MsgStop( STR0048 + CRLF + CRLF + STR0049 + CRLF + cArq, STR0004 ) //"Falha ao salvar o log. Selecione um local e digite o nome do arquivo..."#"Diretório: "#"Integração"
+    EndIf
+endif
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GetInconsis
+Retorna o array de inconsistencias nao fatais acumuladas pela ultima
+chamada a ExecSgActb.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@return aInconsis, Array, lista de mensagens de inconsistencia
+/*/
+//-------------------------------------------------------------------
+Method GetInconsis() as Array Class T641IntCls
+Return ::aInconsis
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DeleteT8A
+Executa o DELETE fisico dos registros T8A vinculados ao ID e Versao
+posicionados na instancia. Utilizado antes da gravacao bulk para
+registros nao-transmitidos (STATUS <> 4).
+
+@obs NOSONAR Regra CS1000: TcSqlExec executa a query diretamente, bypassando o pipeline de dicionário 
+(triggers, validações, auditoria). Para DELETE em tabela Protheus, o padrão exigido é `RecLock`/`Delete()`/`MsUnlock()` ou, 
+quando bulk físico é aceito, usar `FWPreparedStatement:executeQuery()` em vez de `TcSqlExec`.
+Justificativa: FWPreparedStatement/FWExecStatement não possui executeQuery/executeUpdate para DML.
+GetFixQuery() + TcSqlExec() é o padrão correto para UPDATE/INSERT/DELETE com bind.
+Nenhuma das classes possui método nativo para execução de DML:
+- FWPreparedStatement.executeQuery() abre alias (SELECT), não executa DML.
+- FWExecStatement.OpenAlias() / ExecScalar() são exclusivos para SELECT.
+O bind via SetString() garante a sanitização dos parâmetros, eliminando o risco de SQL Injection que a regra CS1000 visa prevenir.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@return lOk, Logical, .T. se o DELETE foi executado sem erros
+/*/
+//-------------------------------------------------------------------
+Method DeleteT8A() as Logical Class T641IntCls
+
+    Local cTblT8A := ""  as Character
+    Local cSqlDel := ""  as Character
+    Local lOk     := .F. as Logical
+
+    cTblT8A := RetSqlName("T8A") //NOSONAR CA2050 O Sonar sinaliza possível SQL Inject na montagem do DELETE, porém RetSqlName retorna um valor interno, sem risco de injection.
+    cSqlDel := "DELETE FROM " + cTblT8A + " WHERE T8A_FILIAL = ? AND T8A_ID = ? AND T8A_VERSAO = ? AND D_E_L_E_T_ = ? "
+
+    ::oDelT8A := FWExecStatement():New(cSqlDel)
+    ::oDelT8A:SetString(1, xFilial("T8A"))
+    ::oDelT8A:SetString(2, ::cT7ZId)
+    ::oDelT8A:SetString(3, ::cT7ZVer)
+    ::oDelT8A:SetString(4, Space(1))
+    cSqlDel := ::oDelT8A:GetFixQuery()
+
+    if TcSqlExec(cSqlDel) >= 0
+        lOk := .T.
+    endif
+
+    If ::oDelT8A != Nil
+		::oDelT8A:Destroy()
+        ::oDelT8A := Nil
+    EndIf
+
+Return lOk
+
+/*/{Protheus.doc} BuildBulkRows
+Itera sobre o array de contas do JSON (infoConta), aplica o De-Para
+de campos, deduplica em memoria via JsonObject e monta o array de
+rows no formato esperado por GravBulk / T641AStru().
+
+As duplicatas sao registradas em ::aInconsis para exibicao posterior via ExibLog.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param aInfoConta, Array, array de JsonObjects retornado por oJsonContas["infoContas"]["infoConta"]
+@return aRet, Array, { aDataBulk, aDup } onde aDataBulk sao as rows validas
+        e aDup contem as entradas descartadas por duplicidade
+/*/
+//-------------------------------------------------------------------
+Method BuildBulkRows(aInfoConta as Array) as Array Class T641IntCls
+
+    Local oItem    := Nil      as Object
+    Local oHash    := Nil      as Object
+    Local aRow     := {}       as Array
+    Local aDataBulk := {}      as Array
+    Local aDup     := {}       as Array
+    Local cChave   := ""       as Character
+    Local cConta   := ""       as Character
+    Local cDesdct  := ""       as Character
+    Local cIndCta  := ""       as Character
+    Local cDtIni   := ""       as Character
+    Local cDtFim   := ""       as Character
+    Local cCodTrib := ""       as Character
+    Local dIniVig  := CTOD("") as Date
+    Local dFimVig  := CTOD("") as Date
+    Local nNivel   := 0        as Numeric
+    Local nI       := 0        as Numeric
+
+    oHash := JsonObject():New()
+
+    For nI := 1 To Len(aInfoConta)
+        oItem  := aInfoConta[nI]
+        cConta := AllTrim(oItem["cCtaInterna"]) // De-Para: cCtaInterna -> T8A_CONTA
+        cDesdct := AllTrim(oItem["cDbrMista"])  // De-Para: cDbrMista   -> T8A_DESDCT
+
+        // Chave de deduplicacao: filial + id + versao + conta + desdobramento
+        cChave := ::cFil + ::cT7ZId + ::cT7ZVer + cConta + cDesdct
+
+        // O prefixo "K"ey evita que chave numerica seja tratada como indice de array
+        If oHash:HasProperty("K" + cChave)
+            AAdd(aDup, {cConta, cDesdct, "Duplicado"})
+            Loop
+        EndIf
+        oHash["K" + cChave] := .T.
+
+        cIndCta := AllTrim(oItem["indCta"]) // De-Para: indCta -> T8A_INDCTA
+
+        cDtIni := T641FmtDt(cValToChar(oItem["iniVig"]))
+        If !Empty(cDtIni)
+            dIniVig := Stod(cDtIni)
+        Else
+            dIniVig := Ctod("")
+        EndIf
+
+        cDtFim := T641FmtDt(cValToChar(oItem["fimVig"]))
+        If !Empty(cDtFim)
+            dFimVig := Stod(cDtFim)
+        Else
+            dFimVig := Ctod("")
+        EndIf
+
+        nNivel   := oItem["nivelCta"]  // De-Para: nivelCta (numero) -> T8A_NIVCTA (char 2)
+        cCodTrib := oItem["codTrib"]   // De-Para: codTrib -> T8A_CODTRI
+
+        // Monta linha na ordem de T641AStru()
+        aRow := { ::cFil,                      /* T8A_FILIAL */;
+                  ::cT7ZId,                    /* T8A_ID     */;
+                  ::cT7ZVer,                   /* T8A_VERSAO */;
+                  "1",                         /* T8A_ATIVO  */;
+                  cConta,                      /* T8A_CONTA  */;
+                  cDesdct,                     /* T8A_DESDCT */;
+                  oItem["nomeCta"],            /* T8A_DESCCT */;
+                  cIndCta,                     /* T8A_INDCTA */;
+                  AllTrim(oItem["descCta"]),   /* T8A_DESNAT */;
+                  AllTrim(oItem["cCtaSup"]),   /* T8A_CNTSUP */;
+                  AllTrim(oItem["cCtaRef"]),   /* T8A_CODREF */;
+                  cValToChar(nNivel),          /* T8A_NIVCTA */;
+                  AllTrim(oItem["natCta"]),    /* T8A_NATCTA */;
+                  AllTrim(oItem["codNat"]),    /* T8A_CODNAT */;
+                  cCodTrib,                    /* T8A_CODTRI */;
+                  oItem["indTribISS"],         /* T8A_INDTIS */;
+                  oItem["idLeiDisp"],          /* T8A_IDLEID */;
+                  dIniVig,                     /* T8A_INIVIG */;
+                  dFimVig }                    /* T8A_FIMVIG */
+
+        AAdd(aDataBulk, aRow)
+    Next nI
+
+    If !(oHash == Nil)
+        FreeObj(oHash)
+        oHash := Nil
+    EndIf
+
+Return { aDataBulk, aDup }
+
+/*/{Protheus.doc} LoadTransm
+Executa o fluxo especifico para registros com STATUS = 4 (transmitidos):
+  1. Captura todos os campos do cabecalho T7Z atual.
+  2. Inativa o cabecalho existente via FAltRegAnt.
+  3. Obtem nova versao via xFunGetVer.
+  4. Grava novo cabecalho T7Z com EVENTO = "A" replicando todos os campos,
+  gravando T7Z_RECIBO atual em T7Z_RECANT e zerando T7Z_RECIBO no novo registro.
+  5. Atualiza a versao nos rows do bulk para a nova versao.
+  6. Executa GravBulk com os rows atualizados.
+
+Retorna o mesmo formato de GravBulk: { nGravados, cMsgErro }.
+
+@author Denis De Souza Naves
+@since  19/08/2026
+@version 1.0
+@param aDataBulk, Array, rows montados por BuildBulkRows() para o ID/Versao anterior
+@param aStru, Array, estrutura de campos retornada por T641AStru()
+@return aRet, Array, { nGravados, cMsgErro } repassado de GravBulk
+/*/
+//-------------------------------------------------------------------
+Method LoadTransm(aDataBulk as Array, aStru as Array) as Array Class T641IntCls
+
+    Local cVerAnt  := ""       as Character
+    Local cVerNova := ""       as Character
+    Local cProtPn  := ""       as Character
+    Local cPlanCt  := ""       as Character
+    Local cFreqEn  := ""       as Character
+    Local cCodPlaH := ""       as Character
+    Local cVerPlaH := ""       as Character
+    Local cMotExc  := ""       as Character
+    Local cNrProc  := ""       as Character
+    Local cRecibo  := ""       as Character
+    Local dDtInva  := CTOD("") as Date
+    Local dDtFiva  := CTOD("") as Date
+    Local nI       := 0        as Numeric
+
+    // Captura todos os campos do cabecalho ANTES de inativar
+    cVerAnt  := AllTrim(T7Z->T7Z_VERSAO)
+    cProtPn  := AllTrim(T7Z->T7Z_PROTUL)
+    dDtInva  := T7Z->T7Z_DTINVA
+    dDtFiva  := T7Z->T7Z_DTFIVA
+    cPlanCt  := AllTrim(T7Z->T7Z_PLANCT)
+    cFreqEn  := AllTrim(T7Z->T7Z_FREQEN)
+    cCodPlaH := AllTrim(T7Z->T7Z_CODPLA)
+    cVerPlaH := AllTrim(T7Z->T7Z_VERPLA)
+    cMotExc  := AllTrim(T7Z->T7Z_MOTEXC)
+    cNrProc  := AllTrim(T7Z->T7Z_NRPROC)
+    cRecibo  := AllTrim(T7Z->T7Z_RECIBO)
+
+    FAltRegAnt("T7Z", "2", .F., "", "", "")
+
+    cVerNova  := xFunGetVer()
+    ::cT7ZVer := cVerNova // atualiza contexto para o Bulk usar a nova versao
+
+    // Grava novo cabecalho T7Z com EVENTO = "A" replicando todos os campos
+    RecLock("T7Z", .T.)
+        T7Z->T7Z_FILIAL := xFilial("T7Z")
+        T7Z->T7Z_ID     := ::cT7ZId
+        T7Z->T7Z_VERSAO := cVerNova
+        T7Z->T7Z_VERANT := cVerAnt
+        T7Z->T7Z_PROTPN := cProtPn
+        T7Z->T7Z_PROTUL := ""
+        T7Z->T7Z_RECANT := cRecibo  //Salva o recibo anterior para rastreabilidade
+        T7Z->T7Z_RECIBO := ""       //Limpa o recibo do novo registro (que ainda não foi transmitido)
+        T7Z->T7Z_STATUS := ""
+        T7Z->T7Z_ATIVO  := "1"
+        T7Z->T7Z_EVENTO := "A"
+        T7Z->T7Z_DTINVA := dDtInva
+        T7Z->T7Z_DTFIVA := dDtFiva
+        T7Z->T7Z_PLANCT := cPlanCt
+        T7Z->T7Z_FREQEN := cFreqEn
+        T7Z->T7Z_CODPLA := cCodPlaH
+        T7Z->T7Z_VERPLA := cVerPlaH
+        T7Z->T7Z_MOTEXC := cMotExc
+        T7Z->T7Z_NRPROC := cNrProc
+    MsUnLock()
+
+    // Atualiza versao nos rows do bulk para a nova versao
+    For nI := 1 To Len(aDataBulk)
+        aDataBulk[nI][3] := ::cT7ZVer
+    Next nI
+
+Return ::GravBulk(aDataBulk, aStru)

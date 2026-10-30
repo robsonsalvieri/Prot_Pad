@@ -1,0 +1,364 @@
+#INCLUDE "PROTHEUS.CH"
+#INCLUDE "APWEBSRV.CH"
+
+/* ===============================================================================
+WSDL Location    http://localhost:81/webservice/RHVDFCERTIFICATE.apw?WSDL
+Gerado em        01/21/14 10:18:16
+Observações      Código-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Alterações neste arquivo podem causar funcionamento incorreto
+                 e serão perdidas caso o código-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _NIKSJWC ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSRHVDFCERTIFICATE
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSRHVDFCERTIFICATE
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD ADDVDFCERTIFICATEREQUEST
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   oWSREQUEST                AS RHVDFCERTIFICATE_TREQUEST
+	WSDATA   oWSVDFCERTIFICATEREQUEST  AS RHVDFCERTIFICATE_TVDFCERTIFICATE
+	WSDATA   cADDVDFCERTIFICATEREQUESTRESULT AS string
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	WSDATA   oWSTREQUEST               AS RHVDFCERTIFICATE_TREQUEST
+	WSDATA   oWSTVDFCERTIFICATE        AS RHVDFCERTIFICATE_TVDFCERTIFICATE
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSRHVDFCERTIFICATE
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O Código-Fonte Client atual requer os executáveis do Protheus Build [7.00.121227P-20131106] ou superior. Atualize o Protheus ou gere o Código-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSRHVDFCERTIFICATE
+	::oWSREQUEST         := RHVDFCERTIFICATE_TREQUEST():New()
+	::oWSVDFCERTIFICATEREQUEST := RHVDFCERTIFICATE_TVDFCERTIFICATE():New()
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSTREQUEST        := ::oWSREQUEST
+	::oWSTVDFCERTIFICATE := ::oWSVDFCERTIFICATEREQUEST
+Return
+
+WSMETHOD RESET WSCLIENT WSRHVDFCERTIFICATE
+	::oWSREQUEST         := NIL 
+	::oWSVDFCERTIFICATEREQUEST := NIL 
+	::cADDVDFCERTIFICATEREQUESTRESULT := NIL 
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	::oWSTREQUEST        := NIL
+	::oWSTVDFCERTIFICATE := NIL
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSRHVDFCERTIFICATE
+Local oClone := WSRHVDFCERTIFICATE():New()
+	oClone:_URL          := ::_URL 
+	oClone:oWSREQUEST    :=  IIF(::oWSREQUEST = NIL , NIL ,::oWSREQUEST:Clone() )
+	oClone:oWSVDFCERTIFICATEREQUEST :=  IIF(::oWSVDFCERTIFICATEREQUEST = NIL , NIL ,::oWSVDFCERTIFICATEREQUEST:Clone() )
+	oClone:cADDVDFCERTIFICATEREQUESTRESULT := ::cADDVDFCERTIFICATEREQUESTRESULT
+
+	// Estruturas mantidas por compatibilidade - NÃO USAR
+	oClone:oWSTREQUEST   := oClone:oWSREQUEST
+	oClone:oWSTVDFCERTIFICATE := oClone:oWSVDFCERTIFICATEREQUEST
+Return oClone
+
+// WSDL Method ADDVDFCERTIFICATEREQUEST of Service WSRHVDFCERTIFICATE
+
+WSMETHOD ADDVDFCERTIFICATEREQUEST WSSEND oWSREQUEST,oWSVDFCERTIFICATEREQUEST WSRECEIVE cADDVDFCERTIFICATEREQUESTRESULT WSCLIENT WSRHVDFCERTIFICATE
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<ADDVDFCERTIFICATEREQUEST xmlns="http://localhost:81/">'
+cSoap += WSSoapValue("REQUEST", ::oWSREQUEST, oWSREQUEST , "TREQUEST", .T. , .F., 0 , NIL, .F.) 
+cSoap += WSSoapValue("VDFCERTIFICATEREQUEST", ::oWSVDFCERTIFICATEREQUEST, oWSVDFCERTIFICATEREQUEST , "TVDFCERTIFICATE", .F. , .F., 0 , NIL, .F.) 
+cSoap += "</ADDVDFCERTIFICATEREQUEST>"
+
+oXmlRet := SvcSoapCall(	Self,cSoap,; 
+	"http://localhost:81/ADDVDFCERTIFICATEREQUEST",; 
+	"DOCUMENT","http://localhost:81/",,"1.031217",; 
+	"http://localhost:81/webservice/RHVDFCERTIFICATE.apw")
+
+::Init()
+::cADDVDFCERTIFICATEREQUESTRESULT :=  WSAdvValue( oXmlRet,"_ADDVDFCERTIFICATEREQUESTRESPONSE:_ADDVDFCERTIFICATEREQUESTRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure TREQUEST
+
+WSSTRUCT RHVDFCERTIFICATE_TREQUEST
+	WSDATA   cAPPROVERBRANCH           AS string OPTIONAL
+	WSDATA   nAPPROVERLEVEL            AS integer OPTIONAL
+	WSDATA   cAPPROVERREGISTRATION     AS string OPTIONAL
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   oWSITEMS                  AS RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM OPTIONAL
+	WSDATA   cOBSERVATION              AS string
+	WSDATA   cPARTICIPANTRH            AS string OPTIONAL
+	WSDATA   cREGISTRATION             AS string
+	WSDATA   dREQUESTDATE              AS date OPTIONAL
+	WSDATA   oWSREQUESTTYPE            AS RHVDFCERTIFICATE_TREQUESTTYPE OPTIONAL
+	WSDATA   dRESPONSEDATE             AS date OPTIONAL
+	WSDATA   cSOURCE                   AS string OPTIONAL
+	WSDATA   cSTARTERBRANCH            AS string OPTIONAL
+	WSDATA   cSTARTERKEY               AS string OPTIONAL
+	WSDATA   nSTARTERLEVEL             AS integer OPTIONAL
+	WSDATA   cSTARTERREGISTRATION      AS string OPTIONAL
+	WSDATA   oWSSTATUS                 AS RHVDFCERTIFICATE_TREQUESTSTATUS OPTIONAL
+	WSDATA   cVISION                   AS string OPTIONAL
+	WSDATA   cWFAPROV                  AS string OPTIONAL
+	WSDATA   cWFID                     AS string OPTIONAL
+	WSDATA   cWFSTAGE                  AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFCERTIFICATE_TREQUEST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFCERTIFICATE_TREQUEST
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFCERTIFICATE_TREQUEST
+	Local oClone := RHVDFCERTIFICATE_TREQUEST():NEW()
+	oClone:cAPPROVERBRANCH      := ::cAPPROVERBRANCH
+	oClone:nAPPROVERLEVEL       := ::nAPPROVERLEVEL
+	oClone:cAPPROVERREGISTRATION := ::cAPPROVERREGISTRATION
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cCODE                := ::cCODE
+	oClone:oWSITEMS             := IIF(::oWSITEMS = NIL , NIL , ::oWSITEMS:Clone() )
+	oClone:cOBSERVATION         := ::cOBSERVATION
+	oClone:cPARTICIPANTRH       := ::cPARTICIPANTRH
+	oClone:cREGISTRATION        := ::cREGISTRATION
+	oClone:dREQUESTDATE         := ::dREQUESTDATE
+	oClone:oWSREQUESTTYPE       := IIF(::oWSREQUESTTYPE = NIL , NIL , ::oWSREQUESTTYPE:Clone() )
+	oClone:dRESPONSEDATE        := ::dRESPONSEDATE
+	oClone:cSOURCE              := ::cSOURCE
+	oClone:cSTARTERBRANCH       := ::cSTARTERBRANCH
+	oClone:cSTARTERKEY          := ::cSTARTERKEY
+	oClone:nSTARTERLEVEL        := ::nSTARTERLEVEL
+	oClone:cSTARTERREGISTRATION := ::cSTARTERREGISTRATION
+	oClone:oWSSTATUS            := IIF(::oWSSTATUS = NIL , NIL , ::oWSSTATUS:Clone() )
+	oClone:cVISION              := ::cVISION
+	oClone:cWFAPROV             := ::cWFAPROV
+	oClone:cWFID                := ::cWFID
+	oClone:cWFSTAGE             := ::cWFSTAGE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFCERTIFICATE_TREQUEST
+	Local cSoap := ""
+	cSoap += WSSoapValue("APPROVERBRANCH", ::cAPPROVERBRANCH, ::cAPPROVERBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("APPROVERLEVEL", ::nAPPROVERLEVEL, ::nAPPROVERLEVEL , "integer", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("APPROVERREGISTRATION", ::cAPPROVERREGISTRATION, ::cAPPROVERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("ITEMS", ::oWSITEMS, ::oWSITEMS , "ARRAYOFTREQUESTITEM", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("OBSERVATION", ::cOBSERVATION, ::cOBSERVATION , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("PARTICIPANTRH", ::cPARTICIPANTRH, ::cPARTICIPANTRH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, ::cREGISTRATION , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REQUESTDATE", ::dREQUESTDATE, ::dREQUESTDATE , "date", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REQUESTTYPE", ::oWSREQUESTTYPE, ::oWSREQUESTTYPE , "TREQUESTTYPE", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("RESPONSEDATE", ::dRESPONSEDATE, ::dRESPONSEDATE , "date", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SOURCE", ::cSOURCE, ::cSOURCE , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERBRANCH", ::cSTARTERBRANCH, ::cSTARTERBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERKEY", ::cSTARTERKEY, ::cSTARTERKEY , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERLEVEL", ::nSTARTERLEVEL, ::nSTARTERLEVEL , "integer", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STARTERREGISTRATION", ::cSTARTERREGISTRATION, ::cSTARTERREGISTRATION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("STATUS", ::oWSSTATUS, ::oWSSTATUS , "TREQUESTSTATUS", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("VISION", ::cVISION, ::cVISION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("WFAPROV", ::cWFAPROV, ::cWFAPROV , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("WFID", ::cWFID, ::cWFID , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("WFSTAGE", ::cWFSTAGE, ::cWFSTAGE , "string", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TVDFCERTIFICATE
+
+WSSTRUCT RHVDFCERTIFICATE_TVDFCERTIFICATE
+	WSDATA   cDOCTODESC                AS string
+	WSDATA   cDOCTOID                  AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFCERTIFICATE_TVDFCERTIFICATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFCERTIFICATE_TVDFCERTIFICATE
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFCERTIFICATE_TVDFCERTIFICATE
+	Local oClone := RHVDFCERTIFICATE_TVDFCERTIFICATE():NEW()
+	oClone:cDOCTODESC           := ::cDOCTODESC
+	oClone:cDOCTOID             := ::cDOCTOID
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFCERTIFICATE_TVDFCERTIFICATE
+	Local cSoap := ""
+	cSoap += WSSoapValue("DOCTODESC", ::cDOCTODESC, ::cDOCTODESC , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("DOCTOID", ::cDOCTOID, ::cDOCTOID , "string", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFTREQUESTITEM
+
+WSSTRUCT RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM
+	WSDATA   oWSTREQUESTITEM           AS RHVDFCERTIFICATE_TREQUESTITEM OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM
+	::oWSTREQUESTITEM      := {} // Array Of  RHVDFCERTIFICATE_TREQUESTITEM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM
+	Local oClone := RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM():NEW()
+	oClone:oWSTREQUESTITEM := NIL
+	If ::oWSTREQUESTITEM <> NIL 
+		oClone:oWSTREQUESTITEM := {}
+		aEval( ::oWSTREQUESTITEM , { |x| aadd( oClone:oWSTREQUESTITEM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFCERTIFICATE_ARRAYOFTREQUESTITEM
+	Local cSoap := ""
+	aEval( ::oWSTREQUESTITEM , {|x| cSoap := cSoap  +  WSSoapValue("TREQUESTITEM", x , x , "TREQUESTITEM", .F. , .F., 0 , NIL, .F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTTYPE
+
+WSSTRUCT RHVDFCERTIFICATE_TREQUESTTYPE
+	WSDATA   cCODE                     AS string
+	WSDATA   cDESCRIPTION              AS string
+	WSDATA   cLINK                     AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFCERTIFICATE_TREQUESTTYPE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFCERTIFICATE_TREQUESTTYPE
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFCERTIFICATE_TREQUESTTYPE
+	Local oClone := RHVDFCERTIFICATE_TREQUESTTYPE():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cLINK                := ::cLINK
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFCERTIFICATE_TREQUESTTYPE
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("DESCRIPTION", ::cDESCRIPTION, ::cDESCRIPTION , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("LINK", ::cLINK, ::cLINK , "string", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTSTATUS
+
+WSSTRUCT RHVDFCERTIFICATE_TREQUESTSTATUS
+	WSDATA   cCODE                     AS string
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFCERTIFICATE_TREQUESTSTATUS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFCERTIFICATE_TREQUESTSTATUS
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFCERTIFICATE_TREQUESTSTATUS
+	Local oClone := RHVDFCERTIFICATE_TREQUESTSTATUS():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFCERTIFICATE_TREQUESTSTATUS
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("DESCRIPTION", ::cDESCRIPTION, ::cDESCRIPTION , "string", .F. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+// WSDL Data Structure TREQUESTITEM
+
+WSSTRUCT RHVDFCERTIFICATE_TREQUESTITEM
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cFIELDDESCRIPTION         AS string OPTIONAL
+	WSDATA   cFIELDNAME                AS string
+	WSDATA   cNEWVALUE                 AS string
+	WSDATA   cPREVIOUSVALUE            AS string OPTIONAL
+	WSDATA   cREQUESTCODE              AS string
+	WSDATA   nSEQUENCE                 AS integer
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHVDFCERTIFICATE_TREQUESTITEM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHVDFCERTIFICATE_TREQUESTITEM
+Return
+
+WSMETHOD CLONE WSCLIENT RHVDFCERTIFICATE_TREQUESTITEM
+	Local oClone := RHVDFCERTIFICATE_TREQUESTITEM():NEW()
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cFIELDDESCRIPTION    := ::cFIELDDESCRIPTION
+	oClone:cFIELDNAME           := ::cFIELDNAME
+	oClone:cNEWVALUE            := ::cNEWVALUE
+	oClone:cPREVIOUSVALUE       := ::cPREVIOUSVALUE
+	oClone:cREQUESTCODE         := ::cREQUESTCODE
+	oClone:nSEQUENCE            := ::nSEQUENCE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHVDFCERTIFICATE_TREQUESTITEM
+	Local cSoap := ""
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("FIELDDESCRIPTION", ::cFIELDDESCRIPTION, ::cFIELDDESCRIPTION , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("FIELDNAME", ::cFIELDNAME, ::cFIELDNAME , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("NEWVALUE", ::cNEWVALUE, ::cNEWVALUE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("PREVIOUSVALUE", ::cPREVIOUSVALUE, ::cPREVIOUSVALUE , "string", .F. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("REQUESTCODE", ::cREQUESTCODE, ::cREQUESTCODE , "string", .T. , .F., 0 , NIL, .F.) 
+	cSoap += WSSoapValue("SEQUENCE", ::nSEQUENCE, ::nSEQUENCE , "integer", .T. , .F., 0 , NIL, .F.) 
+Return cSoap
+
+

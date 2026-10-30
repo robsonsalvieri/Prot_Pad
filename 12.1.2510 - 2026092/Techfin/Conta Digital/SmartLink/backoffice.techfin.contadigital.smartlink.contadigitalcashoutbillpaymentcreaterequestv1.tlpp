@@ -1,0 +1,190 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "backoffice.techfin.contadigital.smartlink.contadigitalcashoutbillpaymentcreaterequestv1.ch"
+
+Namespace totvs.protheus.backoffice.techfin.contadigital.smartlink.ContaDigitalCashoutBillPaymentCreateRequestV1
+
+/*/{Protheus.doc} SetBillPayment
+    
+    Função para enviar borderô para techfin
+
+    @type Function
+    @param cCompany, character, Código da empresa
+    @param cBranch, character, Código da filial
+    @param cNumBord, character, Número do borderô
+    @author André Schwartz
+    @since 15/01/2026
+    @version 1.0
+/*/
+Function SetBillPayment(cCompany as character, cBranch as character, cNumBord as character, cIDMsgAuto as character)
+    Default cIDMsgAuto := ""
+    
+    If Type("cIDMessageAuto") <> "U"
+        cIDMsgAuto := cIDMessageAuto
+    EndIf
+    
+    StartJob("totvs.protheus.backoffice.techfin.contadigital.smartlink.ContaDigitalCashoutBillPaymentCreateRequestV1.TFSendBillPayment", GetEnvServer(), .F., cCompany, cBranch, cNumBord, __cUserId, cIDMsgAuto )
+
+Return 
+
+/*/{Protheus.doc} TFSendBillPayment
+    
+    Função para enviar borderô para techfin
+
+    @type Function
+    @param cCompany, character, Código da empresa
+    @param cBranch, character, Código da filial
+    @param cNumBord, character, Número do borderô
+    @param cUserId, character, ID do usuário
+    @param cIDMsgAuto, character, ID da mensagem automática
+
+    @author André Schwartz
+    @since 15/01/2026
+    @version 1.0
+/*/
+Function TFSendBillPayment(cCompany as character, cBranch as character, cNumBord as character, cUserId as character, cIDMsgAuto as Character) 
+    Local oSmartUtil                as object
+    Local oJson                     as object
+    Local oBeneficiary              as object
+    Local oRequester                as object
+    Local oCashoutBill              as object
+    Local lProcessa  := .F.         as logical
+    Local cSA6Chave  := ""          as character
+    Local cPayload   := ""          as character
+    Local cType      := "ContaDigitalCashoutBillPaymentCreateRequestV1" as character
+    Local aUserInfo  := {}          as array
+    Local lRet       := .T.         as logical
+    Local cCodBar    := ""          as character
+        
+    RPCSetType(3)
+    RPCSetEnv(cCompany, cBranch,,,'FIN')
+
+    SEA->(DbSetOrder(2))
+    SA6->(DbSetOrder(1))
+    SE2->(DbSetOrder(1))
+    SA2->(DbSetOrder(1))
+
+    If SEA->(MsSeek(FWxFilial("SEA") + cNumBord + "P"))
+        cSA6Chave  := FWxFilial("SA6") + SEA->(EA_PORTADO) + SEA->(EA_AGEDEP) + SEA->(EA_NUMCON)    
+        If SA6->(MsSeek(cSA6Chave)) 
+            lProcessa := (SA6->(A6_TFCNT) == "1")
+        EndIf
+    EndIf
+    
+    aUserInfo := FWSfAllUsers({cUserID},{"USR_NOME","USR_EMAIL"})
+
+    Begin transaction
+        While lProcessa .And. !SEA->(Eof()) .And. (cBranch + cNumBord) == SEA->(EA_FILORIG + EA_NUMBOR) .And. SEA->(EA_CART) == "P"
+            If SE2->(MsSeek(FWxFilial("SE2") + SEA->(EA_PREFIXO + EA_NUM + EA_PARCELA + EA_TIPO + EA_FORNECE + EA_LOJA ))) 
+                If SA2->(MsSeek(FWxFilial("SA2") + SEA->( EA_FORNECE + EA_LOJA ))) 
+                    oJson         := JsonObject():New()
+                    oBeneficiary  := JsonObject():New()
+                    oRequester    := JsonObject():New()
+                    oCashoutBill  := JsonObject():New()
+                    
+                    oSmartUtil    := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+
+                    oJson["tenantId"]         := oSmartUtil:GetTenantClient()
+                    oJson["bankAccountId"]    := SA6->A6_IDTECHF
+                    oJson["erpId"]            := cCompany + "|" + cBranch + "|" + SEA->(EA_MSUID) 
+                    oJson["erpSubmittedDate"] := FWTimeStamp(6, SEA->(EA_DATABOR), TIME())
+                    oJson["transactionType"]  := "BillPayment"
+                    oJson["amount"]           := SE2->(E2_SALDO)
+                    oJson["batchId"]          := "BORDERO-" + SEA->(EA_NUMBOR)
+
+                    If SEA->(EA_TPPAGTF) == "1"
+                        oJson["scheduledDate"]    :=  FWTimeStamp(6)
+                    Else
+                        oJson["scheduledDate"]    :=  FWTimeStamp(6, SE2->(E2_VENCTO), TIME())
+                    EndIf
+
+                    oJson["requestType"]      := EncodeUTF8("Solicitação de aprovação")
+                    oJson["idempotencyKey"]   := cCompany + "|" + cBranch + "|" + SEA->(EA_MSUID) 
+
+                    oBeneficiary["name"]           := EncodeUTF8(SA2->(A2_NOME))
+                    oBeneficiary["documentNumber"] := SA2->(A2_CGC)
+                    oJson["beneficiaryInfo"]       := oBeneficiary
+                    
+                    oRequester["email"]    := aUserInfo[1][4]
+                    oRequester["name"]     := aUserInfo[1][3]
+                    oRequester["userId"]   := cUserID
+                    oJson["requesterInfo"] := oRequester
+
+                    oCashoutBill["tenantId"]      := oSmartUtil:GetTenantClient()
+                    oCashoutBill["bankAccountId"] := SA6->A6_IDTECHF
+                    cCodBar := retCodBar()
+                    oCashoutBill["digitable"]     := FinCBLD(cCodBar,.F.) //Converte codigo de barras em linha digitável
+                    oCashoutBill["barcode"]       := cCodBar
+                    
+                    oCashoutBill["dueDate"]   := FWTimeStamp(6, SE2->(E2_VENCTO), TIME())
+                    
+                    oJson["cashoutBillPayment"]   := oCashoutBill
+                    cPayload := oJson:ToJson()
+                    oSmartUtil:setAliasMSUID("SEA")
+
+                    //Caso seja um teste automatizado
+                    If !Empty(cIDMsgAuto)
+                        Private cIDMessageAuto := FWUuidV4(.T.)
+                    EndIf
+                    lRet := oSmartUtil:send(cType, cPayload, .F.)
+
+                    If lRet
+                        RecLock("SEA", .F.)
+                            SEA->EA_STTFIN := "2" //Transmitido
+                        SEA->(MsUnlock())
+                    EndIf
+                EndIf
+            EndIf
+            SEA->(DbSkip())
+        EndDo
+    End Transaction
+   
+    FreeObj(oJson)
+    FreeObj(oBeneficiary)
+    FreeObj(oRequester)
+    FreeObj(oCashoutBill)
+    FwFreeObj(oSmartUtil)
+    RpcClearEnv()
+Return 
+
+/*/{Protheus.doc} retCodBar
+    
+    Função que retorna o código de barras da FIG caso o campo da SE2 esteja vazio
+
+    @type Function
+    @author Squad TechFin
+    @since 24/08/2026
+    @version 1.0
+/*/
+Static Function retCodBar() as character
+
+    Local cQuery := ""    as character
+    Local cAlias := ""    as character
+    Local cRet   := ""    as character
+    Local aRegistro := {} as array
+    Local oStatment       as object
+    Local cChave := ""    as character
+    
+    If AllTrim(SE2->E2_CODBAR) == ""
+        
+        cChave := SE2->(E2_FILIAL) +"|"+ SE2->(E2_PREFIXO) +"|"+ SE2->(E2_NUM) + "|" + SE2->(E2_PARCELA) + "|" + SE2->(E2_TIPO) + "|" + SE2->(E2_FORNECE) + "|" + SE2->(E2_LOJA) +"|"
+        cQuery := "SELECT R_E_C_N_O_ FROM " + RetSqlName("FIG")
+        cQuery += " WHERE FIG_DDASE2 = '" + cChave + "'"
+        cQuery := ChangeQuery(cQuery)
+
+        oStatment  := FwExecStatement():New(cQuery)
+
+        oStatment:setFields({'R_E_C_N_O_'})
+        cAlias    := oStatment:OpenAlias()
+        aRegistro := oStatment:getResultArray(cAlias, .F.)
+        iF Len(aRegistro) >= 1
+            FIG->(dbGoTo(aRegistro[1][1]))
+            cRet := AllTrim(FIG->FIG_CODBAR)
+        EndIf
+    Else
+        cRet := AllTrim(SE2->E2_CODBAR)
+    EndIf
+
+    FreeObj(oStatment)
+
+Return cRet

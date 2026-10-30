@@ -1,0 +1,355 @@
+#Include "tlpp-core.th"
+#Include "fwmvcdef.ch"
+
+Namespace totvs.protheus.health.plans.api.refundSetup.continuedMedication
+
+Using Namespace totvs.protheus.health.plans.api.util
+
+/*/{Protheus.doc} ContinuedMedicationService
+Classe de serviço de medicamentos de uso continuo - Regra de Negócio
+
+@type class
+@author Vinicius Queiros Teixeira
+@since 17/03/2023
+@version Protheus 12
+/*/
+Class ContinuedMedicationService From BaseService
+
+    Private Data cProtocolNumber As Character
+    Private Data oAdapter As Object
+
+    Public Method new() Constructor
+    Public Method postContinuousMedications() As Logical
+    Public Method getContinuousMedications() As Logical
+    Public Method getRefunds() As Logical
+
+    Private Method addContinuousMedications() As Logical
+    Private Method setJsonResponse() As Logical
+
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 17/03/2023
+@version Protheus 12
+/*/
+Method new() Class ContinuedMedicationService
+
+    _Super:new()
+
+    Self:cProtocolNumber := ""
+
+Return Self
+
+/*/{Protheus.doc} postContinuousMedications
+Método responsavel por cadastrar os medicamentos de uso continuo do beneficiário
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 17/03/2023
+@version Protheus 12
+/*/
+Method postContinuousMedications() As Logical Class ContinuedMedicationService
+
+    Local lSucess := .F. As Logical
+    Local aFields := {} As Array
+    
+    BA1->(DbSetOrder(5)) // BA1_FILIAL + BA1_MATANT
+	If BA1->(MsSeek(xFilial("BA1")+Self:jBody["subscriberId"]))
+		Self:jBody["subscriberId"] := BA1->(BA1_CODINT+BA1_CODEMP+BA1_MATRIC+BA1_TIPREG+BA1_DIGITO)
+	EndIf
+
+    // Verifica se os campos do body estão validos
+    aAdd(aFields, {"field" : "healthInsurerCode", "required" : .T., "type" : "C", "size" : tamSX3("BA0_CODIDE")[1]+tamSX3("BA0_CODINT")[1]})
+    aAdd(aFields, {"field" : "subscriberId", "required" : .T., "type" : "C", "size" : tamSX3("BA1_CODINT")[1]+tamSX3("BA1_CODEMP")[1]+tamSX3("BA1_MATRIC")[1]+tamSX3("BA1_TIPREG")[1]+tamSX3("BA1_DIGITO")[1]})
+    aAdd(aFields, {"field" : "professionalCouncil", "required" : .T., "type" : "C"})
+    aAdd(aFields, {"field" : "professionalCouncilNumber", "required" : .T., "type" : "C"})
+    aAdd(aFields, {"field" : "stateAbbreviation", "required" : .T., "type" : "C"})
+    aAdd(aFields, {"field" : "professionalName", "required" : .T., "type" : "C"})
+    aAdd(aFields, {"field" : "prescriptionDate", "required" : .T., "type" : "D"})
+    aAdd(aFields, {"field" : "medications", "required" : .T., "type" : "A"})
+    aAdd(aFields, {"field" : "attachments", "required" : .T., "type" : "A"})
+
+    If Self:checkBodyFields(aFields, "E002")
+        BA0->(DbSetOrder(1)) //B A0_FILIAL + BA0_CODIDE + BA0_CODINT 
+        If BA0->(MsSeek(xFilial("BA0")+Self:jBody["healthInsurerCode"]))                                                                                                                               
+            BA1->(DBSetOrder(2)) // BA1_FILIAL + BA1_CODINT + BA1_CODEMP + BA1_MATRIC + BA1_TIPREG + BA1_DIGITO
+            If BA1->(MsSeek(xFilial("BA1")+Self:jBody["subscriberId"]))
+                If Self:addContinuousMedications()
+                    lSucess := .T.
+                    Self:nCodeStatus := 201 // Create 
+                EndIf
+            Else	
+                Self:setError("E004", "Beneficiário não encontrado",;
+                                      "Não foi encontrado nenhum beneficiário com a matricula "+Self:jBody["subscriberId"],;
+                                      404) // Not Found
+            EndIf 
+        Else
+            Self:setError("E003", "Operadora de Saúde não encontrada",;
+                                  "Não foi encontrada nenhum operadora de saúde com o código "+Self:jBody["healthInsurerCode"],;
+                                  404) // Not Found
+        EndIf  
+    EndIf
+
+Return lSucess
+
+/*/{Protheus.doc} addContinuousMedications
+Método responsavel por adicionar novos medicamentos de uso continuo para o 
+beneficiário
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 20/03/2023
+@version Protheus 12
+/*/
+Method addContinuousMedications() As Logical Class ContinuedMedicationService
+
+    Local nX := 0 As Numeric
+    Local lAdd := .F. As Logical
+    Local oModel As Object
+    Local oModelB4F As Object
+    Local oModelB7D As Object
+    Local aDetailsErro := {} As Array
+    Local lAddMedication := .F. As Logical
+    Local aFields := {} As Array
+    Local jDownload As Json
+    Local aAttachments := {} As Array
+
+    // Caso não tenha cadastro, realiza antes a inclusão do professional de saúde
+    PlSveProfAll(Self:jBody["professionalName"], Self:jBody["professionalCouncil"], Self:jBody["stateAbbreviation"],;
+                 Self:jBody["professionalCouncilNumber"], Self:jBody["healthInsurerCode"], "", "2", "", {})
+
+    oModel := FWLoadModel("PLSCADREC")
+	oModel:setOperation(MODEL_OPERATION_INSERT)
+	oModel:activate()
+
+	oModelB4F := oModel:getModel("B4FMASTER")
+	oModelB7D := oModel:getModel("B7DDETAIL")
+
+	oModelB4F:setValue("B4F_DESCRI", "Receita Nº "+oModelB4F:getValue("B4F_CODREC")+".")
+	oModelB4F:setValue("B4F_MATRIC", Self:jBody["subscriberId"])
+    oModelB4F:setValue("B4F_CODFAM", Substr(Self:jBody["subscriberId"], 1, 14))
+    oModelB4F:setValue("B4F_SIGLA", Self:jBody["professionalCouncil"])
+    oModelB4F:setValue("B4F_ESTSOL", Self:jBody["stateAbbreviation"])
+    oModelB4F:setValue("B4F_REGSOL", Self:jBody["professionalCouncilNumber"])
+    oModelB4F:setValue("B4F_PORTAL", .T.)
+    oModelB4F:setValue("B4F_STATUS", "1") // 1 = Protocolado
+    oModelB4F:setValue("B4F_DATINI", Self:convertDateFormat(Self:jBody["prescriptionDate"]))
+    oModelB4F:setValue("B4F_DATFIN", Self:convertDateFormat(Self:jBody["prescriptionDate"]) + Val(GetNewPar("MV_PLSVLDR", "30")))
+
+    If Self:convertDateFormat(Self:jBody["prescriptionDate"]) > dDataBase
+        aAdd(aDetailsErro, {"code" : "E005-A",;
+                            "message" : "Não permitido cadastrar medicamentos com data maior que a atual.",;
+                            "detailedMessage" : "Data da prescrição (prescriptionDate) maior que a data atual."})
+    EndIf
+
+    // Verifica crítica de cabeçalho
+    If !oModelB4F:vldData(.F.)
+        aAdd(aDetailsErro, {"code" : "E005-B",;
+                            "message" : AllTrim(oModel:getErrorMessage()[6]),;
+                            "detailedMessage" : "Id do campo de erro: "+AllTrim(oModel:getErrorMessage()[4])+"; Id do erro: "+AllTrim(oModel:getErrorMessage()[5])})
+    EndIf
+
+    aAdd(aFields, {"field" : "tableCode", "required" : .T., "type" : "C"})
+    aAdd(aFields, {"field" : "medicationCode", "required" : .T., "type" : "C"})
+
+    For nX := 1 To Len(Self:jBody["medications"])   
+        // // Verifica se os campos do medications do json estão validos 
+        If Self:checkBodyFields(aFields, "E005-"+cValToChar(nX), Self:jBody["medications"][nX], @aDetailsErro, .F.)
+            If nX > 1
+                oModelB7D:addLine()
+            EndIf
+
+            oModelB7D:setValue("B7D_CODPAD", Self:jBody["medications"][nX]["tableCode"])
+            lAddMedication := oModelB7D:setValue("B7D_CODMED", Self:jBody["medications"][nX]["medicationCode"])
+            oModelB7D:setValue("B7D_DTVINI", Self:convertDateFormat(Self:jBody["prescriptionDate"]))
+            oModelB7D:setValue("B7D_DTFVAL", Self:convertDateFormat(Self:jBody["prescriptionDate"]) + Val(GetNewPar("MV_PLSVLDR", "30")))	
+            oModelB7D:setValue("B7D_OK", .F.)
+            oModelB7D:loadValue("B7D_QTDAUT", 0)
+            oModelB7D:loadValue("B7D_QTDEXE", 0)
+            oModelB7D:loadValue("B7D_SEQUEN", StrZero(nX, tamSX3("B7D_SEQUEN")[1]))
+            
+            // Verifica crítica dos itens
+            If !lAddMedication .Or. !oModelB7D:vldData(.F.)
+                aAdd(aDetailsErro, {"code" : "E005-"+cValToChar(nX),;
+                                    "message" : AllTrim(oModel:getErrorMessage()[6]),;
+                                    "detailedMessage" : "Id do campo de erro: "+AllTrim(oModel:getErrorMessage()[4])+"; Id do erro: "+AllTrim(oModel:getErrorMessage()[5])})
+            EndIf
+        EndIf
+    Next nX 
+
+    aFields := {}
+    aAdd(aFields, {"field" : "href", "required" : .T., "type" : "C"})
+
+    For nX := 1 To Len(Self:jBody["attachments"])   
+        // Verifica se os campos do attachments do json estão validos 
+        If Self:checkBodyFields(aFields, "E005-"+cValToChar(nX), Self:jBody["attachments"][nX], @aDetailsErro, .F.)
+            jDownload := Self:fileDownload(Self:jBody["attachments"][nX]["href"])
+
+            If jDownload["sucess"]
+                aAdd(aAttachments, {"fileDirectory" : jDownload["fileDirectory"]})
+            Else
+                aAdd(aDetailsErro, {"code" : "E005-"+cValToChar(nX),;
+                                    "message" : jDownload["message"],;
+                                    "detailedMessage" : jDownload["detailedMessage"]})
+            EndIf
+        EndIf
+    Next nX 
+
+    If Len(aDetailsErro) == 0 .And. oModel:vldData()
+        Self:cProtocolNumber := oModelB4F:getValue("B4F_CODREC")
+        oModel:commitData()	
+        // Anexa no banco de conhecimento os arquivos recebidos
+        Self:addknowledgeBank(aAttachments, "B4F", xFilial("BF4")+Self:cProtocolNumber+Self:jBody["subscriberId"])
+        
+        // Ponto de Entrada na Inclusão dos Medicamentos
+        If ExistBlock("PLGRRCFIM")
+            ExecBlock("PLGRRCFIM", .F., .F., {Self:cProtocolNumber})
+        Endif
+
+        lAdd := Self:setJsonResponse()
+    Else
+        // Exclui os downloads realizados com sucesso
+        If Len(aAttachments) > 0
+            For nX := 1 To Len(aAttachments)
+                FErase(aAttachments[nX]["fileDirectory"])
+            Next nX
+        EndIf
+
+        Self:setError("E005", "Erro ao incluir receita de medicamentos de uso continuo.",;
+                              "Verifique a lista de erros para mais detalhes",;
+                              400,; // Bad Request
+                              aDetailsErro)
+    EndIf
+
+    oModel:deActivate()
+	oModel:destroy()
+	freeObj(oModel)
+	oModel := Nil
+	 
+Return lAdd
+
+/*/{Protheus.doc} setJsonResponse
+Método responsavel por setar o json de resposta dos medicamentos de uso
+continuo cadastro.
+
+@type method
+@author Vinicius Queiros Teixeira
+@since 20/03/2023
+@version Protheus 12
+/*/
+Method setJsonResponse() As Logical Class ContinuedMedicationService
+
+    Local lOk := .F. As Logical
+    Local nPos := 0 As Numeric
+    Local aMedications := {} As Array
+
+    BF4->(DbSetOrder(1))
+    If B4F->(MsSeek(xFilial("B4F")+Self:cProtocolNumber))
+        lOk := .T.
+        Self:setAttributeJson({"attribute" : "prescriptionCode", "value" : B4F->B4F_CODREC, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "status", "value" : B4F->B4F_STATUS, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "prescriptionDescription", "value" : B4F->B4F_DESCRI, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "subscriberId", "value" : B4F->B4F_MATRIC, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "subscriberName", "value" : Posicione("BA1", 2, xFilial("BA1")+B4F->B4F_MATRIC, "BA1_NOMUSR"), "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "registrationDate", "value" : B4F->B4F_DTCAD, "type" : "D", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "professionalCouncil", "value" : B4F->B4F_SIGLA, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "stateAbbreviation", "value" : B4F->B4F_ESTSOL, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "professionalCouncilNumber", "value" : B4F->B4F_REGSOL, "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "professionalName", "value" : Posicione("BB0", 4, xFilial("BB0")+B4F->(B4F_ESTSOL+B4F_REGSOL+B4F_SIGLA), "BB0_NOME"), "type" : "C", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "startValidityDate", "value" : B4F->B4F_DATINI, "type" : "D", "setResponse" : .T.})
+        Self:setAttributeJson({"attribute" : "endValidityDate", "value" : B4F->B4F_DATFIN, "type" : "D", "setResponse" : .T.})
+
+        B7D->(DbSetOrder(1))
+        If B7D->(MsSeek(xFilial("B7D")+Self:cProtocolNumber))
+            Self:setAttributeJson({"attribute" : "medications", "value" : aMedications, "type" : "A", "setResponse" : .T.})
+
+            While B7D->(!EOf()) .And. B7D->(B7D_FILIAL+B7D_CODREC) == xFilial("B7D")+Self:cProtocolNumber
+                aAdd(Self:jResult["medications"], JsonObject():new())
+                nPos := Len(Self:jResult["medications"])
+
+                Self:setAttributeJson({"attribute" : "tableCode", "value" : B7D->B7D_CODPAD, "type" : "C", "setResponse" : .T.}, Self:jResult["medications"][nPos])
+                Self:setAttributeJson({"attribute" : "medicationCode", "value" : B7D->B7D_CODMED, "type" : "C", "setResponse" : .T.}, Self:jResult["medications"][nPos])
+                Self:setAttributeJson({"attribute" : "medicationDescription", "value" : Posicione("BR8", 1, xFilial("BR8")+B7D->(B7D_CODPAD+B7D_CODMED), "BR8_DESCRI"), "type" : "C", "setResponse" : .T.}, Self:jResult["medications"][nPos])
+                B7D->(DbSkip())
+            EndDo
+        EndIf   
+    EndIf
+
+Return lOk
+
+
+/*/{Protheus.doc} getContinuousMedications
+Método responsavel por retornar as consultas dos medicamentos de uso continuo do
+beneficiário
+
+@type method
+@author Giovanna Charlo
+@since 11/04/2023
+@version Protheus 12
+/*/
+Method getContinuousMedications() As Logical Class ContinuedMedicationService
+    
+    Local lSucess := .F. As Logical
+    Local aKeys := {} As Array
+
+    // Chaves do query Params obrigatórios na api
+    aAdd(aKeys, {"type" : "queryParams", "key" : "subscriberId"})
+
+    If Self:checkRequiredKeys(aKeys, "E001")
+        BA1->(DbSetOrder(2))
+        If !BA1->(MsSeek(xFilial("BA1")+Padr(Self:jParams["subscriberId"],tamSX3("BA1_CODINT")[1]+tamSX3("BA1_CODEMP")[1]+tamSX3("BA1_MATRIC")[1]+tamSX3("BA1_TIPREG")[1]+tamSX3("BA1_DIGITO")[1])))
+            Self:setError("E001","Usuário não encontrado", "Não foi possível retornar os dados do beneficiário através da matrícula informada.",404)
+        Else
+            Self:oAdapter := ContinuedMedicationAdapter():New()
+            Self:oAdapter:setQueryParams(Self:jParams)
+
+            If Self:oAdapter:getPageContinuousMedications()
+                lSucess := .T.
+                Self:nCodeStatus := 200
+                Self:jResult := Self:oAdapter:getJsonResult()
+            EndIf
+        EndIf  
+    EndIf
+
+Return lSucess
+
+
+/*/{Protheus.doc} getRefunds
+Método responsavel por retornar as consultas dos medicamentos de uso continuo 
+dos Protocolos de Reembolso 
+
+@type method
+@author Giovanna Charlo
+@since 11/04/2023
+@version Protheus 12
+/*/
+Method getRefunds() As Logical Class ContinuedMedicationService
+    
+    Local lSucess := .F. As Logical
+    Local aKeys := {} As Array
+
+    // Chaves do path Params obrigatórios na api
+    aAdd(aKeys, {"type" : "queryParams", "key" : "prescriptionCode"})
+
+    If Self:checkRequiredKeys(aKeys, "E001")  
+        B7D->(DbSetOrder(3))  
+        If !B7D->(MsSeek(xFilial("B7D")+Padr(Self:jParams["prescriptionCode"],tamSX3("B7D_CODREC")[1])))
+            Self:setError("E001","Receita Não Encontrada", "Não foi possível retornar os dados da receita através do código da receita informada.",404)
+        Else
+            Self:oAdapter := ContinuedMedicationAdapter():New()
+            Self:oAdapter:setQueryParams(Self:jParams)
+    
+            If Self:oAdapter:getPageRefunds()
+                lSucess := .T.
+                Self:nCodeStatus := 200
+                Self:jResult := Self:oAdapter:getJsonResult()
+            EndIf
+
+        EndIf  
+    EndIf
+
+Return lSucess

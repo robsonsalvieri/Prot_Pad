@@ -1,0 +1,544 @@
+#include 'tlpp-core.th'
+#include 'totvs.ch'
+#include 'WSPROCDERE.CH'
+
+/*/{Protheus.doc} WSPROCDERE
+    Processamento de eventos do DeRE (Documento de Arrecadacao) via Web Service TSS.
+    Encapsula as operacoes de envio, consulta e validacao de schema do DeRE
+    em uma classe TLPP com metodos tipados.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @see     WSDERE.PRW
+/*/
+
+// ----------------------------------------------------------------------------
+// Classe principal: WsProcDere
+// Responsavel por orquestrar as chamadas ao Web Service TSS do DeRE.
+// ----------------------------------------------------------------------------
+class WsProcDere
+    private data cAmbiente            as character
+    private data cEntidade            as character
+    private data cUserToken           as character
+    private data oDere                as object
+    private data aEventosEnvio        as array
+    private data aEventosConsulta     as array
+    private data cXmlSchema           as character
+    private data cNrInsc              as character
+    private data cTokenDere           as character
+    private data cVersaoDere          as character
+    private data aResultado           as array
+    private data lSucesso             as logical
+    private data cMsgErro             as character
+
+    public  method new()                as object
+    public  method enviarEventos()      as logical
+    public  method consultarLote()      as logical
+    public  method validarSchema()      as logical
+    public  method gravarTokenDere()    as logical
+    public  method setAmbiente()        as object
+    public  method setEntidade()        as object
+    public  method setUserToken()       as object
+    public  method setNrInsc()          as object
+    public  method setEventosEnvio()    as object
+    public  method setEventosConsulta() as object
+    public  method setXmlSchema()       as object
+    public  method setTokenDere()       as object
+    public  method setVersaoDere()      as object
+    public  method getResultado()       as array
+    public  method getLSucesso()        as logical
+    public  method destroy()            as object
+    private method montarUrlDere()      as character
+    private method validarUrl()         as logical
+    private method formatarResposta()   as logical
+    public  method getDereMsgErro()     as character
+endclass
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:new
+    Construtor da classe WsProcDere. Inicializa os atributos com valores padrao.
+    O ambiente e a entidade sao obtidos dos parametros do sistema via SuperGetMv/TAFRIdEnt.
+    A versao do leiaute DeRE assume o valor padrao vigente e pode ser alterada
+    via setVersaoDere() (util em retificacoes com versao anterior).
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  object  Instancia da classe WsProcDere
+/*/
+method new() as object class WsProcDere
+    ::cAmbiente        := SuperGetMv('MV_TAFAMBD', .F., '2')
+    ::cEntidade        := TAFRIdEnt(,,,,,.T.)
+    ::cUserToken       := 'TOTVS'
+    ::oDere            := nil
+    ::aEventosEnvio    := {}
+    ::aEventosConsulta := {}
+    ::cXmlSchema       := ''
+    ::cNrInsc          := ''
+    ::cTokenDere       := ''
+    ::cVersaoDere      := SuperGetMv('MV_TAFVLDE', .F., '1_0_1')
+    ::aResultado       := {}
+    ::lSucesso         := .F.
+    ::cMsgErro         := ''
+
+return self
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:montarUrlDere
+    Monta a URL de conexao com o servico TSS do DeRE a partir do parametro MV_TAFSURL.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  character  URL completa do servico TSSWSDERE
+/*/
+method montarUrlDere() as character class WsProcDere
+    Local cUrl := '' as character
+    cUrl := rtrim(GetMv('MV_TAFSURL'))
+    if !empty(cUrl)
+        if right(cUrl, 1) != '/'
+            cUrl += '/TSSWSDERE.apw'
+        else
+            cUrl += 'TSSWSDERE.apw'
+        endif
+    endif
+return cUrl
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:validarUrl
+    Valida se a URL do servico TSS foi resolvida a partir do parametro MV_TAFSURL.
+    Impede que a chamada prossiga com URL vazia, o que faria o stub gerado
+    (WSDERE) cair no endereco default de homologacao embutido no fonte.
+    Em caso de URL vazia, preenche o array de resultado com a mensagem de erro
+    e marca a operacao como malsucedida.
+
+    @author  silva.carlos
+    @since   03/09/2026
+    @version 2.0
+    @param   cUrl  character  URL do servico TSS a ser validada
+    @return  logical  .T. se a URL e valida (nao vazia); .F. caso contrario
+/*/
+method validarUrl(cUrl as character) as logical class WsProcDere
+    Local lValida := .T. as logical
+
+    if Empty(cUrl)
+        ::lSucesso := .F.
+        ::cMsgErro := STR0001 //"Parâmetro MV_TAFSURL não configurado: URL do serviço TSS indefinida."
+        lValida    := .F.
+    endif
+
+return lValida
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:enviarEventos
+    Envia eventos DeRE ao TSS via Web Service ENVIAREVENTOS.
+    Os eventos devem ser carregados previamente via setEventosEnvio().
+    Cada evento do array deve conter: [1]=ID, [2]=Codigo, [3]=XML em base64.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  logical  .T. se o envio foi processado com sucesso pelo TSS
+/*/
+method enviarEventos() as logical class WsProcDere
+    Local cUrlDere as character
+    Local lRetWS   as logical
+    Local nItem    as integer
+    Local oEvento  as object
+    Local aRetEnv  := {} as array
+
+    ::lSucesso   := .F.
+    ::aResultado := {}
+
+    cUrlDere := ::montarUrlDere()
+    if ::validarUrl(cUrlDere)
+        ::oDere := WSTSSWSDERE():New()
+        ::oDere:_Url                                         := cUrlDere
+        ::oDere:oWSDEREENVIO:oWSCABEC                        := WsClassNew('TSSWSDERE_DERECABEC')
+        ::oDere:oWSDEREENVIO:oWSCABEC:cEntidade              := ::cEntidade
+        ::oDere:oWSDEREENVIO:oWSCABEC:cNrInsc                := ::cNrInsc
+        ::oDere:oWSDEREENVIO:oWSCABEC:cTokenDere             := ''
+        ::oDere:oWSDEREENVIO:oWSCABEC:cUserToken             := ::cUserToken
+        ::oDere:oWSDEREENVIO:oWSEVENTOS                      := WsClassNew('TSSWSDERE_ARRAYOFDERENVIOEVENTO')
+        ::oDere:oWSDEREENVIO:oWSEVENTOS:oWSDERENVIOEVENTO    := {}
+
+        for nItem := 1 to Len(::aEventosEnvio)
+            oEvento             := WsClassNew('TSSWSDERE_DERENVIOEVENTO')
+            oEvento:CCODIGO     := ::aEventosEnvio[nItem][2]
+            oEvento:CID         := ::aEventosEnvio[nItem][1]
+            oEvento:CXML        := EncodeUTF8(::aEventosEnvio[nItem][3])
+            oEvento:CVERSAODERE := ::cVersaoDere
+            If ::aEventosEnvio[nItem][2] == 'D-1011'
+                oEvento:CVERSAODERE := '1_0_2'
+            EndIf
+            aAdd(::oDere:oWSDEREENVIO:oWSEVENTOS:oWSDERENVIOEVENTO, oEvento)
+        next
+
+        lRetWS := ::oDere:ENVIAREVENTOS()
+
+        aRetEnv := {}
+        if ValType(::oDere:oWSENVIAREVENTOSRESULT:oWSDERERETENVIO) == 'O'
+            aRetEnv := ::oDere:oWSENVIAREVENTOSRESULT:oWSDERERETENVIO:oWSDERERETENVIO
+        endif
+
+        ::formatarResposta(lRetWS, aRetEnv)
+    endif
+
+return ::lSucesso
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:consultarLote
+    Consulta eventos DeRE enviados ao TSS via Web Service CONSULTAREVENTOSDERE.
+    Os IDs dos eventos devem ser carregados previamente via setEventosConsulta().
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  logical  .T. se a consulta retornou dados com sucesso
+/*/
+method consultarLote() as logical class WsProcDere
+    Local cUrlDere := '' as character
+    Local lRetWS   := .F. as logical
+    Local nItem    := 0   as integer
+    Local oEvCons  as object
+    Local aRetEvt  := {} as array
+
+    ::lSucesso   := .F.
+    ::aResultado := {}    
+
+    cUrlDere := ::montarUrlDere()
+    if ::validarUrl(cUrlDere)
+        ::oDere := WSTSSWSDERE():New()
+        ::oDere:_Url                              := cUrlDere
+        ::oDere:oWSDERECONSULTA:cAmbiente         := ::cAmbiente
+        ::oDere:oWSDERECONSULTA:cEntidade         := ::cEntidade
+        ::oDere:oWSDERECONSULTA:cUserToken        := ::cUserToken
+        ::oDere:oWSDERECONSULTA:oWSEVENTOS        := WsClassNew('TSSWSDERE_ARRAYOFDERECONSEVENTOS')
+        ::oDere:oWSDERECONSULTA:oWSEVENTOS:oWSDERECONSEVENTOS := {}
+
+        for nItem := 1 to Len(::aEventosConsulta)
+            oEvCons     := WsClassNew('TSSWSDERE_DERECONSEVENTOS')
+            oEvCons:cID := ::aEventosConsulta[nItem]
+            aAdd(::oDere:oWSDERECONSULTA:oWSEVENTOS:oWSDERECONSEVENTOS, oEvCons)
+        next
+
+        lRetWS := ::oDere:CONSULTAREVENTOSDERE()
+
+        aRetEvt := {}
+        if ValType(::oDere:oWSCONSULTAREVENTOSDERERESULT:oWSEVENTOS) == 'O'
+            aRetEvt := ::oDere:oWSCONSULTAREVENTOSDERERESULT:oWSEVENTOS:oWSDERECONSRETEVT
+        endif
+
+        ::formatarResposta(lRetWS, aRetEvt)
+    endif
+
+
+
+return ::lSucesso
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:validarSchema
+    Valida o schema XML de um evento DeRE via Web Service VALIDARSCHEMA no TSS.
+    O XML deve ser carregado previamente via setXmlSchema().
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  logical  .T. se o schema e valido segundo o TSS
+/*/
+method validarSchema() as logical class WsProcDere
+    Local cUrlDere    := '' as character
+    Local lRetWS      := .F. as logical
+    Local aRetSchema  := {} as array
+
+    //Limpa os atributos da classe
+    ::lSucesso   := .F.
+    ::aResultado := {}
+    
+    cUrlDere := ::montarUrlDere()
+    if ::validarUrl(cUrlDere)
+        ::oDere := WSTSSWSDERE():New()
+        ::oDere:_Url                     := cUrlDere
+        ::oDere:oWSDERESCHEMA             := WsClassNew('TSSWSDERE_DERESCHEMA')
+        ::oDere:oWSDERESCHEMA:cEntidade   := ::cEntidade
+        ::oDere:oWSDERESCHEMA:cUserToken  := ::cUserToken
+        ::oDere:oWSDERESCHEMA:cVersaoDere := ::cVersaoDere
+        ::oDere:oWSDERESCHEMA:cXml        := ::cXmlSchema
+
+        lRetWS := ::oDere:VALIDARSCHEMA()
+
+        aRetSchema := {}
+        if ValType(::oDere:oWSVALIDARSCHEMARESULT:oWSRETORNOS) == 'O'
+            aRetSchema := ::oDere:oWSVALIDARSCHEMARESULT:oWSRETORNOS:oWSDERERETSCHEMAEVT
+        endif
+
+        ::formatarResposta(lRetWS, aRetSchema)
+    endif
+
+
+
+return ::lSucesso
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:gravarTokenDere
+    Grava o token de acesso ao DeRE no TSS via Web Service GRAVARTOKENDERE.
+    O token deve ser carregado previamente via setTokenDere() e a entidade/
+    usertoken sao definidos no construtor ou pelos respectivos setters.
+
+    @author  silva.carlos
+    @since   31/08/2026
+    @version 2.0
+    @return  logical  .T. se o token foi gravado com sucesso no TSS
+/*/
+method gravarTokenDere() as logical class WsProcDere
+    Local cUrlDere := '' as character
+    Local lRetWS   := .F. as logical
+
+    //Limpa os atributos da classe
+    ::lSucesso   := .F.
+    ::aResultado := {}
+
+    cUrlDere := ::montarUrlDere()
+    if ::validarUrl(cUrlDere)
+        ::oDere := WSTSSWSDERE():New()
+        ::oDere:_Url                             := cUrlDere
+        ::oDere:oWSDERETOKENENTRADA              := WsClassNew('TSSWSDERE_DERETOKENENTRADA')
+        ::oDere:oWSDERETOKENENTRADA:cEntidade    := ::cEntidade
+        ::oDere:oWSDERETOKENENTRADA:cToken_Dere  := ::cTokenDere
+        ::oDere:oWSDERETOKENENTRADA:cUserToken   := ::cUserToken
+
+        lRetWS       := ::oDere:GRAVARTOKENDERE()
+        ::formatarResposta(lRetWS, {::oDere:oWSGravarTokenDereResult})
+    endif
+
+return ::lSucesso
+
+// ----------------------------------------------------------------------------
+
+/*/{Protheus.doc} WsProcDere:formatarResposta
+    Formata a resposta do Web Service TSS preenchendo o array de resultado.
+    Em caso de falha, captura a mensagem de erro via GetWscError().
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   lRetWS      variant   Retorno da chamada ao metodo do Web Service
+    @param   aRetMetodo  array     Array de objetos retornado pelo metodo do WS
+    @return  logical     .T. se a resposta foi processada com sucesso
+/*/
+method formatarResposta(lRetWS as variant, aRetMetodo as array) as logical class WsProcDere
+    Local cMsgErro := '' as character
+    Local nItem    := 0  as integer
+    Local lWsResp  := valtype(lRetWS) == 'L' .and. lRetWS
+
+    if lWsResp
+        for nItem := 1 to len(aRetMetodo)
+            aadd(::aResultado, aRetMetodo[nItem])
+        next
+        ::lSucesso := .T.
+    else
+        cMsgErro := STR0002 //"Retorno inesperado do Web Service: "
+        if Empty(GetWscError(3))
+            cMsgErro += GetWscError(1)
+        else
+            cMsgErro += GetWscError(3)
+        endif
+        ::cMsgErro := cMsgErro //Atributo da classe dedicado a receber a variável cMsgErro completa e o aResultado fica vazio {}
+    endif
+
+return ::lSucesso
+
+// ============================================================================
+//  Setters e Getters
+// ============================================================================
+
+/*/{Protheus.doc} WsProcDere:setAmbiente
+    Define o ambiente de operacao do DeRE (1=Producao, 2=Homologacao).
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   cAmbienteNovo  character  Codigo do ambiente
+    @return  object         Self
+/*/
+method setAmbiente(cAmbienteNovo as character) as object class WsProcDere
+    ::cAmbiente := cAmbienteNovo
+return self
+
+/*/{Protheus.doc} WsProcDere:setEntidade
+    Define a entidade (CNPJ/CPF raiz) para as operacoes DeRE.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   cEntidadeNova  character  Identificador da entidade
+    @return  object         Self
+/*/
+method setEntidade(cEntidadeNova as character) as object class WsProcDere
+    ::cEntidade := cEntidadeNova
+return self
+
+/*/{Protheus.doc} WsProcDere:setUserToken
+    Define o token de usuario para autenticacao no TSS.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   cToken  character  Token do usuario
+    @return  object  Self
+/*/
+method setUserToken(cToken as character) as object class WsProcDere
+    ::cUserToken := cToken
+return self
+
+/*/{Protheus.doc} WsProcDere:setNrInsc
+    Define o numero de inscricao (CNPJ/CPF) do contribuinte.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   cInscricao  character  Numero de inscricao do contribuinte
+    @return  object      Self
+/*/
+method setNrInsc(cInscricao as character) as object class WsProcDere
+    ::cNrInsc := cInscricao
+return self
+
+/*/{Protheus.doc} WsProcDere:setEventosEnvio
+    Define o array de eventos a serem enviados ao TSS.
+    Cada elemento deve ser um array com: [1]=ID, [2]=Codigo, [3]=XML em base64.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   aEventos  array  Array de eventos para envio
+    @return  object    Self
+/*/
+method setEventosEnvio(aEventos as array) as object class WsProcDere
+    ::aEventosEnvio := aEventos
+return self
+
+/*/{Protheus.doc} WsProcDere:setEventosConsulta
+    Define o array de IDs de eventos a serem consultados no TSS.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   aEventos  array  Array de IDs de eventos para consulta
+    @return  object    Self
+/*/
+method setEventosConsulta(aEventos as array) as object class WsProcDere
+    ::aEventosConsulta := aEventos
+return self
+
+/*/{Protheus.doc} WsProcDere:setXmlSchema
+    Define o XML (em base64) a ser validado pelo servico de schema do TSS.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @param   cXml  character  Conteudo XML codificado em base64
+    @return  object Self
+/*/
+method setXmlSchema(cXml as character) as object class WsProcDere
+    ::cXmlSchema := EncodeUTF8(cXml)
+return self
+
+/*/{Protheus.doc} WsProcDere:setTokenDere
+    Define o token de acesso ao DeRE a ser gravado no TSS.
+
+    @author  silva.carlos
+    @since   31/08/2026
+    @version 2.0
+    @param   cToken  character  Token de acesso ao DeRE
+    @return  object  Self
+/*/
+method setTokenDere(cToken as character) as object class WsProcDere
+    ::cTokenDere := cToken
+return self
+
+/*/{Protheus.doc} WsProcDere:setVersaoDere
+    Define a versao do leiaute DeRE aplicada no envio de eventos e na validacao
+    de schema. Por padrao a classe usa a versao vigente; use este setter para
+    forcar uma versao especifica, por exemplo ao retificar um evento gerado
+    sob uma versao anterior do leiaute.
+
+    @author  silva.carlos
+    @since   03/09/2026
+    @version 2.0
+    @param   cVersao  character  Versao do leiaute DeRE (ex.: '1.0.1')
+    @return  object   Self
+/*/
+method setVersaoDere(cVersao as character) as object class WsProcDere
+    ::cVersaoDere := cVersao
+return self
+
+/*/{Protheus.doc} WsProcDere:getResultado
+    Retorna o array de resultado da ultima operacao executada.
+    Em caso de sucesso, contem os objetos retornados pelo TSS.
+    Em caso de falha, retorna array vazio. 
+	Use getMsgErro() para obter a mensagem de erro da operação.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  array  Array com os resultados ou mensagem de erro
+/*/
+method getResultado() as array class WsProcDere
+return ::aResultado
+
+/*/{Protheus.doc} WsProcDere:getLSucesso
+    Retorna o indicador de sucesso da ultima operacao executada.
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  logical  .T. se a ultima operacao foi bem-sucedida
+/*/
+method getLSucesso() as logical class WsProcDere
+return ::lSucesso
+
+
+/*/{Protheus.doc} WsProcDere:destroy
+    Libera os recursos alocados pela instancia, eliminando explicitamente da
+    memoria o objeto do Web Service (componente nao-visual) e anulando as
+    referencias internas para evitar vazamento de memoria (RunTime Leak).
+
+    @author  silva.carlos
+    @since   29/08/2026
+    @version 2.0
+    @return  object  Self
+/*/
+method destroy() as object class WsProcDere
+
+    if ValType(::oDere) == 'O'
+        FreeObj(::oDere)
+    endif
+    ::oDere := nil
+
+    ::aEventosEnvio    := nil
+    ::aEventosConsulta := nil
+    ::aResultado       := nil
+
+return self
+
+/*/{Protheus.doc} WsProcDere:getDereMsgErro
+    Retorna a mensagem de erro da última operação executada.
+    Preenchida apenas quando getLSucesso() retorna .F.
+    Vazia quando a operação foi bem-sucedida.
+
+    @author  Denis Souza
+    @since   18/09/2026
+    @version 2.0
+    @return  character  Mensagem de erro do Web Service, ou "" em caso de sucesso
+/*/
+method getDereMsgErro() as character class WsProcDere
+return ::cMsgErro

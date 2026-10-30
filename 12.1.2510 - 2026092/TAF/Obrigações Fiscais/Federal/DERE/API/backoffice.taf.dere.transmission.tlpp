@@ -1,0 +1,597 @@
+#include "tlpp-core.th"
+#include "tlpp-object.th"
+#include "tlpp-rest.th"
+#include "totvs.ch"
+#include "backoffice.taf.dere.transmission.ch"
+
+namespace backoffice.taf.dere.transmission
+
+#DEFINE CONTENT_TYPE        "application/json"
+#DEFINE HEADER_CONTENT_TYPE "Content-Type"
+#DEFINE STATUS_CODE_SUCCESS 200
+#DEFINE STATUS_CODE_ERROR   400
+#DEFINE STATUS_CODE_FAIL    500
+
+#DEFINE DERE_RECORD_ACTIVE  "1"
+#DEFINE DERE_STATUS_WAITING "1"
+
+//Status gravado quando o schema do XML e reprovado na validacao do TSS
+#DEFINE DERE_STATUS_REJECTED_TSS "2"
+
+#DEFINE DERE_EVENT_CODE     1
+#DEFINE DERE_EVENT_ALIAS    4
+
+#DEFINE DERE_EVT_ID         1
+#DEFINE DERE_EVT_VERSION    2
+
+#DEFINE DERE_SEND_ID        1
+#DEFINE DERE_SEND_EVENT     2
+#DEFINE DERE_SEND_XML       3
+
+//Posicoes do array de schemas reprovados montado em TAFDereSendEvents
+#DEFINE DERE_ERR_EVENT      1
+#DEFINE DERE_ERR_ID         2
+#DEFINE DERE_ERR_MESSAGE    3
+
+//Posicoes do array devolvido por TafDereSplitEventKey
+#DEFINE DERE_KEY_ID         1
+#DEFINE DERE_KEY_VERSION    2
+
+//Posicao do tamanho do campo no array devolvido por TamSX3
+#DEFINE SX3_FIELD_SIZE      1
+
+#DEFINE DERE_ID_TYPE_INI    1
+#DEFINE DERE_ID_TYPE_LEN    1
+#DEFINE DERE_ID_CODE_INI    2
+#DEFINE DERE_ID_CODE_LEN    4
+
+#DEFINE SM0_DATA_VALUE      2
+#DEFINE SM0_CGC_INI         1
+#DEFINE SM0_CGC_LEN         8
+
+/*/{Protheus.doc} TAFDereGeTGovError
+Consulta a mensagem de erro retornado pelo governo.
+
+@endpoint  /api/taf/dere/transmission/getGovErrorMsg
+@method    GET
+@type      function
+@author    Rafael de Paula Leme
+@since     26/08/2026
+@version   1.0
+@return    Nil, a resposta é devolvida ao cliente pelo objeto oRest.
+           Sucesso (200): propriedade "message" com a mensagem devolvida pelo governo.
+           Requisição inválida (400): propriedade "message" com o motivo da recusa.
+           Falha de dicionário (500): propriedade "message" com o motivo.
+           Parâmetros de query string: "event" (código do evento, obrigatório),
+           "id" (identificador do registro, obrigatório) e "version" (versão do
+           registro, obrigatório).
+/*/
+@GET(endpoint="/api/taf/dere/transmission/getGovErrorMsg", description="Consulta a mensagem de erro retornado pelo governo")
+Function TAFDereGeTGovError()
+
+    Local jParam    := oRest:getQueryRequest() as json
+    Local jResponse := JsonObject():New()      as json
+    Local oErro     := Nil                     as object
+    Local lSuccess  := .T.                     as logical
+    Local nStatus   := STATUS_CODE_SUCCESS     as numeric
+    Local cEvento   := ""                      as character
+    Local cId       := ""                      as character
+    Local cVersao   := ""                      as character
+    Local cMessage  := ""                      as character
+
+    If !TAFAlsInDic("T7T") .or. !TAFAlsInDic("T7Z")
+        cMessage := STR0004 //"Dicionário de dados desatualizado. Verifique."
+        nStatus  := STATUS_CODE_FAIL
+        lSuccess := .F.
+    Else
+        If jParam:HasProperty("event")
+            cEvento := AllTrim(jParam:GetJsonText("event"))
+        EndIf
+        If jParam:HasProperty("id")
+            cId := AllTrim(jParam:GetJsonText("id"))
+        EndIf
+        If jParam:HasProperty("version")
+            cVersao := AllTrim(jParam:GetJsonText("version"))
+        EndIf
+
+        If Empty(cEvento) .or. Empty(cId) .or. Empty(cVersao)
+            cMessage := STR0002 //"Parâmetros não enviados na requisição."
+            nStatus  := STATUS_CODE_ERROR
+            lSuccess := .F.
+        Else
+            oErro    := backoffice.taf.dere.monitoring.TAFDereEventsMonitor():New()
+            cMessage := oErro:TafDereGetGovErrorMessage(cEvento, cId, cVersao)
+        EndIf
+    EndIf
+
+    jResponse['message'] := cMessage
+    jResponse['success'] := lSuccess
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetStatusCode(nStatus)
+    oRest:SetResponse(jResponse:ToJSON())
+
+    If oErro != Nil
+        FWFreeObj(oErro)
+        oErro := Nil
+    EndIf
+
+    FWFreeObj(jResponse)
+    jResponse := Nil
+
+Return Nil
+
+/*/{Protheus.doc} TAFDereSendEvents
+Função que gera os XMLs dos eventos recebidos como parâmetro e envia ao TSS.
+
+@endpoint  /api/taf/dere/transmission/sendEventXml
+@method    POST
+@type      function
+@author    Rafael de Paula Leme
+@since     23/03/2026
+@version   1.0
+@return    Nil, a resposta é devolvida ao cliente pelo objeto oRest.
+           Sucesso (200): propriedade "message" com o resultado do envio, ou com o
+           aviso de que não há registros pendentes para os eventos solicitados.
+           Requisição inválida (400): propriedade "message" com o motivo da recusa.
+           Falha de dicionário, de ambiente ou do TSS (500): propriedade "message"
+           com o motivo.
+           Corpo da requisição: propriedade "events", array de objetos com a
+           propriedade "event" (código do evento, ex.: "D-1001").
+/*/
+@POST(endpoint="/api/taf/dere/transmission/sendEventXml", description="Envia ao TSS os xmls dos eventos da DeRE")
+Function TAFDereSendEvents()
+
+    Local jResponse   := JsonObject():New()                   as json
+    Local jBody       := JsonObject():New()                   as json
+    Local oSchedule   := Nil                                  as object
+    Local oXml        := Nil                                  as object
+    Local oTssDere    := Nil                                  as object
+    Local aEnvEvt     := {}                                   as array
+    Local aRetTss     := {}                                   as array
+    Local aResultEvt  := {}                                   as array
+    Local aCGC        := {}                                   as array
+    Local aSchemaErr  := {}                                   as array
+    Local aInfoTSS    := GetInfoTSS()                         as array
+    Local lSchema     := .T.                                  as logical
+    Local lSuccess    := .F.                                  as logical
+    Local nStatus     := STATUS_CODE_SUCCESS                  as numeric
+    Local nX          := 0                                    as numeric
+    Local cMessage    := ""                                   as character
+    Local cXmlSchema  := ""                                   as character
+    Local cEntTSS     := SuperGetMV("MV_TAFVLRE",.F.,"")      as character
+    Local cVersaoDere := SuperGetMV("MV_TAFVLDE",.F.,"1_0_1") as character
+
+    If !TAFAlsInDic("T7T") .or. !TAFAlsInDic("T7Z")
+        cMessage := STR0004 //"Dicionário de dados desatualizado. Verifique."
+        nStatus  := STATUS_CODE_FAIL
+    Else
+        //Verifico se existe um TSS pronto para transmitir
+        If Len(aInfoTSS) > 0 .and. !Empty(aInfoTSS[1])
+            //Recupera o body
+            jBody:FromJson(oRest:GetBodyRequest())
+
+            If !jBody:HasProperty('events') .or. ValType(jBody['events']) != 'A'
+                cMessage := STR0006 //"Evento(s) não enviado(s) no body."
+                nStatus  := STATUS_CODE_ERROR
+            Else
+                oXml    := backoffice.taf.dere.xml.TAFDereXmlEvents():New()
+                aEnvEvt := MontaLote(jBody['events'], oXml)
+
+                If Len(aEnvEvt) == 0
+                    cMessage := STR0011 //"Não foram encontrados registros pendentes de envio para o(s) evento(s) selecionado(s)."
+                Else
+                    aCGC := FWSM0Util():GetSM0Data(cEmpAnt, cFilAnt, {"M0_CGC"})
+                
+                    oTssDere  := WsProcDere():New()
+                    
+                    //Faço a validação do schema antes de enviar
+                    lSchema := .T.
+                    If AllTrim(cEntTSS) == '9_99_99'
+                        oTssDere:setEntidade('000001')
+                    EndIf
+                    For nX := 1 to Len(aEnvEvt)
+                        cXmlSchema := aEnvEvt[nX][DERE_SEND_XML]
+                        If aEnvEvt[nX][DERE_SEND_EVENT] == 'D-1011'
+                            oTssDere:setVersaoDere('1_0_2')
+                        Else
+                            oTssDere:setVersaoDere(cVersaoDere)
+                        EndIf
+                        oTssDere:setXmlSchema(cXmlSchema)
+                        oTssDere:validarSchema()
+                        aRetTss := oTssDere:getResultado()
+                        If Len(aRetTss) == 0
+                            cMessage += STR0014 + aEnvEvt[nX][DERE_SEND_EVENT] + STR0015 + CHR(13) + CHR(10) //"Erro ao validar schema do evento "##": TSS não retornou resultado."
+                            lSchema := .F.
+                            Aadd(aSchemaErr, {aEnvEvt[nX][DERE_SEND_EVENT], aEnvEvt[nX][DERE_SEND_ID], STR0016}) //"TSS não retornou resultado para validação de schema."
+                        elseIf aRetTss[1]['LSUCESSO'] == .F.
+                            cMessage += aRetTss[1]['CCODIGO'] + ' - ' + aRetTss[1]['CMENSAGEM'] + CHR(13) + CHR(10)
+                            lSchema := .F.
+
+                            Aadd(aSchemaErr, {aEnvEvt[nX][DERE_SEND_EVENT], ;
+                                            aEnvEvt[nX][DERE_SEND_ID]   , ;
+                                            aRetTss[1]['CMENSAGEM']})
+                        EndIf
+                    Next nX
+
+                    If lSchema
+                        //Faço o envio dos eventos.
+                        //Devido a validação feita de schema, seto a versão contida no parâmetro pois
+                        //não sei qual a ultima setada.
+                        aRetTss := {}
+                        oTssDere:setVersaoDere(cVersaoDere)
+                        oTssDere:setEventosEnvio(aEnvEvt)
+                        oTssDere:setNrInsc(SubStr(aCGC[1][SM0_DATA_VALUE], SM0_CGC_INI, SM0_CGC_LEN))
+                        oTssDere:enviarEventos()
+
+                        aRetTss := oTssDere:getResultado()
+
+                        If Len(aRetTss) > 0
+                            //Faço a junção das informações enviadas x recebidas em um array para
+                            //atualização das tabelas espelhos
+                            aResultEvt := AgrupaInfoEvt(aEnvEvt, aRetTss)
+
+                            //Atualiza o status do evento na tabela espelho
+                            oSchedule := backoffice.taf.dere.monitoring.TAFDereEventsMonitor():New()
+                            oSchedule:TafDereUpdateShipment(aResultEvt)
+
+                            cMessage := STR0008 //"Evento(s) enviado(s) à fila de processamento."
+
+                            If !Empty(TafSchdRun())
+                                //Cria agendamento do smartschedule para monitoramento do TSS
+                                If oSchedule:TafDereSchdEventsMonitor()
+                                    cMessage += STR0009 //" Agendamento criado com sucesso. Monitoramento automático habilitado."
+                                Else
+                                    cMessage += STR0010 //" Falha ao criar agendamento. Monitoramento automático desabilitado."
+                                EndIf
+                            Else
+                                cMessage += STR0007 //" SmartSchedule não encontrado. Monitoramento automático desabilitado."
+                            EndIf
+                            nStatus  := STATUS_CODE_SUCCESS
+                            lSuccess := .T.
+                        EndIf
+                    Else
+                        //Schema reprovado: grava nos registros das tabelas espelho o status
+                        //e a mensagem devolvida pela validacao, sem transmitir o lote
+                        GravaErroSchema(aSchemaErr)
+                    EndIf
+                EndIf
+            EndIf
+        Else
+            cMessage := STR0001 //"TSS não encontrado para transmissão do(s) evento(s). Transmissão cancelada."
+            nStatus  := STATUS_CODE_FAIL
+        EndIf
+    EndIf
+
+    If oTssDere != Nil .And. !oTssDere:getLSucesso() .And. Empty(cMessage)
+        cMessage := oTssDere:getDereMsgErro()
+        nStatus  := STATUS_CODE_FAIL
+    EndIf
+
+    jResponse['message'] := cMessage
+    jResponse['success'] := lSuccess
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetStatusCode(nStatus)
+    oRest:SetResponse(jResponse:ToJSON())
+
+    If oTssDere != Nil
+        oTssDere:destroy()
+        oTssDere := Nil
+    EndIf
+
+    If oSchedule != Nil
+        FWFreeObj(oSchedule)
+        oSchedule := Nil
+    EndIf
+
+    If oXml != Nil
+        FWFreeObj(oXml)
+        oXml := Nil
+    EndIf
+
+    FWFreeObj(jBody)
+    FWFreeObj(jResponse)
+
+    jBody     := Nil
+    jResponse := Nil
+
+Return Nil
+
+/*/{Protheus.doc} TAFDereCheckTransmission
+Função que executa a consulta ao governo manual.
+
+@endpoint  /api/taf/dere/transmission/checkTransmission
+@method    POST
+@type      function
+@author    Rafael de Paula Leme / Wesley Matos
+@since     09/09/2026
+@version   1.0
+@return    Nil
+/*/
+@POST(endpoint="/api/taf/dere/transmission/checkTransmission", description="Consulta manual da transmissão dos eventos")
+Function TAFDereCheckTransmission()
+
+    Local jResponse := JsonObject():New()  as json
+    Local oCheckTransmite := Nil as object
+    Local cMessage := ""  as Character
+    Local lSuccess := .F. as Logical
+    Local nStatus  := STATUS_CODE_SUCCESS as numeric
+
+    If !TAFAlsInDic("T7T")
+        cMessage := STR0004 //"Dicionário de dados desatualizado. Verifique."
+        nStatus  := STATUS_CODE_FAIL
+    Else
+        oCheckTransmite := backoffice.taf.dere.monitoring.TAFDereEventsMonitor():New()
+        oCheckTransmite:TafDereMonitorsSentEvents()
+
+        lSuccess  := .T.
+        cMessage := STR0013 // "Consulta concluída com sucesso."
+    EndIf
+
+    jResponse['success'] := lSuccess
+    jResponse['message'] := cMessage
+
+    oRest:SetKeyHeaderResponse(HEADER_CONTENT_TYPE, CONTENT_TYPE)
+    oRest:SetStatusCode(nStatus)
+    oRest:SetResponse(jResponse:ToJSON())
+        
+    FWFreeObj(jResponse)
+    
+    If oCheckTransmite != Nil
+        FWFreeObj(oCheckTransmite)
+        oCheckTransmite := Nil
+    EndIf
+
+    jResponse := Nil
+
+Return Nil
+
+/*/{Protheus.doc} MontaLote
+Monta o lote de XMLs a ser transmitido ao TSS.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     03/09/2026
+@version   1.0
+@param     aEvents, array , eventos recebidos na propriedade "events" do body
+@param     oXml   , object, instância de TAFDereXmlEvents usada na geração dos XMLs
+@return    array, matriz com uma linha por registro a transmitir e três colunas:
+           [n][1] character - chave de identificação do registro no TSS
+           [n][2] character - código do evento (ex.: "D-1001")
+           [n][3] character - XML gerado para o registro
+/*/
+Static Function MontaLote(aEvents as array, oXml as object) as array
+
+    Local aEnvEvt   := {} as array
+    Local aDadosEvt := {} as array
+    Local nX        := 0  as numeric
+    Local nY        := 0  as numeric
+    Local cEvento   := "" as character
+    Local cId       := "" as character
+    Local cXml      := "" as character
+
+    Default aEvents := {}
+
+    For nX := 1 to Len(aEvents)
+
+        cEvento := AllTrim(aEvents[nX]['event'])
+
+        aDadosEvt := {}
+        BuscaEvt(cEvento, @aDadosEvt)
+
+        For nY := 1 to Len(aDadosEvt)
+            cId  := AllTrim(StrTran(cEvento, "-", "")) + ;
+                    AllTrim(aDadosEvt[nY][DERE_EVT_ID]) + ;
+                    AllTrim(aDadosEvt[nY][DERE_EVT_VERSION])
+
+            cXml := oXml:TafDereGetXmlEvent(cEvento, aDadosEvt[nY][DERE_EVT_ID], ;
+                                            aDadosEvt[nY][DERE_EVT_VERSION])
+
+            If !Empty(cXml)
+                Aadd(aEnvEvt, {cId, cEvento, cXml})
+            EndIf
+        Next nY
+
+    Next nX
+
+Return aEnvEvt
+
+/*/{Protheus.doc} BuscaEvt
+Função que retorna os registros pendentes de transmissão.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     27/08/2026
+@version   1.0
+@param     cEvento  , character, código do evento solicitado (ex.: "D-1001")
+@param     aDadosEvt, array    , recebido por referência, recebe uma linha por registro
+                                 pendente com o ID na coluna 1 e a versão na coluna 2
+@return    logical, .T. quando o evento foi consultado, .F. quando o evento não é
+           suportado ou a sua tabela não existe no dicionário
+/*/
+Static Function BuscaEvt(cEvento as character, aDadosEvt as array) as logical
+
+    Local oPrepare  := Nil as object
+    Local aBind     := {}  as array
+    Local aEventos  := {}  as array
+    Local nX        := 0   as numeric
+    Local nPos      := 0   as numeric
+    Local cQuery    := ""  as character
+    Local cAliasEvt := ""  as character
+    Local cAliasQry := ""  as character
+
+    Default cEvento   := ""
+    Default aDadosEvt := {}
+
+    aEventos := backoffice.taf.dere.events.TAFDereEvents()
+    nPos     := aScan(aEventos, {|aEvent| AllTrim(Upper(aEvent[DERE_EVENT_CODE])) == AllTrim(Upper(cEvento))})
+
+    If nPos > 0
+        cAliasEvt := aEventos[nPos][DERE_EVENT_ALIAS]
+
+        cQuery := "SELECT " + cAliasEvt + "." + cAliasEvt + "_ID ID, "
+        cQuery += cAliasEvt + "." + cAliasEvt + "_VERSAO VERSAO "
+        cQuery += "FROM " + RetSqlName(cAliasEvt) + " " + cAliasEvt + " "
+        cQuery += "WHERE "
+        cQuery += cAliasEvt + "." + cAliasEvt + "_FILIAL = ? AND "
+        cQuery += cAliasEvt + "." + cAliasEvt + "_STATUS IN (?, ?) AND "
+        cQuery += cAliasEvt + "." + cAliasEvt + "_ATIVO = ? AND "
+        cQuery += cAliasEvt + "." + "D_E_L_E_T_ = ? "
+
+        Aadd(aBind, xFilial(cAliasEvt))
+        Aadd(aBind, Space(1))
+        Aadd(aBind, DERE_STATUS_REJECTED_TSS)
+        Aadd(aBind, DERE_RECORD_ACTIVE)
+        Aadd(aBind, Space(1))
+
+        cQuery   := ChangeQuery(cQuery)
+        oPrepare := FwExecStatement():New(cQuery)
+
+        For nX := 1 to Len(aBind)
+            oPrepare:SetString(nX, aBind[nX])
+        Next nX
+
+        cAliasQry := GetNextAlias()
+        oPrepare:OpenAlias(cAliasQry)
+
+        While !(cAliasQry)->(EoF())
+            Aadd(aDadosEvt, {(cAliasQry)->ID, (cAliasQry)->VERSAO})
+            (cAliasQry)->(DbSkip())
+        EndDo
+
+        (cAliasQry)->(DBCloseArea())
+
+    EndIf
+
+    If oPrepare != Nil
+        oPrepare:Destroy()
+        oPrepare := Nil
+    EndIf
+
+Return .T.
+
+/*/{Protheus.doc} AgrupaInfoEvt
+Agrupa as informações enviadas ao TSS com as recebidas no retorno.
+
+Correlaciona cada item do retorno do TSS com o item enviado de mesma chave, montando
+o array consumido por TafDereUpdateShipment para atualizar as tabelas espelho.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     27/08/2026
+@version   1.0
+@param     aEnvEvt, array, lote enviado ao TSS, conforme montado por MontaLote
+@param     aRetTss, array, retorno do TSS obtido por WsProcDere:getResultado
+@return    array, matriz com uma linha por evento correlacionado e quatro colunas:
+           [n][1] character - código do evento (ex.: "D-1001")
+           [n][2] character - chave de identificação do registro no TSS
+           [n][3] character - ID do XML transmitido
+           [n][4] character - status a ser gravado (aguardando retorno)
+/*/
+Static Function AgrupaInfoEvt(aEnvEvt as array, aRetTss as array) as array
+
+    Local aResultEvt := {}  as array
+    Local lAchou     := .F. as logical
+    Local nX         := 0   as numeric
+    Local nY         := 0   as numeric
+    Local cId        := ""  as character
+    Local cEvento    := ""  as character
+
+    Default aEnvEvt := {}
+    Default aRetTss := {}
+
+    For nX := 1 to Len(aRetTss)
+
+        cId     := AllTrim(cValToChar(aRetTss[nX]['CID']))
+        cEvento := Upper(SubStr(cId, DERE_ID_TYPE_INI, DERE_ID_TYPE_LEN)) + '-' + ;
+                   SubStr(cId, DERE_ID_CODE_INI, DERE_ID_CODE_LEN)
+        lAchou  := .F.
+        nY      := 1
+
+        While nY <= Len(aEnvEvt) .And. !lAchou
+
+            If aEnvEvt[nY][DERE_SEND_ID] == cId .And. aEnvEvt[nY][DERE_SEND_EVENT] == cEvento
+                Aadd(aResultEvt, {cEvento, cId, backoffice.taf.dere.xml.TAFXmlIdDe(aEnvEvt[nY][DERE_SEND_XML]), ;
+                                  DERE_STATUS_WAITING})
+                lAchou := .T.
+            EndIf
+
+            nY++
+        EndDo
+
+    Next nX
+
+Return aResultEvt
+
+/*/{Protheus.doc} GravaErroSchema
+Grava nas tabelas espelho o resultado da reprovacao de schema.
+
+Atualiza o campo de status com DERE_STATUS_REJECTED_TSS e o campo de mensagem de retorno
+com o texto devolvido pela validacao, mantendo o registro pendente de transmissao. Como
+esse status tambem compoe o grupo "pending" do totalizador, o registro segue visivel
+para correcao e reenvio.
+
+O alias da tabela e a decomposicao da chave sao resolvidos por TAFDereEventsMonitor, a
+mesma classe que grava o retorno do TSS, para que a chave de indice seja montada em um
+unico lugar.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     09/09/2026
+@version   1.0
+@param     aSchemaErr, array, matriz com uma linha por XML reprovado e tres colunas:
+           [n][1] character - codigo do evento (ex.: "D-1001")
+           [n][2] character - chave de identificacao do registro no TSS
+           [n][3] character - mensagem devolvida pela validacao do schema
+@return    Nil
+/*/
+Static Function GravaErroSchema(aSchemaErr as array)
+
+    Local oMonitor   := Nil as object
+    Local aChave     := {}  as array
+    Local nX         := 0   as numeric
+    Local nTamId     := 0   as numeric
+    Local nTamVersao := 0   as numeric
+    Local cAlias     := ""  as character
+    Local cAliasAnt  := ""  as character
+    Local cChave     := ""  as character
+
+    Default aSchemaErr := {}
+
+    oMonitor := backoffice.taf.dere.monitoring.TAFDereEventsMonitor():New()
+
+    For nX := 1 to Len(aSchemaErr)
+
+        cAlias := oMonitor:TafDereGetEventAlias(aSchemaErr[nX][DERE_ERR_EVENT])
+
+        //O dicionario e a ordem sao resolvidos apenas na troca de tabela, ja que o lote
+        //pode conter varios registros do mesmo evento
+        If cAliasAnt != cAlias
+            nTamId     := TamSX3(cAlias + "_ID")[SX3_FIELD_SIZE]
+            nTamVersao := TamSX3(cAlias + "_VERSAO")[SX3_FIELD_SIZE]
+
+            DbSelectArea(cAlias)
+            (cAlias)->(DbSetOrder(1)) //T7T_FILIAL+T7T_ID+T7T_VERSAO
+            cAliasAnt := cAlias
+        EndIf
+
+        aChave := oMonitor:TafDereSplitEventKey(aSchemaErr[nX][DERE_ERR_ID])
+
+        cChave := xFilial(cAlias) + ;
+                  PadR(aChave[DERE_KEY_ID], nTamId) + ;
+                  PadR(aChave[DERE_KEY_VERSION], nTamVersao)
+
+        If (cAlias)->(DbSeek(cChave))
+            If RecLock(cAlias, .F.)
+                (cAlias)->(FieldPut(FieldPos(cAlias + "_STATUS"), DERE_STATUS_REJECTED_TSS))
+                (cAlias)->(FieldPut(FieldPos(cAlias + "_MSGRET"), aSchemaErr[nX][DERE_ERR_MESSAGE]))
+                (cAlias)->(MsUnlock())
+            EndIf
+        EndIf
+    Next nX
+
+    FWFreeObj(oMonitor)
+    oMonitor := Nil
+
+Return Nil

@@ -1,0 +1,270 @@
+#include 'tlpp-core.th'
+#include 'totvs.ch'
+#include 'fwmvcdef.ch'
+#include 'agrobusiness.agd.accounts.receivable.service.ch'
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} AccountsReceivableService
+Classe de serviço de contas a receber
+@type class
+@version 12
+@author beatriz.dantas
+@since 02/07/2026
+/*/
+class AccountsReceivableService from UtilsService
+    public method New()
+    public method gerarTituloReceber()
+    public method realizarBaixaTitulos()
+
+    private method getListCondicaoTitulo() as Array
+    private method getPayloadFina040() as Array
+endclass
+
+/*/{Protheus.doc} new
+Construtor
+@type method
+@version p12
+@author beatriz.dantas
+@since 02/07/2026
+/*/
+method New() class AccountsReceivableService
+    _Super:New()
+return Self
+
+/*/{Protheus.doc} gerarTituloReceber
+Gera o título a receber no FINA040 com base nos dados do movimento de cotas.
+@type method
+@author beatriz.dantas
+@since 02/07/2026
+@version p12
+@param jDadosMovimento, object/json, dados da movimentação
+@return lRet, boolean, .T. se a geração do título foi bem-sucedida
+/*/
+method gerarTituloReceber(jDadosMovimento as json) class AccountsReceivableService
+    Local aArea        := FWGetArea()
+    Local aTitulos     := {}
+    Local aTitulosRec  := {}
+    Local nX           := 0
+    Local lRet         := .T.
+
+    Private lMsErroAuto    := .F.
+    Private lAutoErrNoFile := .T.
+    Private lMsHelpAuto    := .T.
+
+    aTitulos := Self:getListCondicaoTitulo(jDadosMovimento)
+
+    If Empty(aTitulos)
+        FWRestArea(aArea)
+        Return .F.
+    EndIf
+
+    SaveInter() // Salva variaveis publicas
+
+    Begin Transaction
+        For nX := 1 To Len(aTitulos)
+            aTitulosRec := Self:getPayloadFina040(aTitulos[nX])
+
+            If !IsBlind()
+                MsAguarde({|| MSExecAuto({|x,y| Fina040(x,y)}, aTitulosRec, 3)}, STR0001, STR0002) //"Aguarde..."/"Gerando título financeiro"
+            /*Else
+                MSExecAuto({|x,y| Fina040(x,y)}, Self:getPayloadFina040(aTitulos[nX]),3)*/
+            EndIf
+
+            If lMsErroAuto
+                Self:setError(ArrTokStr(GetAutoGRLog()))
+                FWFreeArray(aTitulos)    
+                lRet := .F.
+                DisarmTransaction()
+                Break
+            Else
+                If __lSX8
+				    ConfirmSX8()
+			    Endif
+                if aTitulos[nX]['baixaAutomatica'] == "1" 
+                    if !Self:realizarBaixaTitulos(SE1->(E1_FILIAL+E1_PREFIXO+E1_NUM+E1_PARCELA+E1_TIPO+E1_CLIENTE+E1_LOJA), aTitulos[nX]['motivoBaixa'])
+                        lRet := .F.
+                        FWFreeArray(aTitulosRec)
+                        FWRestArea(aArea)
+                        DisarmTransaction()
+                        Break
+                    endIf
+                endIf
+            EndIf
+        Next
+    End Transaction
+
+    RestInter()//Recupera as variaveis pulicas
+    
+    if lRet
+		Self:setSuccess(aTitulos) 
+	endif
+    
+    FWRestArea(aArea)
+
+Return lRet
+
+
+/*/{Protheus.doc} getListCondicaoTitulo
+busca listagem financeira a receber de acordo com condição de pagamento
+@type method
+@version 12
+@author beatriz.dantas
+@since 7/13/2026
+@param jPayable, json, Informacoes para criação do(s) titulo(s) a pagar
+@return array, Lista de titulos a pagar gerados
+/*/
+method getListCondicaoTitulo(jDadosMovimento as json) as Array class AccountsReceivableService
+    Local aTitulos         := {}
+    Local aParcelas        := {}
+    Local cNumero          := ""
+    Local dDtMovimento     :=jDadosMovimento["dataMovimento"]
+    Local nX               := 0
+
+    aParcelas := Condicao(jDadosMovimento['valorTotal'], jDadosMovimento['condicaoPagamento'], jDadosMovimento['emissao'])
+    
+    If Empty(aParcelas)
+        Self:setError(STR0003) //"Não foi possível calcular a condição de pagamento."
+        Return aTitulos
+    EndIf
+
+    cNumero := GetSxeNum("SE1","E1_NUM")
+
+    For nX := 1 To Len(aParcelas)
+        AAdd(aTitulos,JsonObject():New())
+        aTitulos[nX]:FromJson(jDadosMovimento:ToJson())
+        aTitulos[nX]["filial"]          := xFilial("SE1")
+        aTitulos[nX]["numeroTitulo"]    := cNumero
+        aTitulos[nX]["parcela"]         := StrZero(nX,Len(SE1->E1_PARCELA))
+        aTitulos[nX]["dataMovimento"]   := dDtMovimento
+        aTitulos[nX]["vencimento"]      := aParcelas[nX][1]
+        aTitulos[nX]["valor"]           := aParcelas[nX][2]
+        aTitulos[nX]["historico"]       := "Movimento inicial Cooperado"
+    Next nX
+
+Return aTitulos
+
+/*/{Protheus.doc} getPayloadFina040
+Retorna o payload (array de campos/valores) do Título Financeiro (SE1/FINA040) com base
+nos dados da movimentação de cota e no parâmetro de valor da cota (MV_AGD0011).
+@type method
+@version 12
+@author beatriz.dantas
+@since 02/07/2026
+@param oDadosMovimento, object/json, dados da movimentação
+@param cNumero, character, número do título
+@param cParcela, character, parcela do título
+@param dVencimento, date, data de vencimento
+@param nValor, numeric, valor do título
+@return aTitulo, array, estrutura no formato aceito pelo MSExecAuto/FINA040
+/*/
+method getPayloadFina040(jTitulo as json) as Array class AccountsReceivableService
+
+    Local aFieldValue := {}
+
+    aAdd(aFieldValue,{"E1_FILIAL"  , jTitulo["filial"]        ,Nil})
+    aAdd(aFieldValue,{"E1_PREFIXO" , jTitulo["prefixo"]       ,Nil})
+    aAdd(aFieldValue,{"E1_NUM"     , jTitulo["numeroTitulo"]  ,Nil})
+    aAdd(aFieldValue,{"E1_PARCELA" , jTitulo["parcela"]       ,Nil})
+    aAdd(aFieldValue,{"E1_TIPO"    , jTitulo["tipoTitulo"]    ,Nil})
+    aAdd(aFieldValue,{"E1_CLIENTE" , jTitulo["cooperado"]     ,Nil})
+    aAdd(aFieldValue,{"E1_LOJA"    , jTitulo["loja"]          ,Nil})
+    aAdd(aFieldValue,{"E1_EMISSAO" , jTitulo["dataMovimento"] ,Nil})
+    aAdd(aFieldValue,{"E1_VENCTO"  , jTitulo["vencimento"]    ,Nil})
+    aAdd(aFieldValue,{"E1_VENCREA" , jTitulo["vencimento"]    ,Nil})
+    aAdd(aFieldValue,{"E1_VALOR"   , jTitulo["valor"]         ,Nil})
+    aAdd(aFieldValue,{"E1_NATUREZ" , jTitulo["natureza"]      ,Nil})
+    aAdd(aFieldValue,{"E1_HIST"    , jTitulo["historico"]     ,Nil})
+
+    aFieldValue := FWVetByDic(aFieldValue,"SE1")
+
+Return aFieldValue
+
+
+
+/*/{Protheus.doc} realizarBaixaTitulos
+Realiza a baixa total do titulo financeiro a receber.
+@type method
+@version 12
+@author jc.maldonado/carlos.augusto
+@since 22/07/2026
+@param cCompositeKey, character, Chave composta para o titulo
+@param cPostingPurposes, character, Código do motivo da baixa (F7G_SIGLA)
+@param cPaymentNotes, character, (Opcional) Historico de pagamento
+@return logical, Dados do titulo baixado
+/*/
+method realizarBaixaTitulos(cCompositeKey as character, cPostingPurposes as character, cPaymentNotes as character) class AccountsReceivableService
+	local aArea    		:= FWGetArea()        
+	local aAreaSE1 		:= SE1->(FWGetArea()) 
+	local aAreaF7G      := F7G->(FWGetArea())
+	local aFieldValue   as array
+	local cMsErroLog    as character
+    local cMV_CXFIN     as character
+    local aBcoAgCtt     as array
+
+	private lMsErroAuto    := .f. as logical
+	private lMsHelpAuto    := .t. as logical
+	private lAutoErrNoFile := .t. as logical
+
+	default cPaymentNotes := ""
+
+	DbSelectArea("SE1")
+	SE1->(dbSetOrder(1))
+	if !SE1->(dbSeek(cCompositeKey))
+		Self:setError(i18N(STR0004, {cCompositeKey})) //"Título a receber não encontrado. chave: #1[CHAVE_TITULO]#"
+		FWRestArea(aAreaSE1); FWRestArea(aArea)
+		return .f.
+	endIf
+
+	if SE1->E1_SALDO <= 0
+		Self:setError(i18N(STR0005, {cCompositeKey})) //"O título não possui saldo a receber em aberto. chave: #1[CHAVE_TITULO]#"
+		FWRestArea(aAreaSE1); FWRestArea(aArea)
+		return .f.
+	endIf
+
+	aFieldValue := {}
+	aAdd(aFieldValue, {"E1_FILIAL" , SE1->E1_FILIAL , nil})
+	aAdd(aFieldValue, {"E1_PREFIXO", SE1->E1_PREFIXO, nil})
+	aAdd(aFieldValue, {"E1_NUM"    , SE1->E1_NUM    , nil})
+	aAdd(aFieldValue, {"E1_PARCELA", SE1->E1_PARCELA, nil})
+	aAdd(aFieldValue, {"E1_TIPO"   , SE1->E1_TIPO   , nil})
+	aAdd(aFieldValue, {"E1_CLIENTE", SE1->E1_CLIENTE, nil})
+	aAdd(aFieldValue, {"E1_LOJA"   , SE1->E1_LOJA   , nil})
+	aAdd(aFieldValue, {"AUTMOTBX"  , cPostingPurposes, nil})
+
+    F7G->(DbSetOrder(1))
+    If F7G->(DbSeek(FWXFilial("F7G") + cPostingPurposes))
+        If F7G->F7G_CART $ "AR" .And. F7G->F7G_MOVBCO == "S"  //P=Pagar;R=Receber;A=Ambos
+            cMV_CXFIN := SuperGetMv("MV_CXFIN",,"")
+            aBcoAgCtt := StrTokArr2(cMV_CXFIN, "/")
+            If !Empty(aBcoAgCtt) .And. Len(aBcoAgCtt) = 3
+                aAdd(aFieldValue, {"AUTBANCO"  , aBcoAgCtt[1], nil})
+                aAdd(aFieldValue, {"AUTAGENCIA", aBcoAgCtt[2], nil})
+                aAdd(aFieldValue, {"AUTCONTA"  , RTrim(aBcoAgCtt[3]), nil})
+            EndIf
+        EndIf
+    EndIf
+
+	aAdd(aFieldValue, {"AUTDTBAIXA",   dDataBase    , nil})
+	aAdd(aFieldValue, {"AUTDTCREDITO", dDataBase    , nil})
+	aAdd(aFieldValue, {"AUTHIST"   ,   cPaymentNotes, nil})
+
+    SaveInter() // Salva variaveis publicas
+
+	AcessaPerg("FIN070", .F.)
+
+    MSExecAuto({|x,y| Fina070(x,y)},aFieldValue,3)
+
+	FWFreeArray(aFieldValue)
+
+	if lMsErroAuto
+		aEval(GetAutoGRLog(), {|xIt| cMsErroLog += xIt + CRLF })
+		Self:setError(pcErrorMessage=STR0006, pcDetailedMessage=cMsErroLog) //"Falha ao baixar título financeiro a receber."
+		return .f.
+	endIf
+
+    RestInter()//Recupera as variaveis pulicas
+	FWRestArea(aAreaSE1)
+    FWRestArea(aArea)
+    FWRestArea(aAreaF7G)
+return .t.

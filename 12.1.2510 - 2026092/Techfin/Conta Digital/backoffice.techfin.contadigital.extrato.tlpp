@@ -1,0 +1,314 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+
+NAMESPACE totvs.protheus.backoffice.techfin.contadigital.extrato
+
+/*/{Protheus.doc} ContaDigitalExtrato
+
+    Classe responsável pelos processos de extrato e conciliação do conta digital
+    
+    @type class
+    @author josue.matheus
+    @since 24/04/2026
+/*/
+class ContaDigitalExtrato
+
+    data cBankAccountId as character
+    data nAmount as numeric
+	data cFileConfig as character
+	data dDateProcess as date
+
+    public method new() constructor
+    public method processBill(cIdBankAccount as character, nAmount as numeric, dDateProcess as date, cFileConfig as character) as logical
+    public method destroy()
+    
+    private method setData(cIdBankAccount as character, nAmount as numeric, dDateProcess as date, cFileConfig as character)
+    private method getCodSIF(cBankCode as character, cBankBranch as character, cBankAccount  as character, dData as date) as character
+    private method getItmSIF(cFilSIG as character, cCodSIF as character) as character
+    private method findExistingCode(cBankCode as character, cBankBranch as character, cBankAccount as character, dData as date) as character
+    private method generateNewCode() as character
+    private method queryMaxItemSIG(cFilSIG as character, cCodSIF as character) as character
+    private method loadBankAccount() as logical
+    private method recordBillData()
+    private method reconcileBill()
+
+end class
+
+/*/{Protheus.doc} ContaDigitalExtrato::new
+
+    Construtor
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+/*/
+method new() class ContaDigitalExtrato
+    ::cBankAccountId    := ""
+    ::cFileConfig       := ""
+    ::nAmount           := 0
+
+return Self
+
+/*/{Protheus.doc} ContaDigitalExtrato::processBill
+
+    Processa fatura completa (busca conta, grava SIF/SIG, concilia)
+    Orquestra todo o fluxo de processamento
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @param cIdBankAccount, character, ID da conta bancária
+    @param nAmount, numeric, valor da fatura
+    @param dDateProcess, date, data de processamento
+    @param cFileConfig, character, configuração do arquivo
+    @return logical, sucesso ou falha
+/*/
+method processBill(cIdBankAccount as character, nAmount as numeric, dDateProcess as date, cFileConfig as character) as logical class ContaDigitalExtrato
+    local lSuccess := .F. as logical
+
+    ::setData(cIdBankAccount, nAmount, dDateProcess, cFileConfig)
+
+    if ::loadBankAccount()
+        ::recordBillData()
+        ::reconcileBill()
+        lSuccess := .T.
+    endif
+
+return lSuccess
+
+/*/{Protheus.doc} ContaDigitalExtrato::setData
+
+    Extrai dados do JSON para atributos da classe
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @param cIdBankAccount, character, ID da conta bancária
+    @param nAmount, numeric, valor da fatura
+    @param dDateProcess, date, data de processamento
+    @param cFileConfig, character, configuração do arquivo
+/*/
+method setData(cIdBankAccount as character, nAmount as numeric, dDateProcess as date, cFileConfig as character) class ContaDigitalExtrato
+    ::cBankAccountId	:= cIdBankAccount
+    ::nAmount 			:= nAmount
+    ::dDateProcess 		:= dDateProcess
+    ::cFileConfig 		:= cFileConfig
+return
+
+/*/{Protheus.doc} ContaDigitalExtrato::loadBankAccount
+
+    Busca e posiciona na conta bancária
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @return logical, conta encontrada
+/*/
+method loadBankAccount() as logical class ContaDigitalExtrato
+    DbSelectArea("SA6")
+    DbSetOrder(4)
+return DbSeek(xFilial("SA6") + ::cBankAccountId)
+
+/*/{Protheus.doc} ContaDigitalExtrato::recordBillData
+
+    Grava dados de SIF e SIG
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+/*/
+method recordBillData() class ContaDigitalExtrato
+    local cCodigo := "" as character
+    local cItem := "" as character
+    local aConfig1 := {} as array
+    local aConfig2 := {} as array
+
+    cCodigo := ::getCodSIF(SA6->A6_COD, SA6->A6_AGENCIA, SA6->A6_NUMCON, ::dDateProcess)
+    cItem := ::getItmSIF(xFilial("SIG"), cCodigo)
+
+    aConfig1 := {cCodigo, SA6->A6_COD, SA6->A6_AGENCIA, SA6->A6_NUMCON, "", "Extrato Conta Digital", ::cFileConfig, ::cFileConfig}
+    aConfig2 := {::cFileConfig, ::cFileConfig}
+
+    F474GRVSIF(aConfig1, aConfig2, ::dDateProcess, '1', "", "")
+
+	F474GRVSIG(cCodigo, cItem,"1"/*cStatus*/,::dDateProcess,/*cNumMov*/,::nAmount,/*cCodMov*/,"D"/*cDebCred*/,;
+				SA6->A6_COD, SA6->A6_AGENCIA , SA6->A6_NUMCON , "" /*cDescrMov*/, ""/*cDescFail*/)
+
+    fwFreeArray(aConfig1)
+    fwFreeArray(aConfig2)
+
+return
+
+/*/{Protheus.doc} ContaDigitalExtrato::reconcileBill
+
+    Concilia a fatura
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+/*/
+method reconcileBill() class ContaDigitalExtrato
+    local cCodigo := ::getCodSIF(SA6->A6_COD, SA6->A6_AGENCIA, SA6->A6_NUMCON, ::dDateProcess) as character
+    F475Concil("1", SA6->A6_COD, SA6->A6_AGENCIA, SA6->A6_NUMCON, {cCodigo})
+return
+
+/*/{Protheus.doc} ContaDigitalExtrato::getCodSIF
+
+    Obtém código SIF existente ou gera um novo
+    Retorna código do extrato para determinado dia, caso ainda não tenha, retorna o próximo código a ser utilizado
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @param cBankCode, character, banco
+    @param cBankBranch, character, agência
+    @param cBankAccount , character, conta
+    @param dData, date, data do processamento
+    @return character, código SIF
+/*/
+method getCodSIF(cBankCode as character, cBankBranch as character, cBankAccount  as character, dData as date) as character class ContaDigitalExtrato
+    local cCodigo := ::findExistingCode(cBankCode, cBankAccount , cBankBranch, dData) as character
+    
+    if empty(cCodigo)
+        cCodigo := ::generateNewCode()
+    endif
+    
+return cCodigo
+
+/*/{Protheus.doc} ContaDigitalExtrato::findExistingCode
+
+    Busca código existente na tabela SIF
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @param cBankCode, character, banco
+    @param cBankAccount , character, conta
+    @param cBankBranch, character, agência
+    @param dData, date, data
+    @return character, código encontrado ou vazio
+/*/
+method findExistingCode(cBankCode as character, cBankAccount as character, cBankBranch as character, dData as date) as character class ContaDigitalExtrato
+    local cCodigo := "" as character
+
+    DbSelectArea("SIF")
+    SIF->(DbSetOrder(4))
+    
+    if DbSeek(xFilial("SIF") + cBankCode + cBankAccount  + cBankBranch + DtoS(dData))
+        cCodigo := SIF->IF_IDPROC
+    endif
+
+return cCodigo
+
+/*/{Protheus.doc} ContaDigitalExtrato::generateNewCode
+
+    Gera novo código SIF
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @return character, novo código SIF
+/*/
+method generateNewCode() as character class ContaDigitalExtrato
+    local cCodigo := GetSxeNum("SIF", "IF_IDPROC") as character
+    ConfirmSx8()
+return cCodigo
+
+/*/{Protheus.doc} ContaDigitalExtrato::getItmSIF
+
+    Obtém próximo número de item para SIG baseado no código SIF
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @param cFilSIG, character, filial SIG
+    @param cCodSIF, character, código SIF
+    @return character, próximo número de item
+/*/
+method getItmSIF(cFilSIG as character, cCodSIF as character) as character class ContaDigitalExtrato
+    local cItem := strzero(0, TamSX3("IG_ITEM")[1]) as character
+    local cAliasQuery := "" as character
+    
+    cAliasQuery := ::queryMaxItemSIG(cFilSIG, cCodSIF)
+    
+    if (cAliasQuery)->(!Eof())
+        cItem := (cAliasQuery)->IG_ITEM
+    endif
+    
+    cItem := soma1(cItem)
+    (cAliasQuery)->(dbCloseArea())
+
+return cItem
+
+/*/{Protheus.doc} ContaDigitalExtrato::queryMaxItemSIG
+
+    Executa query para buscar máximo item existente
+    
+    @type method
+    @author josue.matheus
+    @since 24/04/2026
+    @param cFilSIG, character, filial
+    @param cCodSIF, character, código SIF
+    @return character, alias da query
+/*/
+method queryMaxItemSIG(cFilSIG as character, cCodSIF as character) as character class ContaDigitalExtrato
+    local cQuery := "" as character
+    local oExecQuery as object
+    local nBind := 1 as numeric
+    
+    cQuery := " SELECT MAX(IG_ITEM) IG_ITEM"
+    cQuery += " FROM " + RetSqlName("SIG") + " SIG "
+    cQuery += " WHERE SIG.IG_FILIAL = ? "
+    cQuery += "   AND SIG.IG_IDPROC = ? "
+    cQuery += "   AND SIG.D_E_L_E_T_ = ? "
+
+    oExecQuery := FwExecStatement():New(cQuery)
+    oExecQuery:SetString(nBind++, cFilSIG)
+    oExecQuery:SetString(nBind++, cCodSIF)
+    oExecQuery:SetString(nBind++, " ")
+
+return oExecQuery:OpenAlias()
+
+/*/{Protheus.doc} processBill
+	
+	Processamento do preenchimento do extrato e conciliação Techfin
+
+	@type  Function
+	@author squad.techfin
+	@since 27/04/2026
+	@version version
+	@param cBankId, character, ID do banco
+	@param nAmount, numeric, valor da fatura
+	@param dDateProcess, date, data de processamento
+	@param cFileConfig, character, configuração do arquivo, api ou classe
+	@return aret, array, {lSucesso, mensagem de erro}
+	/*/
+Function procExtrato(cBankId , nAmount , dDateProcess , cFileConfig ) as array
+	local lRet      := .F.  as logical
+	local aRet      := {}   as array
+	local cErrorMsg := ""   as character
+	local oExtrato 		    as object
+	local oError 		    as object
+
+	Default cBankId 	 := ""
+	Default nAmount 	 := 0
+	Default dDateProcess := Date()
+	Default cFileConfig  := ""
+
+	Begin Transaction
+		Try
+			oExtrato := ContaDigitalExtrato():new()
+			lRet := oExtrato:processBill(cBankId, nAmount, dDateProcess, cFileConfig)
+		Catch oError
+			cErrorMsg := oError:Description
+			DisarmTransaction()
+		Endtry
+	End Transaction
+
+	aRet := {lRet, cErrorMsg}
+
+	FwFreeObj(oError)
+    FwFreeObj(oExtrato)
+	
+Return aRet

@@ -1,0 +1,1388 @@
+#INCLUDE 'tlpp-core.th'
+#INCLUDE 'FWMVCDEF.CH'
+#INCLUDE 'TGVA002B.CH'
+#INCLUDE 'PROTHEUS.CH'
+#INCLUDE 'fwlibversion.ch'
+
+using namespace tgv.util
+
+#DEFINE AGUARDANDO  "0"
+#DEFINE PROCESSANDO "1"
+#DEFINE SUCESSO     "2"
+#DEFINE ERROR       "3"
+
+Static lExistIsSellerFilterInDB := FindFunction("tgv.util.isSellerFilterInDB")
+Static __aPrepared  := {}
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} TGV002UpdateStatus
+	Altera o status do pedido na fila de processamento.
+	@type		function
+	@sample 	TGV002UpdateStatus("3", "Falha ao Incluir Pedido", "3")
+	@param		cStatus	, Character, Status
+	@param		cError	, Character, Mensagem de Erro
+	@param		cOperation, Character, Tipo de operação
+	@Return		Logical, Retorna verdeiro se o registro foi alterado
+	@author		Danilo Salve
+	@since		10/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Function TGV002UpdateStatus( cStatus as Character, cError as Character, cOperation as Character ) as Logical
+	Local oModel	as Object
+	Local oModelA1T as Object
+	Local lContinua := .T. as Logical
+	Local aAreaA1T  := A1T->(GetArea())
+
+	cStatus := IIF(Empty(cStatus), "1", cStatus )
+
+	oModel := FWLoadModel("TGVA002")
+	oModelA1T:= oModel:GetModel("A1TMASTER")
+	oModel:SetOperation(MODEL_OPERATION_UPDATE)
+	oModel:Activate()
+
+	If oModel:IsActive()
+		If !oModelA1T:SetValue("A1T_STATUS", cStatus)
+			lContinua := .F.
+		EndIf
+
+		If lContinua .And. !Empty(cError) .And. !oModelA1T:SetValue("A1T_ERROR", cError)
+			lContinua := .F.
+		EndIf
+
+		If lContinua .And. cStatus $ "2#3"
+			oModelA1T:SetValue("A1T_DTPROC", Date())
+			oModelA1T:SetValue("A1T_HRPROC", Left(Time(), 5))
+		Endif
+
+		If !Empty(cOperation)
+			oModelA1T:SetValue("A1T_TPOPER", cOperation)
+		Endif
+
+	Else
+		lContinua := .F.
+	Endif
+
+	If !lContinua .Or. !( oModel:VldData() .And. oModel:CommitData() )
+		lContinua := .F.
+	EndIf
+
+	oModel:DeActivate()
+
+	FreeObj(oModelA1T)
+	FreeObj(oModel)
+	RestArea(aAreaA1T)
+Return lContinua
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} TG02SalesOrders
+	Efetua a inclusão do Pedido de Venda
+	@type		function
+	@sample 	TG02SalesOrders(jPedido, @cError, 3, oSalesOrders)
+	@param		jPedido	,	Json		, Pedido de venda recebido.
+	@param		cError	,	Character	, Descricao do erro - Deve ser
+		passado por referencia.
+	@param		nOperation, Numeric		, Tipo de operação - Deve ser passado
+		por referencia
+	@param		oSalesOrders, Object	, Objeto de Inclusao do Pedido de Venda
+	@Return		Logical, Se conseguiu gravar o pedido retornar verdadeiro
+	@author		Danilo Salve
+	@since		10/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Function TG02SalesOrders(jPedido as Json, cError as Character, nOperation as Numeric, oSalesOrders as Object) as Logical
+	Local cSeller	as Character
+	Local bError	:= Errorblock({|e| GetError(e, @cError, A1T->A1T_NUM) }) as CodeBlock
+	Local lContinue := .T. as Logical
+
+	BEGIN SEQUENCE
+		If nOperation == 5
+			oSalesOrders:cExternalId := A1T->A1T_NUM
+			oSalesOrders:cSellerId := getSellerFromJson(jPedido, .T.)
+		Endif
+
+		If oSalesOrders:SetOperation( nOperation )
+			lContinue  := oSalesOrders:fromExecAuto(jPedido)
+			nOperation := oSalesOrders:nOperation
+		Else
+			lContinue := .F.
+		Endif
+	RECOVER
+		lContinue := .F.
+	END SEQUENCE
+
+	ErrorBlock( bError )
+
+	If lContinue .And. oSalesOrders:commitData()
+		If nOperation == MODEL_OPERATION_INSERT .And. !Empty(oSalesOrders:cExternalId)
+			oSalesOrders:updateSalesOrderId()
+		EndIf
+		NotifySeller(oSalesOrders:cSalesOrderId, oSalesOrders:cSellerId, oSalesOrders:nOperation, /*cError*/, A1T->A1T_NUM, .F., "MATA410")
+		If nOperation <> 5
+			OffLineFilteringOfSaleOrder(oSalesOrders:cSalesOrderId, oSalesOrders:cSellerId)
+		EndIf
+	Else
+		cSeller := IIF(Empty(oSalesOrders:cSellerId), getSellerFromJson(jPedido, .F.), oSalesOrders:cSellerId)
+		cError	:= oSalesOrders:getErrorMessage()
+		NotifySeller( IIF( Empty(oSalesOrders:cSalesOrderId), '', oSalesOrders:cSalesOrderId),;
+		 cSeller, nOperation, cError, A1T->A1T_NUM, .F., "MATA410")
+		lContinue := .F.
+	Endif
+
+Return lContinue
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} NotifySeller
+	Inclui um notificação para o Vendedor (Usuario) reponsavel pelo Pedido e/ou
+	Orçamento
+	@type		function
+	@sample 	NotifySeller("000001", "000001", 3, "")
+	@param		cNumero		, Character	, Numero do Pedido
+	@param		cSeller		, Character	, Codigo do Vendedor
+	@param		nOperation	, Numeric	, Tipo de Operacao
+	@param		cError		, Character	, Descricao do Erro.
+	@param		cExternalId	, Character	, Numero Externo.
+	@Return		Logical, Retorna Verdadeiro se conseguiu incluir a Notificação
+	@author		Danilo Salve
+	@since		15/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Function NotifySeller(cNumero as Character, cSeller as Character, nOperation as Numeric, cError as Character, cExternalId as Character,;
+		lProcessando as Logical, cSource as Character) as Logical
+	Local bError	:= Errorblock({|e| Break(e) }) as codeblock
+	Local lContinua as Logical
+	Local lError	as Logical
+	Local oModel	as Object
+	Local oModelA1S as Object
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation)
+
+	oModel := FWLoadModel("TGVA001")
+	oModelA1S := oModel:GetModel("A1SMASTER")
+	oModel:SetOperation(MODEL_OPERATION_INSERT)
+	oModel:Activate()
+
+	If oModel:IsActive()
+		BEGIN SEQUENCE
+			lError := !Empty(cError)
+			oModelA1S:SetValue("A1S_TITULO", GetNotificationTitle(lError, nOperation, cNumero, lProcessando, cSource))
+
+			If lError
+				oModelA1S:SetValue("A1S_DESC"	, TreatError(cError, cExternalId, cSource))
+			Else
+				oModelA1S:SetValue("A1S_DESC"	, GetNotificationDescription(nOperation, cNumero, cExternalId, cSource))
+			Endif
+
+			oModelA1S:SetValue("A1S_TIPO"	, GetNotificationType(cSource))
+			oModelA1S:SetValue("A1S_CODUSR"	, GetUserSeller(cSeller))
+			oModelA1S:SetValue("A1S_STATUS"	, "1")
+			oModelA1S:SetValue("A1S_MOV"	, IIF(lError, ReturnOperationError(cSource), ReturnOperation(nOperation, cSource)))
+
+			If oModel:VldData() .And. oModel:CommitData()
+				lContinua := .T.
+			Else
+				lContinua := .F.
+			EndIf
+			
+		RECOVER
+			lContinua := .F.
+		END SEQUENCE
+
+		ErrorBlock(bError)
+	Else
+		lContinua := .F.
+	Endif
+
+	oModel:DeActivate()
+
+	FreeObj(oModelA1S)
+	FreeObj(oModel)
+Return lContinua
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetUserSeller
+	Retorna o Usuario do Protheus
+	@type		function
+	@sample 	GetUserSeller("000001")
+	@param		cSeller, Character, Codigo do Vendedor
+	@Return		Character, Codigo do Usuario
+	@author		Danilo Salve
+	@since		15/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetUserSeller(cSeller as Character) as Character
+	Local aArea 		:= GetArea() as Array
+	Local cSellerUserId	as Character
+
+	DbSelectArea("SA3")
+	SA3->(DbSetOrder(1)) // A3_FILIAL, A3_COD
+	If SA3->(DbSeek(FwXFilial("SA3") + cSeller))
+		cSellerUserId := SA3->A3_CODUSR
+	Endif
+
+	RestArea(aArea)
+	aSize(aArea, 0)
+Return cSellerUserId
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitle
+	Retorna o titulo da notificação
+	@type		function
+	@sample 	GetNotificationTitle(.F., 3, "000001")
+	@param		lError		, Logical	, Informe Verdadeiro se for um  tratamento de erro.
+	@param		nOperation	, Numeric	, Tipo de Operacao
+	@param		cNumero		, Character	, Numero do Pedido/Orçamento
+	@param		lProcessando, Logical	, Registro ainda está procesando?
+	@param		cSource		, Character	, Rotina (MATA410 / MATA415)
+	@Return		Character, Retorna o titulo da Notificação.
+	@author		Danilo Salve
+	@since		15/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitle(lError as Logical, nOperation as Numeric, cNumero as Character, lProcessando as Logical, cSource as Character) as Character
+	Local cTitle as Character
+
+	nOperation := IIF(Empty(nOperation) , 3, nOperation)
+
+	If lProcessando
+		cTitle := STR0017 //"Falha ao processar registro."
+	ElseIf !lProcessando
+		If cSource == "MATA410"
+			cTitle := GetNotificationTitleOrder(nOperation, cNumero, lError)
+		ElseIf cSource == "MATA415"
+			cTitle := GetNotificationTitleBudget(nOperation, cNumero, lError)
+		ElseIf cSource == "MATA030"
+			cTitle := GetNotificationTitleCustomer(nOperation, cNumero, lError)
+		ElseIf cSource == "TMKA260"
+			cTitle := GetNotificationTitleProspect(nOperation, cNumero, lError)
+		ElseIf cSource == "TMKA070"
+			cTitle := GetNotificationTitleContact(nOperation, cNumero, lError)
+		ElseIf cSource == "CRMA060"
+			cTitle := GetNotificationTitleRelationContact(nOperation, cNumero, lError)
+		EndIf
+	Endif
+
+Return cTitle
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescription
+	Retorna o titulo da notificação
+	@type		function
+	@sample 	GetNotificationDescription(3, "000001")
+	@param		nOperation	, Numeric   , Tipo de Operacao
+	@param		cNumero		, Character , Numero do Registro
+	@param		cExternalId	, Character , Numero Externo
+	@param		cSource		, Character	, Rotina (MATA410 / MATA415)
+	@Return		Character	, Retorna a descrição da notificação.
+	@author		Danilo Salve
+	@since		15/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescription(nOperation as Numeric, cNumero as Character, cExternalId as Character, cSource as Character) as Character
+	Local cDescription as Character
+
+	If cSource == "MATA410"
+		cDescription := GetNotificationDescriptionOrder(nOperation, cNumero)
+	ElseIf cSource == "MATA415"
+		cDescription := GetNotificationDescriptionBudget(nOperation, cNumero, cExternalId)
+	ElseIf cSource == "MATA030"
+		cDescription := GetNotificationDescriptionCustomer(cNumero)
+	ElseIf cSource == "TMKA260"
+		cDescription := GetNotificationDescriptionProspect(cNumero)
+	ElseIf cSource == "TMKA070"
+		cDescription := GetNotificationDescriptionContact(cNumero)
+	ElseIf cSource == "CRMA060"
+		cDescription := GetNotificationDescriptionRelationContact(cNumero)
+	EndIf
+
+Return cDescription
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} TreatError
+	Efetua o tratamento da mensagem de erro.
+	@type		function
+	@sample 	TreatError(cError)
+	@param		cError		, Character, Mensagem de erro
+	@param		cExternalId	, Character, Número Externo.
+	@param		cSource		, Character	, Rotina (MATA410 / MATA415)
+	@Return		Character	, Retorna a mensagem de erro.
+	@author		Danilo Salve
+	@since		15/12/2020
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function TreatError(cError as Character, cExternalId as Character, cSource as Character) as Character
+	Local cNewErro as Character
+
+	If cSource == "MATA410"
+		cNewErro := UPPER(STR0018) + ' ' + cExternalId + CRLF
+	ElseIf cSource == "MATA415"
+		cNewErro := UPPER(STR0025) + ' ' + cExternalId + CRLF
+	EndIf
+
+	cNewErro += cError
+Return cNewErro
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} Scheddef
+	Realiza o tratamento do Pergunte via Schedule, não considerando
+	o conteúdo da tabela SXD
+	@type		function
+	@sample 	Scheddef()
+	@Return		Array,	Parametros da rotina
+    @author		Danilo Salve
+    @since		10/12/2020
+    @version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function Scheddef() as Array
+	Local aParam as Array
+
+	aParam := { "P",;	//	Tipo R para relatorio P para processo
+		"ParamDef",;	//	Pergunte do relatorio, caso nao use passar ParamDef
+		"A1T",;			//	Alias
+		Nil,;			//	Array de ordens
+		Nil}			//	Título
+
+Return aParam
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperation
+	Retorna o status da movimentação da notificação, de acordo com a operação.
+	@type		function
+	@sample		ReturnOperation(5, "MATA410")
+	@param		nOperation	, Numeric   , Tipo de operação
+	@param		cSource		, Character	, Rotina (MATA410 / MATA415)
+	@Return		Numeric		, Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		07/01/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperation(nOperation as Numeric, cSource as Character) as Numeric
+	
+	Local nStatus as Numeric
+
+	If cSource == "MATA410"
+		nStatus := ReturnOperationOrder(nOperation)
+	ElseIf cSource == "MATA415"
+		nStatus := ReturnOperationBudget(nOperation)
+	ElseIf cSource == "MATA030"
+		nStatus := ReturnOperationCustomer(nOperation)
+	ElseIf cSource == "TMKA260"
+		nStatus := ReturnOperationProspect(nOperation)
+	ElseIf cSource == "TMKA070"
+		nStatus := ReturnOperationContact(nOperation)
+	ElseIf cSource == "CRMA060"
+		nStatus := ReturnOperationRelationContact(nOperation)
+	EndIf
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationError
+	Retorna o status da movimentação da notificação, quando ocorre um erro.
+	@type		function
+	@sample		ReturnOperationError('MATA410')
+	@param		cSource		, Character	, Rotina (MATA410 / MATA415)
+	@Return		Numeric	, Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		11/05/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperationError(cSource as Character) as Numeric
+	Local nStatus as Numeric
+
+	If cSource == "MATA410"
+		nStatus := 10
+	ElseIf cSource == "MATA415"
+		nStatus := 14
+	ElseIf cSource == "MATA030"
+		nStatus := 18
+	ElseIf cSource == "TMKA260"
+		nStatus := 22
+	ElseIf cSource == "TMKA070"
+		nStatus := 26
+	ElseIf cSource == "CRMA060"
+		nStatus := 30
+	EndIf
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetError
+	Retornar a Mensagem de Erro do servidor.
+	@type		function
+	@sample		GetError(e, @cError, "111111111111")
+	@param		oError		, Object	, Objeto de Error
+	@param		cError		, Character	, Descricao do Erro
+	@param		cExternalId	, Character	, Número externo do Pedido/Orcamento
+	@return		Character, Descrição do Erro.
+	@author		Danilo Salve
+	@since		03/02/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetError(oError as Object, cError as Character, cExternalId as Character) as Character
+
+	If oError:gencode > 0
+		cError := STR0016 + ' ' + cExternalId + " - Error: " + Chr(10) + oError:ErrorStack // Ocorreu um erro no processamento do registro:
+		Break(oError)
+	Endif
+
+Return cError
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} TG02WriteSalesBudget
+	Efetua a gravação de um Orçamento de Venda
+	@type function
+	@version 12.1.33
+	@author Squad CRM & Faturamento
+	@since 22/03/2021
+	@param jBudget, json, Objeto com as propriedade de um Orçamento de Vendas
+	@param cError, character, Descricao do erro (enviado por referencia)
+	@param nOperation, numeric, tipo de operação (enviado por referencia)
+	@param oSalesBudgets, object, Class auxiliar para gravação do orçamento
+	@return logical, Se gravação realizada com sucesso retorna verdadeiro
+/*/
+//----------------------------------------------------------------------------
+Function TG02WriteSalesBudget(jBudget as json, cError as character, nOperation as numeric, oSalesBudgets as object) as logical
+	Local bError	:= Errorblock({|e| GetError(e, @cError, A1T->A1T_NUM) }) as codeblock
+	Local cSeller	as character
+	Local lContinua := .T. as logical
+
+	BEGIN SEQUENCE
+		If nOperation == 5
+			oSalesBudgets:cExternalId := A1T->A1T_NUM
+			oSalesBudgets:cSellerId := getSellerFromJson(jBudget, .T.)
+		EndIF
+
+		If oSalesBudgets:SetOperation( nOperation )
+			lContinua  := oSalesBudgets:fromExecAuto(jBudget)
+			nOperation := oSalesBudgets:nOperation
+		Else
+			lContinua := .F.
+		Endif
+	RECOVER
+		lContinua := .F.
+	END SEQUENCE
+
+	ErrorBlock(bError)
+
+	If lContinua .And. oSalesBudgets:commitData()
+		If nOperation == MODEL_OPERATION_INSERT .And. !Empty(oSalesBudgets:cExternalId)
+			oSalesBudgets:updateSalesBudgetId()
+		EndIf
+		NotifySeller(oSalesBudgets:cSalesBudgetID, oSalesBudgets:cSellerId, oSalesBudgets:nOperation, /*cError*/, A1T->A1T_NUM, .F., "MATA415")
+		If nOperation <> 5
+			OffLineFilteringOfSaleBudget(oSalesBudgets:cSalesBudgetID, oSalesBudgets:cSellerId)
+		EndIf
+	Else
+		cSeller := IIF(Empty(oSalesBudgets:cSellerId), getSellerFromJson(jBudget, .F.), oSalesBudgets:cSellerId)
+		cError	:= oSalesBudgets:getErrorMessage()
+		NotifySeller( IIF( Empty(oSalesBudgets:cSalesBudgetID), '', oSalesBudgets:cSalesBudgetID),;
+		 cSeller, nOperation, cError, A1T->A1T_NUM, .F., "MATA415")
+		lContinua := .F.
+	Endif
+Return lContinua
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitleOrder
+	Retorna o título das notificações para pedidos.
+	@type		function
+	@sample 	GetNotificationTitleOrder()
+	@return		Character,	Título da notificação
+	@author		Squad CRM/FAT
+	@since		24/03/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitleOrder(nOperation as Numeric, cNumero as Character, lError as Logical) as Character
+	Local cTitle as Character
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation )
+
+	If lError
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0008 //"Falha ao incluir Pedido de venda"
+		Case nOperation == 4
+			cTitle := STR0009 + ' ' + cNumero //"Falha ao Alterar Pedido de Venda:"
+		Case nOperation == 5
+			cTitle := STR0010 + ' ' + cNumero //"Falha ao Excluir Pedido de venda:"
+		Endcase
+	Else
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0011 + ' ' + cNumero //"Pedido incluÍdo com sucesso:"
+		Case nOperation == 4
+			cTitle := STR0012 + ' ' + cNumero //"Pedido alterado com sucesso:"
+		Case nOperation == 5
+			cTitle := STR0013 + ' ' + cNumero //"Pedido excluído com sucesso:"
+		Endcase
+	EndIf
+
+Return cTitle
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitleBudget
+	Retorna o título das notificações para pedidos.
+	@type		function
+	@sample 	GetNotificationTitleBudget()
+	@Return		Character,	Título da notificação
+	@author		Squad CRM/FAT
+	@since		24/03/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitleBudget(nOperation as Numeric, cNumero as Character, lError as Logical) as Character
+	Local cTitle as Character
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation )
+
+	If lError
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0019 //"Falha ao incluir Orçamento de venda"
+		Case nOperation == 4
+			cTitle := STR0020 + ' ' + cNumero //"Falha ao Alterar Orçamento de Venda:"
+		Case nOperation == 5
+			cTitle := STR0021 + ' ' + cNumero //"Falha ao Excluir Orçamento de venda:"
+		Endcase
+	Else
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0022 + ' ' + cNumero //"Orçamento incluÍdo com sucesso:"
+		Case nOperation == 4
+			cTitle := STR0023 + ' ' + cNumero //"Orçamento alterado com sucesso:"
+		Case nOperation == 5
+			cTitle := STR0024 + ' ' + cNumero //"Orçamento excluído com sucesso:"
+		Endcase
+	EndIf
+
+Return cTitle
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitleCustomer
+	Retorna o título das notificações para os clientes.
+	@type		function
+	@sample 	GetNotificationTitleCustomer()
+	@Return		Character,	Título da notificação
+	@author		Squad CRM/FAT
+	@since		02/05/2023
+	@version	12.1.2210 ou Superior
+	@param nOperation, numeric, número da operação (3 - Inclusão, 4 - Alteração, 5 - Exclusão )
+	@param cNumero, character, código do cliente
+	@param lError, logical, .T. informa uma falha no processo
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitleCustomer(nOperation as Numeric, cNumero as Character, lError as Logical) as Character
+	Local cTitle as Character
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation )
+
+	If lError
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0028 + ' ' + cNumero //"Falha ao incluir cliente:"
+		Case nOperation == 4
+			cTitle := STR0029 + ' ' + cNumero //"Falha ao alterar cliente:"
+		Case nOperation == 5
+			cTitle := STR0030 + ' ' + cNumero //"Falha ao excluir cliente:"
+		Endcase
+	Else
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0031 + ' ' + cNumero //"Cliente incluído com sucesso:"
+		Case nOperation == 4
+			cTitle := STR0032 + ' ' + cNumero //"Cliente alterado com sucesso:"
+		Case nOperation == 5
+			cTitle := STR0033 + ' ' + cNumero //"Cliente excluído com sucesso:"
+		Endcase
+	EndIf
+
+Return cTitle
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescriptionOrder
+	Retorna a descrição da notificação para pedidos
+	@type		function
+	@sample 	GetNotificationDescriptionOrder(3, "000001")
+	@param		nOperation    ,	Numeric   , Tipo de Operacao
+	@param		cNumeroPedido , Character , Numero do Pedido
+	@Return		Character     , Retorna a descrição da notificação.
+	@author		Squad CRM/FAT
+	@since		24/03/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescriptionOrder(nOperation as Numeric, cNumeroPedido as Character) as Character
+	Local cDescription as Character
+
+	Do Case
+	Case nOperation == 3 .Or. nOperation == 4
+		cDescription := STR0014 + ' ' + cNumeroPedido + ' ' + STR0015 //Pedido XXXX foi integrado com sucesso.
+	Case nOperation == 5
+		cDescription := STR0014 + ' ' + cNumeroPedido + ' ' + STR0015 //Pedido XXXX foi integrado com sucesso.
+	Endcase
+
+Return cDescription
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescriptionBudget
+	Retorna a descrição da notificação para orçamentos
+	@type		function
+	@sample 	GetNotificationDescriptionBudget(3, "000001")
+	@param		nOperation	, Numeric   , Tipo de Operacao
+	@param		cBudgetId	, Character , Numero do Orçamento
+	@param		cExternalId	, Character , Numero Externo
+	@Return		Character	, Retorna a descrição da notificação.
+	@author		Squad CRM/FAT
+	@since		24/03/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescriptionBudget(nOperation as Numeric, cBudgetId as Character, cExternalId as Character) as Character
+	Local cDescription as Character
+
+	Do Case
+	Case nOperation == 3 .Or. nOperation == 4
+		cDescription := STR0026 + ' ' + cBudgetId + ' ' + STR0015 //Orçamento XXXX foi integrado com sucesso.
+	Case nOperation == 5
+		cDescription := STR0026 + ' ' + cBudgetId + ' ' + STR0015 //O Orçamento XXXX foi integrado com sucesso.
+	Endcase
+
+Return cDescription
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescriptionCustomer
+	Retorna a descrição da notificação para os Clientes
+	@type		function
+	@sample 	GetNotificationDescriptionCustomer("000001")
+	@param		cCustomerId	, Character , Código do Cliente
+	@Return		Character	, Retorna a descrição da notificação.
+	@author		Squad CRM/FAT
+	@since		02/05/2023
+	@version	12.1.2210 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescriptionCustomer(cCustomerId as Character) as Character
+	Local cDescription as Character
+
+	cDescription := STR0034 + ' ' + cCustomerId + ' ' + STR0015 //"O Cliente" XXXX foi integrado com sucesso.
+
+Return cDescription
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationOrder
+	Retorna o status da movimentação da notificação de pedidos, de acordo
+	com a operação.
+	@type		function
+	@sample 	ReturnOperationOrder(5)
+	@return		Numeric,	Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		24/03/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperationOrder(nOperation as Numeric) as Numeric
+	Local nStatus as Numeric
+
+	Do Case
+	Case nOperation == 3
+		nStatus := 7
+	Case nOperation == 4
+		nStatus := 8
+	Case nOperation == 5
+		nStatus := 9
+	EndCase
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationBudget
+	Retorna o status da movimentação da notificação de orçamentos, de acordo
+	com a operação.
+	@type		function
+	@sample 	ReturnOperationBudget(5)
+	@Return		Numeric,	Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		24/03/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperationBudget(nOperation as Numeric) as Numeric
+	Local nStatus as Numeric
+
+	Do Case
+	Case nOperation == 3
+		nStatus := 11
+	Case nOperation == 4
+		nStatus := 12
+	Case nOperation == 5
+		nStatus := 13
+	EndCase
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationCustomer
+	Retorna o status da movimentação da notificação de Clientes, de acordo
+	com a operação.
+	@type		function
+	@sample 	ReturnOperationCustomer(5)
+	@Return		Numeric,	Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		03/05/2023
+	@version	12.1.2210 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperationCustomer(nOperation as Numeric) as Numeric
+	Local nStatus as Numeric
+
+	Do Case
+	Case nOperation == 3
+		nStatus := 15
+	Case nOperation == 4
+		nStatus := 16
+	Case nOperation == 5
+		nStatus := 17
+	EndCase
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationType
+	Verifica qual será o tipo da notificação
+	(Movimentação de Pedido/Orçamento/Cliente) de acordo com o source recebido.
+	@type		function
+	@sample 	GetNotificationType('MATA410')
+	@param		cSource		, Character, Rotina que manipulou o registro.
+	@Return		Character	, Tipo da Notificação
+	@author		Squad CRM/FAT
+	@since		14/04/2021
+	@version	12.1.27 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationType(cSource as Character) as Character
+	Local cNotificationType as Character
+
+	Do Case
+	Case cSource == "MATA410"
+		cNotificationType := '1'
+	Case cSource == "MATA030"
+		cNotificationType := '2'
+	Case cSource == "MATA415"
+		cNotificationType := '3'
+	Case cSource == "TMKA260"
+		cNotificationType := '4'
+	Case cSource == "TMKA070"
+		cNotificationType := '5'
+	Case cSource == "CRMA060"
+		cNotificationType := '6'
+	EndCase
+
+Return cNotificationType
+
+//------------------------------------------------------------------------------------
+/*/{Protheus.doc} OffLineFilteringOfSaleOrder
+	Salva o pedido de venda no filtro de vendedor para o funcionamento do PGV Offline
+	@type		function
+	@sample 	OffLineFilteringOfSaleOrder("000001", "000001")
+	@param		cSaleOrderID, Character	, Numero do Pedido
+	@param		cSeller		, Character	, Codigo do Vendedor
+	@Return		Logical, Retorna Verdadeiro se conseguiu incluir o pedido e seus itens
+	                     no filtro Offline do vendedor
+	@author		Rafael Mota Previdi
+	@since		06/12/2022
+	@version	12.1.33 ou Superior
+/*/
+//------------------------------------------------------------------------------------
+Static Function OffLineFilteringOfSaleOrder(cSaleOrderID as Character, cSeller as Character)
+
+	Local lSaveSC5            := .F.              as Logical
+	Local lSaveSC6            := .F.              as Logical
+	Local aArea               := GetArea()        as Array
+	Local aAreaSC6            := SC6->(GetArea()) as Array
+	Local aItemsFilter        := {}               as Array
+	Local cQuerySC6           := ""               as Character
+	Local cAliasSC6           := GetNextAlias()   as Character
+	Local nPosStatement       := 0                as Numeric
+	Local oStatementSC6       := Nil              as Object
+	Local lIsSellerFilterInDB := .F.              as Logical
+	Local cFilSC6             := ""               as Character
+	Local cTamSC6Num          := ""               as Character
+	Local cTamSC6Item         := ""               as Character
+	Local cTamSC6Produto      := ""               as Character
+
+	lIsSellerFilterInDB := lExistIsSellerFilterInDB .And. isSellerFilterInDB()
+	If lIsSellerFilterInDB
+
+		// Schema SalesOrders
+		aAdd(aItemsFilter, cSaleOrderID)
+		lSaveSC5 := WriteFilterOffLine(cSeller, "000009", aItemsFilter)
+		aSize(aItemsFilter, 0)
+
+		// Schema SalesOrdersItems
+		cFilSC6        := FWXFilial("SC6")
+		cTamSC6Num     := GetSX3Cache("C6_NUM"    , "X3_TAMANHO")
+		cTamSC6Item    := GetSX3Cache("C6_ITEM"   , "X3_TAMANHO")
+		cTamSC6Produto := GetSX3Cache("C6_PRODUTO", "X3_TAMANHO")
+		cQuerySC6 += "SELECT " + CRLF
+		cQuerySC6 += "	SC6.C6_FILIAL, " + CRLF
+		cQuerySC6 += "	SC6.C6_NUM, " + CRLF
+		cQuerySC6 += "	SC6.C6_ITEM, " + CRLF
+		cQuerySC6 += "	SC6.C6_PRODUTO " + CRLF
+		cQuerySC6 += "FROM " + CRLF 
+		cQuerySC6 += "	" + RetSQLName("SC6") + " SC6 " + CRLF
+		cQuerySC6 += "WHERE " + CRLF
+		cQuerySC6 += "	SC6.C6_FILIAL = '" + cFilSC6 + "'" + CRLF
+		cQuerySC6 += "		AND " + CRLF
+		cQuerySC6 += "	SC6.C6_NUM = '" + cSaleOrderID + "'" + CRLF
+		cQuerySC6 += "		AND " + CRLF
+		cQuerySC6 += "	SC6.D_E_L_E_T_ = ' '" + CRLF
+
+		nPosStatement := chargeAPrepared(cQuerySC6)
+		oStatementSC6 := __aPrepared[nPosStatement][1]
+		execQueryAPrepared(cAliasSC6, oStatementSC6)
+		
+		While !(cAliasSC6)->(EOF()) .And. (cAliasSC6)->(C6_FILIAL + C6_NUM) == cFilSC6 + cSaleOrderID
+			aAdd(aItemsFilter, ALLTRIM((cAliasSC6)->(	PadR(C6_NUM     , cTamSC6Num    ) + ;
+														PadR(C6_ITEM    , cTamSC6Item   ) + ;
+														PadR(C6_PRODUTO , cTamSC6Produto) ) ;
+													))
+			(cAliasSC6)->(DbSkip())
+		EndDo
+		(cAliasSC6)->(DBCloseArea())
+
+		lSaveSC6 := WriteFilterOffLine(cSeller, "000010", aItemsFilter)
+
+		FWFreeObj(aItemsFilter)
+	EndIf
+
+	FWFreeObj(aAreaSC6)
+	FWFreeObj(aArea)
+
+Return (lSaveSC5 .And. lSaveSC6)
+
+//----------------------------------------------------------------------------------------
+/*/{Protheus.doc} OffLineFilteringOfSaleBudget
+	Salva o orçamento de venda no filtro de vendedor para o funcionamento do PGV Offline
+	@type		function
+	@sample 	OffLineFilteringOfSaleBudget("000001", "000001")
+	@param		cSaleBudgetID, Character	, Numero do Orcamento
+	@param		cSeller		 , Character	, Codigo do Vendedor
+	@Return		Logical, Retorna Verdadeiro se conseguiu incluir o orcamento e seus itens
+	                     no filtro Offline do vendedor
+	@author		Rafael Mota Previdi
+	@since		24/02/2023
+	@version	12.1.33 ou Superior
+/*/
+//----------------------------------------------------------------------------------------
+Static Function OffLineFilteringOfSaleBudget(cSaleBudgetID as Character, cSeller as Character)
+
+	Local lSaveSCK            := .F.              as Logical
+	Local lSaveSCJ            := .F.              as Logical
+	Local aArea               := GetArea()        as Array
+	Local aAreaSCK            := SCK->(GetArea()) as Array
+	Local aItemsFilter        := {}               as Array
+	Local cQuerySCK           := ""               as Character
+	Local cAliasSCK           := GetNextAlias()   as Character
+	Local nPosStatement       := 0                as Numeric
+	Local oStatementSCK       := Nil              as Object
+	Local lIsSellerFilterInDB := .F.              as Logical
+	Local cFilSCK             := ""               as Character
+	Local cTamSCKNum          := ""               as Character
+	Local cTamSCKItem         := ""               as Character
+	Local cTamSCKProduto      := ""               as Character
+
+	lIsSellerFilterInDB := lExistIsSellerFilterInDB .And. isSellerFilterInDB()
+	If lIsSellerFilterInDB
+
+		// Schema SalesOrders
+		aAdd(aItemsFilter, cSaleBudgetID)
+		lSaveSCJ := WriteFilterOffLine(cSeller, "000017", aItemsFilter)
+		aSize(aItemsFilter, 0)
+
+		// Schema SalesOrdersItems
+		cFilSCK        := FWXFilial("SCK")
+		cTamSCKNum     := GetSX3Cache("CK_NUM"    , "X3_TAMANHO")
+		cTamSCKItem    := GetSX3Cache("CK_ITEM"   , "X3_TAMANHO")
+		cTamSCKProduto := GetSX3Cache("CK_PRODUTO", "X3_TAMANHO")
+		cQuerySCK += "SELECT " + CRLF
+		cQuerySCK += "	SCK.CK_FILIAL, " + CRLF
+		cQuerySCK += "	SCK.CK_NUM, " + CRLF
+		cQuerySCK += "	SCK.CK_ITEM, " + CRLF
+		cQuerySCK += "	SCK.CK_PRODUTO " + CRLF
+		cQuerySCK += "FROM " + CRLF 
+		cQuerySCK += "	" + RetSQLName("SCK") + " SCK " + CRLF
+		cQuerySCK += "WHERE " + CRLF
+		cQuerySCK += "	SCK.CK_FILIAL = '" + cFilSCK + "'" + CRLF
+		cQuerySCK += "		AND " + CRLF
+		cQuerySCK += "	SCK.CK_NUM = '" + cSaleBudgetID + "'" + CRLF
+		cQuerySCK += "		AND " + CRLF
+		cQuerySCK += "	SCK.D_E_L_E_T_ = ' '" + CRLF
+
+		nPosStatement := chargeAPrepared(cQuerySCK)
+		oStatementSCK := __aPrepared[nPosStatement][1]
+		execQueryAPrepared(cAliasSCK, oStatementSCK)
+		
+		While !(cAliasSCK)->(EOF()) .And. (cAliasSCK)->(CK_FILIAL + CK_NUM) == cFilSCK + cSaleBudgetID
+			aAdd(aItemsFilter, ALLTRIM((cAliasSCK)->(	PadR(CK_NUM     , cTamSCKNum    ) + ;
+														PadR(CK_ITEM    , cTamSCKItem   ) + ;
+														PadR(CK_PRODUTO , cTamSCKProduto) ) ;
+													))
+			(cAliasSCK)->(DbSkip())
+		EndDo
+		(cAliasSCK)->(DBCloseArea())
+
+		lSaveSCK := WriteFilterOffLine(cSeller, "000018", aItemsFilter)
+
+		FWFreeObj(aItemsFilter)
+	EndIf
+
+	FWFreeObj(aAreaSCK)
+	FWFreeObj(aArea)
+
+Return (lSaveSCJ .And. lSaveSCK)
+
+//----------------------------------------------------------------------------------------------
+/*/{Protheus.doc} WriteFilterOffLine
+	Salva os dados do filtro Offline do vendedor conforme dados informados nos parametros
+	@type		function
+	@sample 	WriteFilterOffLine("000001", "000001", {"0010010100"})
+	@param		cSeller		, Character	, Codigo do Vendedor
+	@param		cSchema		, Character	, Código do esquema a que o filtro se refere
+	@param      aItemsFilter, Array     , Lista dos itens que irão compor o filtro
+	@Return		Logical, Retorna Verdadeiro se conseguiu incluir o filtro Offline do Vendedor
+	@author		Rafael Mota Previdi
+	@since		06/12/2022
+	@version	12.1.33 ou Superior
+/*/
+//----------------------------------------------------------------------------------------------
+Function WriteFilterOffLine(cSeller as Character, cSchema as Character, aItemsFilter as Array)
+
+	Local lWrite              := .F.               as Logical
+	Local nOperation          := 0                 as Numeric
+	Local oModel              := Nil               as Object
+	Local oModelAQ4           := Nil               as Object
+	Local oModelAQ5           := Nil               as Object
+	Local aArea               := GetArea()         as Array
+	Local aAreaAQ4            := {}                as Array
+	Local aAreaAQ5            := {}                as Array
+	Local nCodEnt             := 0                 as Numeric
+	Local nQtCodEnt           := Len(aItemsFilter) as Numeric
+	Local cItem               := "0000"            as Character
+	Local lAddItem            := .F.               as Logical
+	Local lIsSellerFilterInDB := .F.               as Logical
+	Local oStatLastItemAQ5    := Nil               as Object
+	Local cQueryLastItemAQ5   := ""                as Character
+	Local nPosStatement       := 0                 as Numeric
+	Local cAliasAQ5Item       := GetNextAlias()    as Character
+	Local cFilAQ5             := ""                as Character
+	Local cUUID               := ""                as Character
+
+	lIsSellerFilterInDB := lExistIsSellerFilterInDB .And. isSellerFilterInDB()
+	If lIsSellerFilterInDB
+		aAreaAQ4 := AQ4->(GetArea())
+		aAreaAQ5 := AQ5->(GetArea())
+		DbSelectArea("AQ4")
+		AQ4->(DbSetOrder(2))	// AQ4_FILIAL+AQ4_VEND+AQ4_SCHEMA+DTOS(AQ4_DATA)
+		nOperation := IIf(AQ4->(DbSeek(FwXFilial("AQ4") + cSeller + cSchema + DTOS(Date()))), MODEL_OPERATION_UPDATE, MODEL_OPERATION_INSERT)
+
+		oModel := FWLoadModel("PGVA005")
+		oModel:SetOperation(nOperation)
+		oModel:Activate()
+
+		If oModel:IsActive()
+			oModelAQ4 := oModel:GetModel("AQ4MASTER")
+			If nOperation == MODEL_OPERATION_INSERT
+				oModelAQ4:SetValue("AQ4_VEND"  , cSeller)
+				oModelAQ4:SetValue("AQ4_SCHEMA", cSchema)
+				oModelAQ4:SetValue("AQ4_DATA"  , Date())
+			EndIf
+
+			cQueryLastItemAQ5 += "SELECT " + CRLF
+			cQueryLastItemAQ5 += "	MAX(AQ5_ITEM) LAST_ITEM" + CRLF
+			cQueryLastItemAQ5 += "FROM " + RetSQLName("AQ5") + " AQ5 " + CRLF
+			cQueryLastItemAQ5 += "WHERE " + CRLF
+			cQueryLastItemAQ5 += "	AQ5.AQ5_FILIAL = '" + FWXFilial("AQ4") + "'" + CRLF
+			cQueryLastItemAQ5 += "		AND " + CRLF
+			cQueryLastItemAQ5 += "	AQ5.AQ5_UUID = '" + oModelAQ4:getValue("AQ4_UUID") + "'" + CRLF
+			cQueryLastItemAQ5 += "		AND " + CRLF
+			cQueryLastItemAQ5 += "	AQ5.D_E_L_E_T_ = ' '" + CRLF
+
+			nPosStatement := chargeAPrepared(cQueryLastItemAQ5)
+			oStatLastItemAQ5 := __aPrepared[nPosStatement][1]
+			execQueryAPrepared(cAliasAQ5Item, oStatLastItemAQ5)
+			cItem := IIf((cAliasAQ5Item)->(EOF() .Or. Empty((cAliasAQ5Item)->LAST_ITEM)), cItem, (cAliasAQ5Item)->LAST_ITEM)
+			(cAliasAQ5Item)->(DBCloseArea())
+
+			oModelAQ5 := oModel:GetModel("AQ5DETAIL")
+			AQ5->(DbSetOrder(2))	// AQ5_FILIAL+AQ5_UUID+AQ5_CODENT+AQ5_ITEM
+			
+			cFilAQ5 := FWXFilial("AQ5")
+			cUUID   := oModelAQ4:getValue("AQ4_UUID")
+			For nCodEnt := 1 To nQtCodEnt		
+				If !(AQ5->(DbSeek(cFilAQ5 + cUUID + aItemsFilter[nCodEnt])))
+					oModelAQ5:AddLine()
+					cItem := Soma1(cItem)
+					oModelAQ5:SetValue("AQ5_ITEM"   , cItem)
+					oModelAQ5:SetValue("AQ5_CODENT" , aItemsFilter[nCodEnt])
+					lAddItem := .T.
+				EndIf
+			Next
+
+			If lAddItem .And. oModel:VldData() .And. oModel:CommitData()
+				lWrite := .T.
+			EndIf
+
+			oModel:DeActivate()
+		EndIf
+
+		RestArea(aAreaAQ4)
+		RestArea(aAreaAQ5)
+
+		FWFreeObj(oModel)
+		FWFreeObj(oModelAQ4)
+		FWFreeObj(oModelAQ5)
+		
+		FWFreeObj(aAreaAQ4)
+		FWFreeObj(aAreaAQ5)
+
+	EndIf
+
+	RestArea(aArea)
+	FWFreeObj(aArea)
+
+Return lWrite
+
+//---------------------------------------------------------------------------------------------
+/*/{Protheus.doc} chargeAPrepared
+	Carrega o array __aPrepared com o objeto
+	@type function
+	@param      cQuery      , character, query a ser consultada/incluida no array __aPrepared
+	@return		nPosPrepared, numeric  , posição do array com o objeto da query a ser utilizado.
+	@author		Squad CRM & Faturamento
+	@since		07/12/2022
+	@version	12.1.33 ou superior
+/*/
+//---------------------------------------------------------------------------------------------
+Static Function chargeAPrepared(cQuery)
+	Local oStatement 	 as Object 
+	Local cMD5           as Character
+	Local nPosPrepared   as Numeric
+
+	cMD5 := MD5(cQuery)
+	If (nPosPrepared := Ascan(__aPrepared,{|x| x[2] == cMD5})) == 0
+		cQuery	:= ChangeQuery(cQuery)
+		oStatement := IIf(TGVA002BFWExecStat(), FwExecStatement():New(cQuery), FWPreparedStatement():New(cQuery))
+		Aadd(__aPrepared,{oStatement, cMD5})
+		nPosPrepared := Len(__aPrepared)
+	EndIf
+Return nPosPrepared
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} TGVA002BFWExecStat
+	Função utilizada para validar a data da LIB para utilização da classe FWExecStatement
+	@type       Function
+	@return     __TGVA002BVerLib, lógico, se pode ser utilizado a classe FWExecStatement
+	@author     Squad CRM/Faturamento
+	@since      07/12/2022
+	@version    12.1.33 ou superior
+/*/
+//-------------------------------------------------------------------------------------
+Static Function TGVA002BFWExecStat()
+	Static __TGVA002BVerLib := Nil
+
+	If __TGVA002BVerLib == Nil
+		__TGVA002BVerLib := FWLibVersion() >= "20211116"
+	EndIf
+Return __TGVA002BVerLib
+
+//----------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} execQueryAPrepared
+	Executa a query contida na posicao indicada por parametro do array __aPrepared
+	@type function
+	@return     Nil
+	@param		cAlias     , character, alias a ser utilizado para a workarea da query
+	@param		oStatement , object   , objeto do prepared ou exec statement para executar a query
+	@author		Squad CRM & Faturamento
+	@since		07/12/2022
+	@version	12.1.33 ou superior
+/*/
+//----------------------------------------------------------------------------------------------------
+Static Function execQueryAPrepared(cAlias as Character, oStatement as Object)
+	IIf(TGVA002BFWExecStat(), oStatement:OpenAlias(cAlias), DbUseArea(.T.,"TOPCONN",TcGenQry(,,oStatement:GetFixQuery()),cAlias,.T.,.T.))
+Return Nil
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescriptionProspect
+	Retorna a descrição da notificação para os Prospects
+	@type		function
+	@sample 	GetNotificationDescriptionProspect("000001")
+	@param		cProspectId	, Character , Código do Prospect
+	@Return		Character	, Retorna a descrição da notificação.
+	@author		Squad CRM/FAT
+	@since		19/07/2023
+	@version	12.1.2210 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescriptionProspect(cProspectId as Character) as Character
+
+	Local cDescription as Character
+
+	cDescription := STR0041 + ' ' + cProspectId + ' ' + STR0015 //"O Prospect" XXXX foi integrado com sucesso.
+
+Return cDescription
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescriptionContact
+	Retorna a descrição da notificação para os Prospects
+	@type		function
+	@sample 	GetNotificationDescriptionContact("000001")
+	@param		cProspectId	, Character , Código do Prospect
+	@Return		Character	, Retorna a descrição da notificação.
+	@author		Squad CRM/FAT
+	@since		26/09/2023
+	@version	12.1.2210 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescriptionContact(cContactId as Character) as Character
+
+	Local cDescription as Character
+
+	cDescription := STR0042 + ' ' + cContactId + ' ' + STR0015 //"O Contato" XXXX "foi integrado com sucesso."
+
+Return cDescription
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationProspect
+	Retorna o status da movimentação da notificação de Prospects, de acordo
+	com a operação.
+	@type		function
+	@sample 	ReturnOperationProspect(5)
+	@Return		Numeric,	Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		03/05/2023
+	@version	12.1.2210 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperationProspect(nOperation as Numeric) as Numeric
+
+	Local nStatus as Numeric
+
+	Do Case
+	Case nOperation == 3
+		nStatus := 19
+	Case nOperation == 4
+		nStatus := 20
+	Case nOperation == 5
+		nStatus := 21
+	EndCase
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitleProspect
+	Retorna o título das notificações para os Prospect.
+	@type		function
+	@sample 	GetNotificationTitleProspect()
+	@Return		Character,	Título da notificação
+	@author		Squad CRM/FAT
+	@since		19/07/2023
+	@version	12.1.2210 ou Superior
+	@param nOperation, numeric, número da operação (3 - Inclusão, 4 - Alteração, 5 - Exclusão )
+	@param cNumero, character, código do Prospect
+	@param lError, logical, .T. informa uma falha no processo
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitleProspect(nOperation as Numeric, cNumero as Character, lError as Logical) as Character
+
+	Local cTitle as Character
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation )
+
+	If lError
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0035 + ' ' + cNumero //"Falha ao incluir Prospect:"
+		Case nOperation == 4
+			cTitle := STR0036 + ' ' + cNumero //"Falha ao alterar Prospect:"
+		Case nOperation == 5
+			cTitle := STR0037 + ' ' + cNumero //"Falha ao excluir Prospect:"
+		Endcase
+	Else
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0038 + ' ' + cNumero //"Prospect incluído com sucesso:"
+		Case nOperation == 4
+			cTitle := STR0039 + ' ' + cNumero //"Prospect alterado com sucesso:"
+		Case nOperation == 5
+			cTitle := STR0040 + ' ' + cNumero //"Prospect excluído com sucesso:"
+		Endcase
+	EndIf
+
+Return cTitle
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationContact
+	Retorna o status da movimentação da notificação de Contatos, de acordo
+	com a operação.
+	@type		function
+	@sample 	ReturnOperationContact(5)
+	@Return		Numeric,	Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		03/05/2023
+	@version	12.1.2210 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function ReturnOperationContact(nOperation as Numeric) as Numeric
+
+	Local nStatus as Numeric
+
+	Do Case
+	Case nOperation == 3
+		nStatus := 23
+	Case nOperation == 4
+		nStatus := 24
+	Case nOperation == 5
+		nStatus := 25
+	EndCase
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitleContact
+	Retorna o título das notificações para os Contatos.
+	@type		function
+	@sample 	GetNotificationTitleContact()
+	@Return		Character,	Título da notificação
+	@author		Squad CRM/FAT
+	@since		26/09/2023
+	@version	12.1.2210 ou Superior
+	@param nOperation, numeric, número da operação (3 - Inclusão, 4 - Alteração, 5 - Exclusão )
+	@param cNumero, character, código do Prospect
+	@param lError, logical, .T. informa uma falha no processo
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitleContact(nOperation as Numeric, cNumero as Character, lError as Logical) as Character
+
+	Local cTitle as Character
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation )
+
+	If lError
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0043 + ' ' + cNumero //"Falha ao incluir Contato:"
+		Case nOperation == 4
+			cTitle := STR0044 + ' ' + cNumero //"Falha ao alterar Contato:"
+		Case nOperation == 5
+			cTitle := STR0045 + ' ' + cNumero //"Falha ao excluir Contato:"
+		Endcase
+	Else
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0046 + ' ' + cNumero //"Contato incluído com sucesso:"
+		Case nOperation == 4
+			cTitle := STR0047 + ' ' + cNumero //"Contato alterado com sucesso:"
+		Case nOperation == 5
+			cTitle := STR0048 + ' ' + cNumero //"Contato excluído com sucesso:"
+		Endcase
+	EndIf
+
+Return cTitle
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationDescriptionRelationContact
+	Retorna a descrição da notificação para os Relacionamento de contatos
+	@type		function
+	@sample 	GetNotificationDescriptionContact("000001")
+	@param		cEntityId	, Character , Código do registro da entidade
+	@Return		Character	, Retorna a descrição da notificação.
+	@author		Squad CRM/FAT
+	@since		18/12/2023
+	@version	12.1.2310 ou Superior
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationDescriptionRelationContact(cEntityId as Character) as Character
+
+	Local cDescription as Character
+
+	cDescription := STR0049 + ' ' + cEntityId + ' ' + STR0050	//"O Relacionamento da entidade " XXXX "  com o(s) contato(s) foi integrado com sucesso."
+
+Return cDescription
+
+//-------------------------------------------------------------------------------------------
+/*/{Protheus.doc} ReturnOperationRelationContact
+	Retorna o status da movimentação da notificação de Relacionamento de Contatos, de acordo
+	com a operação.
+	@type		function
+	@sample 	ReturnOperationContact(5)
+	@Return		Numeric,	Status da movimentação da notificação
+	@author		Squad CRM/FAT
+	@since		18/12/2023
+	@version	12.1.2310 ou Superior
+/*/
+//-------------------------------------------------------------------------------------------
+Static Function ReturnOperationRelationContact(nOperation as Numeric) as Numeric
+
+	Local nStatus as Numeric
+
+	Do Case
+	Case nOperation == 3
+		nStatus := 27
+	Case nOperation == 4
+		nStatus := 28
+	Case nOperation == 5
+		nStatus := 29
+	EndCase
+
+Return nStatus
+
+//----------------------------------------------------------------------------
+/*/{Protheus.doc} GetNotificationTitleRelationContact
+	Retorna o título das notificações para os Contatos.
+	@type		function
+	@sample 	GetNotificationTitleContact()
+	@Return		Character,	Título da notificação
+	@author		Squad CRM/FAT
+	@since		18/12/2023
+	@version	12.1.2310 ou Superior
+	@param nOperation, numeric, número da operação (3 - Inclusão, 4 - Alteração, 5 - Exclusão )
+	@param cNumero, character, código do Prospect
+	@param lError, logical, .T. informa uma falha no processo
+/*/
+//----------------------------------------------------------------------------
+Static Function GetNotificationTitleRelationContact(nOperation as Numeric, cNumero as Character, lError as Logical) as Character
+
+	Local cTitle as Character
+
+	nOperation := IIF( Empty( nOperation ), 3, nOperation )
+
+	If lError
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0051 + ' ' + cNumero //"Inclusão AC8 falhou:"
+		Case nOperation == 4
+			cTitle := STR0052 + ' ' + cNumero //"Alteração AC8 falhou:"
+		Case nOperation == 5
+			cTitle := STR0053 + ' ' + cNumero //"Exclusão AC8 falhou:"
+		Endcase
+	Else
+		Do Case
+		Case nOperation == 3
+			cTitle := STR0054 + ' ' + cNumero //"AC8 incluído com sucesso:"
+		Case nOperation == 4
+			cTitle := STR0055 + ' ' + cNumero //"AC8 alterado com sucesso:"
+		Case nOperation == 5
+			cTitle := STR0056 + ' ' + cNumero //"AC8 excluído com sucesso:"
+		Endcase
+	EndIf
+
+Return cTitle
+

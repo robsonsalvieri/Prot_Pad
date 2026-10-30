@@ -1,0 +1,513 @@
+#include "tlpp-core.th"
+#include "Totvs.ch"
+#include "tbiconn.ch"
+
+NAMESPACE totvs.protheus.backoffice.techfin.job
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+USING NAMESPACE totvs.protheus.backoffice.techfin.smartlink.dupesescrituracaoexecuterequest
+USING NAMESPACE totvs.protheus.backoffice.techfin.duplicataescritural.config.dados
+USING NAMESPACE totvs.protheus.backoffice.techfin.smartlink.dupesupdatepaymentrequest
+
+Static __lAutomato      := TFAdvPrExec()    as logical 
+Static __oQryDup        := Nil              as object
+Static __oQryBaixas     := Nil              as object
+Static __oQryDadosPgto  := Nil              as object
+Static __oUpdFk7        := Nil              as object
+Static __cLastExec      := ''               as character
+Static __lStamp         := Nil
+
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} TechfinJob
+    Execução de rotinas de atualização entre ERP e Techfin.
+    @type       Function
+    @author     Squad TechFin
+    @since      25/04/2026
+    @version    P12.1.2610
+/*/
+//------------------------------------------------------------------------------------------------
+Function Integra( lAutomato as logical, cCompany as character, cBranch as character ) as logical
+    
+    local aFils         := {}           as array
+    local aArea         := FwGetArea()  as array
+    local cCurrentExec  := ''           as character    
+    local cLockName     := ''           as character
+    local cFilBkp       := ''           as   character  
+
+    default cCompany := ""
+    default cBranch := ""
+    default lAutomato := .F.
+
+    If lAutomato
+        RPCSetType(3)
+        RpcSetEnv(cCompany, cBranch )
+    EndIF
+    
+    cLockName   := cEmpAnt + '-Techfin-Duplicatas'        
+    If LockByName(cLockName, .T., .F.)
+        If duplicataescrituralDependencies(.F.)
+            aFils := getActive('5')        
+            If Len(aFils) > 0
+                cFilBkp := cFilAnt       
+                __cLastExec := SuperGetMv("MV_TFDDTHR",,"")    
+                cCurrentExec := FwTimeStamp(6)// 6 = YYYY-MM-DD"T"HH:MM.SS.MM"Z"
+                duplicataEscritural(cEmpAnt, aFils)
+                PutMV("MV_TFDDTHR",cCurrentExec)
+                RpcClearEnv()
+                RpcSetEnv(cEmpAnt, cFilBkp)
+            EndIF
+        EndIf
+
+        UnLockByName(cLockName, .T., .F. )
+    Else
+        FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Duplicata Escritural process is locked by LockByName [lock file: "+cLockName+" ].")
+    EndIf
+
+    FwRestArea(aArea)
+    FwFreeArray(aArea)
+    FwFreeArray(aFils)
+Return
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} duplicataEscritural
+    Execução de rotinas de atualização do Duplicata Escritural 
+    @type       Function
+    @author     Squad TechFin
+    @since      25/04/2026
+    @version    P12.1.2610
+    @param  cEmp , chracter, codigo do grupo de empresas
+    @param  aFils,    array, lista de filiais habilitadas na integração
+/*/
+//------------------------------------------------------------------------------------------------
+Function duplicataEscritural(cEmp as character, aFils as array)
+    local nX := 0                       as numeric
+    local jConfig := JsonObject():new() as json    
+    local cTimeIni := __cLastExec       as character
+  
+      For nx:= 1 to Len(aFils)
+            
+        RpcClearEnv()
+        RpcSetEnv(cEmp, aFils[nX])
+        
+        jConfig:fromJson(getDefault())
+                
+        //-- Verifica se wizard esta configurado 
+        If jConfig["built"]
+            //Quando __cLastExec (conteudo do parametro) é vazio, a primeira execução dentro da filial corrente deve considerar data/hora do wizard 
+            If Empty(cTimeIni)                        
+                __cLastExec :=  jConfig["I_N_S_D_T_"] //Primeira execução pega a data de habilitação do produto
+            EndIf
+
+            //------------------------------------------------------------------------
+            //-- Processa envio das baixas dos títulos
+            dupBaixasTitulo()            
+
+            //------------------------------------------------------------------------
+            //-- Processa atualização de dados de pagamento do título            
+            dupDadosPgto()                       
+
+            //------------------------------------------------------------------------
+            //-- Processa envio da escrituração de títulos 
+            If jConfig["parametros"]["escrituracaoAutomatica"]
+                dupEscrituraNf( jConfig["parametros"]["permiteNotaFiscal"] )
+            EndIf
+
+        EndIf
+    Next nX 
+
+Return
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} dupBaixasTitulo
+    Lista as baixas realizadas para enviar atualização do valor 
+    da duplicata escriturada
+    @type       Function
+    @author     Squad TechFin
+    @since      25/04/2026
+    @version    P12.1.2610    
+/*/
+//------------------------------------------------------------------------------------------------
+Function dupBaixasTitulo()
+    local cAlias := ''      as character
+    local cQuery := ''      as character
+    local cIdDoc := ''      as character
+    local cMotBx := ''      as character
+    local cDtBx  := ''      as character
+    local nValBx := 0       as numeric
+    local aIdFK1 :={}       as array
+    
+    FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupBaixasTitulo() started")
+    If __oQryBaixas == NIL   
+        //Query nao considera estornos devido a restrições da escrituradora 
+        cQuery += " SELECT FK1_IDDOC, ARQ_IDDOC, FK1_IDFK1, FK1_MOTBX, FK1_DATA, FK1_VALOR, F7G_MOVBCO from " +  RetSqlName('FK1') + " FK1 "
+        cQuery += " INNER JOIN " + RetSqlName("ARP") + " ARP "
+        cQuery += "    ON ARP_FILIAL = ? "
+        cQuery += "    And ARP_IDDOC = FK1_IDDOC "
+        cQuery += "    And ARP_STATUS IN (?) "
+        cQuery += "    And ARP.D_E_L_E_T_ = ? "
+        cQuery += " INNER JOIN " + RetSqlName("F7G") + " F7G "
+        cQuery += "    ON F7G_FILIAL = ? "
+        cQuery += "    And F7G_SIGLA = FK1_MOTBX "
+        cQuery += "    And F7G.D_E_L_E_T_ = ? "
+        cQuery += " LEFT JOIN " + RetSqlName("ARQ") + " ARQ "
+        cQuery += "    ON ARQ_FILIAL = ? "
+        cQuery += "    AND ARQ_IDMOV = FK1_IDFK1 "
+        cQuery += "    And ARQ_IDMOV <> ? "        
+        cQuery += "    And ARQ.D_E_L_E_T_ = ? "
+        cQuery += " WHERE FK1.I_N_S_D_T_ >= ? "
+        cQuery += "     And FK1_FILIAL = ? "
+        cQuery += "     And FK1_RECPAG = ? "
+        cQuery += "     And FK1_TPDOC <> ? "
+        cQuery += "     And F7G_MOVBCO = ? "
+        cQuery += "     And FK1.D_E_L_E_T_ = ? "
+        cQuery += "     And ARQ_IDDOC Is Null "
+        cQuery += "Order By FK1_IDDOC, FK1.I_N_S_D_T_"
+        __oQryBaixas := FWExecStatement():New(ChangeQuery(cQuery))
+    EndIf    
+    __oQryBaixas:setString(1, FwxFilial('ARP'))
+    __oQryBaixas:setIn(2, {'2','4'})//1=Processando;2=Escriturado;3=Baixado;4=Baixa Parcial;5=Erro;6=Cancelado
+    __oQryBaixas:setString(3, ' ')
+    __oQryBaixas:setString(4, FwxFilial('F7G') )
+    __oQryBaixas:setString(5, ' ')
+    __oQryBaixas:setString(6, FwxFilial('ARQ') )
+    __oQryBaixas:setString(7, ' ')
+    __oQryBaixas:setString(8, ' ')
+    __oQryBaixas:setUnsafe(9, convTimeStamp(__cLastExec))
+    __oQryBaixas:setString(10, FwxFilial('FK1') )
+    __oQryBaixas:setString(11, 'R')
+    __oQryBaixas:setString(12, 'ES')
+    __oQryBaixas:setString(13, 'S')
+    __oQryBaixas:setString(14, ' ')
+    cAlias := __oQryBaixas:OpenAlias()
+    
+    While (cAlias)->(!Eof())
+        If cIdDoc <> (cAlias)->FK1_IDDOC .Or. cDtBx <> (cAlias)->FK1_DATA
+            dupBaixasSend(cIdDoc, nValBx, cMotBx, StoD(cDtBx), aIdFK1)//-- Chama classe para enviar a mensagem 
+            nValBx := 0
+            aIdFK1 := {}
+        EndIf
+
+        cIdDoc := (cAlias)->FK1_IDDOC
+        cMotBx := (cAlias)->FK1_MOTBX
+        cDtBx  := (cAlias)->FK1_DATA
+        nValBx += (cAlias)->FK1_VALOR
+        aAdd(aIdFK1, (cAlias)->FK1_IDFK1)
+
+        (cAlias)->(dbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())
+    
+    dupBaixasSend(cIdDoc, nValBx, cMotBx, StoD(cDtBx), aIdFK1)//-- Chama classe para enviar a mensagem 
+    FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupBaixasTitulo() finished")
+Return
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} getTipoAtualizacao
+    Determina o tipo de atualização baseado no status do SEA e F71
+    @type       Static Function
+    @author     Squad TechFin
+    @since      06/05/2026
+    @version    P12.1.2610
+    @param      cSEADelet, character, status de deleção do SEA ('*' para deletado)
+    @param      cF71Status, character, status do F71 ('7' para cancelado)
+    @return     cTipoAtualizacao, character, "A" para atualização, "C" para cancelamento
+/*/
+//------------------------------------------------------------------------------------------------
+Static Function getTipoAtualizacao(cSEADelet as character, cF71Status as character)
+    local cTipoAtualizacao := "A" as character
+
+    If cSEADelet == '*' .or. cF71Status == "7"
+        cTipoAtualizacao := "C"
+    Endif
+
+Return cTipoAtualizacao
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} dupDadosPgto
+    Processa as atualizações de dados de pagamento para boletos e PIX
+    @type       Function
+    @author     Squad TechFin
+    @since      06/05/2026
+    @version    P12.1.2610
+/*/
+//------------------------------------------------------------------------------------------------
+Function dupDadosPgto()
+    local cAlias             := '' as character
+    local cQuery             := '' as character
+    local cIdDoc             := '' as character
+    local cTipoAtualizacao   := '' as character
+    local nPaymentType       := 0  as numeric
+    local cCodBar            := '' as character
+
+    FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupDadosPgto() started")
+
+    If Empty(__cLastExec)
+        __cLastExec := SuperGetMv("MV_TFDDTHR",,"")
+    EndIf
+
+    If __oQryDadosPgto == NIL
+        cQuery += "SELECT E1_NUM, FK7.FK7_IDDOC FK7_IDDOC, 1 PAYMENT_TYPE, SE1.E1_CODBAR, SEA.D_E_L_E_T_ SEA_DELET, '' F71_STATUS "
+        cQuery += "FROM " + RetSqlName("SEA") + " SEA "
+        cQuery += "INNER JOIN "+ RetSqlName("SE1") + " SE1 "
+        cQuery += " ON E1_FILIAL = SEA.EA_FILORIG "
+        cQuery += " AND E1_PREFIXO = EA_PREFIXO "
+        cQuery += " AND E1_NUM = EA_NUM "
+        cQuery += " AND E1_PARCELA = EA_PARCELA "
+        cQuery += " AND E1_TIPO = EA_TIPO "
+        cQuery += " AND SE1.D_E_L_E_T_ = ? "
+        cQuery += "INNER JOIN " + RetSqlName("FK7") + " FK7 "
+        cQuery += " ON FK7.FK7_FILIAL = ? "
+        cQuery += " AND FK7.FK7_ALIAS = ? "
+        cQuery += " AND FK7.FK7_FILTIT = SEA.EA_FILIAL "
+        cQuery += " AND FK7.FK7_PREFIX = SEA.EA_PREFIXO "
+        cQuery += " AND FK7.FK7_NUM = SEA.EA_NUM "
+        cQuery += " AND FK7.FK7_PARCEL = SEA.EA_PARCELA "
+        cQuery += " AND FK7.FK7_TIPO = SEA.EA_TIPO "
+        cQuery += " AND FK7.D_E_L_E_T_ = ? "
+        cQuery += "INNER JOIN " + RetSqlName("ARP") + " ARP "
+        cQuery += " ON ARP.ARP_FILIAL = ? "
+        cQuery += " AND ARP.ARP_IDDOC = FK7.FK7_IDDOC "
+        cQuery += " AND ARP.D_E_L_E_T_ = ? "
+        cQuery += "WHERE SEA.S_T_A_M_P_ >= ? "
+        cQuery += " AND SEA.EA_FILIAL = ? "
+        cQuery += " AND SEA.EA_CART = ? "
+        cQuery += "UNION ALL "
+        cQuery += "SELECT F71_NUM, FK7.FK7_IDDOC FK7_IDDOC, 2 PAYMENT_TYPE,'' E1_CODBAR, '' SEA_DELET, F71.F71_STATUS F71_STATUS "
+        cQuery += "FROM " + RetSqlName("F71") + " F71 "
+        cQuery += "INNER JOIN " + RetSqlName("FK7") + " FK7 "
+        cQuery += " ON FK7.FK7_FILIAL = ? "
+        cQuery += " AND FK7.FK7_ALIAS = ? "
+        cQuery += " AND FK7.FK7_IDDOC = F71.F71_IDDOC "
+        cQuery += " AND FK7.D_E_L_E_T_ = ? "
+        cQuery += "INNER JOIN " + RetSqlName("ARP") + " ARP "
+        cQuery += " ON ARP.ARP_FILIAL = ? "
+        cQuery += " AND ARP.ARP_IDDOC = FK7.FK7_IDDOC "
+        cQuery += " AND ARP.D_E_L_E_T_ = ? "
+        cQuery += "WHERE F71.S_T_A_M_P_ >= ? "
+        cQuery += " AND F71.F71_FILIAL = ? "
+        cQuery += " AND F71.F71_STATUS IN (?) "
+        cQuery += " AND F71.D_E_L_E_T_ = ? "
+
+        __oQryDadosPgto := FWExecStatement():New(ChangeQuery(cQuery))
+    EndIf
+
+    __oQryDadosPgto:setString(1,' ')
+    __oQryDadosPgto:setString(2, FwxFilial('FK7'))
+    __oQryDadosPgto:setString(3, 'SE1')
+    __oQryDadosPgto:setString(4, ' ')
+    __oQryDadosPgto:setString(5, FwxFilial('ARP'))
+    __oQryDadosPgto:setString(6, ' ')
+    __oQryDadosPgto:setUnSafe(7, convTimeStamp(__cLastExec))
+    __oQryDadosPgto:setString(8, FwxFilial('SEA'))
+    __oQryDadosPgto:setString(9, 'R')
+    __oQryDadosPgto:setString(10, FwxFilial('FK7'))
+    __oQryDadosPgto:setString(11, 'SE1')
+    __oQryDadosPgto:setString(12, ' ')
+    __oQryDadosPgto:setString(13, FwxFilial('ARP'))
+    __oQryDadosPgto:setString(14, ' ')
+    __oQryDadosPgto:setUnSafe(15, convTimeStamp(__cLastExec))
+    __oQryDadosPgto:setString(16, FwxFilial('F71'))
+    __oQryDadosPgto:setIn(17, {'3','7'})//3=QrCode Gerado;7=Cancelado
+    __oQryDadosPgto:setString(18, ' ')
+
+    cAlias := __oQryDadosPgto:OpenAlias()
+    While (cAlias)->(!Eof())
+        cIdDoc := (cAlias)->FK7_IDDOC
+        nPaymentType := (cAlias)->PAYMENT_TYPE
+        cCodBar := (cAlias)->E1_CODBAR
+        cTipoAtualizacao := getTipoAtualizacao((cAlias)->SEA_DELET, (cAlias)->F71_STATUS)
+        atualizaDadosPgto(nPaymentType, cIdDoc, cTipoAtualizacao, cCodBar)
+        (cAlias)->(DbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())
+
+    FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupDadosPgto() finished")
+Return
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} dupBaixasSend
+    Chama execução da classe responsável pelo envio da mensagem de baixa
+    @type       Function
+    @author     Squad TechFin
+    @since      25/04/2026
+    @version    P12.1.2610    
+/*/
+//------------------------------------------------------------------------------------------------
+Static Function dupBaixasSend(cIdDoc as character, nVal as numeric, cMotBx as character, dDtBaixa as date, aIdFK1 as array)
+    local oBaixa := Nil as object
+    If nVal > 0 
+        oBaixa := totvs.protheus.backoffice.techfin.smartlink.dupessettlementrequest.DupesSettlementRequest():New()
+        oBaixa:setIdDoc( cIdDoc )        
+        oBaixa:setIdFk1( aIdFK1 )        
+        oBaixa:setMotBx( cMotBx )
+        oBaixa:setVlBaixa( nVal )
+        oBaixa:setDtBaixa( dDtBaixa )        
+        oBaixa:sendDupesSettlementRequestV1()
+    EndIf
+Return
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} dupEscrituraNf
+    Lista os Doc. de Saída para escrituração
+    da duplicata escriturada
+    @type       Function
+    @author     Squad TechFin
+    @since      25/04/2026
+    @version    P12.1.2610    
+/*/
+//------------------------------------------------------------------------------------------------
+Function dupEscrituraNf( lPermiteNota as logical )
+    local cAlias        := ''                                          as character
+    local cQuery        := ''                                          as character
+    local lUsaNFe       := .F.                                         as logical    
+    local lUsaNFSe      := .F.                                         as logical    
+    local aNotaEnviada  := {}                                          as array 
+    Local cURL          := PadR(GetNewPar("MV_SPEDURL","http://"),250) as character 
+
+    FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupEscrituraNf() started")   
+
+    //Ve TSS em uso, senão a escrituração é por título 
+    If lPermiteNota
+        lUsaNFe  := CTIsReady(cURL,1,.F.,.F.) .Or. __lAutomato // SPEDNFE.prw
+        lUsaNFSe := NFSIsReady(,cURL,2)       .Or. __lAutomato // FISA022.prw
+        FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupEscrituraNf() - Status NF-e: "+cValToChar(lUsaNFe)+" - Status NFS-e: "+cValToChar(lUsaNFSe))
+    Else        
+        FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupEscrituraNf() - Configuração de escrituração por nota fiscal desabilitada.")        
+    EndIF
+       
+    If __oQryDup == NIL         
+        
+        //no retorno do SPED, tenho que dar um update no FK7 pra atualizar o timestamp (ai aqui nao é o insdt é o stamp)
+        cQuery += " SELECT FK7.R_E_C_N_O_ AS RECFK7, SE1.R_E_C_N_O_ AS RECSE1,  SF2.R_E_C_N_O_ AS RECSF2 "
+        cQuery += " FROM " + RetSqlName("FK7") + " FK7 "    
+        cQuery += " Inner Join " + RetSqlName("SE1") + " SE1"
+        cQuery += "     ON  FK7.FK7_FILTIT = SE1.E1_FILIAL "
+        cQuery += "     And FK7.FK7_PREFIX = SE1.E1_PREFIXO "
+        cQuery += "     And FK7.FK7_NUM = SE1.E1_NUM "
+        cQuery += "     And FK7.FK7_PARCEL = SE1.E1_PARCELA "
+        cQuery += "     And FK7.FK7_TIPO = SE1.E1_TIPO "
+        cQuery += "     And FK7.FK7_CLIFOR = SE1.E1_CLIENTE "
+        cQuery += "     And FK7.FK7_LOJA = SE1.E1_LOJA "
+        cQuery += "     And SE1.E1_EMISSAO >= ? "
+        cQuery += "     And SE1.D_E_L_E_T_ = ? "
+        cQuery += " Left Join " + RetSqlName("ARP") + " ARP "
+        cQuery += "     ON ARP_FILIAL = ? "
+        cQuery += "     And ARP_IDDOC = FK7_IDDOC "        
+        cQuery += "     And ARP.D_E_L_E_T_ = ? "        
+        cQuery += " Left Join  " + RetSqlName("SF2") + " SF2 "
+        cQuery += "     ON SF2.F2_FILIAL = ? "
+        cQuery += "     And SF2.F2_DUPL = SE1.E1_NUM "
+        cQuery += "     And SF2.F2_SERIE = SE1.E1_SERIE "
+        cQuery += "     And SF2.F2_CLIENTE = SE1.E1_CLIENTE "
+        cQuery += "     And SF2.F2_LOJA = SE1.E1_LOJA "
+        cQuery += "     And SF2.F2_PREFIXO = SE1.E1_PREFIXO "        
+        cQuery += "     And F2_TIPO IN (?) "
+        cQuery += "     And SF2.D_E_L_E_T_ = ? "
+        cQuery += " WHERE FK7.S_T_A_M_P_ >= ? "
+        cQuery += "     And FK7.FK7_FILIAL = ? "
+        cQuery += "     And FK7.FK7_ALIAS = ? "
+        cQuery += "     And FK7.D_E_L_E_T_ = ? "        
+        cQuery += "     And ARP.ARP_IDDOC Is Null "        
+        cQuery := ChangeQuery(cQuery)        
+        __oQryDup := FWExecStatement():New(ChangeQuery(cQuery))
+    EndIf
+    __oQryDup:setString(1, getDateConfig())
+    __oQryDup:setString(2, ' ')
+    __oQryDup:setString(3, FwxFilial('ARP'))    
+    __oQryDup:setString(4, ' ')
+    __oQryDup:setString(5, FwxFilial('SF2'))    
+    __oQryDup:setIn(6, {'N','C'})//N=Normal;C=Compl.Preco/Quantidade    
+    __oQryDup:setString(7, ' ')
+    __oQryDup:setUnsafe(8, convTimeStamp(__cLastExec))
+    __oQryDup:setString(9, FwxFilial('FK7'))
+    __oQryDup:setString(10, 'SE1')    
+    __oQryDup:setString(11, ' ')
+    cAlias := __oQryDup:OpenAlias()
+    
+    dbSelectArea('SF2')
+    dbSetOrder(1)
+    dbSelectArea('SE1')
+    dbSetOrder(1)
+    dbSelectArea('FK7')
+    dbSetOrder(1)
+    While (cAlias)->(!Eof())
+        FK7->(msGoto((cAlias)->RECFK7))
+        If ARP->(!msSeek(FwxFilial('ARP')+FK7->FK7_IDDOC))//-- Mesmo com o Join eliminando, verifica a existencia por conta de escriturações a partir de outros processos.
+            SE1->(msGoto((cAlias)->RECSE1))
+            
+            //-- Tem NF vinculada ao título e esta configurado para escriturar por nota
+            iF !Empty((cAlias)->RECSF2) .And. (lUsaNFe .Or. lUsaNFSe)
+                If aScan( aNotaEnviada, {|x| x[1] == (cAlias)->RECSF2 } ) == 0
+                    Aadd(aNotaEnviada, (cAlias)->RECSF2 ) //criar cenário com 2 parcelas para a NF e validar que mandou 1x só
+                    SF2->(dbGoTo((cAlias)->RECSF2))                    
+                    iF (lUsaNFe .And. !Empty(SF2->F2_CHVNFE)) .Or. (lUsaNFSe .And. !Empty(SF2->F2_CODNFE) .And. SF2->F2_FIMP=='S')
+                        escrituraNota()
+                    EndIF
+                EndIF
+            Else
+                escrituraTitulo()
+            EndIF
+        EndIf        
+        (cAlias)->(dbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())	
+    FwLogMsg("INFO",,"TECHFIN",FunName(),"","Techfin.Job", "Branch: "+cFilAnt+" - Function dupEscrituraNf() finished")
+
+Return
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} dupMarcaRegistro
+Após autorização do SEFAZ (autoNfeBusinnes.prw), marca registro FK7 para Job processar envio da escrituração.
+
+@author Squad TechFin
+@since 25/04/2026
+/*/
+//------------------------------------------------------------------------------------------------
+Function dupMarcaRegistro(cF2_PREFIXO as character, cF2_DUPL as character)
+        
+    Local cStatement as Character
+
+    If __lStamp == Nil
+        __lStamp := Ascan(TCStruct(RetSqlName('FK7')), {|x| x[1] == 'S_T_A_M_P_'}) <> 0
+    EndIf
+    If __lStamp        
+        //- Forçando o envio de nulo, é disparado corretamente a atualizaçao do stamp
+        If __oUpdFk7 == Nil
+            cStatement := " UPDATE ? SET S_T_A_M_P_ = ? "
+            cStatement += " WHERE FK7_FILIAL = ? "
+            cStatement += " AND FK7_PREFIX  = ? "
+            cStatement += " AND FK7_NUM  = ? "            
+            cStatement += " AND D_E_L_E_T_ = ? "
+            __oUpdFk7 := FWPreparedStatement():New(cStatement)
+        EndIf        
+        __oUpdFk7:setUnsafe(1, RetSqlName("FK7"))	
+        __oUpdFk7:setUnsafe(2, 'NULL')
+        __oUpdFk7:SetString(3, FwXFilial('FK7'))
+        __oUpdFk7:SetString(4, cF2_PREFIXO)
+        __oUpdFk7:SetString(5, cF2_DUPL)
+        __oUpdFk7:SetString(6, ' ')
+        cStatement := __oUpdFk7:GetFixQuery()        
+        TCSqlExec(cStatement)        
+    EndIf
+
+Return
+
+//------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} SchedDef
+Execução de Parâmetros na Definição do Schedule
+@author Squad TechFin
+@since 25/04/2026
+@return aParam, Array, Conteudo com as definições de parâmetros para WF
+/*/
+//------------------------------------------------------------------------------------------------
+Function SchedDef()
+
+	local aParam as array	
+	aParam := {	"P"		,;	//Tipo R para relatorio P para processo
+				""      ,;	//Nome do grupo de perguntas (SX1)
+				Nil		,;	//cAlias (para Relatorio)
+				Nil		,;	//aArray (para Relatorio)
+				Nil		,;	//Titulo (para Relatorio)
+				Nil		,;	//Nome do Relatório
+				.F.		,;	//Indica se permite que o agendamento possa ser cadastrado como sempre ativo
+				.F.		}	//Indica que o agendamento pode ser realizado por filiais
+Return aParam 

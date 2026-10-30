@@ -1,0 +1,369 @@
+#Include "totvs.ch"
+#Include "fwmvcdef.ch"
+#Include "tlpp-core.th"
+#Include "backoffice.categories.importcategories.data.ch"
+
+namespace totvs.protheus.backoffice.categories.importcategories
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData
+	Efetua a manipulação de dados e uso do MILE no Protheus
+	@type       Class
+	@author     Paulo Dias Oliveira / Squad Retail
+	@since      16/11/2025
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Class ImportCategoriesProtheusData
+	Public Method new() as Object
+	Public Method getTemplate() as Json
+	Public Method postImport(cBody as Character) as Json
+
+	Private Method ACUMileLyo() as Logical
+	Private Method ACUGenCsv() as Character
+	Private Method ACURemoHdr(cFile as Character) as Character
+EndClass
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData::new() as Object
+	Obtém uma nova instancia da classe ImportCategoriesProtheusData
+	@type       method
+	@return     object, retorna uma nova instancia da classe
+	@author     Paulo Dias Oliveira / Squad Retail
+	@since      16/11/2025
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Method new() as Object Class ImportCategoriesProtheusData
+Return Self
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData::new() as Json
+	Obtém o template de importação de categorias em formato JSON, contendo o arquivo CSV codificado em Base64
+	@type       method
+	@return     json, retorna um objeto Json contendo o nome do arquivo e o conteúdo em Base64 do template CSV
+	@author     Paulo Dias Oliveira / Squad Retail
+	@since      16/11/2025
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Method getTemplate() as Json Class ImportCategoriesProtheusData
+	Local jResponse as Json
+	Local cCsvData  as Character
+
+	jResponse := JsonObject():New()
+	cCsvData  := ::ACUGenCsv()
+
+	jResponse['fileName'] := "MILE_CSV.csv"
+	jResponse['fileData'] := Encode64(cCsvData)
+Return jResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData::new() as Json
+	Realiza a importação das categorias utilizando o MILE do Protheus, a partir de um arquivo CSV enviado via API e codificado em Base64 no corpo da requisição
+	@type       method
+	@return     json, retorna um objeto Json indicando o sucesso ou falha da operação, e mensagens de erro quando aplicável
+	@author     Paulo Dias Oliveira / Squad Retail
+	@since      16/11/2025
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Method postImport(cBody as Character) as Json Class ImportCategoriesProtheusData
+	Local jResponse  as Json
+	Local jBody      as Json
+	Local aElements  as Array
+	Local oElement   as Object
+	Local cFile      as Character
+	Local cUploadDir as Character
+	Local cRootPath  as Character
+	Local oFWMILE    as Object
+	Local cMsgError  as Character
+	Local lRet       as Logical
+	Local nI         as Numeric
+	Local nPos       as Numeric
+
+	Default cBody := ""
+
+	jResponse  := JsonObject():New()
+	jBody      := JsonObject():New()
+	aElements  := {}
+	oElement   := Nil
+	cFile      := ""
+	cUploadDir := ""
+	cRootPath  := ""
+	oFWMILE    := Nil
+	cMsgError  := ""
+	lRet       := .F.
+	nI         := 1
+	nPos       := 0
+
+	// Converte o texto JSON
+	jBody:FromJson(cBody)
+		
+	// Extrai e converte o caminho fisico para caminho relativo do Protheus
+	If jBody:HasProperty("Elements")
+		aElements := jBody["Elements"]
+
+		If ValType(aElements) == "A"
+			For nI := 1 To Len(aElements)
+				oElement := aElements[nI]
+				
+				If ValType(oElement) == "J" .And. oElement:HasProperty("UploadDir") .And. oElement:HasProperty("UploadName")
+					// Pega o dir recebido e normaliza as barras
+					cUploadDir := StrTran(oElement["UploadDir"], "\", "/")
+					cUploadDir := StrTran(cUploadDir, "/./", "/")
+
+					// Pega o caminho raiz do Protheus (RootPath) configurado no appserver.ini
+					cRootPath := StrTran(GetSrvProfString("RootPath", ""), "\", "/")
+					If Right(cRootPath, 1) == "/"
+						cRootPath := SubStr(cRootPath, 1, Len(cRootPath) - 1)
+					EndIf
+
+					// Converte o caminho absoluto (S.O.) para caminho relativo (Protheus)
+					nPos := At(Lower(cRootPath), Lower(cUploadDir))
+					If nPos > 0
+						cUploadDir := SubStr(cUploadDir, nPos + Len(cRootPath))
+					EndIf
+
+					// Monta o caminho final preparado para a seguranca do Protheus
+					cFile := cUploadDir + oElement["UploadName"]
+					cFile := StrTran(cFile, "/", "\")
+
+					Exit
+				EndIf
+			Next
+		EndIf
+	EndIf
+
+	// Verifica se o arquivo existe e segue com a importação via MILE
+	If !Empty(cFile) .And. File(cFile)
+
+		// Remove a primeira linha (cabeçalho) do arquivo
+		cFile := ::ACURemoHdr(cFile)
+
+		::ACUMileLyo()
+
+		oFWMILE := FWMILE():New(.T.)
+		oFWMILE:SetLayout("ACU001")
+		oFWMILE:SetTXTFile(cFile) // O MILE exige caminhos relativos
+		oFWMILE:SetInterface(.F.)
+
+		If oFWMILE:Activate()
+
+			oFWMILE:Import()
+
+			If oFWMILE:Error()
+				cMsgError := STR0001 // "Ocorreu um erro na importação. Consulte o Log de Processamento do MILE no Protheus."
+			Else
+				lRet := .T.
+			EndIf
+
+			oFWMILE:Deactivate()
+
+		Else
+			cMsgError := STR0002 + oFWMILE:GetError() // "Falha ao ativar o MILE: "
+		EndIf
+	Else
+		cMsgError := STR0003 + cFile // "Arquivo físico não encontrado. Path convertido: "
+	EndIf
+
+	// Preenche o JSON de resposta
+	If lRet
+		jResponse['status']  := "success"
+		jResponse['message'] := STR0004 // "Importação concluída com sucesso."
+	Else
+		jResponse['error']   := cMsgError
+	EndIf
+
+	// Limpeza de memória
+	FwFreeObj(oFWMILE)
+	FwFreeObj(jBody)
+Return jResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData::new() as Character
+	Gera o conteúdo do arquivo CSV de importação, utilizando dados fixos para exemplo
+	@type       method
+	@return     character, retorna o conteúdo do arquivo CSV a ser importado
+	@author     Paulo Dias Oliveira / Squad Retail
+	@since      16/11/2025
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Method ACUGenCsv() as Character Class ImportCategoriesProtheusData
+	Local cCsv as Character
+
+	cCsv := STR0025 + " (ACU_COD);" + STR0026 + " (ACU_DESC);" + STR0027 + " (ACU_CODPAI);" + STR0028 + " (ACU_DESCC)" + CRLF
+	cCsv += "000001;" + STR0005 + ";;" + STR0006 + ""  + CRLF       // "CATEGORIA 01", ""DESCRICAO ESTENDIDA DA CATEGORIA 01""
+	cCsv += "000002;" + STR0007 + ";000001;" + STR0008 + "" + CRLF  // "CATEGORIA 01.01", "DESCRICAO ESTENDIDA DA CATEGORIA 01.01"
+	cCsv += "000003;" + STR0009 + ";000001;" + STR0010 + "" + CRLF  // "CATEGORIA 01.02", "DESCRICAO ESTENDIDA DA CATEGORIA 01.02"
+	cCsv += "000004;" + STR0011 + ";;" + STR0012 + "" + CRLF        // "CATEGORIA 02", "DESCRICAO ESTENDIDA DA CATEGORIA 02"
+	cCsv += "000005;" + STR0013 + ";000004;" + STR0014 + "" + CRLF  // "CATEGORIA 02.01", "DESCRICAO ESTENDIDA DA CATEGORIA 02.01"
+	cCsv += "000006;" + STR0015 + ";;" + STR0016 + "" + CRLF        // "CATEGORIA 03", "DESCRICAO ESTENDIDA DA CATEGORIA 03"
+	cCsv += "000007;" + STR0017 + ";000006;" + STR0018 + "" + CRLF  // "CATEGORIA 03.01", "DESCRICAO ESTENDIDA DA CATEGORIA 03.01"
+Return cCsv
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData::new() as Logical
+	Realiza a importação das categorias utilizando o MILE do Protheus, a partir de um arquivo CSV enviado via API e codificado em Base64 no corpo da requisição
+	@type       method
+	@return     logical, retorna verdadeiro se a importação foi bem sucedida, ou falso caso contrário
+	@author     Paulo Dias Oliveira / Squad Retail
+	@since      16/11/2025
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Method ACUMileLyo() as Logical Class ImportCategoriesProtheusData
+	Local cCode     as Character
+	Local cDesc     as Character
+	Local cAdapter  as Character
+	Local cType     as Character
+	Local cActive   as Character
+	Local cLayout   as Character
+	Local aArea     as Array
+
+	cCode     := "ACU001"
+	cDesc     := STR0019 // "Importação de Categorias"
+	cAdapter  := "FATA140" 
+	cType     := "2"
+	cActive   := "1"
+	cLayout   := ""
+	aArea     := FWGetArea()
+
+	cLayout := '<?xml version="1.0" encoding="UTF-8"?>'
+	cLayout += '<CFGA600 Operation="4" version="1.01">'
+	cLayout += '<XZ1MASTER modeltype="FIELDS">'
+	cLayout += '<XZ1_LAYOUT order="1"><value>' + cCode + '</value></XZ1_LAYOUT>'
+	cLayout += '<XZ1_TYPE order="2"><value>2</value></XZ1_TYPE>'
+	cLayout += '<XZ1_DESC order="3"><value>' + cDesc + '</value></XZ1_DESC>'
+	cLayout += '<XZ1_ADAPT order="4"><value>' + cAdapter + '</value></XZ1_ADAPT>'
+	cLayout += '<XZ1_STRUC order="5"><value>2</value></XZ1_STRUC>'
+	cLayout += '<XZ1_SEPARA order="6"><value>;</value></XZ1_SEPARA>'
+	cLayout += '<XZ1_SEPINASP order="7"><value>2</value></XZ1_SEPINASP>'
+	cLayout += '<XZ1_TYPEXA order="8"><value>1</value></XZ1_TYPEXA>'
+	cLayout += '<XZ1_SEPINI order="9"><value>2</value></XZ1_SEPINI>'
+	cLayout += '<XZ1_SEPFIN order="10"><value>2</value></XZ1_SEPFIN>'
+	cLayout += '<XZ1_TABLE order="11"><value>ACU</value></XZ1_TABLE>'
+	cLayout += '<XZ1_DESTAB order="12"><value>' + STR0020 + '</value></XZ1_DESTAB>' // "Categoria de Produtos"
+	cLayout += '<XZ1_ORDER order="13"><value>1</value></XZ1_ORDER>'
+	cLayout += '<XZ1_TIPDAT order="18"><value>1</value></XZ1_TIPDAT>'
+	cLayout += '<XZ1_DECSEP order="19"><value>2</value></XZ1_DECSEP>'
+	cLayout += '<XZ1_EMULTC order="20"><value>2</value></XZ1_EMULTC>'
+	cLayout += '<XZ1_DETOPC order="21"><value>2</value></XZ1_DETOPC>'
+	cLayout += '<XZ1_IMPEXP order="23"><value>1</value></XZ1_IMPEXP>'
+	cLayout += '<XZ1_VERSIO order="24"><value>1.0</value></XZ1_VERSIO>'
+	cLayout += '<XZ1_MVCOPT order="25"><value>2</value></XZ1_MVCOPT>'
+	cLayout += '<XZ1_MVCMET order="26"><value>1</value></XZ1_MVCMET>'
+	cLayout += '<XZ1_NOCACHEMOD order="27"><value>2</value></XZ1_NOCACHEMOD>'
+
+	cLayout += '<XZ2DETAIL modeltype="GRID"><struct><XZ2_LAYOUT order="1"></XZ2_LAYOUT><XZ2_SEQ order="2"></XZ2_SEQ><XZ2_CHANEL order="3"></XZ2_CHANEL><XZ2_SUPER order="4"></XZ2_SUPER></struct><items><item id="1" deleted="0" ><XZ2_SEQ>01</XZ2_SEQ><XZ2_CHANEL>ACUMASTER</XZ2_CHANEL>'
+	cLayout += '<XZ3DETAIL modeltype="FIELDS"><XZ3_CHANEL order="2"><value>ACUMASTER</value></XZ3_CHANEL><XZ3_DESC order="3"><value>' + STR0020 + '</value></XZ3_DESC><XZ3_IDOUT order="4"><value>ACUMASTER</value></XZ3_IDOUT><XZ3_OCCURS order="5"><value>1</value></XZ3_OCCURS></XZ3DETAIL>' // "Categoria de Produtos"
+	cLayout += '<XZ4DETAIL modeltype="GRID" optional="1"><struct><XZ4_LAYOUT order="1"></XZ4_LAYOUT><XZ4_CHANEL order="2"></XZ4_CHANEL><XZ4_SEQ order="3"></XZ4_SEQ><XZ4_FIELD order="4"></XZ4_FIELD><XZ4_TYPFLD order="5"></XZ4_TYPFLD><XZ4_EXEC order="6"></XZ4_EXEC><XZ4_COND order="7"></XZ4_COND><XZ4_NOVAL order="8"></XZ4_NOVAL><XZ4_DESC order="9"></XZ4_DESC><XZ4_OBS order="10"></XZ4_OBS><XZ4_SOURCE order="11"></XZ4_SOURCE></struct><items>'
+
+	// Itens
+	cLayout += '<item id="1" deleted="0" ><XZ4_SEQ>002</XZ4_SEQ><XZ4_FIELD>ACU_COD</XZ4_FIELD><XZ4_TYPFLD>C</XZ4_TYPFLD><XZ4_NOVAL>2</XZ4_NOVAL><XZ4_DESC>' + STR0021 + '</XZ4_DESC><XZ4_SOURCE>0001</XZ4_SOURCE></item>' // "Categoria"
+	cLayout += '<item id="2" deleted="0" ><XZ4_SEQ>003</XZ4_SEQ><XZ4_FIELD>ACU_DESC</XZ4_FIELD><XZ4_TYPFLD>C</XZ4_TYPFLD><XZ4_NOVAL>2</XZ4_NOVAL><XZ4_DESC>' + STR0022 + '</XZ4_DESC><XZ4_SOURCE>0002</XZ4_SOURCE></item>' // "Descricao da Categoria"
+	cLayout += '<item id="3" deleted="0" ><XZ4_SEQ>004</XZ4_SEQ><XZ4_FIELD>ACU_CODPAI</XZ4_FIELD><XZ4_TYPFLD>C</XZ4_TYPFLD><XZ4_NOVAL>2</XZ4_NOVAL><XZ4_DESC>' + STR0023 + '</XZ4_DESC><XZ4_SOURCE>0003</XZ4_SOURCE></item>' // "Categoria Superior"
+	cLayout += '<item id="4" deleted="0" ><XZ4_SEQ>005</XZ4_SEQ><XZ4_FIELD>ACU_DESCC</XZ4_FIELD><XZ4_TYPFLD>C</XZ4_TYPFLD><XZ4_NOVAL>2</XZ4_NOVAL><XZ4_DESC>' + STR0024 + '</XZ4_DESC><XZ4_SOURCE>0004</XZ4_SOURCE></item>' // "Descricao Completa"
+
+	cLayout += '</items></XZ4DETAIL>'
+	cLayout += '<XZ5DETAIL modeltype="GRID" optional="1"><struct><XZ5_LAYOUT order="1"></XZ5_LAYOUT><XZ5_CHANEL order="2"></XZ5_CHANEL><XZ5_SEQ order="3"></XZ5_SEQ><XZ5_FIELD order="4"></XZ5_FIELD><XZ5_TYPFLD order="5"></XZ5_TYPFLD><XZ5_EXEC order="6"></XZ5_EXEC><XZ5_COND order="7"></XZ5_COND><XZ5_OBS order="8"></XZ5_OBS><XZ5_SOURCE order="9"></XZ5_SOURCE></struct></XZ5DETAIL>'
+	cLayout += '</item></items></XZ2DETAIL></XZ1MASTER></CFGA600>'
+
+	If (Select("XXJ") == 0)
+		FWOpenXXJ()
+	EndIf
+
+	dbSelectArea("XXJ")
+	XXJ->(dbSetOrder(1)) // XXJ_CODE
+
+	If XXJ->(dbSeek(cCode))
+		RecLock("XXJ", .F.)
+		XXJ->(dbDelete())
+		XXJ->(MsUnlock())
+	EndIf
+
+	RecLock("XXJ", .T.)
+	XXJ->XXJ_CODE   := cCode
+	XXJ->XXJ_DESC   := cDesc
+	XXJ->XXJ_ADAPT  := cAdapter
+	XXJ->XXJ_LAYOUT := cLayout
+	XXJ->XXJ_TYPE   := cType
+	XXJ->XXJ_ACTIVE := cActive
+	XXJ->(MsUnlock())
+
+	FWRestArea(aArea)
+Return .T.
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ImportCategoriesProtheusData::ACURemoHdr() as Character
+	Remove a primeira linha (cabeçalho) do arquivo CSV e retorna o caminho do novo arquivo sem cabeçalho
+	@type       method
+	@param      cFile, character, caminho do arquivo original
+	@return     character, retorna o caminho do arquivo sem cabeçalho
+	@author     Daniel Tonon / Squad Retail
+	@since      06/04/2026
+	@version    P12
+/*/
+//------------------------------------------------------------------------------
+Method ACURemoHdr(cFile as Character) as Character Class ImportCategoriesProtheusData
+	Local aConteudo  as Array
+	Local cFileOut   as Character
+	Local cPath      as Character
+	Local nI         as Numeric
+	Local cContent   as Character
+	Local oFileRead  as Object
+	Local oFileWrite as Object
+
+	Default cFile := ""
+
+	aConteudo := {}
+	nI        := 0
+	cContent  := ""
+
+	// Extrai o diretório do arquivo original (funciona em Windows e Linux)
+	cPath := SubStr(cFile, 1, Max(RAt("\", cFile), RAt("/", cFile)))
+
+	// Define caminho do arquivo temporário (mesmo diretório do arquivo original)
+	cFileOut := cPath + "tmp_" + StrTran(StrTran(Time(), ":", ""), " ", "") + ".csv"
+
+	// Lê o arquivo completo
+	oFileRead := FWFileReader():New(cFile)
+
+	If (oFileRead:Open())
+		While (oFileRead:hasLine())
+			cContent += oFileRead:GetLine() + CRLF
+		End
+		oFileRead:Close()
+	EndIf
+
+	FwFreeObj(oFileRead)
+
+	// Divide o conteúdo em linhas
+	aConteudo := StrToArray(cContent, CRLF)
+
+	// Reconstrói o conteúdo sem a primeira linha
+	cContent := ""
+	For nI := 2 To Len(aConteudo)
+		If !Empty(aConteudo[nI])
+			cContent += aConteudo[nI] + CRLF
+		EndIf
+	Next
+
+	// Cria e escreve no arquivo temporário
+	oFileWrite := FWFileWriter():New(cFileOut, .T.)
+
+	If (!oFileWrite:Exists())
+		oFileWrite:Create()
+		oFileWrite:Close()
+	EndIf
+
+	If (oFileWrite:Open())
+		oFileWrite:Clear()
+		oFileWrite:Write(cContent)
+		oFileWrite:Close()
+	EndIf
+
+	FwFreeObj(oFileWrite)
+
+Return cFileOut

@@ -1,0 +1,397 @@
+-- =============================================
+-- Author:		Thiago Alves Bussolin
+-- Create date: 03/10/2025
+-- Description:	Carrega dados da tabela CT2 para tabela QLX fazendo a ponte para a integração gesplan
+-- =============================================
+CREATE PROCEDURE CTBCT2GES_## (
+	@IN_CONTADE char( 'CT2_DEBITO' ),
+	@IN_CONTAATE char( 'CT2_DEBITO' ),
+	@OUT_RESULTADO char( 01 ) OutPut
+) AS 
+	-- 1- Criando as variaveis
+    -----------------------------------------------------------------
+	declare @maxStagingCounter datetime
+	declare @dtInifilter char(8)
+
+	--## Variaveis Trabalho Pos Consulta ##--
+	declare @cStamp char(26)
+	declare @delTransactTime char(26)
+
+BEGIN
+	select @OUT_RESULTADO = '0'
+
+	Select @cStamp = (
+					SELECT MIN(QLZ_STAMP) 
+						FROM QLZ### QLZ
+						WHERE 
+							QLZ.QLZ_ALIAS = 'QLX' 
+				)
+	
+
+	Select @delTransactTime = CONVERT(CHAR(26), DATEADD(HOUR, -1, GETUTCDATE()), 121)
+	Select @dtInifilter =  Convert(CHAR(8),DateAdd(Year,-2,GetDate()),112)
+	If @cStamp is not null 
+	Begin
+		If @cStamp > @delTransactTime
+		Begin
+			Select @maxStagingCounter  = convert(datetime, @delTransactTime ,121 ) 
+		End
+		Else
+		Begin
+			Select @maxStagingCounter  = convert(datetime, @cStamp,121 ) 
+		End
+	End
+
+	---------------------------------------------------	INICIO DA QUERY -------------------------------------------------------------------------------
+	##IF_001({|| AllTrim(Upper(TcGetDB())) == "ORACLE"})
+		INSERT INTO QLX### (
+			QLX_FILIAL,
+			QLX_MOEDA, 
+			QLX_TIPO,
+			QLX_CONTA,
+			QLX_CCUSTO,
+			QLX_ITEM,
+			QLX_CLVL,
+			QLX_DATA,
+			QLX_TPSALD,
+			QLX_DC,
+			QLX_LOTE,
+			QLX_SBLOTE,
+			QLX_DOC,
+			QLX_LINHA,
+			QLX_PARTID,
+			QLX_HIST,
+			QLX_SEQHIS,
+			QLX_SEQLAN,
+			QLX_EMPORI,
+			QLX_FILORI,
+			##FIELDP01( 'CT2.CT2_EC05CR' )
+				QLX_ENT05,
+			##ENDFIELDP01
+			##FIELDP02( 'CT2.CT2_EC06CR' )
+				QLX_ENT06,
+			##ENDFIELDP02
+			##FIELDP03( 'CT2.CT2_EC07CR' )
+				QLX_ENT07,
+			##ENDFIELDP03
+			##FIELDP04( 'CT2.CT2_EC08CR' )
+				QLX_ENT08,
+			##ENDFIELDP04
+			##FIELDP05( 'CT2.CT2_EC09CR' ) 
+				QLX_ENT09,
+			##ENDFIELDP05
+			QLX_IDLANC,
+			QLX_VALOR,
+			QLX_STAMP,
+			QLX_DELET
+			) 
+			VALUES (
+				CT2_FILIAL,
+				MOEDA,
+				TIPO,
+				CONTA,
+				CENTRO_CUSTO,
+				ITEM_CONTABIL,
+				CLASSE_VALOR,
+				DDATA,     
+				TPSALD,
+				DC,
+				LOTE,
+				SUBLOTE,
+				DOC,
+				LINHA,
+				XPARTIDA,
+				HIST,
+				SEQHIS,
+				SEQLAN,
+				EMPORI,
+				FILORI,
+				##FIELDP06( 'CT2.CT2_EC05CR' )
+					ENT05,
+				##ENDFIELDP06
+				##FIELDP07( 'CT2.CT2_EC06CR' )
+					ENT06,
+				##ENDFIELDP07
+				##FIELDP08( 'CT2.CT2_EC07CR' )
+					ENT07,
+				##ENDFIELDP08
+				##FIELDP09( 'CT2.CT2_EC08CR' )
+					ENT08,
+				##ENDFIELDP09
+				##FIELDP10( 'CT2.CT2_EC09CR' ) 
+					ENT09,
+				##ENDFIELDP10
+				MSUIDT,
+				SALDO,
+				STG_S_T_A_M_P_,
+				'STG_DELET'
+				)
+				INSERT INTO QLZ### (
+					QLZ_FILIAL,
+					QLZ_ALIAS,
+					QLZ_RECNO,
+					QLZ_STAMP
+				) VALUES(
+					' ',
+					'QLX',
+					CT2_RECNO , 
+					'STG_S_T_A_M_P_'
+				)
+	##ENDIF_001
+	##IF_002({|| Trim(TcGetDb()) = "POSTGRES" })
+		Select @cStamp = '1'   --SOBREESCREVER PARA TEMP DB POSTGRES
+	##ENDIF_002
+	
+	SELECT 
+		CT2.CT2_FILIAL,
+		SUBSTRING(CT2.CT2_DATA,1,4) 	ANO,
+		SUBSTRING(CT2.CT2_DATA,5,2) 	MES,
+		CTO.CTO_DESC 					MOEDA,
+		'2' 							TIPO ,
+		ISNULL(CT2.CT2_CREDIT,'')    	CONTA,
+		ISNULL(CT2.CT2_CCC,'')       	CENTRO_CUSTO,
+		ISNULL(CT2.CT2_ITEMC,'')     	ITEM_CONTABIL,
+		ISNULL(CT2.CT2_CLVLCR,'')    	CLASSE_VALOR,
+		ISNULL(CT2.CT2_DATA,'') 	 	DDATA,    
+		ISNULL(CT2.CT2_TPSALD,'') 		TPSALD,
+		ISNULL(CT2.CT2_DC,'') 			DC,
+		ISNULL(CT2.CT2_LOTE,'') 		LOTE,
+		ISNULL(CT2.CT2_SBLOTE,'') 		SUBLOTE,
+		ISNULL(CT2.CT2_DOC,'') 			DOC,
+		ISNULL(CT2.CT2_LINHA,'') 		LINHA,
+		ISNULL(CT2.CT2_DEBITO,'') 		XPARTIDA,
+		ISNULL(CT2.CT2_HIST,'') 		HIST,
+		ISNULL(CT2.CT2_SEQHIS,'') 		SEQHIS,
+		ISNULL(CT2.CT2_SEQLAN,'') 		SEQLAN,
+		ISNULL(CT2.CT2_EMPORI,'') 		EMPORI,
+		ISNULL(CT2.CT2_FILORI,'') 		FILORI,
+		##FIELDP11( 'CT2.CT2_EC05CR' )
+			CT2.CT2_EC05CR    			 	ENT05,
+		##ENDFIELDP11
+		##FIELDP12( 'CT2.CT2_EC06CR' )
+			CT2.CT2_EC06CR    				ENT06,
+		##ENDFIELDP12
+		##FIELDP13( 'CT2.CT2_EC07CR' )
+			CT2.CT2_EC07CR    				ENT07,
+		##ENDFIELDP13
+		##FIELDP14( 'CT2.CT2_EC08CR' )
+			CT2.CT2_EC08CR    				ENT08,
+		##ENDFIELDP14
+		##FIELDP15( 'CT2.CT2_EC09CR' ) 
+			CT2.CT2_EC09CR    				ENT09,
+		##ENDFIELDP15
+		CONCAT( CT2.CT2_MSUIDT,'C') 		MSUIDT,
+		CT2.CT2_VALOR	  					SALDO,
+		##IF_003({|| Trim(TcGetDb()) == "MSSQL" })
+			CT2.CT2_DC STG_S_T_A_M_P_,
+		##ELSE_003
+			ISNULL(RTRIM(LTRIM(CONVERT(CHAR(26), CT2.S_T_A_M_P_, 121))) ,@delTransactTime) STG_S_T_A_M_P_,
+		##ENDIF_003
+		CT2.D_E_L_E_T_                       STG_DELET,
+		CT2.R_E_C_N_O_                       CT2_RECNO
+			FROM CT2### CT2 LEFT JOIN CT2### ON CT2_FILIAL = ' ' INNER JOIN CTO### CTO ON 
+				CTO.CTO_FILIAL = SUBSTRING(CT2.CT2_FILORI,1,@IN_TAMCTO) || REPLICATE(' ', @IN_TAMTOTAL - @IN_TAMCTO)
+				AND CTO.CTO_MOEDA = CT2.CT2_MOEDLC
+				AND CTO.D_E_L_E_T_ = ' '
+			LEFT JOIN QLZ### QLZ
+				ON 
+					QLZ.QLZ_ALIAS = 'QLX' 
+					AND RTRIM(LTRIM(QLZ.QLZ_STAMP)) = CONVERT(CHAR(26), CT2.S_T_A_M_P_ , 121)
+					AND QLZ.QLZ_RECNO = CT2.R_E_C_N_O_
+			WHERE (
+					(@maxStagingCounter is null ) -- CARGA INICIAL
+					OR (CT2.S_T_A_M_P_ > @maxStagingCounter ) --TEMPO MAIOR QUE CONTADOR FLUXO NORMAL
+					) 
+				-- INICIOREGRA DE SEGURANÇA
+					--INDEPENDENTE DO STAMP SO DEVE SUBIR REGISTROS MAIOR QUE UMA DATA INICIO PRE PROGRAMADA 
+					--CLIENTE PODE TER UM CUSTOMIZADO QUE APLIQUE UM UPDATE DE TODOS OS DADOS DA CT2
+					--FAZENDO QUE O STAMP DE TODA A TABELA SEJA ATUALIZADO DISPARANDO A TABELA INTEIRA PARA A GESPLAN  
+						AND CT2.CT2_DATA >= @dtInifilter 
+				-- FIM REGRA DE SEGURANÇA
+				AND CT2.CT2_CREDIT BETWEEN @IN_CONTADE AND @IN_CONTAATE
+				AND CT2.CT2_DC IN ('2','3')
+				AND CT2.CT2_TPSALD = '1'
+				AND CT2.CT2_MOEDLC = '01'
+				AND QLZ.QLZ_RECNO is null
+	UNION ALL
+		SELECT 
+		CT2.CT2_FILIAL    			FILIAL,
+		SUBSTRING(CT2.CT2_DATA,1,4) ANO,
+		SUBSTRING(CT2.CT2_DATA,5,2) MES,
+		CTO.CTO_DESC 				MOEDA,
+		'1' 						TIPO,
+		CT2.CT2_DEBITO    			CONTA,
+		CT2.CT2_CCD       			CENTRO_CUSTO,
+		CT2.CT2_ITEMD     			ITEM_CONTABIL,
+		CT2.CT2_CLVLDB    			CLASSE_VALOR,
+		ISNULL(CT2.CT2_DATA,'') 	DDATA,
+		ISNULL(CT2.CT2_TPSALD,'') 	TPSALD, 
+		ISNULL(CT2.CT2_DC,'') 		DC,
+		ISNULL(CT2.CT2_LOTE,'') 	LOTE,
+		ISNULL(CT2.CT2_SBLOTE,'') 	SUBLOTE,
+		ISNULL(CT2.CT2_DOC,'') 		DOC,
+		ISNULL(CT2.CT2_LINHA,'') 	LINHA,
+		ISNULL(CT2.CT2_CREDIT,'') 	XPARTIDA,
+		ISNULL(CT2.CT2_HIST,'') 	HIST,
+		ISNULL(CT2.CT2_SEQHIS,'') 	SEQHIS,
+		ISNULL(CT2.CT2_SEQLAN,'') 	SEQLAN,
+		ISNULL(CT2.CT2_EMPORI,'') 	EMPORI,
+		ISNULL(CT2.CT2_FILORI,'') 	FILORI,
+		##FIELDP16( 'CT2.CT2_EC05DB' )
+			CT2.CT2_EC05DB    		ENT05,
+		##ENDFIELDP16
+		##FIELDP17( 'CT2.CT2_EC06DB' )
+			CT2.CT2_EC06DB    		ENT06,
+		##ENDFIELDP17
+		##FIELDP18( 'CT2.CT2_EC07DB' )
+			CT2.CT2_EC07DB    		ENT07,
+		##ENDFIELDP18
+		##FIELDP19( 'CT2.CT2_EC08DB' )
+			CT2.CT2_EC08DB    		ENT08,
+		##ENDFIELDP19
+		##FIELDP20( 'CT2.CT2_EC09DB' ) 
+			CT2.CT2_EC09DB    		ENT09,
+		##ENDFIELDP20
+		CONCAT( CT2.CT2_MSUIDT,'D') MSUIDT,
+		CT2.CT2_VALOR *-1	  		SALDO,
+		##IF_004({|| Trim(TcGetDb()) == "MSSQL" })
+			CT2.CT2_DC STG_S_T_A_M_P_,
+		##ELSE_004
+			ISNULL(RTRIM(LTRIM(CONVERT(CHAR(26), CT2.S_T_A_M_P_, 121))) ,@delTransactTime) STG_S_T_A_M_P_,
+		##ENDIF_004
+		CT2.D_E_L_E_T_ 				STG_DELET,
+		CT2.R_E_C_N_O_              CT2_RECNO
+			FROM CT2### CT2 LEFT JOIN CT2### ON CT2_FILIAL = ' '
+				INNER JOIN CTO### CTO ON 
+					CTO.CTO_FILIAL = SUBSTRING(CT2.CT2_FILORI,1,@IN_TAMCTO) || REPLICATE(' ', @IN_TAMTOTAL - @IN_TAMCTO)
+					AND CTO.CTO_MOEDA = CT2.CT2_MOEDLC
+					AND CTO.D_E_L_E_T_ = ' '
+				LEFT JOIN QLZ### QLZ
+				ON 
+					QLZ.QLZ_ALIAS = 'QLX' 
+					AND RTRIM(LTRIM(QLZ.QLZ_STAMP)) = CONVERT(CHAR(26), CT2.S_T_A_M_P_ , 121)
+					AND QLZ.QLZ_RECNO = CT2.R_E_C_N_O_
+			WHERE (
+					(@maxStagingCounter is null ) -- CARGA INICIAL
+					OR (CT2.S_T_A_M_P_ > @maxStagingCounter ) --TEMPO MAIOR QUE CONTADOR FLUXO NORMAL
+				) 
+				-- INICIOREGRA DE SEGURANÇA
+					--INDEPENDENTE DO STAMP SO DEVE SUBIR REGISTROS MAIOR QUE UMA DATA INICIO PRE PROGRAMADA 
+					--CLIENTE PODE TER UM CUSTOMIZADO QUE APLIQUE UM UPDATE DE TODOS OS DADOS DA CT2
+					--FAZENDO QUE O STAMP DE TODA A TABELA SEJA ATUALIZADO DISPARANDO A TABELA INTEIRA PARA A GESPLAN  
+						AND CT2.CT2_DATA >= @dtInifilter 
+				-- FIM REGRA DE SEGURANÇA
+				AND CT2.CT2_DEBITO BETWEEN @IN_CONTADE AND @IN_CONTAATE
+				AND CT2.CT2_DC IN ('1','3')
+				AND CT2.CT2_TPSALD = '1'
+				AND CT2.CT2_MOEDLC = '01'
+				AND QLZ.QLZ_RECNO is null
+	
+	##IF_005({|| Trim(TcGetDb()) $ "MSSQL/POSTGRES" })
+		INSERT INTO QLX### (
+			QLX_FILIAL,
+			QLX_MOEDA, 
+			QLX_TIPO,
+			QLX_CONTA,
+			QLX_CCUSTO,
+			QLX_ITEM,
+			QLX_CLVL,
+			QLX_DATA,
+			QLX_TPSALD,
+			QLX_DC,
+			QLX_LOTE,
+			QLX_SBLOTE,
+			QLX_DOC,
+			QLX_LINHA,
+			QLX_PARTID,
+			QLX_HIST,
+			QLX_SEQHIS,
+			QLX_SEQLAN,
+			QLX_EMPORI,
+			QLX_FILORI,
+			##FIELDP21( 'CT2.CT2_EC05CR' )
+				QLX_ENT05,
+			##ENDFIELDP21
+			##FIELDP22( 'CT2.CT2_EC06CR' )
+				QLX_ENT06,
+			##ENDFIELDP22
+			##FIELDP23( 'CT2.CT2_EC07CR' )
+				QLX_ENT07,
+			##ENDFIELDP23
+			##FIELDP24( 'CT2.CT2_EC08CR' )
+				QLX_ENT08,
+			##ENDFIELDP24
+			##FIELDP25( 'CT2.CT2_EC09CR' ) 
+				QLX_ENT09,
+			##ENDFIELDP25
+			QLX_IDLANC,
+			QLX_VALOR,
+			QLX_STAMP,
+			QLX_DELET
+			) 
+			SELECT 
+				CT2_FILIAL,
+				MOEDA,
+				TIPO,
+				CONTA,
+				CENTRO_CUSTO,
+				ITEM_CONTABIL,
+				CLASSE_VALOR,
+				DDATA,      -- CAMPO DUPLICADO NAO FAZ SENTIDO ENVIAR
+				TPSALD,
+				DC,
+				LOTE,
+				SUBLOTE,
+				DOC,
+				LINHA,
+				XPARTIDA,
+				HIST,
+				SEQHIS,
+				SEQLAN,
+				EMPORI,
+				FILORI,
+				##FIELDP26( 'CT2.CT2_EC05CR' )
+					ENT05,
+				##ENDFIELDP26
+				##FIELDP27( 'CT2.CT2_EC06CR' )
+					ENT06,
+				##ENDFIELDP27
+				##FIELDP28( 'CT2.CT2_EC07CR' )
+					ENT07,
+				##ENDFIELDP28
+				##FIELDP29( 'CT2.CT2_EC08CR' )
+					ENT08,
+				##ENDFIELDP29
+				##FIELDP30( 'CT2.CT2_EC09CR' ) 
+					ENT09,
+				##ENDFIELDP30
+				MSUIDT,
+				SALDO,
+				STG_S_T_A_M_P_,
+				STG_DELET
+				FROM #DADOSCT2
+
+		INSERT INTO QLZ### (
+					QLZ_FILIAL,
+					QLZ_ALIAS,
+					QLZ_RECNO,
+					QLZ_STAMP
+				) SELECT 
+					' ',
+					'QLX',
+					CT2_RECNO , 
+					STG_S_T_A_M_P_ FROM #DADOSCT2
+				
+	##ENDIF_005
+	---------------------------------------------------	FIM DA QUERY -------------------------------------------------------------------------------
+	DELETE FROM QLZ###
+	WHERE 
+		QLZ_ALIAS = 'QLX' 
+		AND QLZ_STAMP < @delTransactTime 
+		AND QLZ_STAMP < (
+							SELECT MAX(QLZ_STAMP )
+							FROM QLZ### 
+							WHERE QLZ_ALIAS = 'QLX' 
+						)	
+	select @OUT_RESULTADO = '1'
+END 

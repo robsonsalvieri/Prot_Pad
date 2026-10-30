@@ -1,0 +1,353 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+namespace totvs.protheus.backoffice.fiscal.tss.util.integration
+
+static lCanUpSerDoc := nil as variant
+static lSPEDTamDoc  := existFunc("SPEDTamDoc") as logical
+static oTamFX9      := nil
+
+#DEFINE LIMITADOR "|"
+
+/*/{Protheus.doc} getTSSId
+Função que recebe um JSON com as informações do documento e retorna o ID a ser utilizado na integração com o TSS
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 3/31/2026
+@param oInfoDoc, json, JSON contendo as informações do documento, como série, número, modelo, entre outros. 
+O JSON pode conter as seguintes chaves: "serie", "doc", "dfe" (tipo de documento fiscal eletrônico), e "legacyid" (ID legado
+@return character, ID do TSS
+/*/
+function getTSSId(oInfoDoc as json) as character
+    local cTSSID        := ""           as character
+    local cDFe          := ""           as character //NFS-NFE-CTE-NFCE
+    local cModelo       := ""           as character
+    local nSerTam       := 3            as integer
+    local nDocTam       := 9            as integer
+    local aTamDoc       := {}           as array
+    local lTransmissao  := .F.          as logical
+    local lLegacy       := .F.          as logical
+    local lMonitor      := .F.          as logical
+
+    //mantem ID do legado
+    if oInfoDoc:hasProperty("legacyid")
+	    cTSSID := oInfoDoc["legacyid"]
+    endIf
+    if canUpSerDoc() .and. oInfoDoc:hasProperty("serie") .and. oInfoDoc:hasProperty("doc")
+        if oInfoDoc:hasProperty("dfe")
+            cDFe := oInfoDoc["dfe"]
+        endIf
+        if lSPEDTamDoc
+            aTamDoc	:= SPEDTamDoc(cDFe)
+            nSerTam := aTamDoc[1]
+            nDocTam := aTamDoc[2]
+		    aTamDoc := aSize(aTamDoc, 0)
+        endIf
+		cTSSID := padr(oInfoDoc["serie"],nSerTam) + padr(oInfoDoc["doc"],nDocTam)
+
+        if oInfoDoc:hasProperty("modelo")
+            cModelo := allTrim(oInfoDoc["modelo"])
+        endIf
+        if UseNewIdInteg(cModelo, allTrim(oInfoDoc["serie"]), allTrim(oInfoDoc["doc"]))
+            SpedSelArea() //atrelar a tabela nova no menudef
+
+            if findByKey(oInfoDoc)
+                if !empty(FX9->FX9_ID)
+                    cTSSID := FX9->FX9_ID
+                endIf
+            else
+                lLegacy := oInfoDoc:hasProperty("islegacy") .and. oInfoDoc["islegacy"]
+                if !lLegacy
+                    lMonitor     := oInfoDoc:hasProperty("ismonitor") .and. oInfoDoc["ismonitor"]
+                    lTransmissao := oInfoDoc:hasProperty("istransmissao") .and. oInfoDoc["istransmissao"]
+
+                    if lMonitor
+                        cTSSID := getNewId(oInfoDoc)
+                    elseif lTransmissao .and. addNewId(oInfoDoc)
+                        cTSSID := FX9->FX9_ID
+                    endIf 
+                endIf
+
+            endIf
+        endIf
+
+    endIf
+  
+return cTSSID
+
+/*/{Protheus.doc} getErpId
+Função que recebe o ID do TSS e retorna o número do documento e série no formato do ERP, 
+considerando os tamanhos configurados para cada um dos sistemas. 
+Exemplo: Recebe um ID do TSS no formato "001000000001" e retorna "001" como série e "000000001" como número do documento, 
+caso os tamanhos sejam 3 para série e 9 para documento. A função também considera a possibilidade de ter tamanhos 
+diferentes configurados para o TSS e para o ERP, ajustando a extração e formatação dos valores conforme necessário.
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 4/30/2026
+@param cIDTSS, character, ID do TSS a ser convertido para o formato do ERP
+@param cModelo, character, modelo do documento (NFS, NFE, CTE, NFCE)
+@return array, array contendo o ID do ERP, série e número do documento
+/*/
+function getErpId(cIDTSS, cModelo)
+	local cSerieERP 	:= ""   as character
+	local cDocERP 		:= ""   as character
+	local aTamDoc	    := {}   as array
+	local aDados	    := {}   as array
+	local nTamSerTSS	:= 3    as integer
+	local nTamDocTSS    := 9    as integer
+	local nTamSerERP	:= 3    as integer
+	local nTamDocERP    := 9    as integer
+
+    if LIMITADOR $ cIDTSS .and. (cModelo == "NFSE" .or. cModelo == "56")
+        aDados      := getDocumentByKey(cIDTSS, cModelo)
+        cSerieERP   := aDados[2]
+        cDocERP     := aDados[3]
+        aSize(aDados,0)
+        aDados := nil
+    else
+
+        if lSPEDTamDoc
+            //recupera tamanho TSS
+            aTamDoc := SPEDTamDoc(cModelo)
+            nTamSerTSS := aTamDoc[1]
+            nTamDocTSS := aTamDoc[2]
+
+            //Recupera tamanho ERP
+            aTamDoc := SPEDTamDoc(cModelo, .T.)
+            nTamSerERP := aTamDoc[1]
+            nTamDocERP := aTamDoc[2]
+            aTamDoc := aSize(aTamDoc,0)
+            aTamDoc := nil
+        endIf
+        
+        //extrai valores com base no tamanhos do ID do TSS
+        cSerieERP 	:= padr(subStr(cIDTSS, 1, nTamSerTSS), nTamSerTSS)
+        cDocERP 	:= padr(allTrim(subStr(cIDTSS, nTamSerTSS+1)), nTamDocTSS)
+        
+        //Transforma nos tamanhos do ERP
+        cSerieERP   := padr(cSerieERP, nTamSerERP)
+        cDocERP     := padr(cDocERP, nTamDocERP)
+    endIf
+
+return {cSerieERP+cDocERP, cSerieERP, cDocERP}
+
+/*/{Protheus.doc} canUpSerDoc
+Funcao que indica se é possível atualizar série e documento, considerando a versão do RPO ou a configuração de MV.
+@type function
+@version 12.1.210
+@author fs.martinez
+@since 5/4/2026
+@return logical, Indica se é possível atualizar série e documento
+/*/
+function canUpSerDoc()
+    if lCanUpSerDoc == nil
+        lCanUpSerDoc := GetRpoRelease() >= "12.1.2610" .or. alltrim(supergetmv("MV_NIDTSS", .F., "0")) == "1"
+    endIf
+return lCanUpSerDoc
+
+/*/{Protheus.doc} selectArea
+Funcao que abre a tabela de IDs de integração com o TSS em uma area de trabalho dedicada, para evitar conflitos de area com a aplicacao principal
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 4/22/2026
+@return variant, nulo
+/*/
+static function SpedSelArea()
+    local aArea := {} as array
+    
+    if select("FX9") == 0
+        aArea := getArea()
+        dbSelectArea("FX9")
+        restArea(aArea)
+        aArea := aSize(aArea, 0)
+        aArea := nil
+    endIf
+
+return nil
+
+/*/{Protheus.doc} findID
+Verificar a existencia do documento na tabela de ID de integração
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 3/31/2026
+@return logical, .T. se o registro foi encontrado (posicionado), .F. se o registro não foi encontrado na base de dados
+/*/
+static function findByKey(oInfoDoc as json) as logical
+    local lFound    := .F.          as logical
+    local cKey      := ""           as character
+
+    if oTamFX9 == nil
+        oTamFX9 := jsonObject():new()
+        oTamFX9["modelo"]   := GetSX3Cache("FX9_MODELO","X3_TAMANHO")
+        oTamFX9["serie"]    := GetSX3Cache("FX9_SERIE","X3_TAMANHO")
+        oTamFX9["doc"]      := GetSX3Cache("FX9_DOC","X3_TAMANHO")
+        oTamFX9["clifor"]   := GetSX3Cache("FX9_CLIFOR","X3_TAMANHO")
+        oTamFX9["loja"]     := GetSX3Cache("FX9_LOJA","X3_TAMANHO")
+        oTamFX9["especie"]  := GetSX3Cache("FX9_ESPECI","X3_TAMANHO")
+    endIf
+
+    cKey := xFilial("FX9") + padr(oInfoDoc["modelo"], oTamFX9["modelo"]) + padr(oInfoDoc["serie"], oTamFX9["serie"]) + padr(oInfoDoc["doc"], oTamFX9["doc"])
+    if oInfoDoc:hasProperty("clifor") .and. !empty(oInfoDoc["clifor"]) .and.  oInfoDoc:hasProperty("loja") .and. !empty(oInfoDoc["loja"])
+        cKey += padr(oInfoDoc["clifor"],oTamFX9["clifor"]) + padr(oInfoDoc["loja"],oTamFX9["loja"])
+        if oInfoDoc:hasProperty("especie")
+            cKey += padr(oInfoDoc["especie"], oTamFX9["especie"])
+        endIf
+    endIf
+
+    FX9->(dbSetOrder(1)) //FX9_FILIAL+FX9_MODELO+FX9_SERIE+FX9_DOC+FX9_CLIFOR+FX9_LOJA+FX9_ESPECI+DTOS(FX9_DTEMIS)
+    lFound := FX9->(dbSeek( cKey ))
+return lFound
+
+/*/{Protheus.doc} addNewId
+Responsável por realizar a persistencia dos dados de ID de integração
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 3/31/2026
+@param oInfoDoc, object, Objeto com dados da DF-e
+@return logical, .T. se persistido com sucesso, .F. não houve persistencia na tabela FX9
+/*/
+static function addNewId(oInfoDoc) as logical
+    local lRet      := .F.          as logical
+    local cSerie                    as character
+    local cDoc                      as character
+    local cClifor                   as character
+    local cLoja                     as character
+    local cEspecie                  as character
+    local cId                       as character
+    local cLegacyId                 as character
+    local cModelo   := "00"         as character
+
+    cSerie      := oInfoDoc["serie"]
+    cDoc        := oInfoDoc["doc"]
+    if oInfoDoc:hasProperty("modelo")
+        cModelo := oInfoDoc["modelo"]
+    endIf
+    if oInfoDoc:hasProperty("clifor")
+        cClifor := oInfoDoc["clifor"]
+    endIf
+    if oInfoDoc:hasProperty("loja")
+        cLoja := oInfoDoc["loja"]
+    endIf
+    if oInfoDoc:hasProperty("especie")
+        cEspecie := oInfoDoc["especie"]
+    endIf
+    //id legado de integração, para garantir a rastreabilidade do documento mesmo após a implementação do novo ID
+    if oInfoDoc:hasProperty("legacyid")
+        cLegacyId   := oInfoDoc["legacyid"]
+    endIf
+    //novo id para integração com o TSS
+    cId := getNewId(oInfoDoc)
+    if oInfoDoc:hasProperty("id")
+        cId := oInfoDoc["id"]
+    endIf
+
+    if recLock("FX9", .T.)
+        FX9->FX9_FILIAL    := xFilial("FX9")
+        FX9->FX9_SERIE     := cSerie
+        FX9->FX9_DOC       := cDoc
+        FX9->FX9_CLIFOR    := cClifor
+        FX9->FX9_LOJA      := cLoja
+        FX9->FX9_DTEMIS    := date()
+        FX9->FX9_ID        := cId          //tamanho 60
+        FX9->FX9_IDLEGA    := cLegacyId    //tamanho 44
+        FX9->FX9_MODELO    := cModelo
+        FX9->FX9_ESPECI    := cEspecie
+        FX9->(msUnlock())
+        lRet := .T.
+    endIf
+
+return lRet
+
+/*/{Protheus.doc} getNewId
+Funcao que gera um novo ID para integração com o TSS, utilizando o formato [modelo]-[serie]-[doc]-[FWUUIDV4()], 
+onde o FWUUIDV4() é limitado para que o ID completo não ultrapasse 60 caracteres, considerando os campos de série e documento 
+variáveis de acordo com a configuração do cliente.
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 4/15/2026
+@param oInfoDoc, object, Objeto contendo dados do documento
+@return character, ID de integração com o TSS
+/*/
+static function getNewId(oInfoDoc) as character
+    local cNewId        := ""                   as character
+    local cSerie        := oInfoDoc["serie"]    as character
+    local cDoc          := oInfoDoc["doc"]      as character
+    local cModelo       := "00"                 as character
+    local cLimitador    := LIMITADOR            as character
+    local dDate         := date()               as date
+
+    if oInfoDoc:hasProperty("modelo")
+        cModelo := oInfoDoc["modelo"]
+    endIf
+    //[modelo]|[serie]|[doc]|[AAAAMM]|[limitado a 44 -> substr(FWUUIDV4())]
+    cNewId := allTrim(cModelo) + cLimitador + allTrim(cSerie) + cLimitador + allTrim(cDoc) + cLimitador
+    cNewId += allTrim(str(year(dDate)))+allTrim(strzero(month(dDate),2)) + cLimitador
+    if len(allTrim(cNewId)) < 44 
+        cNewId += substr(FWUUIDV4(),1,44-len(cNewId)-1) //44 limite TSS
+    endIf
+
+return cNewId
+
+/*/{Protheus.doc} UseNewIdInteg
+Função rsponsável por indicar se usa o novo ID de integração com o TSS ou modelo antigo (SERIE+DOC)
+@type function
+@version 12.1.2610
+@author fs.martinez
+@since 7/6/2026
+@return logical, .T. quando usa o novo modelo de ID de integração com o TSS, .F. quando usa modelo legado
+/*/
+static function UseNewIdInteg(cModelo, cSerie, cDoc) as logical
+    local lRet      := .F. as logical
+    default cModelo := ""
+    default cSerie  := ""
+    default cDoc    := ""
+    lRet := (cModelo == "56" .or. cModelo == "NFSE") .and. (len(alltrim(cSerie)) > 3 .or. len(alltrim(cDoc)) > 9) .and. SuperGetMV("MV_NFSENAC",.F.,"1") == "2"
+return lRet
+
+
+/*/{Protheus.doc} getDocumentByKey
+Funcao que extrai o numero do documento a partir do ID, considerando o formato [modelo]-[serie]-[doc]-[FWUUIDV4()] e a 
+configuração de tamanho de série e documento para cada modelo, para garantir a compatibilidade com o formato de ID antigo e evitar 
+impactos nos clientes que já possuem documentos registrados.
+@type function
+@version 12.1.2510
+@author fs.martinez
+@since 4/27/2026
+@param cID, character, ID do TSS
+@param cModelo, character, Modelo do documento
+@return array, [1]-Modelo, [2]-Serie, [3]-Documento
+/*/
+function getDocumentByKey(cID, cModelo) as array
+    local cDocNumber    := "" as character
+    local cSerieNumber  := "" as character
+    local cModeloKey    := "" as character
+    local aDados        := StrTokArr2(cID,LIMITADOR) as array
+    local nTamSerie     := 3  as integer
+    local nTamDoc       := 9  as integer
+    local aTamDoc       := {} as array
+
+    if len(aDados) >= 2
+        //[1] - modelo
+        //[2] - serie
+        //[3] - documento
+        //[4] - ano e mes
+        //[5] - FWUUIDV4() limitado
+        if existFunc("SPEDTamDoc")
+            aTamDoc     := SPEDTamDoc(cModelo, .T.)
+            nTamSerie   := aTamDoc[1]
+            nTamDoc     := aTamDoc[2]
+            aTamDoc     := aSize(aTamDoc,0)
+            aTamDoc     := nil
+        endIf
+        cModeloKey      := aDados[1]
+        cSerieNumber    := padr(aDados[2], nTamSerie) //considerando o formato do ID antigo, onde o numero da serie estava presente no meio do ID
+        cDocNumber      := padr(aDados[3], nTamDoc) //considerando o formato do ID antigo, onde o numero do documento estava presente no final do ID
+    endIf
+
+return {cModeloKey, cSerieNumber, cDocNumber}

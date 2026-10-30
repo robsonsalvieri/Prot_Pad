@@ -1,0 +1,184 @@
+#include 'totvs.ch'
+#Include "FWMVCDEF.CH"
+//#include "OFSoWorkOrderPartsAddedInFieldServiceInteractor.ch"
+
+#DEFINE STR0001 "Invalid body data, work order does not exist."
+#DEFINE STR0002 "Invalid body data, work order segment does not exist."
+
+
+/*/{Protheus.doc} OFSoWorkOrderPartsAddedInFieldServiceInteractor
+	Classe que vai tratar a criacao de modelos no field service
+	
+	@type class
+	@author Iury Soares Azevedo
+	@since 09/06/2025
+/*/
+Class OFSoWorkOrderPartsAddedInFieldServiceInteractor 
+	public data OFSoWorkOrder as object
+	Public Method New() CONSTRUCTOR
+	Public Method Process()
+
+EndClass
+
+/*/{Protheus.doc} New
+	Construtor Simples
+
+	@type method
+	@author Iury Soares Azevedo
+	@since 09/06/2025
+/*/
+Method New() Class OFSoWorkOrderPartsAddedInFieldServiceInteractor
+	self:OFSoWorkOrder := OFSoWorkOrder():New()
+Return SELF
+
+/*/{Protheus.doc} Process
+	processa a criacao
+	@type method
+	@author Iury Soares Azevedo
+	@since 09/06/2025
+/*/
+Method Process(jSoRequestBody) Class OFSoWorkOrderPartsAddedInFieldServiceInteractor
+	local jBody := jSoRequestBody:jBody as json
+	local cReferenceID := "" as character
+	local cSegmReferenceID := "" as character
+	local jRet as json
+	Local aResult as Array
+	Local cNumOSV as character
+
+	if jBody:HasProperty("data")
+		cReferenceID := iif(jBody["data"]:HasProperty("woHeaderReferenceId"),jBody["data"]["woHeaderReferenceId"],"")
+		cSegmReferenceID := iif(jBody["data"]:HasProperty("woSegmentReferenceId"),jBody["data"]["woSegmentReferenceId"],"")
+	endif
+
+
+	if empty(cReferenceID) .OR. ;
+		! self:OFSoWorkOrder:existsWorkOrder(cReferenceID)
+		
+		jRet :=  OFSoRestErrorResponse():BadRequest("WorkOrderPartsAddedInFieldService", 0, STR0001, "")	// "Invalid body data, work order does not exist."
+		return jret
+	endif
+
+	if empty(cSegmReferenceID) .OR. ;
+		! self:OFSoWorkOrder:existsWorkOrderSegment(cSegmReferenceID)
+		
+		jRet :=  OFSoRestErrorResponse():BadRequest("WorkOrderPartsAddedInFieldService", 0, STR0002, "")	// "Invalid body data, work order segment does not exist."
+		return jret
+	endif
+
+	cNumOSV := self:OFSoWorkOrder:getNumOSV()
+
+	VSJ->(dbSelectArea("VSJ"))
+	VSJ->(dbSetOrder(1))
+
+	VO1->(dbSelectArea("VO1"))
+	VO1->(dbSetOrder(1))
+
+	VO1->(MsSeek(xFilial("VO1")+cNumOSV))
+	VSJ->(MsSeek(xFilial("VSJ")+cNumOSV))
+
+	SB2->(dbSelectArea("SB2"))
+	SB2->(dbSetOrder(1))
+
+	//Pergunta usada para trazer parametros de busca de estoque
+	Pergunte("MTA260",.F.)
+
+	aResult := InsertParts(cNumOSV, jBody["data"]["parts"], self:OFSoWorkOrder:getSeqInc())
+	
+	If aResult[1]
+		jRet := OFSoResponseBody():New(200, jSoRequestBody, aResult[2])
+	Else
+		jRet := OFSoRestErrorResponse():BadRequest("WorkOrderPartsAddedInFieldService", 0, aResult[2], "")
+	EndIf
+	
+return jRet
+
+
+/*/{Protheus.doc} InsertParts
+	Efetua o cadastro das pecas envidas na tabela VSJ
+	@type function
+	@author Iury Soares Azevedo
+	@since 09/06/2025
+/*/
+
+Static Function InsertParts(cNumOSV, aParts, cSeqInc)
+	Local aRet := {.T.,Nil} as array
+	Local oModel := FWLoadModel("OFIA486") as object
+	Local oVSJMaster := oModel:GetModel("VSJMASTER") as object
+	Local oVSJDetail := oModel:GetModel("VSJDETAIL") as object
+	Local aErro := {} as array
+	Local cErro := "" as character
+	Local nX as Numeric
+	// Local jRet as Json
+
+	//varivareis globais utilizadas no modelo
+	Private INCLUI := .F. as logical
+	Private ALTERA := .F. as logical
+	Private aRotina := {} as array
+	Private Digitado := Nil
+	Private Garantia := Nil
+
+	oModel:SetOperation(3)
+	oModel:Activate()
+
+	oVSJMaster:LoadValue("VSJ_NUMOSV",cNumOSV)
+
+	For nX := 1 to len(aParts)
+		If !oVSJDetail:IsEmpty()
+			oVSJDetail:AddLine()
+			oVSJDetail:GoLine(oVSJDetail:Length())
+		EndIf
+
+
+		oVSJDetail:LoadValue("VSJ_ORIDAD","4")
+		oVSJDetail:SetValue("VSJ_TIPTEM","C")
+		oVSJDetail:SetValue("VSJ_CODITE",aParts[nX]["partNumber"])
+		oVSJDetail:SetValue("VSJ_QTDINI",aParts[nX]["requestedQuantity"])
+		oVSJDetail:LoadValue("VSJ_SEQINC",cSeqInc)
+		//como a requisição veio do SO o registro deve nascer como integrado para evitar o loop infinito.
+		//imporante manter essa atualização sempre no final
+		oVSJDetail:LoadValue("VSJ_BBDINC", FGX_Timestamp())
+		oVSJDetail:LoadValue("VSJ_BBSYNC", "1")
+		oVSJDetail:LoadValue("VSJ_BBINTG", "1")
+		oVSJDetail:LoadValue("VSJ_BBRFID", aParts[nX]["referenceId"])
+
+		//SB1 ja esta posicionada
+		SB2->(dbSetOrder(1))
+		If SB2->(MsSeek(xFiliaL("SB2")+SB1->B1_COD+SB1->B1_LOCPAD))
+			aParts[nX]["binQuantity"] := SaldoMov(nil, nil, nil, If(mv_par03 == 1, .F., Nil), nil, nil, nil, nil)
+		Else
+			aParts[nX]["binQuantity"] := 0
+		EndIf
+		aParts[nX]["binLocation"] := FGX_SetVlJson(SB1->B1_LOCPAD)
+
+		aParts[nX]["partType"] := "RegularPart"
+		aParts[nX]["suppliedQuantity"] := 0
+		aParts[nX]["unitCost"] := Round(oVSJDetail:GetValue("VSJ_VALCUS"),2)
+		aParts[nX]["unitPrice"] := Round(oVSJDetail:GetValue("VSJ_VALPEC"),2)
+		aParts[nX]["lineTotal"] := Round(aParts[nX]["requestedQuantity"] * oVSJDetail:GetValue("VSJ_VALPEC"),2)
+		aParts[nX]["description"] := FGX_SetVlJson(SB1->B1_DESC)
+		aParts[nX]["serialNumber"] := FGX_SetVlJson(SB1->B1_CODBAR)
+		aParts[nX]["invoiceNote"] := ""
+
+
+	Next nX
+	//lTeste:=oStrVSJ:GetProperty("VSJ_GRUITE",MODEL_FIELD_OBRIGAT)
+
+	If oModel:VldData() .AND. oModel:CommitData()
+		// jRet := JsonObject():New()
+		// jRet:Set(aParts)
+
+		aRet[1] := .T.
+		aRet[2] := aParts //jRet:ToJson()
+	Else
+		aErro := oModel:GetErrorMessage()
+		cErro := cValToChar(oModel:GetErrorMessage()[4]) + ' - '
+		cErro += cValToChar(oModel:GetErrorMessage()[5]) + ' - '
+		cErro += cValToChar(oModel:GetErrorMessage()[6])
+		aRet[1] := .F.
+		aRet[2] := cErro
+	EndIf
+
+	oModel:DeActivate()
+Return aRet
+
+

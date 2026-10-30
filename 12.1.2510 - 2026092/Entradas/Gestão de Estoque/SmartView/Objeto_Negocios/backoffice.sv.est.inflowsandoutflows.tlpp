@@ -1,0 +1,1164 @@
+#include "msobject.ch"
+#include "backoffice.sv.est.inflowsandoutflows.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+#include "totvs.ch"
+
+#DEFINE SX1GRUPO "ESTT026"
+
+using namespace totvs.protheus.backoffice.est.smartView.integratedProvider
+namespace totvs.estoque.inflowsandoutflows.integratedprovider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team="SIGAEST", tables="SB1,SB2,SB9,SD1,SD2,SD3", name="Entradas e Saidas", country="ALL", customTables="SB1")
+
+class InflowsAndOutflowsTReportsBusinessObject from totvs.protheus.backoffice.est.smartView.integratedProvider.EstIntegratedProvider
+	
+	public method new() as object
+	public method getDescription() as character
+	public method getData(nPage as numeric, oFilter as object) as object
+	
+	Protected Method oNGetSchema()
+	Protected data lExistPergunte as logical
+
+	private method getInfoEmpCached(hCache as json, cCodFil as character) as array
+	private method rowToJson(cAlias as character, aFldName as array, aFldType as array, hCacheEmp as json, hCacheTipo as json) as json
+
+endclass
+
+/*/{Protheus.doc} new
+Metodo construtor da classe. Define area, nome de exibicao, pergunte e tipo LookUp
+do objeto de negocio de Entradas e Saidas.
+@type   method
+@author Squad Entradas
+@since  Junho 30,2023
+@return object, instancia da classe InflowsAndOutflowsTReportsBusinessObject
+/*/
+method new() class InflowsAndOutflowsTReportsBusinessObject
+	
+	LOCAL cMsgSX1 as Character
+	_Super:new()
+
+	//Define a Area
+	self:appendArea(STR0001) // Estoque/Custos
+
+	//Define o nome do Objeto de Negocio
+	self:setDisplayName(STR0002) // Entradas e Saidas
+
+	//Indica o pergunte que sera utilizado no relatorio
+	self:lExistPergunte := self:SetPergunte(SX1GRUPO)
+	If !self:lExistPergunte
+		cMsgSX1 := OemToAnsi(I18N(STR0019,{SX1GRUPO})) //#Grupo de perguntas #1[SX1GRUPO]# nao encontrado. Verifique na tabela SX1, o grupo de perguntas informado
+		self:setErrorStatus(400,STR0020,cMsgSX1)   	  //#Sem Pergunte
+		FwLogMsg("WARN",, "SmartView ESTSV017",,,,cMsgSX1,,,)
+	EndIf
+
+	//Indica que o LookUp sera do tipo padrao LookUp
+	self:setIsLookUp(.T.)
+
+return self
+
+/*/{Protheus.doc} getDescription
+Metodo que retorna a descricao do objeto de negocio.
+@type   method
+@author Squad Entradas
+@since  Junho 30,2023
+@return character, descricao exibida para o objeto de negocio
+/*/
+method getDescription() as character class InflowsAndOutflowsTReportsBusinessObject
+return (STR0003) //Exibe um resumo por produto de todas as suas entradas e saidas no perùodo.
+
+/*/{Protheus.doc} getData
+Metodo que retorna o Objeto de dados com o resumo de entradas e saidas por produto.
+
+O SALDOINI e' derivado: obtem-se o SALDOATUAL e revertem-se os movimentos do periodo
+([MV_PAR07, MV_PAR08]), mesma regra do MATR320/MAT006, cujo cabecalho declara que
+"SALDO INICIAL e' o resultado da soma das outras colunas do relatorio e nao o saldo
+inicial cadastrado no estoque".
+
+@type   method
+@author Squad Entradas
+@since  Junho 30,2023
+@param  nPage, numeric, numero da pagina requisitada pelo Smart View (nao utilizado: o
+        objeto retorna o resultado completo, sem paginacao no banco)
+@param  oFilter, object, objeto de filtros/parametros (pergunte) fornecido pelo Smart View
+@return object, self:oData preenchido com os itens do relatorio
+/*/
+method getData(nPage as numeric, oFilter as object) as object class InflowsAndOutflowsTReportsBusinessObject
+
+local aFields	as array
+local aFldName	as array
+local aFldType	as array
+local cAlias	as character
+local cLocCQ	as character
+local cLocProc	as character
+local cCodIni	as character
+local cCodFim	as character
+local cQuery	as character
+local cDtSD2	as character
+local cSqlFlds	as character
+local dDataIni	as date
+local dDataAte	as date
+local dDtSaldo	as date
+local jItems	as json
+local jParams	as json
+local lEstorno	as logical
+local lIntDL	as logical
+local nBind		as numeric
+local nMoeda	as numeric
+local nOPInd	as numeric
+local nTpSaldo	as numeric
+local nTSldMOD	as numeric
+local nX		as numeric
+local nFields	as numeric
+local oQuery	as object
+local hCacheEmp		as json
+local hCacheTipo	as json
+
+	// Valida o pergunte
+	if !self:lExistPergunte
+		return self:oData
+	endif
+	
+	// Carrega parametros do sistema
+	cLocProc := SuperGetMV('MV_LOCPROC', .F., '99')
+	cLocCQ	 := SuperGetMV('MV_CQ', .F., '98')
+	lEstorno := SuperGetMV('MV_D3ESTOR', .F., 'N') == 'N'
+	lIntDL   := SuperGetMV('MV_D3SERVI', .F., 'N') == 'N' .And. IntDL()
+
+
+	// Campo de data do SD2 usado na composicao do SALDOATUAL, replicando a CalcEst/MAT006, que decide entre
+	// D2_DTDIGIT e D2_EMISSAO conforme UsaD2DTDIG():
+	//   DbSetOrder( IIf(lUsaD2DIG, 20, 6) ) / IIf(lUsaD2DIG, D2_DTDIGIT < dData, D2_EMISSAO < dData)
+	// Quando UsaD2DTDIG() esta ativo mas o D2_DTDIGIT do movimento esta VAZIO, usa-se o D2_EMISSAO como
+	// fallback: em SQL o vazio (espacos) e' menor que qualquer 'AAAAMMDD', logo o filtro de piso ("> data")
+	// descartaria silenciosamente o movimento do SALDOATUAL, enquanto as colunas do periodo (VENDAS,
+	// DEVCOMPRAS, SAIPD3) o consideram por filtrarem sempre por D2_EMISSAO. Essa divergencia fazia a saida
+	// nao ser subtraida do SALDOATUAL e, por consequencia, distorcia o SALDOINI (obtido revertendo os
+	// movimentos do periodo sobre o SALDOATUAL).
+	cDtSD2   := if( UsaD2DTDIG(), "(CASE WHEN SD2.D2_DTDIGIT = ' ' THEN SD2.D2_EMISSAO ELSE SD2.D2_DTDIGIT END)", "SD2.D2_EMISSAO" )
+
+	// Metodo para retorno do json dos parametros
+	jParams := oFilter:getParameters()
+	//Retorno da tela de multi filiais com as filiais selecionadas ou somente a filial corrente
+	self:aFils := self:retFils( jParams['SV_MULTBRANCH'])
+
+	// Atualiza variaveis para protecao de errorlog, caso estejam vazias.
+	cCodIni		:= jParams['MV_PAR05'][1]
+	cCodFim		:= jParams['MV_PAR06'][1]
+	dDataIni	:= if(!empty(jParams['MV_PAR07'][1]), FwDateTimeToLocal(jParams['MV_PAR07'][1])[1], FirstDate(dDataBase))
+	dDataAte	:= if(!empty(jParams['MV_PAR08'][1]), FwDateTimeToLocal(jParams['MV_PAR08'][1])[1], LastDate(dDataBase))
+	nMoeda		:= if(!empty(jParams['MV_PAR09'][1]), jParams['MV_PAR09'][1], 1)
+	// A moeda compoe o NOME das colunas de custo (B9_VINIx, D1_CUSTOx, D2_CUSTOx, D3_CUSTOx).
+	// Fora da faixa 1..5 geraria referencia a coluna inexistente e erro de SQL em runtime.
+	nMoeda		:= if(nMoeda >= 1 .and. nMoeda <= 5, nMoeda, 1)
+	nTpSaldo	:= if(!empty(jParams['MV_PAR10'][1]), jParams['MV_PAR10'][1], 1)
+	nTSldMOD	:= if(!empty(jParams['MV_PAR11'][1]), jParams['MV_PAR11'][1], 1)
+	nOPInd		:= if(!empty(jParams['MV_PAR13'][1]), jParams['MV_PAR13'][1], 1)
+
+	// Data de corte do SALDOATUAL: dDataAte + 1, replicando CalcEst(...,mv_par08+1) do MATR320/MAT006.
+	// Garante que os movimentos do proprio dia final (dDataAte) sejam considerados no saldo (filtro < dDtSaldo).
+	dDtSaldo	:= dDataAte + 1
+
+	// Carrega os campos do schema do objeto de neg?cioo
+	aFields := self:getStructFields()
+
+	// PERFORMANCE: materializa uma unica vez o nome e o tipo de cada campo do schema.
+	// Antes, getName()/getType() eram invocados dentro do laco de linhas (Len(aFields) chamadas
+	// de metodo por linha retornada); com muitas linhas isso multiplicava em milhoes de chamadas.
+	// O conteudo e' identico - apenas deixa de ser recalculado por linha.
+	nFields  := Len(aFields)
+	aFldName := Array(nFields)
+	aFldType := Array(nFields)
+	For nX := 1 To nFields
+		aFldName[nX] := aFields[nX]:getName()
+		aFldType[nX] := aFields[nX]:getType()
+	Next nX
+
+	// PERFORMANCE: a mesma lista de campos e' usada no SELECT externo, no GROUP BY e no ORDER BY.
+	// Monta uma unica vez (string identica a anterior, sem alterar a query gerada).
+	cSqlFlds := self:getSQLFields(.F.,,.F.)
+
+	cQuery := "	SELECT FILIAL,"
+	cQuery += cSqlFlds
+	cQuery += " , SUM(SALDOINI) SALDOINI "
+    cQuery += " , SUM(COMPRAS) COMPRAS "
+    cQuery += " , SUM(MOVINTERNA) MOVINTERNA "
+    cQuery += " , SUM(REQPARAPROD) REQPARAPROD "
+    cQuery += " , SUM(PRODUCAO) PRODUCAO "
+    cQuery += " , SUM(TRANSFERENCIAS) TRANSFERENCIAS "
+    cQuery += " , SUM(TRANSFPROCESSO) TRANSFPROCESSO "
+    cQuery += " , SUM(REQARMPROCESSO) REQARMPROCESSO "
+    cQuery += " , SUM(VENDAS) VENDAS "
+    cQuery += " , SUM(DEVVENDAS) DEVVENDAS "
+    cQuery += " , SUM(DEVCOMPRAS) DEVCOMPRAS "
+    cQuery += " , SUM(ENTPD3) ENTPD3 "
+    cQuery += " , SUM(SAIPD3) SAIPD3 "
+    cQuery += " , SUM(SALDOATUAL) SALDOATUAL "
+    cQuery += " , SUM(REQPRODIND) REQPRODIND "
+	
+	cQuery += " FROM ( "
+	cQuery += " 	SELECT "
+	cQuery += "			SB2.B2_FILIAL	FILIAL "
+	cQuery += "	, " + self:getSQLFields(.T.,,.F.)
+	
+	cQuery += "		, 	0 SALDOINI "
+
+	if nTpSaldo == 1
+		cQuery += "	,SB2.B2_VATU" + alltrim(str(nMoeda)) + " SALDOATUAL "
+	elseif nTpSaldo == 2
+		cQuery += "	,SB2.B2_VFIM" + alltrim(str(nMoeda)) + " SALDOATUAL "
+	else
+		cQuery += "	,( SELECT SUM(CUSTO) CUSTO "
+		cQuery += "	FROM ( "
+		cQuery += "	SELECT COALESCE(SUM(SB9.B9_VINI"+alltrim(str(nMoeda))+"),0) CUSTO "
+		cQuery += "	FROM " + RetSqlName("SB9") + " SB9 "
+
+		cQuery += "	WHERE " + FwJoinFilial("SB9","SB2")
+		cQuery += "	AND SB9.B9_COD = SB2.B2_COD "
+		cQuery += "	AND SB9.B9_LOCAL = SB2.B2_LOCAL "
+		// Considera o saldo inicial do SB9 tanto quando B9_DATA esta preenchida quanto quando esta vazia
+		// (saldo inicial cadastrado sem data). A data vazia e tratada como '00000000' (a mais antiga),
+		// replicando a CalcEst/MAT006 (B9_DATA vazia < dData sempre verdadeiro): assim ela concorre no MAX
+		// e casa no filtro externo, respeitando o corte < dDtSaldo.
+		cQuery += "	AND (CASE WHEN SB9.B9_DATA = ' ' THEN '00000000' ELSE SB9.B9_DATA END) = ( SELECT MAX(CASE WHEN SB9A.B9_DATA = ' ' THEN '00000000' ELSE SB9A.B9_DATA END) "
+		cQuery += "	                        FROM " + RetSqlName("SB9") + " SB9A "
+		cQuery += "	                        WHERE SB9A.B9_FILIAL = SB9.B9_FILIAL "
+		cQuery += "	                        AND SB9A.B9_COD = SB9.B9_COD "
+		cQuery += "	                        AND SB9A.B9_LOCAL = SB9.B9_LOCAL "
+		cQuery += "	                        AND (CASE WHEN SB9A.B9_DATA = ' ' THEN '00000000' ELSE SB9A.B9_DATA END) < ? "
+		cQuery += "	                        AND SB9A.D_E_L_E_T_ = ? "
+		cQuery += "	                    ) "
+		cQuery += "	AND SB9.D_E_L_E_T_ = ? "
+
+		cQuery += "	UNION ALL "
+
+		cQuery += "	SELECT  COALESCE(SUM(SD1.D1_CUSTO" + if(nMoeda > 1, alltrim(str(nMoeda)),'') + "),0) CUSTO "
+		cQuery += "	FROM " + RetSqlName("SD1") + " SD1 "
+
+		cQuery += "	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+		cQuery += "	ON " + FwJoinFilial("SF4","SD1")
+		cQuery += "	AND F4_CODIGO = SD1.D1_TES "
+		cQuery += "	AND F4_ESTOQUE = ? "
+		cQuery += "	AND F4_PODER3 NOT IN (?) "
+		cQuery += "	AND SF4.D_E_L_E_T_ = ? "
+
+		cQuery += "	WHERE " + FwJoinFilial("SD1","SB2")
+		cQuery += "	AND SD1.D1_COD = SB2.B2_COD "
+		cQuery += "	AND SD1.D1_LOCAL = SB2.B2_LOCAL "
+		// Piso de data = ultimo saldo inicial (B9_DATA < dDtSaldo). B9_DATA vazia tratada como '00000000'
+		// (a mais antiga), replicando a CalcEst/MAT006, para nao ser ignorada no MAX nem no corte.
+		cQuery += "	AND SD1.D1_DTDIGIT > ( SELECT COALESCE(MAX(CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END), '00000000') "
+		cQuery += "	                        FROM " + RetSqlName("SB9") + " SB9B "
+		cQuery += "	                        WHERE " + FwJoinFilial("SB9B","SB2")
+		cQuery += "	                        AND SB9B.B9_COD = SB2.B2_COD "
+		cQuery += "	                        AND SB9B.B9_LOCAL = SB2.B2_LOCAL "
+		cQuery += "	                        AND (CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END) < ? "
+		cQuery += "	                        AND SB9B.D_E_L_E_T_ = ? ) "
+		cQuery += "	AND SD1.D1_DTDIGIT < ? "
+		cQuery += "	AND SD1.D1_ORIGLAN <> ? "
+		cQuery += "	AND ( SD1.D1_TIPODOC <> ? OR SD1.D1_FORMUL = ? ) "
+		cQuery += "	AND SD1.D_E_L_E_T_ = ? "
+
+		cQuery += "	UNION ALL "
+
+		cQuery += "	SELECT COALESCE(SUM(SD2.D2_CUSTO"+alltrim(str(nMoeda))+" * (-1)),0) CUSTO "
+		cQuery += "	FROM " + RetSqlName("SD2") + " SD2 "
+
+		cQuery += "	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+		cQuery += "	ON " + FwJoinFilial("SF4","SD2")
+		cQuery += "	AND F4_CODIGO = SD2.D2_TES "
+		cQuery += "	AND F4_ESTOQUE = ? "
+		cQuery += "	AND F4_PODER3 NOT IN (?) "
+		cQuery += "	AND SF4.D_E_L_E_T_ = ? "
+
+		cQuery += "	WHERE " + FwJoinFilial("SD2","SB2")
+		cQuery += "	AND SD2.D2_COD = SB2.B2_COD "
+		cQuery += "	AND SD2.D2_LOCAL = SB2.B2_LOCAL "
+		// Piso de data = ultimo saldo inicial (B9_DATA < dDtSaldo). B9_DATA vazia tratada como '00000000'
+		// (a mais antiga), replicando a CalcEst/MAT006, para nao ser ignorada no MAX nem no corte.
+		cQuery += "	AND " + cDtSD2 + " > ( SELECT COALESCE(MAX(CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END), '00000000') "
+		cQuery += "	                        FROM " + RetSqlName("SB9") + " SB9B "
+		cQuery += "	                        WHERE " + FwJoinFilial("SB9B","SB2")
+		cQuery += "	                        AND SB9B.B9_COD = SB2.B2_COD "
+		cQuery += "	                        AND SB9B.B9_LOCAL = SB2.B2_LOCAL "
+		cQuery += "	                        AND (CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END) < ? "
+		cQuery += "	                        AND SB9B.D_E_L_E_T_ = ? ) "
+		cQuery += "	AND " + cDtSD2 + " < ? "
+		cQuery += "	AND SD2.D2_ORIGLAN <> ? "
+		cQuery += "	AND SD2.D_E_L_E_T_ = ? "
+
+		cQuery += "	UNION ALL "
+
+		cQuery += "	SELECT COALESCE(SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO"+alltrim(str(nMoeda))+" * (-1) "
+		cQuery += "							ELSE SD3.D3_CUSTO"+alltrim(str(nMoeda))+" END )),0) CUSTO "
+		cQuery += "	FROM " + RetSqlName("SD3") + " SD3 "
+		cQuery += "	WHERE " + FwJoinFilial("SD3","SB2")
+		cQuery += "	AND SD3.D3_COD = SB2.B2_COD "
+		cQuery += "	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+		// Piso de data = ultimo saldo inicial (B9_DATA < dDtSaldo). B9_DATA vazia tratada como '00000000'
+		// (a mais antiga), replicando a CalcEst/MAT006, para nao ser ignorada no MAX nem no corte.
+		cQuery += "	AND SD3.D3_EMISSAO > ( SELECT COALESCE(MAX(CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END), '00000000') "
+		cQuery += "	                        FROM " + RetSqlName("SB9") + " SB9B "
+		cQuery += "	                        WHERE " + FwJoinFilial("SB9B","SB2")
+		cQuery += "	                        AND SB9B.B9_COD = SB2.B2_COD "
+		cQuery += "	                        AND SB9B.B9_LOCAL = SB2.B2_LOCAL "
+		cQuery += "	                        AND (CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END) < ? "
+		cQuery += "	                        AND SB9B.D_E_L_E_T_ = ? ) "
+		cQuery += "	AND SD3.D3_EMISSAO < ? "
+		if lEstorno
+			cQuery += "		AND SD3.D3_ESTORNO <> ? "
+		endif
+		cQuery += "	AND SD3.D_E_L_E_T_ = ? "
+		
+		cQuery += "	UNION ALL "
+
+		cQuery += "	SELECT COALESCE(SUM((	CASE WHEN SD3.D3_CF = 'DE3' THEN SD3.D3_CUSTO"+alltrim(str(nMoeda))+" * (-1) "
+		cQuery += "							ELSE SD3.D3_CUSTO"+alltrim(str(nMoeda))+" END )),0) CUSTO "
+		cQuery += "	FROM " + RetSqlName("SD3") + " SD3 "
+		cQuery += "	WHERE " + FwJoinFilial("SD3","SB2")
+		cQuery += "	AND SD3.D3_COD = SB2.B2_COD "
+		cQuery += "	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+		cQuery += "	AND SD3.D3_LOCAL = ? "
+		cQuery += "	AND SUBSTRING(SD3.D3_CF,2,2) = ? "
+		// Piso de data = ultimo saldo inicial (B9_DATA < dDtSaldo). B9_DATA vazia tratada como '00000000'
+		// (a mais antiga), replicando a CalcEst/MAT006, para nao ser ignorada no MAX nem no corte.
+		cQuery += "	AND SD3.D3_EMISSAO > ( SELECT COALESCE(MAX(CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END), '00000000') "
+		cQuery += "	                        FROM " + RetSqlName("SB9") + " SB9B "
+		cQuery += "	                        WHERE " + FwJoinFilial("SB9B","SB2")
+		cQuery += "	                        AND SB9B.B9_COD = SB2.B2_COD "
+		cQuery += "	                        AND SB9B.B9_LOCAL = SB2.B2_LOCAL "
+		cQuery += "	                        AND (CASE WHEN SB9B.B9_DATA = ' ' THEN '00000000' ELSE SB9B.B9_DATA END) < ? "
+		cQuery += "	                        AND SB9B.D_E_L_E_T_ = ? ) "
+		cQuery += "	AND SD3.D3_EMISSAO < ? "
+		if lEstorno
+			cQuery += "		AND SD3.D3_ESTORNO <> ? "
+		endif
+		cQuery += "	AND SD3.D_E_L_E_T_ = ? "
+
+		cQuery += "		) QRYSLDATU "
+		cQuery += "	) SALDOATUAL "
+
+	endif
+
+	cQuery += "	,COALESCE(( SELECT SUM(SD1.D1_CUSTO" + if(nMoeda > 1, alltrim(str(nMoeda)),'') + ") "
+	cQuery += "		FROM " + RetSqlName("SD1") + " SD1 "
+	cQuery += "		INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += "		ON  " + FwJoinFilial("SF4","SD1")
+	cQuery += "		AND SF4.F4_CODIGO = SD1.D1_TES "
+	cQuery += "		AND SF4.F4_ESTOQUE = ? "
+	cQuery += "		AND SF4.F4_PODER3 = ? "
+	cQuery += "		AND SF4.D_E_L_E_T_ = ? "
+	cQuery += "		WHERE " + FwJoinFilial("SD1","SB2")
+	cQuery += "		AND SD1.D1_COD = SB2.B2_COD "
+	cQuery += "		AND SD1.D1_LOCAL = SB2.B2_LOCAL "
+	cQuery += "		AND SD1.D1_DTDIGIT BETWEEN ? AND ? "
+	cQuery += "		AND SD1.D1_TIPO <> ? "
+	// Nota de reducao (D1_TIPODOC <> '54') nao integra a entrada normal de compras.
+	cQuery += "		AND SD1.D1_TIPODOC <> ?  "
+	// Nota de credito (D1_TIPO='5') de devolucao (D1_TIPODOC='53') nao entra como entrada positiva de compras:
+	// com formulario proprio (D1_FORMUL='S') seu valor e' classificado em DEVVENDAS; sem formulario proprio
+	// (D1_FORMUL='N') e' abatido de COMPRAS no COALESCE subtraido abaixo (junto da nota de reducao '54').
+	cQuery += "		AND NOT ( SD1.D1_TIPO = ? AND SD1.D1_TIPODOC = ? ) "
+	cQuery += "		AND SD1.D1_ORIGLAN <> ? "
+	cQuery += "		AND SD1.D_E_L_E_T_ = ? "
+	cQuery += "	  ),0) "
+	// Abatimento de COMPRAS: reune, num unico SELECT subtraido, dois documentos que reduzem a compra:
+	//   - nota de reducao SEM formulario proprio (D1_TIPODOC='54' e D1_FORMUL<>'S');
+	//   - nota de credito (D1_TIPO='5') de devolucao (D1_TIPODOC='53') SEM formulario proprio (D1_FORMUL='N').
+	cQuery += " - COALESCE( (SELECT SUM(SD1.D1_CUSTO" + if(nMoeda > 1, alltrim(str(nMoeda)),'') + ") "
+	cQuery += "   	FROM " + RetSqlName("SD1") + " SD1 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD1")
+	cQuery += " 	AND SF4.F4_CODIGO = SD1.D1_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.F4_PODER3 = ? "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD1","SB2")
+	cQuery += " 	AND SD1.D1_COD = SB2.B2_COD "
+	cQuery += " 	AND SD1.D1_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD1.D1_DTDIGIT BETWEEN ? AND ? "
+	cQuery += " 	AND ( ( SD1.D1_TIPODOC = ? AND SD1.D1_FORMUL <> ? ) "
+	cQuery += " 	   OR ( SD1.D1_TIPO = ? AND SD1.D1_TIPODOC = ? AND SD1.D1_FORMUL = ? ) ) "
+	cQuery += " 	AND SD1.D1_ORIGLAN <> ? "
+	cQuery += " 	AND SD1.D_E_L_E_T_ = ? "
+	cQuery += " ),0) COMPRAS "
+
+	cQuery += "	,COALESCE(( SELECT "
+	cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+	cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+	cQuery += "	  	FROM " + RetSqlName("SD3") + " SD3 "
+	cQuery += "		WHERE " + FwJoinFilial("SD3","SB2")
+	cQuery += "		AND SD3.D3_COD = SB2.B2_COD "
+	cQuery += "		AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+	cQuery += "		AND SUBSTRING(SD3.D3_CF,3,1) <> ? "
+	cQuery += "		AND SD3.D3_CF NOT IN (?) "
+	cQuery += "		AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+	cQuery += "		AND SD3.D3_OP = ? "
+	if lEstorno
+		cQuery += "		AND SD3.D3_ESTORNO <> ? "
+	endif
+
+	if lIntDL
+		cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+		cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+	endif
+
+	// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em MOVINTERNA.
+	cQuery += "		AND SD3.D_E_L_E_T_ = ? "
+	cQuery += "	),0) MOVINTERNA "
+
+	if nOPInd == 2
+		cQuery += "	,COALESCE(( SELECT "
+		cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+		cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+		cQuery += "	  	FROM " + RetSqlName("SD3") + " SD3 "
+		cQuery += "		WHERE " + FwJoinFilial("SD3","SB2")
+		cQuery += "		AND SD3.D3_COD = SB2.B2_COD "
+		cQuery += "		AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+		cQuery += "		AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+		cQuery += "		AND SUBSTRING(SD3.D3_CF,1,2) <> ? "
+		cQuery += "		AND SD3.D3_CF NOT IN (?) "
+		cQuery += "		AND SD3.D3_OP <> ? "
+		if lEstorno
+			cQuery += "		AND SD3.D3_ESTORNO <> ? "
+		endif
+
+		if lIntDL
+			cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+			cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+		endif
+
+		// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em REQPARAPROD.
+		cQuery += "		AND SD3.D_E_L_E_T_ = ? "
+		cQuery += "	),0) REQPARAPROD "
+	else
+		cQuery += " , 0 REQPARAPROD "
+	endif
+
+	cQuery += "	,COALESCE(( SELECT "
+	cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+	cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+	cQuery += " 	FROM " + RetSqlName("SD3") + " SD3 "
+	cQuery += " 	WHERE " + FwJoinFilial("SD3","SB2")
+	cQuery += " 	AND SD3.D3_COD = SB2.B2_COD "
+	cQuery += " 	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD3.D3_CF IN (?) "
+	cQuery += " 	AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+	if lEstorno
+		cQuery += " 	AND SD3.D3_ESTORNO <> ? "
+	endif
+
+	if lIntDL
+		cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+		cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+	endif
+
+	// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em TRANSFERENCIAS.
+	cQuery += "	AND SD3.D_E_L_E_T_ = ? "
+	cQuery += "),0) TRANSFERENCIAS "
+
+	cQuery += "	,COALESCE(( SELECT "
+	cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+	cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+	cQuery += " 	FROM " + RetSqlName("SD3") + " SD3 "
+	cQuery += " 	WHERE " + FwJoinFilial("SD3","SB2")
+	cQuery += " 	AND SD3.D3_COD = SB2.B2_COD "
+	cQuery += " 	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+	cQuery += " 	AND SUBSTRING(SD3.D3_CF,1,2) <> ? "
+	cQuery += " 	AND SUBSTRING(SD3.D3_CF,3,1) = ? "
+	cQuery += " 	AND SD3.D3_CF NOT IN (?) "
+	if lEstorno
+		cQuery += " 	AND SD3.D3_ESTORNO <> ? "
+	endif
+
+	if lIntDL
+		cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+		cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+	endif
+
+	// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em TRANSFPROCESSO.
+	cQuery += " 	AND SD3.D_E_L_E_T_ = ? "
+	cQuery += " 	),0) TRANSFPROCESSO "
+
+	cQuery += "	,COALESCE(( SELECT "
+	cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+	cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+	cQuery += " 	FROM " + RetSqlName("SD3") + " SD3 "
+	cQuery += " 	WHERE " + FwJoinFilial("SD3","SB2")
+	cQuery += " 	AND SD3.D3_COD = SB2.B2_COD "
+	cQuery += " 	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD3.D3_LOCAL = ? "
+	cQuery += " 	AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+	cQuery += " 	AND SUBSTRING(SD3.D3_CF,1,2) <> ? "
+	cQuery += " 	AND SUBSTRING(SD3.D3_CF,3,1) = ? "
+	cQuery += " 	AND SD3.D3_CF NOT IN (?) "
+	if lEstorno
+		cQuery += " 	AND SD3.D3_ESTORNO <> ? "
+	endif
+
+	if lIntDL
+		cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+		cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+	endif
+
+	// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em REQARMPROCESSO.
+	cQuery += " 	AND SD3.D_E_L_E_T_ = ? "
+	cQuery += " 	),0) REQARMPROCESSO "
+
+	cQuery += "	,COALESCE(( SELECT "
+	cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+	cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+	cQuery += " 	FROM " + RetSqlName("SD3") + " SD3 "
+	cQuery += " 	WHERE " + FwJoinFilial("SD3","SB2")
+	cQuery += " 	AND SD3.D3_COD = SB2.B2_COD "
+	cQuery += " 	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SUBSTRING(SD3.D3_CF,1,2) = ? "
+	cQuery += " 	AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+	if lEstorno
+		cQuery += " 	AND SD3.D3_ESTORNO <> ? "
+	endif
+	if lIntDL
+		cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+		cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+	endif
+
+	// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em PRODUCAO.
+	cQuery += " 	AND SD3.D_E_L_E_T_ = ? "
+	cQuery += " 	),0) PRODUCAO "
+
+	cQuery += " ,COALESCE( (SELECT SUM(SD2.D2_CUSTO" + alltrim(str(nMoeda)) + ") "
+	cQuery += "   	FROM " + RetSqlName("SD2") + " SD2 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD2")
+	cQuery += " 	AND SF4.F4_CODIGO = SD2.D2_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.F4_PODER3 = ? "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD2","SB2")
+	cQuery += " 	AND SD2.D2_COD = SB2.B2_COD "
+	cQuery += " 	AND SD2.D2_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD2.D2_EMISSAO BETWEEN ? AND ? "
+	cQuery += " 	AND SD2.D2_TIPO <> ? "
+	cQuery += " 	AND SD2.D2_ORIGLAN <> ? "
+	cQuery += " 	AND SD2.D_E_L_E_T_ = ? "
+	cQuery += " ),0) "
+	// Nota de credito (D1_TIPO = '5') de reducao de valores (D1_TIPODOC = '54') com formulario SIM
+	cQuery += " - COALESCE( (SELECT SUM(SD1.D1_CUSTO" + if(nMoeda > 1, alltrim(str(nMoeda)),'') + ") "
+	cQuery += "   	FROM " + RetSqlName("SD1") + " SD1 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD1")
+	cQuery += " 	AND SF4.F4_CODIGO = SD1.D1_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD1","SB2")
+	cQuery += " 	AND SD1.D1_COD = SB2.B2_COD "
+	cQuery += " 	AND SD1.D1_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD1.D1_DTDIGIT BETWEEN ? AND ? "
+	cQuery += " 	AND SD1.D1_TIPO = ? "
+	cQuery += " 	AND SD1.D1_TIPODOC = ? "
+	cQuery += " 	AND SD1.D1_FORMUL = ? "
+	cQuery += " 	AND SD1.D1_ORIGLAN <> ? "
+	cQuery += " 	AND SD1.D_E_L_E_T_ = ? "
+	cQuery += " ),0) VENDAS "
+
+	cQuery += "	,COALESCE(( SELECT SUM(SD1.D1_CUSTO" + if(nMoeda > 1, alltrim(str(nMoeda)),'') + ") "
+	cQuery += " 	FROM " + RetSqlName("SD1") + " SD1 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD1")
+	cQuery += " 	AND SF4.F4_CODIGO = SD1.D1_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.F4_PODER3 = ? "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD1","SB2")
+	cQuery += " 	AND SD1.D1_COD = SB2.B2_COD "
+	cQuery += " 	AND SD1.D1_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD1.D1_DTDIGIT BETWEEN ? AND ? "
+	// Devolucao de venda: tipo 'D' OU nota de credito (D1_TIPO='5') de devolucao com documento '53'
+	// e formulario proprio (D1_FORMUL='S') - estes ultimos deixam de compor COMPRAS e passam a DEVVENDAS.
+	cQuery += " 	AND ( SD1.D1_TIPO = ? "
+	cQuery += " 	   OR ( SD1.D1_TIPO = ? AND SD1.D1_TIPODOC = ? AND SD1.D1_FORMUL = ? ) ) "
+	cQuery += " 	AND SD1.D1_ORIGLAN <> ? "
+	cQuery += " 	AND SD1.D_E_L_E_T_ = ? "
+	cQuery += " ),0) DEVVENDAS "
+
+	cQuery += " ,COALESCE( (SELECT SUM(SD2.D2_CUSTO" + alltrim(str(nMoeda)) + ") "
+	cQuery += "   	FROM " + RetSqlName("SD2") + " SD2 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD2")
+	cQuery += " 	AND SF4.F4_CODIGO = SD2.D2_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.F4_PODER3 = ? "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD2","SB2")
+	cQuery += " 	AND SD2.D2_COD = SB2.B2_COD "
+	cQuery += " 	AND SD2.D2_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD2.D2_EMISSAO BETWEEN ? AND ? "
+	cQuery += " 	AND SD2.D2_TIPO = ? "
+	cQuery += " 	AND SD2.D2_ORIGLAN <> ? "
+	cQuery += " 	AND SD2.D_E_L_E_T_ = ? "
+	cQuery += " ),0) DEVCOMPRAS "
+
+	cQuery += "	,COALESCE(( SELECT SUM(SD1.D1_CUSTO" + if(nMoeda > 1, alltrim(str(nMoeda)),'') + ") "
+	cQuery += "   	FROM " + RetSqlName("SD1") + " SD1 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD1")
+	cQuery += " 	AND SF4.F4_CODIGO = SD1.D1_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.F4_PODER3 IN (?) "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD1","SB2")
+	cQuery += " 	AND SD1.D1_COD = SB2.B2_COD "
+	cQuery += " 	AND SD1.D1_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD1.D1_DTDIGIT BETWEEN ? AND ? "
+	cQuery += " 	AND SD1.D1_ORIGLAN <> ? "
+	cQuery += " 	AND SD1.D_E_L_E_T_ = ? "
+	cQuery += " ),0) ENTPD3 "
+
+	cQuery += " ,COALESCE( (SELECT SUM(SD2.D2_CUSTO" + alltrim(str(nMoeda)) + ") "
+	cQuery += "   	FROM " + RetSqlName("SD2") + " SD2 "
+	cQuery += " 	INNER JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += " 	ON " + FwJoinFilial("SF4","SD2")
+	cQuery += " 	AND SF4.F4_CODIGO = SD2.D2_TES "
+	cQuery += " 	AND SF4.F4_ESTOQUE = ? "
+	cQuery += " 	AND SF4.F4_PODER3 IN (?) "
+	cQuery += " 	AND SF4.D_E_L_E_T_ = ? "
+	cQuery += " 	WHERE " + FwJoinFilial("SD2","SB2")
+	cQuery += " 	AND SD2.D2_COD = SB2.B2_COD "
+	cQuery += " 	AND SD2.D2_LOCAL = SB2.B2_LOCAL "
+	cQuery += " 	AND SD2.D2_EMISSAO BETWEEN ? AND ? "
+	cQuery += " 	AND SD2.D2_ORIGLAN <> ? "
+	cQuery += " 	AND SD2.D_E_L_E_T_ = ? "
+	cQuery += " ),0) SAIPD3 "
+
+	if nOPInd == 1
+		cQuery += "	,COALESCE(( SELECT "
+		cQuery += "		SUM((	CASE WHEN SD3.D3_TM > '500' THEN SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " * (-1)"
+		cQuery += "				ELSE SD3.D3_CUSTO" + alltrim(str(nMoeda)) + " END )) " 
+		cQuery += " 	FROM " + RetSqlName("SD3") + " SD3 "
+		cQuery += " 	WHERE " + FwJoinFilial("SD3","SB2")
+		cQuery += " 	AND SD3.D3_COD = SB2.B2_COD "
+		cQuery += " 	AND SD3.D3_LOCAL = SB2.B2_LOCAL "
+		cQuery += " 	AND SD3.D3_EMISSAO BETWEEN ? AND ? "
+		cQuery += " 	AND SUBSTRING(SD3.D3_CF,1,2) <> ? "
+		cQuery += " 	AND SUBSTRING(SD3.D3_CF,3,1) <> ? "
+		cQuery += " 	AND SD3.D3_CF NOT IN (?) "
+		cQuery += " 	AND SD3.D3_OP <> ? "
+		if lEstorno
+			cQuery += " 	AND SD3.D3_ESTORNO <> ? "
+		endif
+
+		if lIntDL
+			cQuery += " 	AND (( SD3.D3_SERVIC = ? ) OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM <= ? ) "
+			cQuery += " 	OR ( SD3.D3_SERVIC <> ? AND SD3.D3_TM > ? AND SD3.D3_LOCAL = ? )) "
+		endif
+
+		// Corrige ausencia do filtro de soft-delete: sem este AND, movimentos SD3 excluidos eram somados em REQPRODIND.
+		cQuery += " 	AND SD3.D_E_L_E_T_ = ? "
+		cQuery += " 	),0) REQPRODIND "
+	else
+		cQuery += " ,  0 REQPRODIND "
+	endif
+
+	cQuery += " FROM " + RetSqlName("SB2") + " SB2 "
+
+	cQuery += "     INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += "     ON " + FwJoinFilial("SB1","SB2")
+	cQuery += "     AND SB1.B1_COD = SB2.B2_COD "
+	cQuery += " 	AND SB1.B1_TIPO BETWEEN ? AND ? "
+	cQuery += "     AND SB1.D_E_L_E_T_ = ? "
+
+	cQuery += " WHERE "
+	cQuery += " SB2.B2_FILIAL IN (?) "
+	cQuery += " AND SB2.B2_COD BETWEEN ? AND ? "
+	if nTSldMOD == 2
+		cQuery += " AND SUBSTRING(TRIM(SB2.B2_COD),1,3) <> ? "
+	endif
+	cQuery += " AND SB2.B2_LOCAL BETWEEN ? AND ? "
+	cQuery += " AND SB2.D_E_L_E_T_ = ? "
+
+	cQuery += " ) QRY "
+
+	if !empty(self:cWhereFiltroSV)
+		cQuery += " WHERE 1 = 1 "
+		cQuery += self:cWhereFiltroSV
+	endif
+
+	cQuery += " GROUP BY QRY.FILIAL, " + cSqlFlds
+	cQuery += " ORDER BY QRY.FILIAL, " + cSqlFlds
+
+	cQuery := changeQuery(cQuery)
+
+	oQuery := FwExecStatement():New(cQuery)
+	
+	nBind := 1
+
+	if nTpSaldo == 3
+		// SALDOATUAL - cortes de data usam dDtSaldo (=dDataAte+1), replicando CalcEst(...,mv_par08+1) do MATR320/MAT006,
+		// para que os movimentos do proprio dia final (dDataAte) componham o saldo.
+		//SB9
+		// B9_DATA vazia tratada como '00000000' direto na query (literal, sem bind).
+		// Restam: o corte de data (< dDtSaldo) e os 2 D_E_L_E_T_ (subquery e externo).
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, ' ')
+		// SD1
+		oQuery:SetString(nBind++, 'S')
+		oQuery:SetIn(nBind++, {'R','D'})
+		oQuery:SetString(nBind++, ' ')
+		// SD1 - piso de data (ultimo B9_DATA < dDtSaldo), replicando @vDtVai da MAT006/CalcEst
+		// (B9_DATA vazia tratada como '00000000' na query, sem bind). Corte de data e D_E_L_E_T_ da subquery.
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, 'LF')
+		// SD1 - exclui documento de credito (D1_TIPODOC='54') exceto formulario proprio (D1_FORMUL='S'), replicando a MAT006/CalcEst
+		oQuery:SetString(nBind++, '54')
+		oQuery:SetString(nBind++, 'S')
+		oQuery:SetString(nBind++, ' ')
+		// SD2
+		oQuery:SetString(nBind++, 'S')
+		oQuery:SetIn(nBind++, {'R','D'})
+		oQuery:SetString(nBind++, ' ')
+		// SD2 - piso de data (ultimo B9_DATA < dDtSaldo), replicando @vDtVai da MAT006/CalcEst
+		// (B9_DATA vazia tratada como '00000000' na query, sem bind). Corte de data e D_E_L_E_T_ da subquery.
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, 'LF')
+		oQuery:SetString(nBind++, ' ')
+		// SD3_1
+		// SD3_1 - piso de data (ultimo B9_DATA < dDtSaldo), replicando @vDtVai da MAT006/CalcEst
+		// (B9_DATA vazia tratada como '00000000' na query, sem bind). Corte de data e D_E_L_E_T_ da subquery.
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetDate(nBind++, dDtSaldo)
+		if lEstorno
+			oQuery:SetString(nBind++, 'S')
+		endif
+		oQuery:SetString(nBind++, ' ')
+		// SD3_2
+		oQuery:SetString(nBind++, cLocProc)
+		oQuery:SetString(nBind++, 'E3')
+		// SD3_2 - piso de data (ultimo B9_DATA < dDtSaldo), replicando @vDtVai da MAT006/CalcEst
+		// (B9_DATA vazia tratada como '00000000' na query, sem bind). Corte de data e D_E_L_E_T_ da subquery.
+		oQuery:SetDate(nBind++, dDtSaldo)
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetDate(nBind++, dDtSaldo)
+		if lEstorno
+			oQuery:SetString(nBind++, 'S')
+		endif
+		oQuery:SetString(nBind++, ' ')
+	endif
+
+	// COMPRAS
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'N')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'D')
+	oQuery:SetString(nBind++, '54')
+	// COMPRAS (exclui nota de credito '5' de devolucao '53' - FORMUL 'S' vai para DEVVENDAS, 'N' abate de COMPRAS)
+	oQuery:SetString(nBind++, '5')
+	oQuery:SetString(nBind++, '53')
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+	// COMPRAS (abatimento: nota de reducao '54'/FORMUL<>'S' OU nota de credito '5' de devolucao '53'/FORMUL='N')
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'N')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	// ramo da nota de reducao '54'
+	oQuery:SetString(nBind++, '54')
+	oQuery:SetString(nBind++, 'S')
+	// ramo da nota de credito de devolucao '53' sem formulario proprio
+	oQuery:SetString(nBind++, '5')
+	oQuery:SetString(nBind++, '53')
+	oQuery:SetString(nBind++, 'N')
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+
+	// MOVINTERNA
+	oQuery:SetString(nBind++, '3')
+	// 'RED'/'DED': movimentos gerados pela nota de reducao de valores - nao considerados
+	oQuery:SetIn(nBind++, {"RE4","DE4","RED","DED"})
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, ' ')
+	if lEstorno
+		oQuery:SetString(nBind++, 'S')
+	endif
+	if lIntDL
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, cLocCQ)
+	endif
+	oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery MOVINTERNA
+
+	// REQPARAPROD
+	if nOPInd == 2
+		oQuery:SetDate(nBind++, dDataIni)
+		oQuery:SetDate(nBind++, dDataAte)
+		oQuery:SetString(nBind++, 'PR')
+		// 'RED'/'DED': movimentos gerados pela nota de reducao de valores - nao considerados
+		oQuery:SetIn(nBind++, {'RE4','DE4','RED','DED'})
+		oQuery:SetString(nBind++, ' ')
+		if lEstorno
+			oQuery:SetString(nBind++, 'S')
+		endif
+		if lIntDL
+			oQuery:SetString(nBind++, ' ')
+			oQuery:SetString(nBind++, ' ')
+			oQuery:SetString(nBind++, '500')
+			oQuery:SetString(nBind++, ' ')
+			oQuery:SetString(nBind++, '500')
+			oQuery:SetString(nBind++, cLocCQ)
+		endif
+		oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery REQPARAPROD
+	endif
+
+	// TRANSFERENCIAS
+	oQuery:SetIn(nBind++, {'RE4','DE4'})
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	if lEstorno
+		oQuery:SetString(nBind++, 'S')
+	endif
+	if lIntDL
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, cLocCQ)
+	endif
+	oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery TRANSFERENCIAS
+	
+	// TRANSFPROCESSO
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'PR')
+	oQuery:SetString(nBind++, '3')
+	oQuery:SetIn(nBind++, {'RE4','DE4'})
+	if lEstorno
+		oQuery:SetString(nBind++, 'S')
+	endif
+	if lIntDL
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, cLocCQ)
+	endif
+	oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery TRANSFPROCESSO
+	
+	// REQARMPROCESSO
+	oQuery:SetString(nBind++, cLocProc)
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'PR')
+	oQuery:SetString(nBind++, '3')
+	oQuery:SetIn(nBind++, {'RE4','DE4'})
+	if lEstorno
+		oQuery:SetString(nBind++, 'S')
+	endif
+	if lIntDL
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, cLocCQ)
+	endif
+	oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery REQARMPROCESSO
+
+	// PRODUCAO
+	oQuery:SetString(nBind++, 'PR')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	if lEstorno
+		oQuery:SetString(nBind++, 'S')
+	endif
+	if lIntDL
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, ' ')
+		oQuery:SetString(nBind++, '500')
+		oQuery:SetString(nBind++, cLocCQ)
+	endif
+	oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery PRODUCAO
+
+	// VENDAS
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'N')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'D')
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+	// VENDAS (SD1 - Abatimento da nota de reducao com formulario proprio)
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, '5')
+	oQuery:SetString(nBind++, '54')
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+
+	// DEVVENDAS
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'N')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'D')
+	// DEVVENDAS (nota de credito de devolucao '53' com formulario proprio - deixa de sair em COMPRAS)
+	oQuery:SetString(nBind++, '5')
+	oQuery:SetString(nBind++, '53')
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+
+	// DEVCOMPRAS (SD2)
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, 'N')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'D')
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+
+	// ENTPD3
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetIn(nBind++, {'R','D'})
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+
+	// SAIPD3
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetIn(nBind++, {'R','D'})
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetDate(nBind++, dDataIni)
+	oQuery:SetDate(nBind++, dDataAte)
+	oQuery:SetString(nBind++, 'LF')
+	oQuery:SetString(nBind++, ' ')
+
+	// REQPRODIND
+	if nOPInd == 1
+		oQuery:SetDate(nBind++, dDataIni)
+		oQuery:SetDate(nBind++, dDataAte)
+		oQuery:SetString(nBind++, 'PR')
+		oQuery:SetString(nBind++, '3')
+		// 'RED'/'DED': movimentos gerados pela nota de reducao de valores - nao considerados
+		oQuery:SetIn(nBind++, {'RE4','DE4','RED','DED'})
+		oQuery:SetString(nBind++, ' ')
+		if lEstorno
+			oQuery:SetString(nBind++, 'S')
+		endif
+		if lIntDL
+			oQuery:SetString(nBind++, ' ')
+			oQuery:SetString(nBind++, ' ')
+			oQuery:SetString(nBind++, '500')
+			oQuery:SetString(nBind++, ' ')
+			oQuery:SetString(nBind++, '500')
+			oQuery:SetString(nBind++, cLocCQ)
+		endif
+		oQuery:SetString(nBind++, ' ')	// D_E_L_E_T_ da subquery REQPRODIND
+	endif
+	
+	// INNER JOIN SB1
+	oQuery:SetString(nBind++, jParams['MV_PAR03'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR04'][1])
+	oQuery:SetString(nBind++, ' ')
+	
+	// WHERE 
+	oQuery:SetIn(nBind++, self:aFils)
+	oQuery:SetString(nBind++, cCodIni)
+	oQuery:SetString(nBind++, cCodFim)
+	if nTSldMOD == 2
+		oQuery:SetString(nBind++, 'MOD')
+	endif
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])
+	oQuery:SetString(nBind++, ' ')	
+
+	cAlias := oQuery:OpenAlias()
+
+	// Inicializa os caches de execucao (uma unica vez, antes do laco)
+	hCacheEmp  := JsonObject():new()	// cache EMPNOME/FILNOME por FILIAL
+	hCacheTipo := JsonObject():new()	// cache descricao de B1_TIPO por codigo de tipo
+
+	While (cAlias)->(!EOF())
+
+		// Converte a linha corrente do alias no item de saida (nomes/tipos vem do cache do schema).
+		jItems := self:rowToJson(cAlias, aFldName, aFldType, hCacheEmp, hCacheTipo)
+
+		jItems['SALDOINI']	:=	jItems['SALDOATUAL'] - jItems['COMPRAS'] - (jItems['REQPARAPROD']) - (jItems['REQPRODIND']) - (jItems['MOVINTERNA']) - ;
+								(jItems['PRODUCAO']) + jItems['VENDAS'] - (jItems['TRANSFERENCIAS']) - ((cAlias)->REQARMPROCESSO) - ;
+								jItems['DEVVENDAS'] + jItems['DEVCOMPRAS'] - jItems['ENTPD3'] + jItems['SAIPD3']
+	
+		self:processData()
+		self:oData:appendData(jItems)
+
+		(cAlias)->(DbSkip())
+	EndDo 
+
+	(cAlias)->(DbCloseArea())
+	
+	oQuery:Destroy()
+
+	// Os caches hCacheEmp/hCacheTipo sao JsonObject locais de vida curta (so existem
+	// durante getData()) e sao liberados ao termino do metodo. Nao ha chamada explicita
+	// de liberacao pois o JsonObject nao expoe Destroy()/Clean() idiomatico neste uso.
+return self:oData
+
+
+/*/{Protheus.doc} rowToJson
+Converte a linha corrente do alias de trabalho no item (json) de saida do relatorio.
+
+Extraido do laco de getData() sem alteracao de comportamento: a ordem de avaliacao dos
+campos, o tratamento de EMPNOME/FILNOME, a descricao de B1_TIPO (com cache e sentinela
+para tipo sem descricao na SX5) e a conversao de datas permanecem identicos.
+
+@type   method
+@author Squad Entradas
+@since  Setembro 02,2026
+@param  cAlias, character, alias de trabalho posicionado na linha a converter
+@param  aFldName, array, nomes dos campos do schema (cache montado uma vez em getData)
+@param  aFldType, array, tipos dos campos do schema (cache montado uma vez em getData)
+@param  hCacheEmp, json, cache de EMPNOME/FILNOME indexado por FILIAL
+@param  hCacheTipo, json, cache da descricao de B1_TIPO indexado pelo codigo do tipo
+@return json, item preenchido com os campos do schema (sem a coluna SALDOINI, calculada em getData)
+/*/
+method rowToJson(cAlias as character, aFldName as array, aFldType as array, hCacheEmp as json, hCacheTipo as json) as json class InflowsAndOutflowsTReportsBusinessObject
+
+	local jItems	as json
+	local aSX5		as array
+	local aEmpFil	as array
+	local cFldName	as character
+	local cFldType	as character
+	local cChvTipo	as character
+	local nX		as numeric
+	local nY		as numeric
+	local nFields	as numeric
+	local xContAux	as variant
+
+	jItems  := JsonObject():New()
+	nFields := Len(aFldName)
+
+	// Laco para carregar os valores nos campos padroes do schema do objeto
+	For nX := 1 To nFields
+
+		xContAux := Nil
+		// PERFORMANCE: nome/tipo vem do cache montado antes do laco (mesmos valores de getName()/getType()).
+		cFldName := aFldName[nX]
+		cFldType := aFldType[nX]
+
+		if cFldName == 'EMPNOME'
+			aEmpFil  := self:getInfoEmpCached(hCacheEmp, (cAlias)->FILIAL)
+			xContAux := aEmpFil[1]
+		elseif cFldName == 'FILNOME'
+			aEmpFil  := self:getInfoEmpCached(hCacheEmp, (cAlias)->FILIAL)
+			xContAux := aEmpFil[2]
+		elseif cFldName == 'B1_TIPO'
+			cChvTipo := alltrim((cAlias)->B1_TIPO)
+			if hCacheTipo[cChvTipo] == Nil
+				aSX5 := FwGetSX5("02", cChvTipo)
+				if len(aSX5) == 0
+					hCacheTipo[cChvTipo] := ""	// sentinela: tipo sem descricao na SX5 (saida original = Nil)
+					// xContAux permanece Nil, identico a F
+				else
+					for nY := 1 to len(aSX5)
+						xContAux := cChvTipo + ' - ' + alltrim(aSX5[nY][4])	// preserva "ultimo elemento"
+					next nY
+					hCacheTipo[cChvTipo] := xContAux
+				endif
+			else
+				if hCacheTipo[cChvTipo] == ""	// caso vazio cacheado -> reproduz Nil de F
+					xContAux := Nil
+				else
+					xContAux := hCacheTipo[cChvTipo]
+				endif
+			endif
+		elseif cFldType == "date" .and. !Empty( (cAlias)->&(cFldName) )
+			xContAux := totvs.framework.treports.date.dateToTimeStamp( StoD((cAlias)->&(cFldName)) )
+		else
+			xContAux := (cAlias)->&(cFldName)
+		endif
+
+		jItems[cFldName] := xContAux
+
+	Next nX
+
+return jItems
+
+
+/*/{Protheus.doc} getInfoEmpCached
+Resolve o nome da empresa (EMPNOME) e o nome da filial (FILNOME) de uma FILIAL utilizando
+cache de execucao (memoizacao). Delega a self:getInfoEmp apenas na primeira ocorroncia de cada
+FILIAL distinta; nas ocorroncias seguintes reutiliza o valor cacheado. Preserva exatamente os
+valores retornados por getInfoEmp.
+@type  method
+@author Squad Entradas
+@since  Agosto 26,2026
+@param  hCache, json, cache indexado pela FILIAL (par {EMPNOME, FILNOME} por chave)
+@param  cCodFil, character, codigo da FILIAL a ser resolvida
+@return array, par { EMPNOME, FILNOME } correspondente a FILIAL informada
+/*/
+method getInfoEmpCached(hCache as json, cCodFil as character) as array class InflowsAndOutflowsTReportsBusinessObject
+
+	local aRet as array
+
+	if hCache[cCodFil] == Nil
+		aRet := { self:getInfoEmp("M0_NOME", cCodFil), self:getInfoEmp("M0_FILIAL", cCodFil) }
+		hCache[cCodFil] := aRet
+	else
+		aRet := hCache[cCodFil]
+	endif
+
+return aRet
+
+
+/*/{Protheus.doc} oNGetSchema
+Metodo que define a Estrutura de dados (schema) exposta pelo objeto de negocio.
+@type   method
+@author Squad Entradas
+@since  Junho 30,2023
+@return nil, o schema e' montado em self:oSchema
+/*/
+method oNGetSchema() class InflowsAndOutflowsTReportsBusinessObject
+
+	self:oSchema:aliasToSchema("SB1",{"B1_TIPO","B1_COD","B1_DESC","B1_UM","B1_GRUPO","B1_CONTA","B1_CC","B1_ITEMCC","B1_CLVL"})
+
+	self:oSchema:addProperty("EMPNOME"       , STR0004, "string", STR0004, "EMPNOME")
+	self:oSchema:addProperty("FILNOME"       , STR0005, "string", STR0005, "FILNOME")
+	self:oSchema:addProperty("FILIAL"        , STR0005, "string", STR0005, "FILIAL")
+	self:oSchema:addProperty("SALDOINI"      , STR0006, "number", STR0006, "SALDOINI")
+	self:oSchema:addProperty("COMPRAS"       , STR0007, "number", STR0007, "COMPRAS")
+	self:oSchema:addProperty("MOVINTERNA"    , STR0008, "number", STR0008, "MOVINTERNA")
+	self:oSchema:addProperty("REQPARAPROD"   , STR0009, "number", STR0009, "REQPARAPROD")
+	self:oSchema:addProperty("PRODUCAO"      , STR0011, "number", STR0011, "PRODUCAO")
+	self:oSchema:addProperty("TRANSFERENCIAS", STR0010, "number", STR0010, "TRANSFERENCIAS")
+	self:oSchema:addProperty("TRANSFPROCESSO", STR0013, "number", STR0013, "TRANSFPROCESSO")
+	self:oSchema:addProperty("VENDAS"        , STR0012, "number", STR0012, "VENDAS")
+	self:oSchema:addProperty("DEVVENDAS"     , STR0014, "number", STR0014, "DEVVENDAS")
+	self:oSchema:addProperty("DEVCOMPRAS"    , STR0015, "number", STR0015, "DEVCOMPRAS")
+	self:oSchema:addProperty("ENTPD3"        , STR0016, "number", STR0016, "ENTPD3")
+	self:oSchema:addProperty("SAIPD3"        , STR0017, "number", STR0017, "SAIPD3")
+	self:oSchema:addProperty("SALDOATUAL"    , STR0018, "number", STR0018, "SALDOATUAL")
+	self:oSchema:addProperty("REQPRODIND"    , STR0021, "number", STR0021, "REQPRODIND")
+
+return

@@ -1,0 +1,354 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "retail.salesconnectretail.credit.obj.ch"
+
+namespace totvs.protheus.retail.salesconnectretail.obj
+
+using namespace totvs.protheus.retail.salesconnectretail.dto
+
+/*/{Protheus.doc} SalesConnectRetailCreditObj
+Objeto de processamento da API GET /api/retail/v1/SalesConnectRetail/credit/.
+Pipeline: autentica (X-PASS-KEY), parse/valida a query string, resolve o cliente
+pelo CPF/CNPJ (SA1), consulta os creditos NCC em aberto na SE1 (saldo>0, sem
+filtro de filial, sem MV_CMP330) e monta o envelope paginado.
+
+Pipeline em :Process():
+  1. Authenticate  : X-PASS-KEY vs token fixo da API
+  2. ParseQuery    : query string (JSON) -> SalesConnectRetailCreditQueryDto
+  3. ValidateQuery : taxId obrigatorio (0007) + paginacao valida (0008)
+  4. QuerySE1      : cliente existe? (0009) -> consulta SE1<->SA1 paginada
+  5. BuildResponse : cReturn (200)
+
+Campos publicos lidos pela function thin: nHttpStatus, cReturn.
+
+@author  Thalys Augusto Alves Juvenal
+@since   31/07/2026
+@version 1.0
+@type class
+/*/
+Class SalesConnectRetailCreditObj
+    Protected Data cAuthToken as Character
+    Public Data cQueryJson  as Character
+    Public Data nHttpStatus as Numeric
+    Public Data cReturn     as Character
+    Public Data cUuid       as Character
+
+    Protected Data oQueryDto as Object
+
+    Public Method New(cAuthToken as Character, cQueryJson as Character) as Object
+    Public Method Process() as Logical
+
+    Protected Method Authenticate()  as Logical
+    Protected Method ParseQuery()    as Logical
+    Protected Method ValidateQuery() as Object
+    Protected Method QuerySE1()      as Object
+    Protected Method BuildResponse(oRespDto as Object) as Logical
+    Protected Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical
+    Protected Method FmtIsoDate(cYmd as Character) as Character
+    Protected Method BindCredit(oStmt as Object, cCgc as Character) as Numeric
+    Protected Method ClientExists(cCgc as Character) as Logical
+EndClass
+
+/*/{Protheus.doc} New
+Construtor. Recebe o X-PASS-KEY (extraido pela function thin) e a query em JSON.
+@param cAuthToken, character, valor cru do header X-PASS-KEY
+@param cQueryJson, character, query string serializada como JSON
+@return object, Self
+@type method
+/*/
+Method New(cAuthToken as Character, cQueryJson as Character) as Object Class SalesConnectRetailCreditObj
+    ::cAuthToken  := cAuthToken
+    ::cQueryJson  := cQueryJson
+    ::nHttpStatus := 200
+    ::cReturn     := ""
+    ::cUuid       := FwUUIDv4()
+    ::oQueryDto   := Nil
+Return Self
+
+/*/{Protheus.doc} Process
+Orquestra o pipeline. Cada etapa abortada retorna .F. e preenche nHttpStatus +
+cReturn via BuildError.
+@return logical, .T. sucesso, .F. erro
+@type method
+/*/
+Method Process() as Logical Class SalesConnectRetailCreditObj
+    Local oRespDto as Object
+    Local lRet     as Logical
+    Local nI       as Numeric
+
+    LjGrvLog("SalesConnectRetailCreditObj", ;
+        "[" + ::cUuid + "] inicio - empresa '" + AllTrim(cEmpAnt) + "' filial '" + AllTrim(cFilAnt) + "'")
+
+    lRet := ::Authenticate()
+
+    If lRet
+        lRet := ::ParseQuery()
+    EndIf
+
+    If lRet
+        lRet := ::ValidateQuery():isValid
+    EndIf
+
+    If lRet
+        oRespDto := ::QuerySE1()
+        lRet     := (oRespDto != Nil)
+    EndIf
+
+    If lRet
+        ::BuildResponse(oRespDto)
+    EndIf
+
+    If oRespDto != Nil
+        For nI := 1 To Len(oRespDto:aItems)
+            FWFreeObj(oRespDto:aItems[nI])
+        Next nI
+        FWFreeObj(oRespDto)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} Authenticate
+Valida o X-PASS-KEY contra o token fixo da API (autenticacao em duas camadas:
+o framework REST ja validou usuario/senha do ERP antes desta function).
+@return logical, .T. autorizado, .F. (nHttpStatus=401)
+@type method
+/*/
+Method Authenticate() as Logical Class SalesConnectRetailCreditObj
+    Local lRet        := .T. as Logical
+    Local cAuthHeader := ""  as Character
+    Local cExpected   := ""  as Character
+
+    If ValType(::cAuthToken) == "C"
+        cAuthHeader := AllTrim(::cAuthToken)
+    EndIf
+    // Token fixo da API (produto TOTVS) - DVARPV-7981
+    cExpected := "2lz3fw3vOvPd0TsQ1Kj8hGast77d1YKZRj6LYRwIZG3M"
+
+    If Empty(cAuthHeader) .Or. !(cAuthHeader == cExpected)
+        ::BuildError("0002", STR0001, 401) // Token X-PASS-KEY invalido ou ausente
+        LjGrvLog("SalesConnectRetailCreditObj", "[" + ::cUuid + "] 401: X-PASS-KEY invalido/ausente")
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ParseQuery
+Desserializa a query string (JSON) em SalesConnectRetailCreditQueryDto.
+@return logical, sempre .T. (a query vem de oRest:getQueryRequest, sempre JSON valido)
+@type method
+/*/
+Method ParseQuery() as Logical Class SalesConnectRetailCreditObj
+    ::oQueryDto := SalesConnectRetailCreditQueryDto():New()
+    ::oQueryDto:fromJson(::cQueryJson)
+Return .T.
+
+/*/{Protheus.doc} ValidateQuery
+Valida taxId obrigatorio (0007) e paginacao (0008). Retorna
+SalesConnectRetailValidationResult; se invalido, ja escreve 400 via BuildError.
+@return object, SalesConnectRetailValidationResult (isValid/code/message)
+@type method
+/*/
+Method ValidateQuery() as Object Class SalesConnectRetailCreditObj
+    Local oResult := Nil as Object
+
+    If !::oQueryDto:hasTaxId() .Or. ( Len(::oQueryDto:cTaxId) != 11 .And. Len(::oQueryDto:cTaxId) != 14 )
+        oResult := SalesConnectRetailValidationResult():New(.F., "0007", STR0002) // Informe um CPF/CNPJ (taxId) valido do consumidor - 11 (CPF) ou 14 (CNPJ) digitos
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailCreditObj", "[" + ::cUuid + "] 400: " + oResult:message)
+    ElseIf ::oQueryDto:nPage < 1 .Or. ::oQueryDto:nPageSize < 1 .Or. ::oQueryDto:nPageSize > 100
+        oResult := SalesConnectRetailValidationResult():New(.F., "0008", STR0003) // Paginacao invalida (page>=1, pageSize entre 1 e 100)
+        ::BuildError(oResult:code, oResult:message, 400)
+        LjGrvLog("SalesConnectRetailCreditObj", "[" + ::cUuid + "] 400: " + oResult:message)
+    Else
+        oResult := SalesConnectRetailValidationResult():New(.T., "", "")
+    EndIf
+Return oResult
+
+/*/{Protheus.doc} ClientExists
+Verifica se ha cliente na SA1 com o CPF/CNPJ informado, em QUALQUER filial (para
+distinguir "cliente nao encontrado" de "cliente sem credito") - sem amarrar A1_FILIAL.
+@param cCgc, character, CPF/CNPJ ja padronizado ao tamanho de A1_CGC
+@return logical, .T. se existe ao menos um cliente
+@type method
+/*/
+Method ClientExists(cCgc as Character) as Logical Class SalesConnectRetailCreditObj
+    Local oStmt  as Object
+    Local cAlias as Character
+    Local nQtd   := 0 as Numeric
+    Local lRet   := .F. as Logical
+
+    oStmt := FWPreparedStatement():New()
+    oStmt:SetQuery("SELECT COUNT(*) AS RSCLI FROM " + RetSqlName("SA1") + " SA1 " + ;
+                   "WHERE SA1.A1_CGC = ? AND SA1.D_E_L_E_T_ = ' '")
+    oStmt:SetString(1, cCgc)
+    cAlias := GetNextAlias()
+    DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmt:GetFixQuery()), cAlias, .F., .T.)
+    nQtd := (cAlias)->RSCLI
+    (cAlias)->(DbCloseArea())
+    oStmt:Destroy()
+    FWFreeObj(oStmt)
+    lRet := ( nQtd > 0 )
+Return lRet
+
+/*/{Protheus.doc} BindCredit
+Bind do unico placeholder da consulta: A1_CGC (no EXISTS da SA1). O E1_TIPO='NCC' e
+literal na query (NCC only), entao nao ha placeholder de tipo.
+@param oStmt, object, FWPreparedStatement com SetQuery aplicado
+@param cCgc,  character, CPF/CNPJ ja padronizado ao tamanho de A1_CGC
+@return numeric, proximo indice de placeholder livre
+@type method
+/*/
+Method BindCredit(oStmt as Object, cCgc as Character) as Numeric Class SalesConnectRetailCreditObj
+    Local nP := 1 as Numeric
+
+    oStmt:SetString(nP++, cCgc)
+Return nP
+
+/*/{Protheus.doc} QuerySE1
+Consulta os creditos NCC em aberto (saldo>0) do cliente, resolvido pelo CGC via
+EXISTS na SA1 (cross-filial - SEM amarrar A1_FILIAL nem E1_FILIAL, traz de TODAS as
+filiais, independe do compartilhamento da SA1). O EXISTS mantem o par COD+LOJA e nao
+duplica linhas da SE1. Filtros por placeholder (anti-injection). Total/soma via
+SELECT COUNT(*)+SUM; paginacao em ADVPL (build sem SetInteger/OFFSET). Retorna Nil
+(com 0009/404) se o cliente nao existir na SA1 (em nenhuma filial).
+@return object, SalesConnectRetailCreditResponseDto, ou Nil se cliente inexistente (0009/404)
+@type method
+/*/
+Method QuerySE1() as Object Class SalesConnectRetailCreditObj
+    Local oReq        as Object
+    Local cCgcPad     as Character
+    Local cFromWhere  as Character
+    Local oStmtCnt    as Object
+    Local oStmtFch    as Object
+    Local cCntAlias   as Character
+    Local cAlias      as Character
+    Local nTotal      := 0 as Numeric
+    Local nSaldo      := 0 as Numeric
+    Local aItens      as Array
+    Local oItem       as Object
+    Local nSkip       as Numeric
+    Local nRead       as Numeric
+    Local oResp       := Nil as Object
+
+    oReq    := ::oQueryDto
+    cCgcPad := PadR(oReq:cTaxId, TamSx3("A1_CGC")[1])
+
+    // CROSS-FILIAL: resolve o cliente pelo CGC via EXISTS na SA1, SEM amarrar A1_FILIAL,
+    // trazendo os creditos do CPF/CNPJ em TODAS as filiais (independe do compartilhamento
+    // da SA1). O EXISTS evita duplicar linhas da SE1. A Baixa (DVARPV-7982) atua na filial
+    // especifica de cada titulo (E1_FILIAL retornado em cada item).
+    // PERFORMANCE: sem E1_FILIAL, avaliar indice de apoio por E1_CLIENTE+E1_LOJA e o plano
+    // de execucao em producao conforme a SE1 cresce.
+    cFromWhere := "FROM " + RetSqlName("SE1") + " SE1 "
+    cFromWhere += "WHERE EXISTS (SELECT 1 FROM " + RetSqlName("SA1") + " SA1 "
+    cFromWhere += "WHERE SA1.A1_COD = SE1.E1_CLIENTE AND SA1.A1_LOJA = SE1.E1_LOJA "
+    cFromWhere += "AND SA1.A1_CGC = ? AND SA1.D_E_L_E_T_ = ' ') "
+    cFromWhere += "AND SE1.E1_SALDO > 0 AND SE1.D_E_L_E_T_ = ' ' "
+    // NCC only (DVARPV-7982 / Bruno Almeida): a Consulta retorna apenas NCC (RA fora de
+    // escopo). 'NCC' e constante (sem risco de injecao), por isso literal na query.
+    cFromWhere += "AND SE1.E1_TIPO = 'NCC' "
+
+    // 0009: cliente inexistente na SA1 (em qualquer filial) -> distingue de "sem credito"
+    If !::ClientExists(cCgcPad)
+        ::BuildError("0009", STR0004, 404) // Cliente nao encontrado para o CPF/CNPJ informado
+        LjGrvLog("SalesConnectRetailCreditObj", "[" + ::cUuid + "] 404: cliente nao encontrado")
+        Return Nil
+    EndIf
+
+    // 1) Total + soma de saldo (build sem FWCountRows)
+    oStmtCnt := FWPreparedStatement():New()
+    oStmtCnt:SetQuery("SELECT COUNT(*) AS RSTOTAL, SUM(SE1.E1_SALDO) AS RSSALDO " + cFromWhere)
+    ::BindCredit(oStmtCnt, cCgcPad)
+    cCntAlias := GetNextAlias()
+    DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmtCnt:GetFixQuery()), cCntAlias, .F., .T.)
+    nTotal := (cCntAlias)->RSTOTAL
+    nSaldo := If(nTotal > 0, (cCntAlias)->RSSALDO, 0)
+    (cCntAlias)->(DbCloseArea())
+    oStmtCnt:Destroy()
+    FWFreeObj(oStmtCnt)
+
+    // 2) Pagina: SELECT + ORDER BY; paginacao em ADVPL sobre o cursor
+    oStmtFch := FWPreparedStatement():New()
+    oStmtFch:SetQuery("SELECT SE1.R_E_C_N_O_ AS RSRECNO, SE1.E1_FILIAL, SE1.E1_CLIENTE, SE1.E1_LOJA, SE1.E1_PREFIXO, " + ;
+        "SE1.E1_NUM, SE1.E1_PARCELA, SE1.E1_TIPO, SE1.E1_SALDO, SE1.E1_VENCREA " + ;
+        cFromWhere + "ORDER BY SE1.E1_VENCREA, SE1.R_E_C_N_O_")
+    ::BindCredit(oStmtFch, cCgcPad)
+    cAlias := GetNextAlias()
+    DBUseArea(.T., "TOPCONN", TCGenQry(,, oStmtFch:GetFixQuery()), cAlias, .F., .T.)
+
+    // Paginacao por cursor (DbSkip): adequada ao volume desta consulta - creditos de
+    // UM cliente (poucas dezenas de titulos), pageSize limitado a 100. Para paginas
+    // muito avancadas seria O(offset); se o volume crescer, migrar para OFFSET/FETCH
+    // (SQL Server) / ROWNUM/LIMIT (Oracle/MySQL). Este build nao tem SetInteger.
+    nSkip := (oReq:nPage - 1) * oReq:nPageSize
+    While nSkip > 0 .And. !(cAlias)->(Eof())
+        (cAlias)->(DbSkip())
+        nSkip--
+    EndDo
+
+    aItens := {}
+    nRead  := 0
+    While !(cAlias)->(Eof()) .And. nRead < oReq:nPageSize
+        oItem := SalesConnectRetailCreditItemDto():New( ;
+            (cAlias)->RSRECNO, ;
+            AllTrim((cAlias)->E1_FILIAL), ;
+            AllTrim((cAlias)->E1_CLIENTE), ;
+            AllTrim((cAlias)->E1_LOJA), ;
+            AllTrim((cAlias)->E1_PREFIXO), ;
+            AllTrim((cAlias)->E1_NUM), ;
+            AllTrim((cAlias)->E1_PARCELA), ;
+            AllTrim((cAlias)->E1_TIPO), ;
+            AllTrim(cCgcPad), ;
+            (cAlias)->E1_SALDO, ;
+            ::FmtIsoDate(AllTrim((cAlias)->E1_VENCREA)) )
+        AAdd(aItens, oItem)
+        nRead++
+        (cAlias)->(DbSkip())
+    EndDo
+    (cAlias)->(DbCloseArea())
+    oStmtFch:Destroy()
+    FWFreeObj(oStmtFch)
+
+    oResp := SalesConnectRetailCreditResponseDto():New(aItens, nTotal, oReq:nPage, oReq:nPageSize, nSaldo)
+Return oResp
+
+/*/{Protheus.doc} FmtIsoDate
+Converte "YYYYMMDD" (E1_VENCREA no banco) para "YYYY-MM-DD". "" se nao tiver 8 chars.
+@param cYmd, character, ex: "20260815"
+@return character, ex: "2026-08-15" ou ""
+@type method
+/*/
+Method FmtIsoDate(cYmd as Character) as Character Class SalesConnectRetailCreditObj
+    Local cRet := "" as Character
+    If ValType(cYmd) == "C" .And. Len(cYmd) == 8
+        cRet := SubStr(cYmd, 1, 4) + "-" + SubStr(cYmd, 5, 2) + "-" + SubStr(cYmd, 7, 2)
+    EndIf
+Return cRet
+
+/*/{Protheus.doc} BuildResponse
+Preenche nHttpStatus=200 e cReturn com o JSON do envelope.
+@param oRespDto, object, SalesConnectRetailCreditResponseDto pronto
+@return logical, sempre .T.
+@type method
+/*/
+Method BuildResponse(oRespDto as Object) as Logical Class SalesConnectRetailCreditObj
+    Local lRet := .T. as Logical
+    ::nHttpStatus := 200
+    ::cReturn     := oRespDto:toJson()
+    LjGrvLog("SalesConnectRetailCreditObj", "[" + ::cUuid + "] 200 OK")
+Return lRet
+
+/*/{Protheus.doc} BuildError
+Preenche nHttpStatus e cReturn com um SalesConnectRetailErrorDto serializado.
+@param cCode,    character, codigo de erro
+@param cMessage, character, mensagem
+@param nStatus,  numeric,   HTTP status final
+@return logical, sempre .F.
+@type method
+/*/
+Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical Class SalesConnectRetailCreditObj
+    Local oDto as Object
+    Local lRet := .F. as Logical
+    ::nHttpStatus := nStatus
+    oDto := SalesConnectRetailErrorDto():New(cCode, cMessage)
+    ::cReturn := oDto:toJson()
+    FWFreeObj(oDto)
+Return lRet

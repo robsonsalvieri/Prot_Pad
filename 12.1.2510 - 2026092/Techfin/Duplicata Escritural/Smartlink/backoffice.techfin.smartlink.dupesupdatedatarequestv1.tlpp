@@ -1,0 +1,419 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "FwMVCDef.ch"
+
+NAMESPACE totvs.protheus.backoffice.techfin.smartlink.DupesUpdateDataRequestV1
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+
+Static __lCustomRule    := ExistBlock("TFDPLESC") as Logical
+
+#define ID_VALORFATURA  1
+#define ID_DATAVENC     2
+#define ID_JUROSMORA    3
+#define ID_MULTA        4
+#define ID_ABATIMENTO   5
+
+/*/{Protheus.doc} updateEscrituracaoTit
+    Recebe os campos atualizados na alteração do titulo a receber.
+    @type  Function
+    @author squad TechFin
+    @since 16/04/2026
+    @version 1.0
+    @param aCamposUpdate, Array, Campos que foram atualizados
+/*/
+Function updateEscrituracaoTit(aCamposUpdate as Array)
+
+	local cChaveFK7   := ""    as character
+	local cOcurrences := "011" as character
+	local cChaveTit   := ""    as character
+	local aArea       := {}    as array
+	local oUpdate     := DupesUpdateDataRequestV1():New() as object
+
+	aArea       := ARP->(FwGetArea())
+
+	cChaveTit := FWxFilial("SE1", SE1->E1_FILORIG)+"|"+SE1->E1_PREFIXO+"|"+SE1->E1_NUM+"|"+SE1->E1_PARCELA+"|"+SE1->E1_TIPO+"|"+SE1->E1_CLIENTE+"|"+SE1->E1_LOJA
+	cChaveFK7 := FinBuscaFK7(cChaveTit,"SE1")
+
+	ARP->(dbSetOrder(1))
+	If ARP->(MsSeek(FwxFilial('ARP')+cChaveFK7))
+		oUpdate:setIdDoc(cChaveFK7)
+		oUpdate:setOcurrences(cOcurrences)
+		oUpdate:vldUpd(aCamposUpdate)
+		oUpdate:send()
+	EndIF
+
+	FwRestArea(aArea)
+	FwFreeArray(aArea)
+	FwFreeObj(oUpdate)
+Return
+
+/*/{Protheus.doc} DupesUpdateDataRequestV1    
+    Classe de Integração  Duplicata Escritural
+    Retorno da tentativa de escrituração  do título.
+
+    @type class
+    @author Squad TechFin
+    @since 3/28/2026
+/*/
+	class DupesUpdateDataRequestV1
+
+		data cProdTF            as character
+		data cIdDoc             as character
+		data cOcurrences        as character
+		data cVencto            as character
+		data nJurosMora         as numeric
+		data nValor             as numeric
+
+		public method new() constructor
+
+		public method setIdDoc()
+		public method setOcurrences()
+
+		public method getIdDoc()      as character
+		public method getOcurrences() as character
+		public method send()          as logical
+
+		public method vldUpd(aCamposUpdate as Array)
+
+		private method setValor(nValor as numeric)
+		private method setVencto(dVencto as date)
+		private method setValJur(nValJur as numeric)
+
+		private method getValor()      as numeric
+		private method getVencto()     as character
+		private method getValJur()     as numeric
+
+		private method loadCustomRule(nTipo as numeric, cOpc as character, xValue as variant) as variant
+	end class
+
+/*/{Protheus.doc} DupesUpdateDataRequestV1::New
+    Método construtor da classe
+    @type method
+    @author Squad TechFin
+    @since 3/28/2026
+/*/
+method new() class DupesUpdateDataRequestV1
+	::cProdTF            := "5"
+	::cIdDoc             := ""
+	::cOcurrences        := ""
+	::nJurosMora         := 0
+	::cVencto            := ""
+	::nValor             := 0
+return Self
+
+/*/{Protheus.doc} send
+    Método responsável por enviar a mensagem ao smartlink, além de registrar as ocorrências do evento.
+    @type method
+    @author Squad TechFin
+    @since 10/04/2026
+    @version 1.0
+    @return lSuccess, logical, Indica se o envio foi bem sucedido
+    /*/
+Method send() class DupesUpdateDataRequestV1
+	local jData           := jsonObject():new()          as json
+	local jLoteDuplicatas := jsonObject():new()          as json
+	local jAbatimento     := jsonObject():new()          as json
+	local jAtraso         := jsonObject():new()          as json
+	local oSmartUtil      := SmartlinkUtil():new()       as object
+	local oOcurrences     := TechfinOccurrences():new()  as object
+	local lSuccess        := .F.                         as logical
+	local lSendAtraso     := .F.                         as logical
+	local nVal            := 0                           as numeric
+	local nValor          := ::getValor()                as numeric
+	local nValJur         := ::getValJur()               as numeric
+	local cVencto         := ::getVencto()               as character
+
+	If (nValor > 0) .Or. (!Empty(cVencto)) .Or. (nValJur > 0)
+
+		jData["respondTo"]       := "DupesUpdateDataResponseV1"
+		jData["cnpjSolicitante"] := FwSM0Util():GetSM0Data(cEmpAnt, cFilAnt, {"M0_CGC"})[1][2]
+		jData["lote_duplicatas"] := {}
+
+		jLoteDuplicatas["erpInstallmentId"] := ::getIdDoc()
+
+		//------------------------------------------------------------------
+		//-- Valor (E1_VALOR)
+		If nValor > 0
+			jLoteDuplicatas["valor"] := nValor
+		EndIf
+
+		//------------------------------------------------------------------
+		//-- Vencimento (E1_VENCREA)
+		If !Empty(cVencto)
+			jLoteDuplicatas["vencimento"] := cVencto
+		EndIf
+
+		//------------------------------------------------------------------
+		//-- Abatimento percentual (nao tem campo padrao)
+		nVal := ::loadCustomRule(ID_ABATIMENTO, "A", 0)
+		If nVal > 0
+			jAbatimento["percentual"]       := nVal
+			jAbatimento["motivoAbatimento"] := "N"
+			jLoteDuplicatas["abatimento"]   := jAbatimento
+		EndIf
+
+		//------------------------------------------------------------------
+		//-- Juros Mora (E1_VALJUR)
+		jAtraso["jurosMora"] := 0
+		If nValJur > 0
+			jAtraso["jurosMora"] := nValJur
+			lSendAtraso          := .T.
+		EndIF
+
+		//------------------------------------------------------------------
+		//--  Multa (nao tem campo padrao)
+		jAtraso["multa"] := 0
+		nVal := ::loadCustomRule(ID_MULTA, "A", 0)
+		If nVal > 0
+			jAtraso["multa"] := nVal
+			lSendAtraso      := .T.
+		EndIf
+
+		If lSendAtraso
+			jAtraso["clausulaPenal"]     := ""
+			jAtraso["encargoMoratorios"] := 0
+			jLoteDuplicatas["atraso"]    := jAtraso
+		EndIf
+
+		aAdd(jData["lote_duplicatas"], jLoteDuplicatas)
+
+		If (lSuccess := oSmartUtil:send("DupesUpdateDataRequestV1", jData:toJson(), .T.))
+			oOcurrences:setProduct(::cProdTF) //Duplicata escritural
+			oOcurrences:setIdDoc(::getIdDoc())
+			oOcurrences:register(::getOcurrences())
+
+			If !Empty(cVencto)
+				cVencto := StrTran(cVencto,'-','')
+				DupUpdVenc( cVencto, ::getIdDoc() )
+			EndIF
+		EndIf
+	EndIf
+
+	FwFreeObj(jData)
+	FwFreeObj(jLoteDuplicatas)
+	FwFreeObj(jAbatimento)
+	FwFreeObj(jAtraso)
+	FwFreeObj(oOcurrences)
+	FwFreeObj(oSmartUtil)
+Return lSuccess
+
+/*/{Protheus.doc} setIdDoc
+    Método para definir o IdDoc do título, utilizado para registro de ocorrências no monitor de duplicata escritural.
+     
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @param cIdDoc, character, IdDoc do título a ser registrado nas ocorrências do monitor de duplicata escritural
+/*/
+Method setIdDoc(cIdDoc as character) class DupesUpdateDataRequestV1
+	::cIdDoc := cIdDoc
+Return
+
+/*/{Protheus.doc} getIdDoc
+    Método para obter o IdDoc do título definido para a mensagem, utilizado para registro de ocorrências no monitor de duplicata escritural.
+     
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @return cIdDoc, character, IdDoc do título a ser registrado nas ocorrências do monitor de duplicata escritural
+/*/
+Method getIdDoc() as character class DupesUpdateDataRequestV1
+Return ::cIdDoc
+
+/*/{Protheus.doc} setOcurrences
+    Método para definir as ocorrências a serem registradas no monitor de duplicata escritural, caso a mensagem seja enviada com sucesso.
+
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @param cOcurrences, character, ocorrências a serem registradas no monitor de duplicata escritural
+    
+/*/
+Method setOcurrences(cOcurrences as character) class DupesUpdateDataRequestV1
+	::cOcurrences := cOcurrences
+Return
+
+/*/{Protheus.doc} getOcurrences
+    Método para obter as ocorrências definidas para registro no monitor de duplicata escritural, caso a mensagem seja enviada com sucesso.
+
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @return cOcurrences, character, ocorrências a serem registradas no monitor de duplicata escritural
+    /*/
+Method getOcurrences() as character class DupesUpdateDataRequestV1
+Return ::cOcurrences
+
+/*/{Protheus.doc} setValor
+    Método para definir o valor da duplicata.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @param nValor, numeric, Valor da duplicata
+/*/
+Method setValor(nValor as numeric) class DupesUpdateDataRequestV1
+	::nValor := ::loadCustomRule(ID_VALORFATURA, "A", nValor)
+Return
+
+/*/{Protheus.doc} getValor
+    Método para obter o valor da duplicata.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @return nValor, numeric, Valor da duplicata
+/*/
+Method getValor() as numeric class DupesUpdateDataRequestV1
+	If ::nValor == 0
+		::setValor(SE1->E1_VALOR)
+	EndIf
+Return ::nValor
+
+/*/{Protheus.doc} setVencto
+    Método para definir o vencimento da duplicata.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @param dVencto, date, Data de vencimento da duplicata
+/*/
+Method setVencto(dVencto as date) class DupesUpdateDataRequestV1
+	dVencto := ::loadCustomRule(ID_DATAVENC, "A", dVencto)
+	::cVencto := SubStr(FWTimeStamp(5, dVencto), 1, 10)
+Return
+
+/*/{Protheus.doc} getVencto
+    Método para obter o vencimento da duplicata.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @return cVencto, character, Data de vencimento da duplicata
+/*/
+Method getVencto() as character class DupesUpdateDataRequestV1
+Return ::cVencto
+
+/*/{Protheus.doc} setValJur
+    Método para definir o valor de juros de mora da duplicata.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @param nValJur, numeric, Valor de juros de mora da duplicata
+/*/
+Method setValJur(nValJur as numeric) class DupesUpdateDataRequestV1
+	::nJurosMora := ::loadCustomRule(ID_JUROSMORA, "A", nValJur)
+Return
+
+/*/{Protheus.doc} getValJur
+    Método para obter o valor de juros de mora da duplicata.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @return nJurosMora, numeric, Valor de juros de mora da duplicata
+/*/
+Method getValJur() as numeric class DupesUpdateDataRequestV1
+Return ::nJurosMora
+
+
+/*/{Protheus.doc} vldUpd
+    Método para validar e atualizar os campos da duplicata de acordo com as mudanças identificadas.
+    @type method
+    @author Squad Techfin
+    @since 13/04/2026
+    @version 1.0
+    @param aCamposUpdate, array, Array com os campos a serem atualizados contendo [nomoCampo, valorAnterior, valorNovo]
+/*/
+Method vldUpd(aCamposUpdate as Array) class DupesUpdateDataRequestV1
+	local nX     := 0                  as numeric
+	local nTotal := len(aCamposUpdate) as numeric
+
+	for nX := 1 to nTotal
+		If aCamposUpdate[nX][2] != aCamposUpdate[nX][3]
+			If aCamposUpdate[nX][1] == "E1_VALOR"
+				::setValor(aCamposUpdate[nX][3])
+			ElseIf aCamposUpdate[nX][1] == "E1_VENCREA"
+				::setVencto(aCamposUpdate[nX][3])
+			ElseIf aCamposUpdate[nX][1] == "E1_VALJUR"
+				::setValJur(aCamposUpdate[nX][3])
+			EndIf
+		EndIf
+	next
+Return
+
+
+//-----------------------------------------------------------------------
+/*/{Protheus.doc} DupesUpdateDataRequestV1::loadCustomRule
+    Verifica e executa regra customizada de composição de valores para títulos. Caso exista ponto de entrada TFDPLESC, executa a customização fornecendo o tipo, operação e valor para processamento personalizado.
+    
+    @type Method 
+    @author Squad TechFin
+    @since  02/04/2026
+    @param nTipo, Numeric, Tipo de operação - Identificação do atributo a ser atualizado
+    @param cOpc, Character, operação Inclusão ou alteração
+    @param xValue, Variant, Valor padrão carregado
+    @return Variant, Valor processado pela regra ou valor original se não houver customização
+
+/*/
+//-----------------------------------------------------------------------
+Method loadCustomRule(nTipo as numeric, cOpc as character, xValue as variant) as variant class DupesUpdateDataRequestV1
+	local aArea := {}    as array
+
+	If __lCustomRule
+
+		aArea := {SE1->(FwGetArea()), SA1->(FwGetArea()),FK7->(FwGetArea())}
+
+		xValue := ExecBlock("TFDPLESC",.F.,.F.,{nTipo, cOpc, xValue})
+
+		aEval(aArea,{|x| FwRestArea(x)})
+	EndIF
+
+	FwFreeArray(aArea)
+Return xValue
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} DupUpdVenc
+	Atualização vencimento do registro da ARP após o envio da mensagem para Techfin (título ja alterado)
+	@type function
+	@author Squad TechFin
+	@since 20/06/2026
+	@param cVencto, character, novo vencimento atribuído ao título (SE1)
+/*/
+//---------------------------------------------------------------------
+Static Function DupUpdVenc( cVencto as character, cChaveFK7 as character )
+	Local oModel  			as object
+	local oModelARP         as object
+	local oModelARQ	        as object
+	Local cError 	:=	""	as character
+
+	ARP->(DbSetOrder(1))
+	If !ARP->(MsSeek(FWxFilial('ARP') + cChaveFK7))
+		Help( ,,"DupUpdVenc",,"Registro ARP não localizado. FK7_IDDOC: " + cChaveFK7, 1, 0 )
+		Return
+	EndIf
+
+	oModel := FWLoadModel("totvs.protheus.backoffice.techfin.duplicataescritural.monitor.duplicatasMonitor")
+	oModelARP := oModel:GetModel("ARPMASTER")
+	oModelARQ := oModel:GetModel("ARQDETAIL")
+
+	oModelARQ:SetOptional(.T.)
+	oModel:SetOperation(MODEL_OPERATION_UPDATE)
+	oModel:Activate()
+	oModelARP:setValue("ARP_VENCRE", StoD(cVencto) )
+	if !(oModel:vldData() .and. oModel:commitData() .and. !oModel:HasErrorMessage())
+		cError := oModel:GetErrorMsgText(.T.)
+	endif
+	oModel:deActivate()
+	oModel:destroy()
+	
+	If !Empty(cError)
+		Help( ,,"DupUpdVenc",,cError, 1, 0 )
+	EndIf
+Return
+

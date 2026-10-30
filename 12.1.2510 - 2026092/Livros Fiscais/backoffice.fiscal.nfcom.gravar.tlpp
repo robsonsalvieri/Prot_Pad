@@ -1,0 +1,183 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+/*/{Protheus.doc} FIS_GravaSFXNFCom
+Grava ou atualiza na tabela SFX os complementos fiscais da NFCom (Modelo 62).
+
+Substitui o FwBulk direto da funcao COMCOMPDKO (COMXCOL.PRW - Compras),
+adicionando controle de upsert, validacao e rastreabilidade fiscal.
+
+O fluxo de chamada e:
+  COMXCOL (ImportCol) -> MATA140I (grava DKO) -> MATA103 (classifica)
+    -> COMCOMPDKO (le DKO, monta aDCompFis) -> FIS_GravaSFXNFCom (grava SFX)
+
+A funcao recebe o array aDCompFis ja montado por COMCOMPDKO com os campos
+de chave e os 7 campos de negocio NFCom lidos da tabela DKO.
+
+A funcao e idempotente: se ja existir registro na SFX com a mesma chave
+(indice 2), os campos de negocio sao atualizados. Caso contrario,
+um novo registro e inserido.
+
+Nao abre nem fecha transacao - assume que o chamador ja gerencia a transacao.
+
+@type Function
+@author Victor Viana
+@since 16/09/2026
+@version 2.0
+
+@param aDCompFis  Array  Array de arrays no formato { { {"FX_CAMPO", valor}, ... }, ... }
+                         montado por COMCOMPDKO a partir dos dados da tabela DKO.
+                         Cada elemento externo representa um item da nota.
+                         Campos esperados por item:
+                           FX_FILIAL  - Filial (xFilial("SFX"))
+                           FX_TIPOMOV - Tipo de movimento ("E" = Entrada)
+                           FX_DOC     - Numero do documento (DKO->DKO_DOC)
+                           FX_SERIE   - Serie do documento (DKO->DKO_SERIE)
+                           FX_CLIFOR  - Codigo do fornecedor (DKO->DKO_FORNEC)
+                           FX_LOJA    - Loja do fornecedor (DKO->DKO_LOJA)
+                           FX_ESPECIE - Especie do documento (DKO->DKO_ESPECI)
+                           FX_ITEM    - Numero do item (DKO->DKO_ITEM)
+                           FX_COD     - Codigo do produto (DKO->DKO_COD)
+                           FX_TIPSERV - Tipo de servico (DKO->DKO_TIPSER)
+                           FX_TPASSIN - Tipo assinante (DKO->DKO_TPASSI)
+                           FX_UMED    - Unidade de medida (DKO->DKO_UMED)
+                           FX_NUMCONT - Numero do contrato (DKO->DKO_NUMCON)
+                           FX_DINCONT - Data inicio contrato (DKO->DKO_DINCON)
+                           FX_DFICONT - Data termino contrato (DKO->DKO_DFICON)
+                           FX_CCLAS62 - Classificacao NFCom Mod.62 (DKO->DKO_CLAS62)
+
+@return Logical .T. se todos os itens foram gravados com sucesso, .F. caso contrario
+/*/
+Function FIS_GravaSFXNFCom(aDCompFis as array) as logical
+
+    Local lRet  := .T. as logical
+    Local nI    := 0   as integer
+
+    Default aDCompFis := {}
+
+    If !FwAliasInDic("SFX")
+        Return .F.
+    EndIf
+
+    If Empty(aDCompFis) .Or. Len(aDCompFis) == 0
+        Return .F.
+    EndIf
+
+    For nI := 1 To Len(aDCompFis)
+        If !FIS_UpsertSFXItem(aDCompFis[nI])
+            lRet := .F.
+        EndIf
+    Next nI
+
+Return lRet
+
+//-------------------------------------------------------------------
+// FIS_UpsertSFXItem
+// Executa INSERT ou UPDATE na SFX para um unico item do array aDCompFis.
+//-------------------------------------------------------------------
+Static Function FIS_UpsertSFXItem(aItem as array) as logical
+
+    Local lRet     := .F. as logical
+    Local cChave   := ""  as character
+    Local nX       := 0   as integer
+    Local nPosCol  := 0   as integer
+    Local aGravBus := {}  as array
+
+    // Campos de negocio atualizados no UPDATE
+    aGravBus := {"FX_TIPSERV", "FX_TPASSIN", "FX_UMED", "FX_NUMCONT", ;
+                 "FX_DINCONT", "FX_DFICONT", "FX_CCLAS62"}
+
+    If Empty(aItem) .Or. Len(aItem) == 0
+        Return .F.
+    EndIf
+
+    // Extrai valores de chave do array para montar o seek
+    // Ordem do indice 2: FILIAL+TIPOMOV+ESPECIE+SERIE+DOC+CLIFOR+LOJA+ITEM+COD
+    cChave := FIS_ExtraiChaveSFX(aItem)
+
+    If Empty(AllTrim(cChave))
+        Return .F.
+    EndIf
+
+    DbSelectArea("SFX")
+    SFX->(DbSetOrder(2))
+
+    If SFX->(DbSeek(cChave))
+        // UPDATE - atualiza apenas os 7 campos de negocio NFCom
+        If SFX->(RecLock("SFX", .F.))
+            For nX := 1 To Len(aItem)
+                If AScan(aGravBus, {|cCampo| cCampo == aItem[nX][1]}) > 0
+                    nPosCol := SFX->(FieldPos(aItem[nX][1]))
+                    If nPosCol > 0
+                        SFX->(FieldPut(nPosCol, aItem[nX][2]))
+                    EndIf
+                EndIf
+            Next nX
+            SFX->(MsUnLock())
+            lRet := .T.
+        EndIf
+    Else
+        // INSERT
+        If SFX->(RecLock("SFX", .T.))
+            SFX->FX_FILIAL := xFilial("SFX")
+            For nX := 1 To Len(aItem)
+                If aItem[nX][1] != "FX_FILIAL"
+                    nPosCol := SFX->(FieldPos(aItem[nX][1]))
+                    If nPosCol > 0
+                        SFX->(FieldPut(nPosCol, aItem[nX][2]))
+                    EndIf
+                EndIf
+            Next nX
+            SFX->(MsUnLock())
+            lRet := .T.
+        EndIf
+    EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+// FIS_ExtraiChaveSFX
+// Extrai os campos de chave do array de item e monta a string
+// para seek no indice 2 da SFX.
+// Retorna string vazia se FX_DOC estiver vazio (item invalido).
+//-------------------------------------------------------------------
+Static Function FIS_ExtraiChaveSFX(aItem as array) as character
+
+    Local cFilial  := "" as character
+    Local cTipoMov := "" as character
+    Local cEspecie := "" as character
+    Local cSerie   := "" as character
+    Local cDoc     := "" as character
+    Local cCliFor  := "" as character
+    Local cLoja    := "" as character
+    Local cItem    := "" as character
+    Local cCodProd := "" as character
+    Local nX       := 0  as integer
+
+    For nX := 1 To Len(aItem)
+        Do Case
+            Case aItem[nX][1] == "FX_FILIAL"  ; cFilial  := aItem[nX][2]
+            Case aItem[nX][1] == "FX_TIPOMOV" ; cTipoMov := aItem[nX][2]
+            Case aItem[nX][1] == "FX_ESPECIE" ; cEspecie := aItem[nX][2]
+            Case aItem[nX][1] == "FX_SERIE"   ; cSerie   := aItem[nX][2]
+            Case aItem[nX][1] == "FX_DOC"     ; cDoc     := aItem[nX][2]
+            Case aItem[nX][1] == "FX_CLIFOR"  ; cCliFor  := aItem[nX][2]
+            Case aItem[nX][1] == "FX_LOJA"    ; cLoja    := aItem[nX][2]
+            Case aItem[nX][1] == "FX_ITEM"    ; cItem    := aItem[nX][2]
+            Case aItem[nX][1] == "FX_COD"     ; cCodProd := aItem[nX][2]
+        EndCase
+    Next nX
+
+    If Empty(AllTrim(cDoc))
+        Return ""
+    EndIf
+
+Return PadR(cFilial,  TamSx3("FX_FILIAL")[1])  + ;
+       PadR(cTipoMov, TamSx3("FX_TIPOMOV")[1]) + ;
+       PadR(cEspecie, TamSx3("FX_ESPECIE")[1]) + ;
+       PadR(cSerie,   TamSx3("FX_SERIE")[1])   + ;
+       PadR(cDoc,     TamSx3("FX_DOC")[1])     + ;
+       PadR(cCliFor,  TamSx3("FX_CLIFOR")[1])  + ;
+       PadR(cLoja,    TamSx3("FX_LOJA")[1])    + ;
+       PadR(cItem,    TamSx3("FX_ITEM")[1])    + ;
+       PadR(cCodProd, TamSx3("FX_COD")[1])

@@ -1,0 +1,140 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "lojxanacre.ch"
+
+namespace totvs.protheus.retail.anacre
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} LjSetAnaCre
+Processa a solicitacao de analise de credito recebida pelo PSH (Smart-Hub-Protheus).
+Localiza o cliente na AI0 pela chave filial+codigo+loja e atualiza o campo
+AI0_ANACRE para '1' (Pendente). Se o registro nao existir na AI0, cria um novo
+registro minimo com AI0_ANACRE = '1'.
+A funcao e idempotente: se AI0_ANACRE ja for '1', retorna sucesso sem regravar.
+
+@type    function
+@author  Bruno Almeida
+@since   27/07/2026
+@version P12
+
+@param   cCodigo   as Character  Codigo do cliente (A1_COD / AI0_CODCLI)
+@param   cLoja     as Character  Loja do cliente (A1_LOJA / AI0_LOJA)
+@param   lPendente as Logical    .T. = solicitar analise; .F. ou Nil = sem acao
+
+@return  Array, { [1] lSucesso as Logical, [2] cMensagem as Character }
+         [1] .T. = processado com sucesso; .F. = erro
+         [2] Descricao do erro (vazio quando sucesso)
+/*/
+//------------------------------------------------------------------------------
+Function LjSetAnaCre(cCodigo as Character, cLoja as Character, lPendente as Logical) as Array
+
+    Local aRet        := {} as Array
+    Local aAreaSA1    := {} as Array
+    Local aAreaAI0    := {} as Array
+    Local aLocAI0     := {} as Array
+    Local lEncontrou  := .F. as Logical
+    Local lJaPendente := .F. as Logical
+    Local cLogSuc     := "" as Character
+
+    aRet := { .T., "" }
+
+    // Guarda 1: parametros obrigatorios
+    If Empty(cCodigo) .Or. Empty(cLoja)
+        LjGrvLog("LOJXANACRE", "LjSetAnaCre - Parametros invalidos", "cCodigo ou cLoja vazio")
+        aRet[1] := .F.
+        aRet[2] := STR0001 //"Código/Loja do cliente não informado."
+
+    // Guarda 2: pendenteAnaliseCredito ausente ou false -- sem efeito colateral (Cenario 3 da issue)
+    ElseIf ValType(lPendente) <> "L" .Or. !lPendente
+        LjGrvLog("LOJXANACRE", "LjSetAnaCre - pendenteAnaliseCredito false ou ausente, sem ação", cCodigo + "|" + cLoja)
+
+    Else
+        LjGrvLog("LOJXANACRE", "LjSetAnaCre - Inicio processamento", cCodigo + "|" + cLoja)
+
+        // Guarda 3: verificar existencia do cliente na SA1 (somente leitura)
+        aAreaSA1 := SA1->(GetArea())
+        DbSelectArea("SA1")
+        SA1->(DbSetOrder(1)) // Indice 1: A1_FILIAL + A1_COD + A1_LOJA
+        If !SA1->(DbSeek(xFilial("SA1") + PADR(cCodigo, TamSx3("A1_COD")[1]) + PADR(cLoja, TamSx3("A1_LOJA")[1])))
+            LjGrvLog("LOJXANACRE", "LjSetAnaCre - Cliente não encontrado na SA1", cCodigo + "|" + cLoja)
+            aRet[1] := .F.
+            aRet[2] := STR0002 //"Cliente não encontrado na SA1."
+        EndIf
+        RestArea(aAreaSA1)
+
+        If aRet[1]
+            // Localizar registro do cliente na AI0
+            aAreaAI0    := AI0->(GetArea())
+            aLocAI0     := LjAnaCreLocAI0(cCodigo, cLoja)
+            lEncontrou  := aLocAI0[1]
+            lJaPendente := aLocAI0[2]
+
+            If lEncontrou .And. lJaPendente
+                // Cenario 5: idempotencia -- AI0_ANACRE ja e '1', retorna sucesso sem regravar
+                LjGrvLog("LOJXANACRE", "LjSetAnaCre - AI0_ANACRE ja é '1', não foi necessario nenhuma atualização", cCodigo + "|" + cLoja)
+
+            ElseIf lEncontrou
+                // Cenario 1: atualizar AI0_ANACRE no registro existente
+                RecLock("AI0", .F.)
+                    AI0->AI0_ANACRE := "1"
+                AI0->(MsUnlock())
+                LjGrvLog("LOJXANACRE", "LjSetAnaCre - AI0_ANACRE atualizado para '1' (registro existente)", cCodigo + "|" + cLoja)
+
+            Else
+                // Cenario 2: criar novo registro minimo na AI0
+                RecLock("AI0", .T.)
+                    AI0->AI0_FILIAL := xFilial("AI0")
+                    AI0->AI0_CODCLI := PADR(cCodigo, TamSx3("AI0_CODCLI")[1])
+                    AI0->AI0_LOJA   := PADR(cLoja,   TamSx3("AI0_LOJA")[1])
+                    AI0->AI0_ANACRE := "1"
+                AI0->(MsUnlock())
+                LjGrvLog("LOJXANACRE", "LjSetAnaCre - Novo registro AI0 criado com AI0_ANACRE = '1'", cCodigo + "|" + cLoja)
+
+            EndIf
+
+            RestArea(aAreaAI0)
+        EndIf
+
+        If aRet[1]
+            cLogSuc := "Sim"
+        Else
+            cLogSuc := "Nao"
+        EndIf
+        LjGrvLog("LOJXANACRE", "LjSetAnaCre - Fim processamento", "Sucesso: " + cLogSuc)
+
+    EndIf
+
+Return aRet
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} LjAnaCreLocAI0
+Localiza o registro do cliente na tabela AI0 pelo indice 1 (filial+codigo+loja)
+e verifica se AI0_ANACRE ja e '1' (Pendente).
+
+@type    function
+@author  Bruno Almeida
+@since   27/07/2026
+@version P12
+
+@param   cCodigo  as Character  Codigo do cliente (AI0_CODCLI)
+@param   cLoja    as Character  Loja do cliente (AI0_LOJA)
+
+@return  Array, { [1] lEncontrou as Logical, [2] lJaPendente as Logical }
+         [1] .T. = registro encontrado na AI0
+         [2] .T. = AI0_ANACRE ja e '1' (somente valido quando [1] = .T.)
+/*/
+//------------------------------------------------------------------------------
+Static Function LjAnaCreLocAI0(cCodigo as Character, cLoja as Character) as Array
+
+    Local aRet := {} as Array
+
+    aRet := { .F., .F. }
+
+    DbSelectArea("AI0")
+    AI0->(DbSetOrder(1)) // Indice 1: AI0_FILIAL + AI0_CODCLI + AI0_LOJA
+    If AI0->(DbSeek(xFilial("AI0") + PADR(cCodigo, TamSx3("AI0_CODCLI")[1]) + PADR(cLoja, TamSx3("AI0_LOJA")[1])))
+        aRet[1] := .T.
+        aRet[2] := AllTrim(AI0->AI0_ANACRE) == "1"
+    EndIf
+
+Return aRet

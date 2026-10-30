@@ -1,0 +1,149 @@
+#INCLUDE 'TOTVS.CH'
+#INCLUDE 'tlpp-core.th'
+#INCLUDE 'tlpp-rest.th'
+
+/*-------------------------------------------------------------------
+{Protheus.doc} POST TafPostaccountingEntry
+Efetua o lançamento contabil 
+@author	adilson.roberto
+@since	11/07/2024
+-------------------------------------------------------------------*/
+@POST(endpoint='/api/taf/fiscal/v1/calculations/accountingEntry', description="Lançamento Contábil") //"Realiza a consulta de um processo de apuração"
+Function TafPostaccountingEntry()
+Local oJsBody     := JsonObject():new() as Json
+Local oJsResponse := JsonObject():new() as Json 
+Local nCodRet     := 0                  as numeric
+Local cMsgRet     := ""                 as character
+Local nRecnoV12   := 0                  as numeric
+Local lRetV12     := .F.
+
+    //Recupera o conteudo do body
+    oJsBody:fromJson( oRest:GetBodyRequest() ) 
+
+    If oJsBody:hasProperty('id') .and. !empty(oJsBody['id'])
+        V12->(DbSetOrder(1))
+        if V12->(DbSeek( xFilial('V12')+oJsBody["id"] )) 
+            nRecnoV12 := V12->(Recno())
+            TafLanCtb('1',V12->V12_TITULO, nRecnoV12, @cMsgRet, @lRetV12,alltrim(oJsBody["branch"]))   
+        Endif 
+    Endif
+
+    If !lRetV12
+        nCodRet := 400
+        If Empty(cMsgRet)
+            cMsgRet := "Nao foi localizado nenhuma informação para geração contábil."
+        Endif    
+        oJsResponse['code'] := nCodRet
+        oJsResponse['detailMessage'] := ''
+        oJsResponse['message'] := cMsgRet 
+    Else
+        nCodRet := 201      
+    Endif  
+    
+    oRest:setStatusCode(nCodRet)
+    oRest:setResponse(oJsResponse)
+Return
+
+/*---------------------------------------------------------------------
+{Protheus.doc} TafLanCtb
+Função checa se é uma inclusão ou um cancelamento e efetua o lançamento 
+contabil de acordo com a opção. 
+@author	adilson.roberto
+@since	11/07/2024
+---------------------------------------------------------------------*/ 
+Function TafLanCtb(cOp as character, cTitulo as character, nRecV12 as numeric, cMsgRet as character, lRetV12 as logical, cBranch as character)
+    Local aRetTit   := StrTokArr(GetMv("MV_LPADIPI", ,"720,721"), ",")  as array
+    Local cLcPadTit := ""                                               as character
+    Local cLcPadExt := ""                                               as character
+    Local nHdlPrv	:=	0                                               as numeric
+    Local cLoteFis  := ""                                               as character
+    Local cArquivo  := ""                                               as character
+    Local nLinha	:=	0                                               as numeric
+    Local nTotal	:=	0                                               as numeric
+    Local cProgram  := "WSTAF066"                                       as character
+    Local cLancCont := ""                                               as character
+    Local aArea     := GetArea()                                        as array
+    Local cFilBak   := ''                                               as character
+    Local cEmpBak   := ''                                               as character
+    Local lRpcSetEnv := .F.                                             as Logical
+
+    DEFAULT cOp     := '1'
+    DEFAULT nRecV12 := 0
+    DEFAULT cTitulo := ""
+    DEFAULT cMsgRet := ""
+    DEFAULT lRetV12 := .F.
+    DEFAULT cBranch := ""
+
+    lRpcSetEnv := (  !Empty( cBranch ) .And. ( AllTrim(cBranch) <> AllTrim(cFilAnt) )  )
+
+    If lRpcSetEnv
+
+        cFilBak := cFilAnt
+        cEmpBak := cEmpAnt
+
+        RpcClearEnv()
+
+        RpcSetType(3)
+        RpcSetEnv(cEmpAnt,cBranch)
+
+    EndIf
+
+    If Len(aRetTit) > 0 
+        If !Empty(aRetTit[1])
+            cLcPadTit := Alltrim(aRetTit[1])
+        Endif
+        If Len(aRetTit) > 1 .And. !Empty(aRetTit[2])
+            cLcPadExt := Alltrim(aRetTit[2])
+        Endif
+    Endif
+
+    If cOp == '1'
+        V12->(DbGoto(nRecV12))
+        SE2->(DbSeek( xFilial('SE2')+V12->V12_PREFIX+V12->V12_TITULO+V12->V12_PARCEL+V12->V12_TIPO+V12->V12_FORNEC+V12->V12_LOJA )) 
+    EndIf
+
+	cLoteFis	:=	Iif(Empty(Alltrim(cTitulo)), "FIS", cTitulo)
+	nHdlPrv		:=	HeadProva(cLoteFis,cProgram,cUserName,@cArquivo)                                   
+	
+	If nHdlPrv <= 0
+		//ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+		//³ Nao foi possivel criar o arquivo contra prova para esta nota,³
+		//³ para tal devera' ser utilizada a rotina de Lancto Off-Line.  ³ 	
+		//ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+		cMsgRet := "Nao foi possivel criar o arquivo contra prova para esta nota"
+	Else
+        cLancCont := Iif(cOp == '1', cLcPadTit, cLcPadExt)
+        
+	    nTotal	+=	DetProva(nHdlPrv,cLancCont,cProgram,cLoteFis,@nLinha)
+
+	    //ÚÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ¿
+	    //³ Envia para Lancamento Contabil, se gerado arquivo   ³
+	    //ÀÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÙ
+	    RodaProva(nHdlPrv,nTotal)
+		If nTotal > 0
+            nTotal := 0				
+	        cA100Incl(cArquivo,nHdlPrv,3,cLoteFis,.T.,.F.)
+
+            // gRAVA NA v12 UM ID indicando que ouve geração de dados contabeis
+            If cOp == '1'
+                If V12->(RecLock('V12',.F.))
+                    V12->V12_GECONT := .T.
+                    lRetV12 := .T.
+                    V12->(MsUnLock())
+                Endif
+            Endif    
+        Endif    
+    Endif
+
+    If lRpcSetEnv
+
+        RpcClearEnv()
+
+        RpcSetType(3)
+        RpcSetEnv( cEmpBak , cFilBak )
+
+        RestArea( aArea )
+
+    EndIf
+
+Return

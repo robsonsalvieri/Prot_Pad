@@ -1,0 +1,984 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "totvs.ch"
+#include "dtaagentmrpevents.ch"
+#include "dtaagentmrp.ch"
+
+namespace totvs.protheus.manufacturing.agent.mrp.events
+using namespace totvs.protheus.manufacturing.agent
+
+#DEFINE TICKET_AVAIABLE_STATUS "3,6,7,9"
+
+/*/{Protheus.doc} DTAAgentMRPEvents
+Classe da API de retorno dos eventos e documentos processados pelo agente
+
+@type class
+@author marcelo.neumann
+@since 16/12/2025
+@version P12
+/*/
+Class DTAAgentMRPEvents
+
+	Private Data aEvents     as Array
+	Private Data aStructHZQ  as Array
+	Private Data cIdProcess  as Character
+	Private Data cTicket     as Character
+	Private Data cUser       as Character
+	Private Data jIndexHZQ   as Json
+	Private Data nIdExec     as Integer
+	Private Data nTamIdExec  as Integer
+	Private Data oRegexDates as Object
+
+	Public Method new() as Object
+
+	//Endpoint utilizado pelo agente 1 - valida se o ticket pode ser processado
+	@Get("api/pcp/v1/DTAAgentMRPEvents/validate/:ticket")
+	Public Method getValidate() as Logical
+
+	//Endpoint utilizado pelo agente 2 - Estrutura os eventos do MRP
+	@Post("api/pcp/v1/DTAAgentMRPEvents/struct/:ticket")
+	Public Method postStruct() as Logical
+
+	//Endpoint utilizado pelo agente 3 - Marca os documentos conforme regras existentes
+	@Post("api/pcp/v1/DTAAgentMRPEvents/mark/:ticket")
+	Public Method postMark() as Logical
+
+	//Endpoint utilizado pelo reasoning - registra as respostas do agente
+	@Post("api/pcp/v1/DTAAgentMRPEvents/responses/:ticket")
+	Public Method postResponses() as Logical
+
+	//Endpoint utilizado pelo reasoning - busca dados quantitativos dos eventos
+	@Get("api/pcp/v1/DTAAgentMRPEvents/eventsTypes/:ticket")
+	Public Method getEventsTypes() as Logical
+
+	Public Method processGetValidate(cTicket as Character) as Json
+	Public Method processPostStruct(cTicket as Character) as Json
+	Public Method processPostMark(cTicket as Character) as Json
+	Public Method processPostResponses(cTicket as Character, aResponses as Array) as Json
+	Public Method processGetEventsTypes(cTicket as Character) as Json
+
+	Private Method clearProperties()
+	Private Method createRegexDate()
+	Private Method getAvaiableStatusDescription() as Character
+	Private Method getCounterDocuments(jDocumentCounters as Json) as Array
+	Private Method getCounterEvents(jEventsCounter as Json) as Array
+	Private Method getDocumentDates(cEventLog as Character, cEventType as Character, dOriginalDate as Date, dNewDate as Date)
+	Private Method getGroupedCount(cColumnGroup as Character) as Json
+	Private Method getNextIdExec() as Character
+	Private Method getSelectedDocuments() as Array
+	Private Method getSelectedEvents() as Array
+	Private Method getTotalEvents() as Integer
+	Private Method loadDataToStruct(cTicket as Character) as Logical
+	Private Method loadHZQValuesToInsert() as Array
+	Private Method loadMRPEvents()
+	Private Method loadStructHZQ()
+	Private Method structEvents() as Json
+	Private Method ticketHasValidEvents() as Logical
+
+	Static Method executeAgent(cTicket as Character)
+	Static Method isAgentAvailable() as Logical
+
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe.
+
+@type method
+@author marcelo.neumann
+@since 16/12/2025
+@version P12
+@return Self, Object, Instância da classe
+/*/
+Method new() as Object Class DTAAgentMRPEvents
+Return Self
+
+/*/{Protheus.doc} clearProperties
+Faz a limpeza das propriedades da classe
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return Nil
+/*/
+Method clearProperties() Class DTAAgentMRPEvents
+	Self:cIdProcess := ""
+	Self:cTicket    := ""
+	Self:cUser      := ""
+	Self:nIdExec    := 0
+	Self:nTamIdExec := 0
+
+	FreeObj(Self:jIndexHZQ)
+	FreeObj(Self:oRegexDates)
+
+	If !Empty(Self:aEvents)
+		aSize(Self:aEvents, 0)
+	EndIf
+	If !Empty(Self:aStructHZQ)
+		aSize(Self:aStructHZQ, 0)
+	EndIf
+Return
+
+/*/{Protheus.doc} executeAgent
+Inicia a execução do agente de análise do log de eventos do MRP.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cTicket, Character, Ticket do MRP
+@return Nil
+/*/
+Method executeAgent(cTicket as Character) Class DTAAgentMRPEvents
+	Local oDTAAgent as Object
+
+	oDTAAgent := DTARunAgent():New(AGENTE_EVENTOS)
+	oDTAAgent:setAgentKey(cTicket)
+	oDTAAgent:setContent(I18N(STR0001, {cTicket})) //"Realize a análise dos eventos do ticket #1[ID]#"
+	oDTAAgent:runAsync()
+	FreeObj(oDTAAgent)
+Return
+
+/*/{Protheus.doc} getValidate
+Método que será executado pelo REST com o endpoint [GET] api/pcp/v1/DTAAgentMRPEvents/validate/:ticket
+Retorna se o ticket está válido para utilização no agente.
+
+@type method
+@author marcelo.neumann
+@since 16/12/2025
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method getValidate() as Logical Class DTAAgentMRPEvents
+	Local jPathParams as Json
+	Local jReturn	  as Json
+	Local lRet        as Logical
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+
+	jPathParams := oRest:getPathParamsRequest()
+	jReturn     := Self:processGetValidate(jPathParams["ticket"])
+	lRet        := oRest:setResponse(jReturn:toJson())
+
+	jPathParams  := Nil
+	FreeObj(jReturn)
+Return lRet
+
+/*/{Protheus.doc} processGetValidate
+Faz as validações do ticket do MRP para determinar se este pode ser utilizado pelo agente de logs do MRP.
+
+@type method
+@author lucas.franca
+@since 04/05/2026
+@version P12
+@param 01 cTicket, Character, Número do ticket do MRP
+@return jReturn, Json, Objeto JSON com o resultado da validação, onde:
+				Se houver erro na validação, o JSON terá a propriedade "error" com a descrição do erro.
+				Se o ticket for válido, o JSON terá a propriedade "message" com a mensagem de sucesso.
+/*/
+Method processGetValidate(cTicket as Character) as Json Class DTAAgentMRPEvents
+	Local nTicketSize := GetSX3Cache("HW3_TICKET", "X3_TAMANHO") as Numeric
+
+	Self:cTicket := cTicket
+
+	If Empty(Self:cTicket) .Or. Len(Self:cTicket) != nTicketSize
+		Return {"error": I18N(STR0002, {nTicketSize})} // "Número do ticket do MRP inválido. O número do ticket deve conter #1[QTD]# caracteres."
+	EndIf
+
+	HW3->(dbSetOrder(1))
+	If !HW3->(dbSeek(xFilial("HW3") + Self:cTicket))
+		Return {"error": STR0003} //"Ticket do MRP não encontrado."
+	EndIf
+
+	If !(HW3->HW3_STATUS $ TICKET_AVAIABLE_STATUS)
+		Return {"error": I18N(STR0004, {P144Status(HW3->HW3_STATUS), Self:getAvaiableStatusDescription()})} //"Status do ticket não permitido para execução do agente. O status do ticket é '#1[STATUS_ATUAL]#'. Somente os tickets com status (#2[STATUS_PERMITIDO]#) são permitidos."
+	EndIf
+
+	If MrpTickeME(cTicket, .F.)
+		Return {"error": STR0005} //"Ticket do MRP corresponde a um processamento Multi-Empresa. O agente não processa tickets Multi-Empresa."
+	EndIf
+
+	If !Self:ticketHasValidEvents()
+		Return {"error": STR0006} //"Ticket do MRP não possui eventos válidos para processamento."
+	EndIf
+
+	If !DTARunAgent():findAgentProcessByKey(AGENTE_EVENTOS, Self:cTicket)
+		Return {"error": STR0007} //"Não foi encontrado processamento do agente para este ticket do MRP. Processamento não permitido."
+	EndIf
+
+Return {"message": STR0008} //"Ticket do MRP válido para execução do agente."
+
+/*/{Protheus.doc} getAvaiableStatusDescription
+Retorna a descrição dos status permitidos para execução do agente de logs do MRP,
+formatada como uma string com os status separados por vírgula e entre aspas simples.
+
+@type method
+@author lucas.franca
+@since 05/05/2026
+@version P12
+@return cDescription, Character, String com a descrição dos status permitidos, no formato "'Finalizado', 'Documentos gerados', ...".
+/*/
+Method getAvaiableStatusDescription() as Character Class DTAAgentMRPEvents
+	Local aStatus      as Array
+	Local cDescription as Character
+	Local nIndex       as Integer
+
+	aStatus := StrTokArr(TICKET_AVAIABLE_STATUS, ",")
+	For nIndex := 1 To Len(aStatus)
+		aStatus[nIndex] := P144Status(aStatus[nIndex])
+	Next nIndex
+
+	cDescription := "'" + ArrTokStr(aStatus, "', '") + "'"
+	aSize(aStatus, 0)
+Return cDescription
+
+/*/{Protheus.doc} ticketHasValidEvents
+Verifica se o ticket do MRP possui eventos válidos para processamento pelo agente.
+São considerados válidos os eventos '002' (Atrasar), '003' (Adiantar) e '007' (Cancelar) registrados na tabela HWM.
+
+@type method
+@author lucas.franca
+@since 05/05/2026
+@version P12
+@return lHasValidEvents, Logical, .T. quando o ticket possui ao menos um evento válido, caso contrário .F.
+/*/
+Method ticketHasValidEvents() as Logical Class DTAAgentMRPEvents
+	Local lHasValidEvents as Logical
+
+	lHasValidEvents := Self:getTotalEvents() > 0
+Return lHasValidEvents
+
+/*/{Protheus.doc} postStruct
+Método que será executado pelo REST com o endpoint [POST] api/pcp/v1/DTAAgentMRPEvents/struct/:ticket
+Realiza o processamento do ticket do MRP, estruturando os eventos encontrados e inserindo os dados na tabela HZQ.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method postStruct() as Logical Class DTAAgentMRPEvents
+	Local jPathParams as Json
+	Local jReturn	  as Json
+	Local lRet        as Logical
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+	jPathParams := oRest:getPathParamsRequest()
+	jReturn     := Self:processPostStruct(jPathParams["ticket"])
+	lRet        := oRest:setResponse(jReturn:toJson())
+
+	FreeObj(jReturn)
+	jPathParams := Nil
+Return lRet
+
+/*/{Protheus.doc} processPostStruct
+Realiza o processamento do ticket do MRP, estruturando os eventos encontrados e inserindo os dados na tabela HZQ.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@param 01 cTicket, Character, Número do ticket do MRP a ser processado
+@return jReturn, Json, Informações sobre o processamento. Quantidades de eventos processados em caso de sucesso, ou mensagem de erro em caso de falha.
+/*/
+Method processPostStruct(cTicket as Character) as Json Class DTAAgentMRPEvents
+	Local jReturn as Json
+
+	If Self:loadDataToStruct(cTicket)
+		jReturn := Self:structEvents()
+		Self:clearProperties()
+	Else
+		jReturn := {"error": STR0007} //"Não foi encontrado processamento do agente para este ticket do MRP. Processamento não permitido."
+	EndIf
+Return jReturn
+
+/*/{Protheus.doc} loadDataToStruct
+Carrega as informações do ticket do MRP utilização do método structEvents.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@param 01 cTicket, Character, Número do ticket do MRP a ser processado
+@return lFoundProcess, Logical, Indica se o processamento do ticket foi encontrado e carregado corretamente.
+/*/
+Method loadDataToStruct(cTicket as Character) as Logical Class DTAAgentMRPEvents
+	Local lFoundProcess := .F. as Logical
+
+	If DTARunAgent():findAgentProcessByKey(AGENTE_EVENTOS, cTicket)
+		lFoundProcess   := .T.
+		Self:cIdProcess := HZP->HZP_ID
+		Self:cTicket    := cTicket
+		Self:cUser      := RetCodUsr()
+		Self:nTamIdExec := GetSX3Cache("HZQ_IDEXEC", "X3_TAMANHO")
+
+		Self:loadStructHZQ()
+		Self:loadMRPEvents()
+		Self:createRegexDate()
+	EndIf
+Return lFoundProcess
+
+/*/{Protheus.doc} structEvents
+Realiza a estruturação dos eventos do MRP, inserindo os dados na tabela HZQ e realizando a contagem dos tipos de eventos e documentos processados.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return jEvents, Json, Informações sobre o processamento. Quantidades de eventos processados em caso de sucesso, ou mensagem de erro em caso de falha.
+/*/
+Method structEvents() as Json Class DTAAgentMRPEvents
+	Local aInsertData as Array
+	Local jEvents     as Json
+	Local jCounters   as Json
+	Local lSuccess    as Logical
+	Local nIndex      as Integer
+	Local nTotal      as Integer
+	Local oBulkHZQ    as Object
+
+	aInsertData := Self:loadHZQValuesToInsert()
+	jCounters   := {"events": JsonObject():New(), "documents": JsonObject():New()}
+	lSuccess    := .T.
+	nTotal      := Len(Self:aEvents)
+	nIndex      := 0
+	oBulkHZQ    := FwBulk():New(RetSqlName("HZQ"))
+	oBulkHZQ:setFields(Self:aStructHZQ)
+
+	While lSuccess .And. nIndex < nTotal
+		nIndex++
+		aInsertData[Self:jIndexHZQ["HZQ_IDEXEC"]] := Self:getNextIdExec()
+		aInsertData[Self:jIndexHZQ["HZQ_TPEVEN"]] := Self:aEvents[nIndex]["event_type"]
+		aInsertData[Self:jIndexHZQ["HZQ_DOCUM" ]] := Self:aEvents[nIndex]["document_code"]
+		aInsertData[Self:jIndexHZQ["HZQ_ORIGEM"]] := Self:aEvents[nIndex]["origin"]
+		aInsertData[Self:jIndexHZQ["HZQ_PROD"  ]] := Self:aEvents[nIndex]["product"]
+		aInsertData[Self:jIndexHZQ["HZQ_LOCAL" ]] := Self:aEvents[nIndex]["warehouse"]
+
+		Self:getDocumentDates(Self:aEvents[nIndex]["log_mrp"], Self:aEvents[nIndex]["event_type"], @aInsertData[Self:jIndexHZQ["HZQ_DTORIG"]], @aInsertData[Self:jIndexHZQ["HZQ_DTNOVA"]])
+		lSuccess := oBulkHZQ:addData(aInsertData)
+
+		If jCounters["events"]:HasProperty(Self:aEvents[nIndex]["event_type"]) == .F.
+			jCounters["events"][Self:aEvents[nIndex]["event_type"]] := 0
+		EndIf
+		If jCounters["documents"]:HasProperty(Self:aEvents[nIndex]["origin"]) == .F.
+			jCounters["documents"][Self:aEvents[nIndex]["origin"]] := 0
+		EndIf
+		jCounters["events"][Self:aEvents[nIndex]["event_type"]]++
+		jCounters["documents"][Self:aEvents[nIndex]["origin"]]++
+		FreeObj(Self:aEvents[nIndex])
+	End
+
+	lSuccess := lSuccess .And. oBulkHZQ:close()
+	If !lSuccess
+		jEvents := {"error": STR0009} //"Ocorreram erros ao inserir os documentos na tabela HZQ."
+		FWLogMsg("ERROR", , "EventsDocuments", "DTAAgentMRPEvents", "structEvents", 0, 0, oBulkHZQ:getError(), , , , , )
+	Else
+		jEvents := {;
+			"total_events": Self:getTotalEvents(),;
+			"total_documents": nTotal,;
+			"documents": Self:getCounterDocuments(jCounters["documents"]),;
+			"event_types": Self:getCounterEvents(jCounters["events"]);
+		}
+	EndIf
+
+	aSize(aInsertData, 0)
+	oBulkHZQ:destroy()
+	FreeObj(oBulkHZQ)
+	FreeObj(jCounters)
+Return jEvents
+
+/*/{Protheus.doc} getCounterDocuments
+Recupera os contadores de documentos processados no formato {"type": "nome documento", "quantity": quantidade} para cada tipo de documento encontrado.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@param 01 jDocumentCounters, Json, Contagem de documentos por tipo
+@return aDocuments, Array, Array de objetos JSON no formato {"type": "nome documento", "quantity": quantidade} para cada tipo de documento encontrado.
+/*/
+Method getCounterDocuments(jDocumentCounters as Json) as Array Class DTAAgentMRPEvents
+	Local aDocuments := {} as Array
+
+	If jDocumentCounters:HasProperty(IND_ORIGEM_SC)
+		aAdd(aDocuments, {"type": DTAAgentMRPProcEvents():getOriginDescription(IND_ORIGEM_SC), "quantity": jDocumentCounters[IND_ORIGEM_SC]})
+	EndIf
+	If jDocumentCounters:HasProperty(IND_ORIGEM_OP)
+		aAdd(aDocuments, {"type": DTAAgentMRPProcEvents():getOriginDescription(IND_ORIGEM_OP), "quantity": jDocumentCounters[IND_ORIGEM_OP]})
+	EndIf
+	If jDocumentCounters:HasProperty(IND_ORIGEM_PC)
+		aAdd(aDocuments, {"type": DTAAgentMRPProcEvents():getOriginDescription(IND_ORIGEM_PC), "quantity": jDocumentCounters[IND_ORIGEM_PC]})
+	EndIf
+	If jDocumentCounters:HasProperty(IND_ORIGEM_AE)
+		aAdd(aDocuments, {"type": DTAAgentMRPProcEvents():getOriginDescription(IND_ORIGEM_AE), "quantity": jDocumentCounters[IND_ORIGEM_AE]})
+	EndIf
+Return aDocuments
+
+/*/{Protheus.doc} getCounterEvents
+Recupera os contadores de eventos processados no formato {"type": "nome evento", "quantity": quantidade} para cada tipo de evento encontrado.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@param 01 jEventsCounter, Json, Contagem de eventos por tipo
+@return aEvents, Array, Array de objetos JSON no formato {"type": "nome evento", "quantity": quantidade} para cada tipo de evento encontrado.
+/*/
+Method getCounterEvents(jEventsCounter as Json) as Array Class DTAAgentMRPEvents
+	Local aEvents := {} as Array
+
+	If jEventsCounter:HasProperty("002")
+		aAdd(aEvents, {"type": DTAAgentMRPProcEvents():getEventDescription("002"), "quantity": jEventsCounter["002"]})
+	EndIf
+	If jEventsCounter:HasProperty("003")
+		aAdd(aEvents, {"type": DTAAgentMRPProcEvents():getEventDescription("003"), "quantity": jEventsCounter["003"]})
+	EndIf
+	If jEventsCounter:HasProperty("007")
+		aAdd(aEvents, {"type": DTAAgentMRPProcEvents():getEventDescription("007"), "quantity": jEventsCounter["007"]})
+	EndIf
+Return aEvents
+
+/*/{Protheus.doc} loadHZQValuesToInsert
+Retorna um array no formato correto para inserção em bulk na tabela HZQ (conforme Self:aStructHZQ).
+Adiciona no array os valores fixos utilizados durante o processamento
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return aInsertData, Array, Array formatado para inserção de dados na tabela HZQ
+/*/
+Method loadHZQValuesToInsert() as Array Class DTAAgentMRPEvents
+	Local aInsertData as Array
+
+	aInsertData := Array(Len(Self:aStructHZQ))
+
+	aInsertData[Self:jIndexHZQ["HZQ_FILIAL"]] := xFilial("HZQ")
+	aInsertData[Self:jIndexHZQ["HZQ_IDPRC" ]] := Self:cIdProcess
+	aInsertData[Self:jIndexHZQ["HZQ_TICKET"]] := Self:cTicket
+	aInsertData[Self:jIndexHZQ["HZQ_STATUS"]] := STATUS_HZQ_PENDENTE
+	aInsertData[Self:jIndexHZQ["HZQ_MSGERR"]] := ""
+	aInsertData[Self:jIndexHZQ["HZQ_ATIVO" ]] := IND_HZQ_ATIVO
+	aInsertData[Self:jIndexHZQ["HZQ_USER"  ]] := Self:cUser
+	aInsertData[Self:jIndexHZQ["HZQ_CHECK" ]] := IND_HZQ_MARCADO
+
+Return aInsertData
+
+/*/{Protheus.doc} getNextIdExec
+Retorna o próximo ID de execução para inserção na tabela HZQ, incrementando o contador Self:nIdExec. (não valida valores existentes na tabela)
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return cIdExec, Character, Próximo ID de execução para inserção na tabela HZQ
+/*/
+Method getNextIdExec() as Character Class DTAAgentMRPEvents
+	Local cIdExec as Character
+
+	Self:nIdExec++
+	cIdExec := StrZero(Self:nIdExec, Self:nTamIdExec)
+Return cIdExec
+
+/*/{Protheus.doc} loadMRPEvents
+Recupera os eventos do MRP associados ao ticket que está sendo processado.
+Realiza consulta na tabela HWM filtrando eventos válidos (002, 003, 007) e carrega Self:aEvents
+
+@type method
+@author lucas.franca
+@since 08/05/2026
+@version P12
+@return Nil
+/*/
+Method loadMRPEvents() Class DTAAgentMRPEvents
+	Local cAlias  as Character
+	Local cQuery  as Character
+	Local jEvent  as Json
+	Local jOrigin as Json
+	Local oQuery  as Object
+
+	cQuery := "SELECT HWM.HWM_FILIAL,"
+	cQuery +=       " HWM.HWM_EVENTO,"
+	cQuery +=       " HWM.HWM_LOGMRP,"
+	cQuery +=       " HWM.HWM_DOC,"
+	cQuery +=       " HWM.HWM_ALIAS,"
+	cQuery +=       " CASE"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4U' THEN T4U.T4U_ORIGEM"
+	cQuery +=           " ELSE '0'"
+	cQuery +=       " END TIPO,"
+	cQuery +=       " CASE"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4Q' THEN T4Q.T4Q_PROD"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4T' THEN T4T.T4T_PROD"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4U' THEN T4U.T4U_PROD"
+	cQuery +=       " END PRODUTO,"
+	cQuery +=       " CASE"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4Q' THEN T4Q.T4Q_LOCAL"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4T' THEN T4T.T4T_LOCAL"
+	cQuery +=           " WHEN HWM.HWM_ALIAS = 'T4U' THEN T4U.T4U_LOCAL"
+	cQuery +=       " END ARMAZEM"
+	cQuery +=  " FROM " + RetSqlName("HWM") + " HWM"
+	cQuery +=  " LEFT OUTER JOIN " + RetSqlName("T4Q") + " T4Q"
+	cQuery +=    " ON HWM.HWM_ALIAS  = 'T4Q'"
+	cQuery +=   " AND " + FwJoinFilial("T4Q", "HWM", "T4Q", "HWM", .T.)
+	cQuery +=   " AND T4Q.T4Q_OP     = HWM.HWM_DOC"
+	cQuery +=   " AND T4Q.D_E_L_E_T_ = ' '"
+	cQuery +=  " LEFT OUTER JOIN " + RetSqlName("T4T") + " T4T"
+	cQuery +=    " ON HWM.HWM_ALIAS  = 'T4T'"
+	cQuery +=   " AND " + FwJoinFilial("T4T", "HWM", "T4T", "HWM", .T.)
+	cQuery +=   " AND T4T.T4T_DOCUM  = HWM.HWM_DOC"
+	cQuery +=   " AND T4T.D_E_L_E_T_ = ' '"
+	cQuery +=  " LEFT OUTER JOIN " + RetSqlName("T4U") + " T4U"
+	cQuery +=    " ON HWM.HWM_ALIAS  = 'T4U'"
+	cQuery +=   " AND " + FwJoinFilial("T4U", "HWM", "T4U", "HWM", .T.)
+	cQuery +=   " AND T4U.T4U_DOCUM  = HWM.HWM_DOC"
+	cQuery +=   " AND T4U.D_E_L_E_T_ = ' '"
+	cQuery += " WHERE HWM.HWM_FILIAL = ?"
+	cQuery +=   " AND HWM.HWM_TICKET = ?"
+	cQuery +=   " AND HWM.HWM_EVENTO IN ('002','003','007')"
+	cQuery +=   " AND HWM.D_E_L_E_T_ = ' '"
+
+	oQuery := FwExecStatement():New(cQuery)
+	oQuery:setString(1, xFilial("HWM"))
+	oQuery:setString(2, Self:cTicket)
+
+	jOrigin      := {"T4U": IND_ORIGEM_PC, "T4T": IND_ORIGEM_SC, "T4Q": IND_ORIGEM_OP}
+	Self:aEvents := {}
+	cAlias       := oQuery:openAlias()
+	While (cAlias)->(!Eof())
+		jEvent := JsonObject():New()
+		jEvent["branch_id"    ] := (cAlias)->HWM_FILIAL
+		jEvent["event_type"   ] := (cAlias)->HWM_EVENTO
+		jEvent["document_code"] := RTrim((cAlias)->HWM_DOC)
+		jEvent["alias"        ] := (cAlias)->HWM_ALIAS
+		jEvent["log_mrp"      ] := RTrim((cAlias)->HWM_LOGMRP)
+		jEvent["origin"       ] := jOrigin[(cAlias)->HWM_ALIAS]
+		jEvent["product"      ] := RTrim((cAlias)->PRODUTO)
+		jEvent["warehouse"    ] := RTrim((cAlias)->ARMAZEM)
+
+		If (cAlias)->HWM_ALIAS == "T4U" .And. (cAlias)->TIPO == "2"
+			jEvent["origin"] := IND_ORIGEM_AE
+		EndIf
+
+		aAdd(Self:aEvents, jEvent)
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(dbCloseArea())
+
+	jEvent := Nil
+	oQuery:Destroy()
+	FreeObj(oQuery)
+	FreeObj(jOrigin)
+
+Return Nil
+
+/*/{Protheus.doc} getDocumentDates
+Extrai a data original e nova data do documento a partir do log do evento do MRP.
+Retorna por referência nos argumentos dOriginalDate e dNewDate, respectivamente. Quando não encontrar as datas retorna uma data vazia.
+
+@type method
+@author lucas.franca
+@since 08/05/2026
+@version P12
+@param 01 cEventLog    , Character, String contendo o log do evento MRP
+@param 02 cEventType   , Character, Tipo de evento (ex: "002" para atrasar, "003" para adiantar, "007" para cancelar)
+@param 03 dOriginalDate, Date     , Por referência - retorna a data original do documento
+@param 04 dNewDate     , Date     , Por referência - retorna a nova data do documento (vazio para cancelamentos)
+@return Nil
+/*/
+Method getDocumentDates(cEventLog as Character, cEventType as Character, dOriginalDate as Date, dNewDate as Date) Class DTAAgentMRPEvents
+	Local aDates := {} as Array
+
+	//inicializa as datas que serão retornadas por referência
+	dOriginalDate := CtoD("")
+	dNewDate      := CtoD("")
+
+	//busca todas as ocorrências de datas na string do log do mrp
+	If Self:oRegexDates:tokenizer(cEventLog, @aDates)
+		dOriginalDate := CtoD(aDates[1]) //primeira data é sempre a data original do documento
+		If cEventType != "007"
+			dNewDate := CtoD(aTail(aDates)) //se não for cancelamento, a última data da string é a nova data do documento
+		EndIf
+		aSize(aDates, 0)
+	EndIf
+Return Nil
+
+/*/{Protheus.doc} createRegexDate
+Cria o objeto de regex para extração de datas dos logs do MRP, considerando o formato de data configurado.
+
+@type method
+@author lucas.franca
+@since 08/05/2026
+@version P12
+@return Nil
+/*/
+Method createRegexDate() Class DTAAgentMRPEvents
+	Local cDateFormat as Character
+	Local cSeparator  as Character
+	Local cRegex      as Character
+
+	//Verifica formato de data e monta o regex
+	cDateFormat      := Lower(Set(_SET_DATEFORMAT))
+	cSeparator       := Left(StrTran(StrTran(StrTran(cDateFormat, "y", ""), "m", ""), "d", ""), 1) //Remove caracteres y,m,d, restando apenas o separador de datas.
+	cRegex           := '\b(\d{1,4})' + cSeparator + '(\d{1,4})' + cSeparator + '(\d{1,4})\b'
+	Self:oRegexDates := tlpp.regex.Regex():New(cRegex)
+Return
+
+/*/{Protheus.doc} getTotalEvents
+Obtém a quantidade total de eventos MRP associados ao ticket.
+
+@type method
+@author lucas.franca
+@since 08/05/2026
+@version P12
+@return nTotalEvents, Integer, Quantidade total de eventos encontrados
+/*/
+Method getTotalEvents() as Integer Class DTAAgentMRPEvents
+	Local cQuery       as Character
+	Local nTotalEvents as Integer
+	Local oQuery       as Object
+
+	cQuery := "SELECT COUNT(*) TOTAL"
+	cQuery +=  " FROM " + RetSqlName("HWM") + " HWM"
+	cQuery += " WHERE HWM.HWM_TICKET = ?"
+	cQuery +=   " AND HWM.D_E_L_E_T_ = ' '"
+	If !MrpTickeME(Self:cTicket, .F.)
+		cQuery += " AND HWM.HWM_FILIAL = '" + xFilial("HWM") + "'"
+	EndIf
+
+	oQuery := FwExecStatement():New(cQuery)
+	oQuery:setString(1, Self:cTicket)
+
+	nTotalEvents := oQuery:execScalar("TOTAL")
+	oQuery:Destroy()
+	FreeObj(oQuery)
+Return nTotalEvents
+
+/*/{Protheus.doc} loadStructHZQ
+Carrega a estrutura das tabelas que serão gravadas para uso durante o processo.
+
+@type method
+@author lucas.franca
+@since 16/12/2025
+@version P12
+@return Nil
+/*/
+Method loadStructHZQ() Class DTAAgentMRPEvents
+	Local nIndex as Integer
+
+	Self:aStructHZQ := {}
+	aAdd(Self:aStructHZQ, {"HZQ_FILIAL"})
+	aAdd(Self:aStructHZQ, {"HZQ_IDPRC" })
+	aAdd(Self:aStructHZQ, {"HZQ_IDEXEC"})
+	aAdd(Self:aStructHZQ, {"HZQ_TICKET"})
+	aAdd(Self:aStructHZQ, {"HZQ_TPEVEN"})
+	aAdd(Self:aStructHZQ, {"HZQ_DOCUM" })
+	aAdd(Self:aStructHZQ, {"HZQ_PROD"  })
+	aAdd(Self:aStructHZQ, {"HZQ_LOCAL" })
+	aAdd(Self:aStructHZQ, {"HZQ_ORIGEM"})
+	aAdd(Self:aStructHZQ, {"HZQ_DTORIG"})
+	aAdd(Self:aStructHZQ, {"HZQ_DTNOVA"})
+	aAdd(Self:aStructHZQ, {"HZQ_STATUS"})
+	aAdd(Self:aStructHZQ, {"HZQ_ATIVO" })
+	aAdd(Self:aStructHZQ, {"HZQ_CHECK" })
+	aAdd(Self:aStructHZQ, {"HZQ_USER"  })
+	aAdd(Self:aStructHZQ, {"HZQ_MSGERR"})
+
+	Self:jIndexHZQ := JsonObject():New()
+	For nIndex := 1 To Len(Self:aStructHZQ)
+		Self:jIndexHZQ[Self:aStructHZQ[nIndex][1]] := nIndex
+	Next nIndex
+Return Nil
+
+/*/{Protheus.doc} postMark
+Método que será executado pelo REST com o endpoint [POST] api/pcp/v1/DTAAgentMRPEvents/mark/:ticket
+Verifica a existência de regras de seleção e marca os documentos conforme as regras
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method postMark() as Logical Class DTAAgentMRPEvents
+	Local jPathParams as Json
+	Local jReturn	  as Json
+	Local lRet        as Logical
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+	jPathParams := oRest:getPathParamsRequest()
+	jReturn     := Self:processPostMark(jPathParams["ticket"])
+	lRet        := oRest:setResponse(jReturn:toJson())
+
+	FreeObj(jReturn)
+	jPathParams := Nil
+Return lRet
+
+/*/{Protheus.doc} processPostMark
+Verifica a existência de regras de seleção e marca os documentos conforme as regras
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@param 01 cTicket, Character, Número do ticket do MRP a ser processado
+@return jReturn, Json, Informações sobre o processamento. Quantidades de eventos processados em caso de sucesso, ou mensagem de erro em caso de falha.
+/*/
+Method processPostMark(cTicket as Character) as Json Class DTAAgentMRPEvents
+	Local aPreferences    as Array
+	Local aSystemRules    as Array
+	Local cErrorMessage   as Character
+	Local cMessage        as Character
+	Local jReturn         as Json
+	Local lSuccess := .T. as Logical
+
+	Self:cTicket := cTicket
+	aPreferences := DTAAgentMRPPreferences():getRegras()
+	If Empty(aPreferences)
+		cMessage := STR0010 //"Não existem pré-definições de seleção de documentos. Desta forma, todos os registros permanecem marcados para o processamento."
+	Else
+		lSuccess := DTAAgentMRPDocuments():applyPreferences(Self:cTicket, aPreferences, @cErrorMessage)
+		If lSuccess
+			cMessage := STR0011 //"Pré-definições aplicadas com sucesso."
+		EndIf
+	EndIf
+
+	aSystemRules := {}
+	//Executa as validações de negócio, desmarcando os documentos que não podem ser alterados
+	If lSuccess
+		lSuccess := DTAAgentMRPDocuments():validDocuments(Self:cTicket, @cErrorMessage, @aSystemRules)
+	EndIf
+
+	jReturn := JsonObject():New()
+	If lSuccess
+		jReturn["message"        ] := cMessage
+		jReturn["applyed_rules"  ] := aPreferences
+		jReturn["system_rules"   ] := aSystemRules
+		jReturn["total_events"   ] := Self:getTotalEvents()
+		jReturn["documents"      ] := Self:getSelectedDocuments()
+		jReturn["event_types"    ] := Self:getSelectedEvents()
+		jReturn["total_documents"] := 0
+		aEval(jReturn["event_types"], {|jEvent| jReturn["total_documents"] += jEvent["quantity"]})
+	Else
+		jReturn["error"] := cErrorMessage
+	EndIf
+	aPreferences := Nil
+	aSystemRules := Nil
+	Self:clearProperties()
+
+Return jReturn
+
+/*/{Protheus.doc} getSelectedDocuments
+Retorna a quantidade de documentos selecionados por documento
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return aDocuments, Array, Array contendo a quantidade de documentos selecionados por tipo de documento, no formato {"type": "nome documento", "quantity": quantidade}
+/*/
+Method getSelectedDocuments() as Array Class DTAAgentMRPEvents
+	Local aDocuments as Array
+	Local jCounters  as Json
+
+	jCounters  := Self:getGroupedCount("HZQ_ORIGEM")
+	aDocuments := Self:getCounterDocuments(jCounters)
+
+	FreeObj(jCounters)
+Return aDocuments
+
+/*/{Protheus.doc} getSelectedEvents
+Retorna a quantidade de eventos selecionados por tipo de evento
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@return aEvents, Array, Array contendo a quantidade de eventos selecionados por tipo de evento, no formato {"type": "nome evento", "quantity": quantidade}
+/*/
+Method getSelectedEvents() as Array Class DTAAgentMRPEvents
+	Local aEvents   as Array
+	Local jCounters as Json
+
+	jCounters := Self:getGroupedCount("HZQ_TPEVEN")
+	aEvents   := Self:getCounterEvents(jCounters)
+
+	FreeObj(jCounters)
+Return aEvents
+
+/*/{Protheus.doc} getGroupedCount
+Verifica na tabela HZQ a quantidade de registros marcados agrupados pelo campo definido em cColumnGroup e retorna um JSON com a contagem por grupo.
+
+@type method
+@author lucas.franca
+@since 11/05/2026
+@version P12
+@param 01 cColumnGroup, Character, Nome do campo pelo qual os registros devem ser agrupados (ex: "HZQ_ORIGEM" para agrupar por tipo de documento, "HZQ_TPEVEN" para agrupar por tipo de evento)
+@return jCounters, Json, JSON contendo a contagem de registros por grupo, no formato {"grupo": quantidade}
+/*/
+Method getGroupedCount(cColumnGroup as Character) as Json Class DTAAgentMRPEvents
+	Local cAlias     as Character
+	Local cQuery     as Character
+	Local jCounters  as Json
+	Local oQuery     as Object
+
+	cQuery := "SELECT COUNT(*) TOTAL, HZQ.? GRUPO"
+	cQuery +=  " FROM " + RetSqlName("HZQ") + " HZQ"
+	cQuery += " WHERE HZQ.HZQ_FILIAL = ?"
+	cQuery +=   " AND HZQ.HZQ_TICKET = ?"
+	cQuery +=   " AND HZQ.HZQ_CHECK  = ?"
+	cQuery +=   " AND HZQ.D_E_L_E_T_ = ' '"
+	cQuery += " GROUP BY HZQ.?"
+	oQuery := FwExecStatement():New(cQuery)
+	oQuery:setUnsafe(1, cColumnGroup)
+	oQuery:setString(2, xFilial("HZQ"))
+	oQuery:setString(3, Self:cTicket)
+	oQuery:setString(4, IND_HZQ_MARCADO)
+	oQuery:setUnsafe(5, cColumnGroup)
+
+	jCounters := JsonObject():New()
+	cAlias    := oQuery:openAlias()
+	While (cAlias)->(!Eof())
+		jCounters[(cAlias)->GRUPO] := (cAlias)->TOTAL
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(dbCloseArea())
+	oQuery:Destroy()
+	FreeObj(oQuery)
+
+Return jCounters
+
+/*/{Protheus.doc} postResponses
+Método que será executado pelo REST com o endpoint [POST] api/pcp/v1/DTAAgentMRPEvents/responses/:ticket
+Registra as respostas retornadas pelo reasoning no resultado do processamento do agente.
+
+@type method
+@author lucas.franca
+@since 10/08/2026
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method postResponses() as Logical Class DTAAgentMRPEvents
+	Local jPathParams as Json
+	Local jReturn	  as Json
+	Local jBody       as Json
+	Local lRet        as Logical
+	Local nIndex      as Integer
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+	
+	jBody := JsonObject():New()
+	jBody:FromJson(oRest:getBodyRequest())
+
+	For nIndex := 1 To Len(jBody["responses"])
+		jBody["responses"][nIndex]["message"] := DTAUtils():decodeUTF8(jBody["responses"][nIndex]["message"])
+	Next nIndex
+
+	jPathParams := oRest:getPathParamsRequest()
+	jReturn     := Self:processPostResponses(jPathParams["ticket"], jBody["responses"])
+	lRet        := oRest:setResponse(jReturn:toJson())
+
+	FreeObj(jReturn)
+	FreeObj(jBody)
+	jPathParams := Nil
+Return lRet
+
+/*/{Protheus.doc} processPostResponses
+Persiste no HZP_RESULT as respostas recebidas para o ticket informado.
+
+@type method
+@author lucas.franca
+@since 10/08/2026
+@version P12
+@param 01 cTicket   , Character, Número do ticket do MRP
+@param 02 aResponses, Array    , Lista de respostas no formato {"type", "message"}
+@return jResponse, Json, Mensagem com o resultado da tentativa de gravação das respostas.
+/*/
+Method processPostResponses(cTicket as Character, aResponses as Array) as Json Class DTAAgentMRPEvents
+	Local jResponse as Json
+
+	jResponse := {"message": ""}
+	If DTARunAgent():findAgentProcessByKey(AGENTE_EVENTOS, cTicket)
+		DTARunAgent():updateAgentResult(aResponses)
+		jResponse["message"] := STR0012 //"Respostas do agente registradas com sucesso."
+	Else
+		jResponse["message"] := STR0013 //"Dados de execução do agente não encontrados. Respostas não registradas."
+	EndIf
+
+Return jResponse
+
+/*/{Protheus.doc} getEventsTypes
+Método que será executado pelo REST com o endpoint [GET] api/pcp/v1/DTAAgentMRPEvents/eventsTypes/:ticket
+Retorna os tipos de eventos do ticket com as respectivas quantidades de eventos e produtos distintos.
+
+@type method
+@author lucas.franca
+@since 10/08/2026
+@version P12
+@return lRet, Logical, Indica se o processamento da requisição foi realizado corretamente.
+/*/
+Method getEventsTypes() as Logical Class DTAAgentMRPEvents
+	Local jPathParams as Json
+	Local jReturn	  as Json
+	Local lRet        as Logical
+
+	oRest:setKeyHeaderResponse("Content-Type","application/json")
+	jPathParams := oRest:getPathParamsRequest()
+	jReturn     := Self:processGetEventsTypes(jPathParams["ticket"])
+	lRet        := oRest:setResponse(jReturn:toJson())
+
+	FreeObj(jReturn)
+	jPathParams := Nil
+Return lRet
+
+/*/{Protheus.doc} processGetEventsTypes
+Consulta os eventos do ticket na HWM e monta o retorno agregado por tipo de evento.
+
+@type method
+@author lucas.franca
+@since 10/08/2026
+@version P12
+@param 01 cTicket, Character, Número do ticket do MRP
+@return jResponse, Json, Objeto com array "events" contendo código do evento, quantidade de eventos e quantidade de produtos distintos.
+/*/
+Method processGetEventsTypes(cTicket as Character) as Json Class DTAAgentMRPEvents
+	Local cAlias    as Character
+	Local cQuery    as Character
+	Local jResponse as Json
+	Local oQuery    as Object
+
+	jResponse := {"events": Array(0)}
+
+	cQuery := "SELECT HWM.HWM_EVENTO, COUNT(*) TOTAL_EVT, COUNT(DISTINCT HWM.HWM_PRODUT) TOTAL_PROD"
+	cQuery +=  " FROM " + RetSqlName("HWM") + " HWM"
+	cQuery += " WHERE HWM.HWM_FILIAL = ?"
+	cQuery +=   " AND HWM.HWM_TICKET = ?"
+	cQuery += " GROUP BY HWM.HWM_EVENTO"
+
+	oQuery := FwExecStatement():New(cQuery)
+	oQuery:setString(1, xFilial("HWM"))
+	oQuery:setString(2, cTicket)
+
+	cAlias := oQuery:openAlias()
+	While (cAlias)->(!Eof())
+		aAdd(jResponse["events"], {"eventCode": (cAlias)->HWM_EVENTO, "eventQuantity": (cAlias)->TOTAL_EVT, "productsQuantity": (cAlias)->TOTAL_PROD})
+		(cAlias)->(dbSkip())
+	End
+	(cAlias)->(dbCloseArea())
+	FreeObj(oQuery)
+Return jResponse
+
+/*/{Protheus.doc} isAgentAvailable
+Verifica se o agente de eventos do MRP está disponível para execução.
+
+@type method
+@author lucas.franca
+@since 10/08/2026
+@version P12
+@return lAvailable, Logical, Indica se o agente está disponível para execução.
+/*/
+Method isAgentAvailable() as Logical Class DTAAgentMRPEvents
+	Local lAvailable as Logical
+
+	lAvailable := DTARunAgent():canRunAgents()
+//a ideia aqui é verificar se o agente está habilitado para o cliente. Ver se vai ser possível.
+Return lAvailable

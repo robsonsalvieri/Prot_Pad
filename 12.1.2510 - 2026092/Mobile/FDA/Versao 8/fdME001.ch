@@ -1,0 +1,36 @@
+#ifdef SPANISH
+	#define STR0001 "Merchandising"
+	#define STR0002 "Campanhas"
+	#define STR0003 "Escolha a Campanha:"
+	#define STR0004 "Cód."
+	#define STR0005 "Descr."
+	#define STR0006 "Pesquisa"
+	#define STR0007 "Escolha a Pesquisa:"
+	#define STR0008 "Iniciar >"
+	#define STR0009 "Respostas"
+	#define STR0010 "Resposta"
+#else
+	#ifdef ENGLISH
+		#define STR0001 "Merchandising"
+		#define STR0002 "Campanhas"
+		#define STR0003 "Escolha a Campanha:"
+		#define STR0004 "Cód."
+		#define STR0005 "Descr."
+		#define STR0006 "Pesquisa"
+		#define STR0007 "Escolha a Pesquisa:"
+		#define STR0008 "Iniciar >"
+		#define STR0009 "Respostas"
+		#define STR0010 "Resposta"
+	#else
+		#define STR0001 "Merchandising"
+		#define STR0002 "Campanhas"
+		#define STR0003 "Escolha a Campanha:"
+		#define STR0004 "Cód."
+		#define STR0005 "Descr."
+		#define STR0006 "Pesquisa"
+		#define STR0007 "Escolha a Pesquisa:"
+		#define STR0008 "Iniciar >"
+		#define STR0009 "Respostas"
+		#define STR0010 "Resposta"
+	#endif
+#endif

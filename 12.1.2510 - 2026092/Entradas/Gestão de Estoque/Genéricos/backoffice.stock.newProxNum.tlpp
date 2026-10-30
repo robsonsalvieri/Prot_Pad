@@ -1,0 +1,321 @@
+#include "protheus.ch"
+#INCLUDE "fileio.ch"
+#include "backoffice.stock.newProxNum.ch"
+
+namespace backoffice.stock.newProxNum
+
+Static _lValidSpecialKey
+
+//------------------------------------------------------------------------------
+//  NewProxNum()
+// 	Função responsável por retornar o próximo registro sequencial
+// 	@type 		Function
+// 	@author		Nilton Rodrigues
+// 	@since 		04/08/2023
+// 	@return		Sequencia docseq
+//------------------------------------------------------------------------------
+Function NewProxNum() as character
+	Local cNumSeq                                   as character
+	Local  __cKeyComp  := backoffice.stock.newProxNum.RetNameNumSeq(1) as character
+	Local  __cCampo    := backoffice.stock.newProxNum.RetNameNumSeq(2) as character
+	Local  __cAlias    := backoffice.stock.newProxNum.RetNameNumSeq(3) as character
+
+	//------------------------------------------------------------------------------
+	//- efetua a validação de specialkey 
+	//------------------------------------------------------------------------------
+	ValidSpeciaKey()
+
+	cNumSeq := GetSxeNum(__cAlias,__cCampo,__cKeyComp)
+	ConfirmSx8()
+	//------------------------------------------------------------------------------
+	//- caso tenha atingindo o limite, grava o stamp
+	//- para controle no momento da reinicialização do license, onde possa não
+	//- ter o LSNUMBER.VAL e também para uma primeira execução
+	//------------------------------------------------------------------------------
+	backoffice.stock.newProxNum.CheckLimitNumSeq(cNumSeq)
+
+Return cNumSeq
+
+//------------------------------------------------------------------------------
+//  RetNameNumSeq()
+// 	Função responsável por retornar o nome do alias de trabalho ou o nome do campo
+// 	@type 		Function
+// 	@author		Nilton Rodrigues
+// 	@since 		04/08/2023
+// 	@return		timestamp formato UTC
+//------------------------------------------------------------------------------
+Function RetNameNumSeq(nTipo as numeric) as character
+	Local cNome as character
+
+	If nTipo == 1 //- nome do alias
+		//------------------------------------------------------------------------------
+		//- aqui é o ponto que será definido se sera  compatilhado com todo ambiente
+		//- ou se será compartilhado por empresa
+		//------------------------------------------------------------------------------
+		cNome := '@@@'+RetSqlName("SD2")
+	ElseIf nTipo == 2 //- nome do campo chave para controle
+		cNome := 'D2_NUMSEQ'
+	ElseIf nTipo == 3 //- Alias Default 
+		cNome := 'SD2'
+	EndIf
+
+Return cNome
+
+//------------------------------------------------------------------------------
+//  GetDBTimeStamp()
+// 	Função responsável por retornar o TimeStamp atual db SGBD
+// 	@type 		Function
+// 	@author		Nilton Rodrigues
+// 	@since 		04/08/2023
+// 	@return		timestamp formato UTC
+//------------------------------------------------------------------------------
+Static Function GetDBTimeStamp() As Character
+	Local cQuery     as character
+	Local cTimeStamp as character
+	Local cDbMs := UPPER(TcGetDb()) as Character
+	//------------------------------------------------------------------------------
+	//- Inicializado desta maneira para cobertura de outros bancos, isso
+	//- dá garantia da execução na issue x cobertura
+	//------------------------------------------------------------------------------
+	cQuery := " SELECT CONVERT(varchar, GetUtcDate() , 127) AS TIME_STAMP"
+
+	Do Case
+	Case "MSSQL" $ DEF_SGBD
+		cQuery := " SELECT CONVERT(varchar, GetUtcDate() , 127) AS TIME_STAMP"
+	Case "ORACLE" $ DEF_SGBD
+		cQuery := " SELECT TO_CHAR( SYS_EXTRACT_UTC(SYSTIMESTAMP), '" + 'yyyy-mm-dd"T"HH24:MI:SS"Z"'+ "') AS TIME_STAMP FROM DUAL"
+	Case "POSTGRES" $ DEF_SGBD
+		cQuery := " SELECT TO_CHAR( TIMEZONE('utc', now()), '" + 'YYYY-MM-DD"T"HH24:MI:SS"Z"'+ "') AS TIME_STAMP FROM TOP_FIELD LIMIT 1"
+	EndCase
+
+	cTimeStamp := AllTrim( MPSysExecScalar( cQuery, "TIME_STAMP" ) )
+	//----------------------------------------------------------------------------------------------------------------------------------
+	//- realiza um ajuste no SQLServer para quando esteja zerado o milesegundos
+	//- https://learn.microsoft.com/en-us/sql/t-sql/functions/cast-and-convert-transact-sql?view=sql-server-ver16#date-and-time-styles
+	//----------------------------------------------------------------------------------------------------------------------------------
+	If "MSSQL" $ cDbMs .and. Len(Alltrim(cTimeStamp)) < 13
+		cTimeStamp := AllTrim(cTieStamp)+'.005'
+	EndIf
+Return cTimeStamp
+
+//------------------------------------------------------------------------------
+//  CheckLimitNumSeq()
+// 	Função responsável por validar se foi atingido o limite e grava o stamp/Data 
+//  desse momento em que se atingiu 
+// 	@type 		Function
+// 	@author		Nilton Rodrigues
+// 	@since 		04/08/2023
+// 	@return		timestamp formato UTC
+//------------------------------------------------------------------------------
+Function CheckLimitNumSeq(cNumSeq)
+	Local cStamp   as character
+	If cNumSeq == DEF_cLimite
+		cStamp := backoffice.stock.newProxNum.GetDBTimeStamp()
+		PutMv(DEF_cNameParam,cStamp)
+	EndIf
+Return
+
+//------------------------------------------------------------------------------
+// NextDocSeq
+// Busca o próximo numero em função do reset do LS.
+// Faz com que seja analisado o maior retorno
+// @type  Function
+// @author Nilton Rodrigues
+// @since 02/08/2023
+// @version v1.0
+// @param lCampo   logico
+// @param nTamanho numerico
+// @return Proximo numero sequencial
+//------------------------------------------------------------------------------
+Function NextDocSeq(lCampo, nTamanho)
+	Local cNumSeq     as character
+	Local cQuery      as Character
+	Local _cAlias     as character
+	Local cDataCorte  as character
+	Local oQuery      as object
+	Local nX          as numeric
+	Local nTable      as numeric
+	Local lExistInsDT as logical
+	Local aTables     as array
+
+	nX          := 1
+	_cAlias     := Alias()
+	nTamanho    := DEF_nTamanho
+	cNumSeq     := Replicate("0",nTamanho)
+	lCampo      := .F.
+	cDataCorte  := GetMv(DEF_cNameParam,.F.,'')
+	aTables     := STRTOKARR('SD1|SD2|SD3|SH6', '|' )
+	lExistInsDT := .T.
+
+	For nTable := 1 To len(aTables)
+		If Ascan(TCStruct(RetSqlName(aTables[nTable])), {|x| x[1] == 'I_N_S_D_T_'}) == 0
+			lExistInsDT := .F.
+		EndIf
+	Next
+
+	//------------------------------------------------------------------------------
+	//- ENCONTRA O MAIOR NUMSEQ ENTRE AS TABELAS
+	//------------------------------------------------------------------------------
+	cQuery := "SELECT MAX(NUMSEQ) NUMSEQ FROM ("
+	//------------------------------------------------------------------------------
+	//- busca o maior do SD1
+	//------------------------------------------------------------------------------
+	cQuery += " SELECT MAX(D1_NUMSEQ) NUMSEQ FROM "
+	cQuery += RetSqlName("SD1")
+	cQuery += " WHERE D_E_L_E_T_ = ? "
+	If !Empty(cDataCorte) .and. lExistInsDT
+		cQuery += " AND I_N_S_D_T_ > ?"
+	endIf
+	cQuery += " UNION ALL "
+	//------------------------------------------------------------------------------
+	//- busca o maior do SD2
+	//------------------------------------------------------------------------------
+	cQuery += " SELECT MAX(D2_NUMSEQ) NUMSEQ FROM "
+	cQuery += RetSqlName("SD2")
+	cQuery += " WHERE D_E_L_E_T_ = ? "
+	If !Empty(cDataCorte) .and. lExistInsDT
+		cQuery += " AND I_N_S_D_T_ > ?"
+	endIf
+	cQuery += " UNION ALL "
+	//------------------------------------------------------------------------------
+	//- busca o maior do SD3 - NUMSEQ
+	//------------------------------------------------------------------------------
+	cQuery += " SELECT MAX(D3_NUMSEQ) NUMSEQ FROM "
+	cQuery += RetSqlName("SD3")
+	cQuery += " WHERE D_E_L_E_T_ = ? "
+	If !Empty(cDataCorte) .and. lExistInsDT
+		cQuery += " AND I_N_S_D_T_ > ?"
+	endIf
+	cQuery += " UNION ALL "
+	//------------------------------------------------------------------------------
+	//- busca o maior do SD3 - IDENT
+	//------------------------------------------------------------------------------
+	cQuery += " SELECT MAX(D3_IDENT) IDENT FROM "
+	cQuery += RetSqlName("SD3")
+	cQuery += " WHERE D_E_L_E_T_ = ? "
+	If !Empty(cDataCorte) .and. lExistInsDT
+		cQuery += " AND I_N_S_D_T_ > ?"
+	endIf
+	cQuery += " UNION ALL "
+	//------------------------------------------------------------------------------
+	//- busca o maior do SH6
+	//------------------------------------------------------------------------------
+	cQuery += " SELECT MAX(H6_IDENT) IDENT FROM "
+	cQuery += RetSqlName("SH6")
+	cQuery += " WHERE D_E_L_E_T_ = ? "
+	If !Empty(cDataCorte) .and. lExistInsDT
+		cQuery += " AND I_N_S_D_T_ > ?"
+	endIf
+	cQuery += ") MAIOR"
+	cQuery := ChangeQuery(cQuery)
+
+	oQuery := FwExecStatement():New(cQuery)
+
+	//------------------------------------------------------------------------------
+	//- Tabela SD1
+	//------------------------------------------------------------------------------
+	oQuery:SetString(nX, Space(1))//- d_e_l_e_t_
+	nX++
+	If !Empty(cDataCorte) .and. lExistInsDT
+		oQuery:SetString(nX, cDataCorte)
+		nX++
+	endIf
+
+	//------------------------------------------------------------------------------
+	//- Tabela SD2
+	//------------------------------------------------------------------------------
+	oQuery:SetString(nX, Space(1))//- d_e_l_e_t_
+	nX++
+	If !Empty(cDataCorte) .and. lExistInsDT
+		oQuery:SetString(nX, cDataCorte)
+		nX++
+	endIf
+
+	//------------------------------------------------------------------------------
+	//- Tabela SD3 - NUMSEQ
+	//------------------------------------------------------------------------------
+	oQuery:SetString(nX, Space(1))//- d_e_l_e_t_
+	nX++
+	If !Empty(cDataCorte) .and. lExistInsDT
+		oQuery:SetString(nX, cDataCorte)
+		nX++
+	endIf
+
+	//------------------------------------------------------------------------------
+	//- Tabela SD3 - IDENT
+	//------------------------------------------------------------------------------
+	oQuery:SetString(nX, Space(1))//- d_e_l_e_t_
+	nX++
+	If !Empty(cDataCorte) .and. lExistInsDT
+		oQuery:SetString(nX, cDataCorte)
+		nX++
+	endIf
+
+	//------------------------------------------------------------------------------
+	//- Tabela SH6
+	//------------------------------------------------------------------------------
+	oQuery:SetString(nX, Space(1))//- d_e_l_e_t_
+	nX++
+	If !Empty(cDataCorte) .and. lExistInsDT
+		oQuery:SetString(nX, cDataCorte)
+		nX++
+	endIf
+
+	cNumSeq := Padr(oQuery:ExecScalar('NUMSEQ'),nTamanho)
+	If Empty(cNumSeq)
+		cNumSeq  := Replicate("0",nTamanho)
+	EndIf
+
+	If cNumSeq == DEF_cLimite
+		//------------------------------------------------------------------------------
+		//- valida e grava o limite
+		//------------------------------------------------------------------------------
+		backoffice.stock.newProxNum.CheckLimitNumSeq(cNumSeq)
+		//------------------------------------------------------------------------------
+		//- inicializa a numeração, pois atingiu o limite de ZZZZZZ
+		//------------------------------------------------------------------------------
+		cNumSeq := StrZero(1,nTamanho)
+	Else
+		cNumSeq := Soma1(cNumSeq,nTamanho)
+	EndIf
+
+	FreeObj(oQuery)
+
+	//------------------------------------------------------------------------------
+	//- verifica a existencia de alias em execução
+	//------------------------------------------------------------------------------
+	If !Empty(_cAlias)
+		dbSelectArea(_cAlias)
+	EndIf
+Return cNumSeq
+
+//------------------------------------------------------------------------------
+// ValidSpeciaKey
+// Efetua a validação de specialkey diferentes em uso para o consumo de 
+// Numerações 
+// @type  Function
+// @author Nilton Rodrigues
+// @since 26/06/2025
+// @version v1.0
+// @return Logical 
+//------------------------------------------------------------------------------
+Static Function ValidSpeciaKey as logical
+	
+	//------------------------------------------------------------------------------
+	//- efetua a verificação se é a primeira chamada
+	//------------------------------------------------------------------------------
+	If _lValidSpecialKey == nil 
+		//------------------------------------------------------------------------------
+		//- verifica se a chave existe e se está ligada
+		//------------------------------------------------------------------------------
+		_lValidSpecialKey:= ( GetPvProfString('General', 'CheckSpecialKey', '1', GetAdv97() ) == '1' )
+		//------------------------------------------------------------------------------
+		//- se não estiver ligada a chave é mandatório ser ligada 
+		//- para que a função do frame faça sua validação
+		//------------------------------------------------------------------------------
+		If !_lValidSpecialKey
+			UserException('A chave CheckSpecialKey em seu ambiente está desligada, você deve liga-la para seu uso da seção [GENERAL].')
+		EndIf 
+	EndIf
+
+Return _lValidSpecialKey

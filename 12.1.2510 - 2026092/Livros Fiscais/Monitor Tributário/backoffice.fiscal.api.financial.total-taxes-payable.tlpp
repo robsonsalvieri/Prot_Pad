@@ -1,0 +1,291 @@
+#INCLUDE "tlpp-core.th"
+#INCLUDE "tlpp-rest.th"
+#INCLUDE "totvs.ch"
+#INCLUDE "FISA318.CH"
+
+/*/{Protheus.doc} TITFinancialTaxesTotalWithholdings
+    Endpoint REST para processar a requisição da API de tributos retidos (Pagar/Pago) separado por esfera.
+    @type  Function
+    @author Caique Carlos
+    @since 03/12/2025
+    @version 1.0
+    @param jurisdiction, character, Esfera de governo (state, federal, municipal) (via path parameter)
+    @param paymentStatus, character, Status do pagamento (amounts-paid, amounts-payable) (via path parameter)
+    @param branches, character, Código das filiais separadas por vírgula (via query parameter)
+    @param periodStart, character, Data inicial do período no formato YYYY-MM-DD (via query parameter)
+    @param periodEnd, character, Data final do período no formato YYYY-MM-DD (via query parameter)
+    @param page, character, Número da página para paginação (opcional, via query parameter)
+    @param pageSize, character, Quantidade de registros por página (opcional, via query parameter)
+    @return Nil, nulo, Resposta enviada via framework oRest
+    @example
+        GET /api/fiscal/tax-monitor/v1/financial/municipal/tributes-by-municipality?branches=D MG 01,D RJ 02&periodStart=2024-01-01&periodEnd=2024-12-31&page=1&pageSize=10
+/*/
+@get(endpoint='/api/fiscal/tax-monitor/v1/financial/:jurisdiction/:paymentStatus/withholdings', description='API Financeira - Total de Tributos Pagos/a Pagar')
+Function TITFinancialTaxesTotalWithholdings()
+    Local oJsResponse := JsonObject():new()                as json
+    Local oQryStr     := oRest:getQueryRequest()           as json
+    Local aRequiredProperties                              as array
+    Local jPath                                            as json
+    Local aPathParams := {"amounts-paid","amounts-payable","state","federal","municipal"}  as array
+
+    jPath := oRest:getPathParamsRequest()
+
+    If  (jPath:HasProperty('jurisdiction')  .and. (aScan(aPathParams, Lower(jPath["jurisdiction"])) > 0)) .and. ;
+        (jPath:HasProperty('paymentStatus') .and. (aScan(aPathParams, Lower(jPath["paymentStatus"])) > 0))
+
+        aRequiredProperties	:= {;
+            {'branches',400,;   //PROPERTY //ERROR_CODE
+            STR0069,;           //"O parâmetro 'branches' é obrigatório e não foi informado."
+            STR0070},;          //"Informar Código de Filiais separadas por vírgula."
+            {'periodStart',400,;
+            STR0071,;           //"Nenhuma Data foi informada no parâmetro 'periodStart'."
+            STR0072},;          //"Informar a data desejada para o período"
+            {'periodEnd',400,;
+            STR0073,;           //"Nenhuma Data foi informada no parâmetro 'periodEnd'."
+            STR0072};           //"Informar a data desejada para o período"
+        }
+
+        If FISA318F6HasApiRequiredProperties(aRequiredProperties, oQryStr, @oJsResponse) 
+            oJsResponse := GetFinancialTaxesTotalWithholdings(;
+                                                    oQryStr['branches'], oQryStr['periodStart'], oQryStr['periodEnd'],;
+                                                    oQryStr['page'], oQryStr['pageSize'],;
+                                                    Lower(jPath["jurisdiction"]), Lower(jPath["paymentStatus"]);
+                                                    )  
+        EndIf
+
+        oRest:setKeyHeaderResponse('Content-Type', 'application/json')
+        oRest:setResponse(oJsResponse)
+    EndIf
+
+    FwFreeArray(aRequiredProperties)
+    FWFreeObj(jPath)
+    FWFreeObj(oJsResponse)
+    FWFreeObj(oQryStr)
+Return
+
+/*/ {Protheus.doc} GetFinancialTaxesTotalWithholdings
+    Monta a resposta JSON com o total de tributos (por natureza) pagos ou a pagar
+    para as filiais e período informados. Realiza paginação e formata o resultado
+    para consumo pela API REST.
+    @type     Function
+    @author   Caique Carlos
+    @since    03/12/2025
+    @version  1.0
+    @param    cBranches, character, Código das filiais separadas por vírgula (ex: "D MG 01,D RJ 02")
+    @param    cPeriodStart, character, Data inicial do período no formato YYYY-MM-DD
+    @param    cPeriodEnd, character, Data final do período no formato YYYY-MM-DD
+    @param    cPage, character, Número da página para paginação (opcional)
+    @param    cPageSize, character, Quantidade de registros por página (opcional)
+    @param    cJurisdiction, character, Jurisdição informada no path ("state","federal","municipal")
+    @param    cPaymentStatus, character, Status informado no path ("amounts-paid","amounts-payable")
+    @exemple
+        GetFinancialTaxesTotalWithholdings("D MG 01,D RJ 02", "2024-01-01", "2024-12-31", "1", "10", "municipal", "amounts-payable")
+/*/
+Function GetFinancialTaxesTotalWithholdings(cBranches as character, cPeriodStart as character, cPeriodEnd as character,;
+                                            cPage as character, cPageSize as character, cJurisdiction as character, cPaymentStatus as character)
+    Local oJsonResp         := JsonObject():New() as json
+    Local nPageSize         := 0                  as numeric
+    Local nPage             := 0                  as numeric
+    Local nPageAux          := 0                  as numeric
+    Local nLenJsonResp      := 0                  as numeric
+    Local cAlias            := GetNextAlias()     as character
+    Local cCharJurisdiction := MapJurisdiction(cJurisdiction) as character
+
+    Default cPage     := "1"
+    Default cPageSize := "10"
+
+    nPage             := Val(cPage)
+    nPageSize         := Val(cPageSize)
+
+    GetTaxesTotalValues(@cAlias, cBranches, cPeriodStart, cPeriodEnd, nPage, nPageSize, cCharJurisdiction, cPaymentStatus)
+
+    If (cAlias)->(!EoF())
+        oJsonResp["items"] := {}
+
+        While (cAlias)->(!Eof()) .and. nPageAux < nPageSize
+            aAdd( oJsonResp["items"], JsonObject():New() )
+
+            nLenJsonResp                                       := Len(oJsonResp["items"])
+            oJsonResp["items"][nLenJsonResp]["tax"]            := AllTrim((cAlias)->NATUREZA)
+            oJsonResp["items"][nLenJsonResp]["taxDescription"] := AllTrim((cAlias)->DESCRIC)
+
+            If cPaymentStatus == "amounts-paid"
+                oJsonResp["items"][nLenJsonResp]["valuePaid"]    := (cAlias)->VALOR_PAGO
+            ElseIf cPaymentStatus == "amounts-payable"
+                oJsonResp["items"][nLenJsonResp]["valuePayable"] := (cAlias)->VALOR_PAGAR
+            EndIf
+
+            nPageAux++
+            (cAlias)->(DbSkip())
+        EndDo
+        oJsonResp["hasNext"] := (cAlias)->(!Eof())
+    Else
+        oJsonResp["items"]   := {}
+        oJsonResp["hasNext"] := .F.
+    EndIf
+
+    (cAlias)->(DbCloseArea())
+
+Return oJsonResp:toJson()
+
+/*/ {Protheus.doc} GetTaxesTotalValues
+    Executa a query que agrega os valores por natureza (CIW_NATURE) e abre um alias
+    contendo o conjunto de resultados
+    @type     Static Function
+    @since    03/12/2025
+    @version  1.0
+    @param    cAlias, character, Nome do alias que receberá o resultado (passado por referência)
+    @param    cBranches, character, Filiais separadas por vírgula
+    @param    cPeriodStart, character, Data inicial no formato YYYY-MM-DD
+    @param    cPeriodEnd, character, Data final no formato YYYY-MM-DD
+    @param    nPage, numeric, Número da página (1..N)
+    @param    nPageSize, numeric, Tamanho da página
+    @param    cJurisdiction, character, Código da jurisdição ('1'|'2'|'3')
+    @param    cPaymentStatus, character, 'amounts-paid' ou 'amounts-payable'
+/*/
+Static Function GetTaxesTotalValues(cAlias as character, cBranches as character, cPeriodStart as character, cPeriodEnd as character,;
+                                    nPage as numeric, nPageSize as numeric, cJurisdiction as character, cPaymentStatus as character)
+    Local oQryValues  := FWExecStatement():New()                                              as object
+    Local nBind       := 1                                                                    as numeric
+    Local cQuery      := ""                                                                   as character
+    Local cJoinFilial := JoinFilialTableFact("SE2", "SED", "CIW.CIW_FILIAL", "SED.ED_FILIAL") as character
+
+    cQuery += "SELECT "
+    cQuery +=   "CIW_NATURE NATUREZA, "
+    cQuery +=   "ED_DESCRIC DESCRIC, "
+
+    If cPaymentStatus == "amounts-payable"
+        cQuery +=   "SUM(CIW_SALDO) VALOR_PAGAR "
+    ElseIf cPaymentStatus == "amounts-paid"
+        cQuery +=   "SUM(CIW_VALOR - CIW_SALDO) VALOR_PAGO "
+    EndIf
+
+    cQuery += "FROM ? CIW "                                         // FIS319SqlName("CIW")
+    cQuery += "INNER JOIN ? SED ON ? "                              // RetSqlName("SED") SED.FILIAL = CIW.FILIAL
+    cQuery += "AND ED_CODIGO = CIW_NATURE "
+    cQuery += "WHERE CIW_FILIAL IN (?) "                            // D MG 01,D RJ 02
+    cQuery +=   "AND CIW_ESFERA = ? "                               // 1 - Estadual | 2 - Federal | 3 - Municipal
+    cQuery +=   "AND CIW_EMISSA BETWEEN ? AND ? "                   // 20240101 E 20241231
+    cQuery +=   "AND CIW_VALOR > ? "                                // 0
+
+    If cPaymentStatus == "amounts-payable"
+        cQuery +=   "AND CIW_SALDO > ? "                            // 0
+    EndIf
+
+    cQuery +=   "AND CIW.D_E_L_E_T_ = ? "                           // ' '
+    cQuery +=   "AND SED.D_E_L_E_T_ = ? "                           // ' '
+    cQuery += "GROUP BY CIW_NATURE, ED_DESCRIC "
+    cQuery += "ORDER BY CIW_NATURE "
+    cQuery += "OFFSET ( ? * ? ) ROWS "                              // (1 - 1) * 10
+    cQuery += "FETCH NEXT ? ROWS ONLY"                              // 11
+
+    oQryValues:SetQuery(ChangeQuery(cQuery))
+
+    oQryValues:SetUnsafe(nBind++, FIS319SqlName("CIW"))
+    oQryValues:SetUnsafe(nBind++, RetSqlName("SED"))
+    oQryValues:SetUnsafe(nBind++, cJoinFilial)
+    oQryValues:SetIn(nBind++, StrTokArr(cBranches, "," ))
+    oQryValues:SetString(nBind++, cJurisdiction)
+    oQryValues:SetString(nBind++, StrTran(cPeriodStart, "-", ""))
+    oQryValues:SetString(nBind++, StrTran(cPeriodEnd, "-", ""))
+    oQryValues:SetNumeric(nBind++, 0)
+
+    If cPaymentStatus == "amounts-payable"
+        oQryValues:SetNumeric(nBind++, 0)
+    EndIf
+
+    oQryValues:SetString(nBind++, " ")
+    oQryValues:SetString(nBind++, " ")
+    oQryValues:SetNumeric(nBind++, nPage - 1)
+    oQryValues:SetNumeric(nBind++, nPageSize)
+    oQryValues:SetNumeric(nBind++, nPageSize + 1)
+
+    oQryValues:cBaseQuery := oQryValues:GetFixQuery()
+    cAlias                := oQryValues:OpenAlias()
+
+    FwFreeObj(oQryValues)
+Return
+
+/*/{Protheus.doc} JoinFilialTableFact
+    Gera a expressão de JOIN entre campos de filial conforme o modo de
+    compartilhamento das tabelas informadas (FWModeAccess). A função retorna
+    uma string contendo a condição SQL a ser usada no JOIN entre as tabelas
+    fato e do dicionario (ex: "SED.ED_FILIAL = CIW.CIW_FILIAL").
+    Suporta diferentes SGBDs (SUBSTRING para SQL Server e Postgres, SUBSTR para Oracle).
+    @type    Function
+    @author  Caique Carlos
+    @since   03/12/2025
+    @version 1.0
+    @param   cTableBaseFact, character, Nome da tabela base da tabela fato (ex: 'SE2')
+    @param   cTableDict, character, Nome da tabela contida no dicionario (ex: 'SED')
+    @param   cFieldFilialFact, character, Campo de filial da tabela fato com prefixo (ex: 'CIW.CIW_FILIAL')
+    @param   cFieldFilialDict, character, Campo de filial da tabela contida no dicionario com prefixo (ex: 'SED.ED_FILIAL')
+    @return  character, Expressão SQL para join de filial
+    @example JoinFilialTableFact('SE2', 'SED', 'CIW.CIW_FILIAL', 'SED.ED_FILIAL')
+    @see     https://tdn.totvs.com/display/public/framework/FWModeAccess+-+Retorna+modo+de+compartilhamento
+    @see     https://tdn.totvs.com/display/tec/TCGetDB
+    @obs     Tabelas igual a 'EEE' não entra devido ao fato de serem exclusivas em todos os níveis (Empresa/Unidade/Filial)
+                obrigatoriamente o join será pela filial completa.
+/*/
+Function JoinFilialTableFact(cTableBaseFact as character, cTableDict as character, cFieldFilialFact as character, cFieldFilialDict as character)
+    Local cJoinFilial    := ""           as character
+    Local cTableOneMode  := ""           as character
+    Local cTableTwoMode  := ""           as character
+    Local cDataBaseName  := TCGetDb()    as character
+    Local cSubStringFunc := "SUBSTR"     as character
+
+    Default cTableBaseFact    := ""
+    Default cTableDict        := ""
+    Default cFieldFilialFact  := ""
+    Default cFieldFilialDict  := ""
+
+    If cDataBaseName == "MSSQL" .Or. cDataBaseName == "POSTGRESQL"
+        cSubStringFunc := "SUBSTRING"
+    EndIf
+
+    // (Empresa/Unidade/Filial)
+    cTableOneMode := FWModeAccess(cTableBaseFact, 1) + FWModeAccess(cTableBaseFact, 2) + FWModeAccess(cTableBaseFact, 3)
+    cTableTwoMode := FWModeAccess(cTableDict, 1) + FWModeAccess(cTableDict, 2) + FWModeAccess(cTableDict, 3)
+
+    Do Case
+        // Cenário 1: Qualquer tabela compartilhada (CCC) -> join sempre verdadeiro
+        Case cTableOneMode == "CCC" .Or. cTableTwoMode == "CCC"
+            cJoinFilial := " ' ' = ' ' "
+
+        // Cenário 2: Mesmo modo de acesso -> compara filial completa
+        Case cTableOneMode == cTableTwoMode
+            cJoinFilial := cFieldFilialDict + " = " + cFieldFilialFact
+
+        // Cenário 3: Empresa exclusiva (ECC) -> compara 1º caractere (código empresa)
+        Case cTableOneMode == "ECC" .Or. cTableTwoMode == "ECC"
+            cJoinFilial := cSubStringFunc + "(" + cFieldFilialDict + ", 1, 1) = " + cSubStringFunc + "(" + cFieldFilialFact + ", 1, 1)"
+
+        // Cenário 4: Empresa e Unidade exclusivas (EEC) -> compara 5 primeiros caracteres
+        Case cTableOneMode == "EEC" .Or. cTableTwoMode == "EEC"
+            cJoinFilial := cSubStringFunc + "(" + cFieldFilialDict + ", 1, 5) = " + cSubStringFunc + "(" + cFieldFilialFact + ", 1, 5)"
+    EndCase
+Return cJoinFilial
+
+/*/ {Protheus.doc} MapJurisdiction
+    Mapeia a jurisdição informada na path para o código utilizado na base de dados
+    Função utilizada pra mapear os valores de jurisdição com isso evita linhas de condicionais
+    @type    Static Function
+    @author  Caique Carlos
+    @since   03/12/2025
+    @version 1.0
+    @param   cJurisdiction, character, Jurisdição informada no path ("state","federal","municipal")
+    @return  character, Código da jurisdição ('1'|'2'|'3')
+    @example MapJurisdiction("state")
+    @see     https://tdn.totvs.com/display/public/FRAMJOI/JSONObject%3AgetJSONObject
+/*/
+Static Function MapJurisdiction(cJurisdiction as character)
+    Local cMap      := '{"federal": "1", "state": "2", "municipal": "3"}' as character
+    Local cMapValue := ""                                                 as character
+    Local jMap      := JsonObject():New()                                 as json
+
+    jMap:FromJson(cMap)
+
+    cMapValue := jMap:GetJsonObject(cJurisdiction)
+
+    FwFreeObj(jMap)
+Return cMapValue

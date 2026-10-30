@@ -1,0 +1,843 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "msobject.ch"
+#include "backoffice.sv.est.costComparison.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+//Grupo de perguntas  
+#define SX1GRUPO "ESTT024"
+
+//NAMESPACE
+namespace totvs.protheus.backoffice.est.costComparison.integratedprovider
+using namespace totvs.protheus.backoffice.est.smartView.integratedProvider
+//ANNOTATION
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team="SIGAEST", tables="SB2,SB1", customTables="SB1,SB2" ,name="Comparativo de Custos", country="ALL")
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} costComparisonSmartViewBusinessObject
+	Classe para criacao do Objeto de Negocio do Comparativo de Custos
+	@type class
+	@author Rodrigo Lombardi
+	@since 10/2023
+	@version 1.0
+*/
+//-------------------------------------------------------------------  
+Class costComparisonSmartViewBusinessObject From totvs.protheus.backoffice.est.smartView.integratedProvider.EstIntegratedProvider
+
+	Public Method new() as object
+	Public Method getData() as object
+	Public Method getCalc() as array
+ 
+	Protected Method oNGetSchema()
+	Protected Method getSaldoSQL() as Json
+	Protected data aFields			as array
+	Protected data jItems			as json
+	Protected data cWhere			as character
+	Protected data lExistPergunte	as logical
+
+EndClass
+ 
+//-------------------------------------------------------------------
+/*{Protheus.doc} new
+	Metodo de instancia da classe
+	@type method
+	@return object, self
+	@author BackOffice
+	@since 10/2023
+	@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method new() Class costComparisonSmartViewBusinessObject
+
+	_Super:new()
+	
+	//Define a Área
+	self:appendArea( STR0001 )//Estoque/Custos
+
+	//Define o nome do Objeto de Negócio
+	self:setDisplayName( STR0002 )//Comparativo de Custos
+
+	//Define a descrição do Objeto de Negócio
+	self:setDescription( STR0003 )//Esta Objeto de Negócio ira trazer o Comparativo de Custos entre dois periodos especificados
+
+	//Define o conjunto de perguntas e faz o teste se existe
+	self:lExistPergunte := self:setPergunte( SX1GRUPO )
+	If !self:lExistPergunte
+		self:setErrorStatus(400,STR0004,i18n(STR0005,{SX1GRUPO}))//Grupo de pergunte não existe		
+		FWLogMsg('WARN', , 'SmartView', , , , i18n(STR0005,{SX1GRUPO}), , , )//O Grupo de perguntas #1 não existe
+	EndIf
+	
+	//Indica que o LookUp será do tipo padrão LookUp
+	self:setIsLookUp(.T.)
+
+Return self
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} getData
+	Retorna os dados do objeto de negócio
+	@param nPage, numérico, indica a página atual do relatório
+	@param oFilter, objeto, contém o filtro do TReports
+	@return object: self:oData
+	@author BackOffice
+	@since 04/2023
+	@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method getData( nPage as Numeric, oFilter as object) as object Class costComparisonSmartViewBusinessObject
+
+	Local aInicial  as Array
+	Local aFinal    as Array
+	Local aCustom   as Array
+	Local aFiliais  as Array
+	Local cQuery	as Character
+	Local cFields	as Character
+	Local cCustom	as Character
+	Local cAlias	as Character
+	Local cFiltro      as Character
+	Local cInFiliais as Character
+	Local cBkpFil   as Character
+	Local dDtIni	as Date
+	Local dDtFim	as Date
+	Local jParams	as Json	
+	Local nMoeda    as Numeric	
+	Local nX	    as Numeric	
+	Local nFil      as Numeric
+	Local nBind     as Numeric
+	Local nDecQtd	as Numeric
+	Local nDecVal	as Numeric
+	Local nDecVar	as Numeric
+	Local lUseSetIn as Logical
+	Local aIsDate   as Array
+	Local jCache    as Json
+	Local jSaldoIni as Json
+	Local jSaldoFim as Json
+	Local cFilAtual as Character
+	Local cChaveIni as Character
+	Local cChaveFim as Character
+	Local cChaveSld as Character
+	Local cLocProc  as Character
+	Local lUseFallback as Logical
+	Local oQuery    	
+
+	//Valida o pergunte
+	If !self:lExistPergunte
+		return self:oData
+	Endif
+
+	jParams := oFilter:getParameters() //metodo para retorno do json dos parâmetros
+
+    //Retorno da tela de multi filiais com as filiais selecionadas ou somente a filial corrente
+    self:aFils := self:retFils(jParams['SV_MULTBRANCH'])
+	//Já realizo a correção das datas
+	dDtIni	:= if(!empty(jParams['MV_PAR03'][1]), FwDateTimeToLocal(jParams['MV_PAR03'][1])[1], FirstDate(dDataBase))
+	dDtFim	:= if(!empty(jParams['MV_PAR04'][1]), FwDateTimeToLocal(jParams['MV_PAR04'][1])[1], LastDate(dDataBase))
+	nMoeda := jParams['MV_PAR07'][1]
+	cFiltro := " AND "
+
+	//--------------------------------------------------------------------------
+	// TRATATIVA DE CASAS DECIMAIS (padrao MATR242: PesqPict/TamSX3 de SB2->B2_QATU
+	// e SB2->B2_CM1). O jItems e enviado como JSON puro ao Smart View - sem a
+	// formatacao por picture que o TReport aplica na impressao - por isso os valores
+	// precisam ser arredondados explicitamente com Round() nas mesmas casas decimais
+	// usadas pelo relatorio legado, evitando ruido de ponto flutuante (ex.: 12.339999999998).
+	//--------------------------------------------------------------------------
+	nDecQtd := TamSX3("B2_QATU")[2]//Casas decimais de quantidade
+	nDecVal := TamSX3("B2_CM1")[2]//Casas decimais de valor unitario/total
+	nDecVar := 2//Casas decimais da Variacao(%) - mesma da picture "@E 99999.99" usada em C242CalVar (MATR242)
+
+	//--------------------------------------------------------------------------
+	// PERFORMANCE (padrao backoffice.sv.est.stockposition - Fase 1): o saldo/custo de cada
+	// data e calculado via SQL por getSaldoSQL() (chamado 1x por data), evitando N chamadas
+	// de CalcEst() por linha. Cai para o fallback (getCalc/CalcEst) quando o Entry Point
+	// D3VALIDO esta ativo
+	// (regra customizada no SD3) ou quando o produto esta em armazem de processo (cLocProc),
+	// pois nesses casos o SQL nao reproduz a regra completa do xCalcEst.
+	//--------------------------------------------------------------------------
+	lUseFallback := ExistBlock('D3VALIDO')
+	cLocProc     := GetMvNNR('MV_LOCPROC','99')
+	//Se tiver custom
+	cCustom := self:getSQLFields(.f.,nil,.t.)
+	if !empty(cCustom)	
+		aCustom := StrTokArr(cCustom,",")
+		For nX := 1 to len(aCustom)
+			aadd(self:aFields,aCustom[nX])		
+		Next
+	EndIf
+	
+	cFields := StrTran(ArrTokStr(self:aFields),"|",",")	
+		
+	//Os filtros serão setados na interface do novo TReports
+	If !(oFilter:hasFilter())
+		cFiltro := " "  
+	Endif 
+
+	// OTIMIZACAO: Processamento multi-filial em uma unica query (elimina o loop For por filial).
+	// Monta a lista de filiais uma vez; usa setIn() quando <= 50 filiais, IN literal acima disso.
+	aFiliais := {}
+	For nFil := 1 to len(self:aFils)
+		aAdd(aFiliais, FWxFilial("SB2", self:aFils[nFil]))
+	Next nFil
+	lUseSetIn  := (Len(aFiliais) <= 50)
+	// ccBpFilIn retorna a lista literal quando > 50 filiais; vazio quando usa setIn()
+	cInFiliais := ccBpFilIn(aFiliais, lUseSetIn)
+
+	nBind  := 1
+	cQuery := " SELECT ? "//1
+	cQuery += " FROM " + RetSQLName("SB2") + " SB2 "
+	cQuery += " INNER JOIN " + RetSQLName("SB1") + " SB1 "
+	// FWJoinFilial casa a filial de SB1 com a de cada linha de SB2 (dispensa bind fixo de filial)
+	cQuery += " ON " + FWJoinFilial("SB1","SB2")
+	cQuery += " AND SB1.B1_COD = SB2.B2_COD AND SB1.D_E_L_E_T_ = ? "//2
+	If lUseSetIn
+		// Usa placeholder para setIn() - mais seguro e performatico
+		cQuery += " WHERE SB2.B2_FILIAL IN (?) " //3
+	Else
+		// Fallback: IN clause manual para > 50 filiais (nao consome placeholder)
+		// CA2050:SUPPRESS - cInFiliais e construido de forma segura usando FWxFilial()
+		cQuery += " WHERE SB2.B2_FILIAL IN (" + cInFiliais + ") "
+	EndIf
+	cQuery += " AND SB2.B2_COD >= ? AND SB2.B2_COD <= ? "//4 //5
+	cQuery += " AND SB2.B2_LOCAL >= ? AND SB2.B2_LOCAL <= ? "//6 //7
+	cQuery += " AND SB2.D_E_L_E_T_ = ? "//8
+
+	//Internacionalizacao
+	cQuery += self:cWhere
+	cQuery += " ? "//9
+	// OTIMIZACAO (1a): ordena por filial/produto/local para permitir a troca de cFilAnt
+	// somente na quebra de filial (evita reset de contexto de filial a cada linha).
+	cQuery += " ORDER BY SB2.B2_FILIAL, SB2.B2_COD, SB2.B2_LOCAL "
+	cQuery := changeQuery(cQuery)
+	oQuery := FwExecStatement():New(cQuery)				
+
+	cBkpFil := cFilant 
+
+	//Bindings (a numeracao segue a ordem textual dos placeholders na query)
+	oQuery:setUnsafe(nBind++, cFields)                     //1 SELECT ?
+	oQuery:SetString(nBind++, ' ')                         //2 SB1.D_E_L_E_T_
+	// Filtro de filial da SB2: setIn() quando <= 50 filiais; caso contrario ja esta no IN manual
+	If lUseSetIn
+		oQuery:SetIn(nBind++, aFiliais)                    //3 SB2.B2_FILIAL IN
+	EndIf
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])      //4 SB2.B2_COD >=
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])      //5 SB2.B2_COD <=
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])      //6 SB2.B2_LOCAL >=
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])      //7 SB2.B2_LOCAL <=
+	oQuery:SetString(nBind++, ' ')                         //8 SB2.D_E_L_E_T_
+	oQuery:SetUnsafe(nBind++, cFiltro + oFilter:getSQLExpression()) //9 filtro dinamico
+
+	cAlias := oQuery:OpenAlias()
+
+	// OTIMIZACAO (3): resolve o tipo de cada campo uma unica vez (o dicionario nao muda
+	// durante a execucao), evitando FWSX3Util():GetFieldType() por campo em cada linha.
+	aIsDate := Array(Len(self:aFields))
+	For nX := 1 To Len(self:aFields)
+		aIsDate[nX] := (FWSX3Util():GetFieldType(self:aFields[nX]) == "D")
+	Next nX
+
+	// OTIMIZACAO (1b): cache dos calculos de saldo/custo por produto+local+data (usado
+	// apenas no caminho de fallback via CalcEst).
+	jCache   := JsonObject():New()
+	// OTIMIZACAO (1a): controla a filial corrente para trocar cFilAnt so na quebra de filial.
+	cFilAtual := ""
+
+	// Esta Fase 1 ALTERA o motor de calculo. E uma aproximacao do xCalcEst (nao cobre poder
+	// de terceiros, remito, fluxo reverso, pais <> BRA, SIGAEIC, filtro SF5, D2_DTDIGIT vs
+	// D2_EMISSAO). Comparar QtdInicial/ValInicial/TotInicial/QtdFinal/ValFinal/TotFinal/
+	// Variacao com a versao anterior (getCalc) numa massa real que inclua importacao/remito,
+	// TES de terceiros, armazem de processo e cliente com D3VALIDO. So promover apos conferir.
+	jSaldoIni := JsonObject():New()
+	jSaldoFim := JsonObject():New()
+	If !lUseFallback
+		jSaldoIni := self:getSaldoSQL(dDtIni, aFiliais, jParams, oFilter, lUseSetIn, cInFiliais)
+		jSaldoFim := self:getSaldoSQL(dDtFim, aFiliais, jParams, oFilter, lUseSetIn, cInFiliais)
+	EndIf
+
+	While !(cAlias)->(Eof())
+		// CalcEst calcula saldo/custo no contexto da filial corrente. Como a query esta
+		// ordenada por filial, so atualiza cFilAnt quando a filial realmente muda.
+		If (cAlias)->&("B2_FILIAL") != cFilAtual
+			cFilAtual := (cAlias)->&("B2_FILIAL")
+			cFilAnt   := cFilAtual
+		EndIf
+
+		self:jItems := JsonObject():New()		
+
+		For nX := 1 To Len(self:aFields)			
+			if aIsDate[nX] //Campo tipo data tem um tratamento diferente para envio
+				If !Empty( (cAlias)->&(self:aFields[nX]) )
+					self:jItems[self:aFields[nX]] := totvs.framework.treports.date.dateToTimeStamp(StoD((cAlias)->&(self:aFields[nX])))
+				EndIf
+			Else
+				self:jItems[self:aFields[nX]] := (cAlias)->&(self:aFields[nX])
+			EndIf
+		Next nX		
+		
+		// Chave do saldo calculado via SQL (por filial+produto+local).
+		// A query principal do getData NAO seleciona B2_COD (o codigo do produto vem por
+		// B1_COD, da SB1); por isso a chave usa B1_COD. Como a query casa SB1.B1_COD =
+		// SB2.B2_COD, o valor e o mesmo do B2_COD usado pelo getSaldoSQL. O RTrim em cada
+		// componente elimina diferenca de padding e garante o match no hasProperty().
+		cChaveSld := RTrim((cAlias)->&("B2_FILIAL")) + "|" ;
+			+ RTrim((cAlias)->&("B1_COD")) + "|" ;
+			+ RTrim((cAlias)->&("B2_LOCAL"))
+
+		If !lUseFallback .And. AllTrim((cAlias)->&("B2_LOCAL")) != AllTrim(cLocProc) ;
+			.And. jSaldoIni:hasProperty(cChaveSld) .And. jSaldoFim:hasProperty(cChaveSld)
+			// PERFORMANCE FASE 1: saldo/custo (inicial e final) obtidos dos hashes calculados
+			// via SQL (sem CalcEst), um por data (getSaldoSQL chamado 2x acima).
+			aInicial := jSaldoIni[cChaveSld]
+			aFinal   := jSaldoFim[cChaveSld]
+		Else
+			// Fallback: mantem CalcEst (com cache) para armazem de processo, EP D3VALIDO
+			// ativo ou produto sem linha no resultado da query de saldo.
+			cChaveIni := (cAlias)->&("B1_COD") + "|" + (cAlias)->&("B2_LOCAL") + "|" + DToS(dDtIni)
+			cChaveFim := (cAlias)->&("B1_COD") + "|" + (cAlias)->&("B2_LOCAL") + "|" + DToS(dDtFim)
+			If jCache:hasProperty(cChaveIni)
+				aInicial := jCache[cChaveIni]
+			Else
+				aInicial := self:getCalc((cAlias)->&("B1_COD"),(cAlias)->&("B2_LOCAL"),dDtIni,nMoeda)
+				jCache[cChaveIni] := aInicial
+			EndIf
+			If jCache:hasProperty(cChaveFim)
+				aFinal := jCache[cChaveFim]
+			Else
+				aFinal := self:getCalc((cAlias)->&("B1_COD"),(cAlias)->&("B2_LOCAL"),dDtFim,nMoeda)
+				jCache[cChaveFim] := aFinal
+			EndIf
+		EndIf
+
+		self:jItems["QtdInicial"] := Round(aInicial[1], nDecQtd)//Quantidade
+		self:jItems["ValInicial"] := Round(aInicial[2], nDecVal)//Unitario
+		self:jItems["TotInicial"] := Round(aInicial[3], nDecVal)//Total
+		self:jItems["QtdFinal"] := Round(aFinal[1], nDecQtd)//Quantidade
+		self:jItems["ValFinal"] := Round(aFinal[2], nDecVal)//Unitario
+		self:jItems["TotFinal"] := Round(aFinal[3], nDecVal)//Total
+
+		//Variacao(%): mesmo calculo de C242CalVar (MATR242) - razao entre os valores
+		//unitarios final/inicial *100 (e nao a diferenca percentual). Quando um dos
+		//valores unitarios e' zero, ou ambos sao iguais (sem variacao), o resultado e' zero.
+		If !(self:jItems["ValInicial"] == 0 .Or. self:jItems["ValFinal"] == 0 .Or. (self:jItems["ValInicial"] == self:jItems["ValFinal"]))
+			self:jItems["Variacao"] := Round((self:jItems["ValFinal"] / self:jItems["ValInicial"]) * 100, nDecVar)
+		Else
+			self:jItems["Variacao"] := 0
+		EndIf
+		
+		self:processData()
+		self:oData:appendData(self:jItems)
+	
+		(cAlias)->(DBSkip())	
+		
+	EndDo 
+			
+	(cAlias)->(DBCloseArea())
+
+	cFilant := cBkpFil
+
+	FwFreeObj(jCache)
+	FwFreeObj(jSaldoIni)
+	FwFreeObj(jSaldoFim)
+
+    oQuery:Destroy()
+ 	
+return self:oData
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} oNGetSchema
+	Retorna a estrutura dos campos
+	@type method
+	@return object, self:oSchema
+	@author BackOffice
+	@since 04/2023
+	@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method oNGetSchema() Class costComparisonSmartViewBusinessObject
+
+	Local aFldSB1 as Array
+	Local aFldSB2 as Array
+	self:aFields := {"B1_COD","B1_DESC","B1_TIPO","B1_UM","B2_LOCAL","B2_QATU","B2_FILIAL"}
+	
+	aFldSB1 := {"B1_COD","B1_DESC","B1_TIPO","B1_UM"}
+	aFldSB2 := {"B2_LOCAL","B2_QATU","B2_FILIAL"}	
+
+	self:AliasToSchema("SB1", aFldSB1)
+	self:AliasToSchema("SB2", aFldSB2)
+		
+	//Custom
+	self:addProperty("QtdInicial", STR0012, "number", STR0012,"QtdInicial")//"Quantidade Dt. Inicial"
+	self:addProperty("ValInicial", STR0013, "number", STR0013,"ValInicial")//Valor Unit Dt. Inicial
+	self:addProperty("TotInicial", STR0014, "number", STR0014,"TotInicial")//Total Dt. Inicial
+	self:addProperty("QtdFinal", STR0015, "number", STR0015,"QtdFinal")//Quantidade Dt. Final	
+	self:addProperty("ValFinal", STR0016, "number", STR0016,"ValFinal")//Valor Unit Dt. Final
+	self:addProperty("TotFinal", STR0017, "number", STR0017,"TotFinal")//Total Dt. Final
+	self:addProperty("Variacao", STR0018+"(%)", "number", STR0018+"(%)","Variacao")//Variação
+	
+Return self:oSchema
+
+
+/*{Protheus.doc} getCalc
+	Calcula e retorna a quantidade, valor total e valor unitario de um determinado produto
+	@type method
+	@param cProd  , character, codigo do produto
+	@param cLocal , character, codigo do local/armazem
+	@param dDta   , date     , data de referencia para o calculo do saldo
+	@param nMoeda , numeric  , moeda de referencia (1=moeda base, demais indexadas)
+	@return array, {nQtd, nUnit, nTotal}
+	@author rodrigo.lombardi
+	@since 10/2023
+	@version 1.0
+*/
+
+Method getCalc( cProd as Character, cLocal as Character, dDta as date,nMoeda as numeric) as Array Class costComparisonSmartViewBusinessObject
+Local aCalc 	as Array
+Local nQtd		as Numeric
+Local nUnit		as Numeric
+Local nTotal	as Numeric
+
+aCalc := CalcEst(cProd,cLocal,dDta)
+nQtd   := aCalc[1]
+nTotal := aCalc[nMoeda+1]
+nUnit  := IIf( nQtd == 0, 0, nTotal / nQtd )
+
+Return {nQtd,nUnit,nTotal} 
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} getSaldoSQL
+	Calcula, via SQL, o saldo/custo de TODOS os produtos/locais para UMA data de corte,
+	espelhando a "Fase 1" do backoffice.sv.est.stockposition (padrao homologado).
+	Arquitetura de performance: substitui as 6 subqueries correlacionadas da versao
+	anterior (N x 6 execucoes) por 3 LEFT JOINs com tabelas derivadas pre-agregadas
+	(3 varreduras unicas: SD1, SD2, SD3). O SB9 tambem passa a ser resolvido via
+	tabela derivada com MAX(B9_DATA) GROUP BY, eliminando a subquery correlacionada
+	aninhada que gerava N lookups adicionais. A formula do xCalcEst e preservada:
+	  quantidade = B9_QINI + SUM(SD1.D1_QUANT) - SUM(SD2.D2_QUANT) +/- SUM(SD3.D3_QUANT)
+	  total      = B9_VINI + SUM(SD1.custo)    - SUM(SD2.custo)    +/- SUM(SD3.custo)
+	Considera apenas TES que movimenta estoque (SF4.F4_ESTOQUE='S'), despreza ORIGLAN='LF',
+	aplica fluxo reverso no SD1. O sinal do SD3 segue D3_TM (<=500 entra, >500 sai).
+	Chamada duas vezes pelo getData (uma por data): comportamento identico ao anterior,
+	porem sem timeout em bases grandes.
+	@param dData     , date     , data de corte do saldo
+	@param aFiliais  , array    , filiais no formato SQL (FWxFilial)
+	@param jParams   , json     , parametros do pergunte (para a moeda MV_PAR07)
+	@param oFilter   , object   , filtro do TReports (mantido por simetria, nao usado aqui)
+	@param lUseSetIn , logical  , .T. usa setIn(); .F. usa lista literal cInFiliais
+	@param cInFiliais, character, lista literal de filiais quando > 50
+	@return json, hash "filial|produto|local" -> {qtd, unitario, total}
+	@author Squad Entradas
+	@since 08/2026
+*/
+//-------------------------------------------------------------------
+Method getSaldoSQL(dData as Date, aFiliais as Array, jParams as Json, oFilter as Object, lUseSetIn as Logical, cInFiliais as Character) as Json Class costComparisonSmartViewBusinessObject
+
+	Local jSaldo      := JsonObject():New() as Json
+	Local nBind       := 1 as Numeric
+	Local cQuery      := "" as Character
+	Local cAliasAtual := "" as Character
+	Local cIsNull     := MatIsNull() as Character
+	Local cMoeda      := Str(jParams['MV_PAR07'][1],1) as Character
+	Local cData       := DToS(dData) as Character
+	Local lD3Estor    := (Upper(GetMV('MV_D3ESTOR', .F., 'N')) == 'S') as Logical
+	Local nQtd        := 0 as Numeric
+	Local nTotal      := 0 as Numeric
+	Local nUnit       := 0 as Numeric
+	Local cChave      := "" as Character
+	// FLUXO REVERSO (espelha xCalcEst em MATXFUNB.PRX): a nota de credito com
+	// complemento "reducao de valores" (D1_TIPO='5' e D1_TIPODOC='54', quando nao
+	// e formulario proprio) NAO agrega ao saldo de estoque - ela e desconsiderada.
+	// So vale para o Brasil e apenas nas releases em que a regra existe.
+	Local lRevFlow    := (cPaisLoc == "BRA") .And. ;
+	                     FindFunction("backoffice.stock.inbounddocument.updateB2FromD1") as Logical
+	// Coluna de custo do SD1 conforme a moeda (moeda 1 usa D1_CUSTO; demais D1_CUSTOn).
+	Local cD1Cst      := "" as Character
+	// B9_DATA piso: o xCalcEst soma movimentos a partir do DIA SEGUINTE ao ultimo
+	// fechamento. "D_DTDIGIT > B9_DATA" equivale a "D_DTDIGIT >= B9_DATA+1" sem
+	// aritmetica de data no SQL. Quando nao ha fechamento, COALESCE cai para cDtFloor
+	// (dia anterior a 1980), incluindo todos os movimentos a partir de 01/01/1980.
+	Local cDtFloor    := "19791231" as Character
+	Local oQuery
+
+	// Moeda 1 usa a coluna base D1_CUSTO; demais moedas usam D1_CUSTOn.
+	If jParams['MV_PAR07'][1] == 1
+		cD1Cst := "D1_CUSTO"
+	Else
+		cD1Cst := "D1_CUSTO" + cMoeda
+	EndIf
+
+	// =========================================================================
+	// ARQUITETURA DE PERFORMANCE: tabelas derivadas pre-agregadas (JOIN vs subquery
+	// correlacionada). Cada bloco abaixo e executado UMA unica vez pelo banco e
+	// depois joined com a SB2  -  eliminando as N*6 subqueries da versao anterior.
+	//
+	// Estrutura geral:
+	//   SB2
+	//   LEFT JOIN SB9_MAX  -> ultimo fechamento anterior a dData (MAX GROUP BY)
+	//   LEFT JOIN SB9_DAT  -> dados do fechamento cujo B9_DATA = MAX acima
+	//   LEFT JOIN AGG_SD1  -> SUM(D1_QUANT), SUM(D1_CUSTO) agrupado por filial/cod/local
+	//   LEFT JOIN AGG_SD2  -> SUM(D2_QUANT), SUM(D2_CUSTO) agrupado por filial/cod/local
+	//   LEFT JOIN AGG_SD3  -> SUM liquido D3 agrupado por filial/cod/local
+	// =========================================================================
+
+	// -------------------------------------------------------------------------
+	// SB9_MAX: para cada combinacao filial/produto/local retorna a data maxima
+	// de fechamento ANTERIOR (strict <) a dData. Resolvido sem subquery correlacionada.
+	// -------------------------------------------------------------------------
+	cQuery := " SELECT "
+	cQuery += "   SB2.B2_FILIAL, SB2.B2_COD, SB2.B2_LOCAL "
+	cQuery += " , " + cIsNull + "( SB9D.B9_QINI, 0 ) B9_QINI "
+	cQuery += " , " + cIsNull + "( SB9D.B9_VINI" + cMoeda + ", 0 ) B9_VINI "
+	cQuery += " , " + cIsNull + "( AGG1.SD1_QUANT, 0 ) CALC_SD1_QUANT "
+	cQuery += " , " + cIsNull + "( AGG1.SD1_CUSTO, 0 ) CALC_SD1_CUSTO "
+	cQuery += " , " + cIsNull + "( AGG2.SD2_QUANT, 0 ) CALC_SD2_QUANT "
+	cQuery += " , " + cIsNull + "( AGG2.SD2_CUSTO, 0 ) CALC_SD2_CUSTO "
+	cQuery += " , " + cIsNull + "( AGG3.SD3_QUANT, 0 ) CALC_SD3_QUANT "
+	cQuery += " , " + cIsNull + "( AGG3.SD3_CUSTO, 0 ) CALC_SD3_CUSTO "
+	cQuery += " , " + cIsNull + "( AGGDV.DEVVEN_QUANT, 0 ) DEVVEN_QUANT "
+	cQuery += " , " + cIsNull + "( AGGDV.DEVVEN_CUSTO, 0 ) DEVVEN_CUSTO "
+	cQuery += " , " + cIsNull + "( AGGDC.DEVCMP_QUANT, 0 ) DEVCMP_QUANT "
+	cQuery += " , " + cIsNull + "( AGGDC.DEVCMP_CUSTO, 0 ) DEVCMP_CUSTO "
+
+	// -------------------------------------------------------------------------
+	// FROM SB2 + INNER JOIN SB1 (mesmo criterio da query principal do getData)
+	// -------------------------------------------------------------------------
+	cQuery += " FROM " + RetSQLName("SB2") + " SB2 "
+	cQuery += " INNER JOIN " + RetSQLName("SB1") + " SB1 "
+	cQuery += " ON " + FWJoinFilial("SB1","SB2")
+	cQuery += " AND SB1.B1_COD = SB2.B2_COD AND SB1.D_E_L_E_T_ = ? "  // placeholder 2
+
+	// -------------------------------------------------------------------------
+	// SB9_MAX: data maxima de fechamento anterior a dData, por filial/produto/local.
+	// LEFT JOIN para preservar produtos sem fechamento.
+	// -------------------------------------------------------------------------
+	cQuery += " LEFT JOIN ( "
+	cQuery += "   SELECT B9_FILIAL, B9_COD, B9_LOCAL, MAX(B9_DATA) B9_DATA_MAX "
+	cQuery += "   FROM " + RetSQLName("SB9") + " "
+	cQuery += "   WHERE B9_DATA <= ? AND D_E_L_E_T_ = ? "  // placeholders 3,4
+	cQuery += "   GROUP BY B9_FILIAL, B9_COD, B9_LOCAL "
+	cQuery += " ) SB9M ON ( SB9M.B9_FILIAL = SB2.B2_FILIAL AND SB9M.B9_COD = SB2.B2_COD AND SB9M.B9_LOCAL = SB2.B2_LOCAL ) "
+
+	// -------------------------------------------------------------------------
+	// SB9_DAT: linha completa do fechamento cuja data = MAX calculado acima.
+	// Segundo LEFT JOIN no SB9 para recuperar B9_QINI e B9_VINIn sem reler todo o SB9.
+	// -------------------------------------------------------------------------
+	cQuery += " LEFT JOIN " + RetSQLName("SB9") + " SB9D "
+	cQuery += " ON ( SB9D.B9_FILIAL = SB9M.B9_FILIAL AND SB9D.B9_COD = SB9M.B9_COD "
+	cQuery += "      AND SB9D.B9_LOCAL = SB9M.B9_LOCAL AND SB9D.B9_DATA = SB9M.B9_DATA_MAX "
+	cQuery += "      AND SB9D.D_E_L_E_T_ = ? ) "  // placeholder 5
+
+	// AGG_SD1: entradas pos-fechamento. Piso via LEFT JOIN com PISO1 (subquery derivada
+	// da SB9  -  1 varredura) + CASE WHEN no SUM. Elimina N subqueries correlacionadas.
+	// Bindings PISO1: B9_DATA < cData (P-A), D_E_L_E_T_ (P-B).
+	cQuery += " LEFT JOIN ( "
+	cQuery += "   SELECT SD1.D1_FILIAL, SD1.D1_COD, SD1.D1_LOCAL "
+	cQuery += "        , SUM( CASE WHEN SD1.D1_DTDIGIT > " + cIsNull + "(PISO1.B9_DATA_MAX, ?) THEN SD1.D1_QUANT    ELSE 0 END ) SD1_QUANT "  // fallback piso: cDtFloor
+	cQuery += "        , SUM( CASE WHEN SD1.D1_DTDIGIT > " + cIsNull + "(PISO1.B9_DATA_MAX, ?) THEN SD1." + cD1Cst + " ELSE 0 END ) SD1_CUSTO " // fallback piso: cDtFloor
+	cQuery += "   FROM " + RetSQLName("SD1") + " SD1 "
+	cQuery += "   INNER JOIN " + RetSQLName("SF4") + " SF4 "
+	cQuery += "   ON SF4.F4_FILIAL = ? AND SF4.F4_CODIGO = SD1.D1_TES "   // P6
+	cQuery += "      AND SF4.F4_ESTOQUE = ? AND SF4.D_E_L_E_T_ = ? "      // P7,P8
+	cQuery += "   LEFT JOIN ( "
+	cQuery += "     SELECT B9_FILIAL, B9_COD, B9_LOCAL, MAX(B9_DATA) B9_DATA_MAX "
+	cQuery += "     FROM " + RetSQLName("SB9") + " "
+	cQuery += "     WHERE B9_DATA <= ? AND D_E_L_E_T_ = ? "                // P-A, P-B
+	cQuery += "     GROUP BY B9_FILIAL, B9_COD, B9_LOCAL "
+	cQuery += "   ) PISO1 ON PISO1.B9_FILIAL = SD1.D1_FILIAL AND PISO1.B9_COD = SD1.D1_COD AND PISO1.B9_LOCAL = SD1.D1_LOCAL "
+	cQuery += "   WHERE SD1.D1_COD  >= ? AND SD1.D1_COD  <= ? "           // P9,P10
+	cQuery += "     AND SD1.D1_LOCAL >= ? AND SD1.D1_LOCAL <= ? "          // P11,P12
+	cQuery += "     AND SD1.D1_DTDIGIT <= ? "                               // P13 teto: cData
+	cQuery += "     AND SD1.D1_ORIGLAN <> ? "                              // P14
+	cQuery += "     AND SD1.D1_TIPO <> ? "                                 // P15: exclui devol.vendas (D1_TIPO='D') - contabilizadas em AGGDV
+	If lRevFlow
+		cQuery += "   AND NOT ( SD1.D1_TIPO = ? AND SD1.D1_TIPODOC = ? AND SD1.D1_FORMUL <> ? ) "  // P15,P16,P17
+	EndIf
+	cQuery += "     AND SD1.D_E_L_E_T_ = ? "                              // P18
+	cQuery += "   GROUP BY SD1.D1_FILIAL, SD1.D1_COD, SD1.D1_LOCAL "
+	cQuery += " ) AGG1 ON ( AGG1.D1_FILIAL = SB2.B2_FILIAL AND AGG1.D1_COD = SB2.B2_COD AND AGG1.D1_LOCAL = SB2.B2_LOCAL ) "
+
+	// AGG_SD2: saidas pos-fechamento. Mesmo padrao PISO2.
+	// Bindings PISO2: B9_DATA < cData (P-A), D_E_L_E_T_ (P-B).
+	cQuery += " LEFT JOIN ( "
+	cQuery += "   SELECT SD2.D2_FILIAL, SD2.D2_COD, SD2.D2_LOCAL "
+	cQuery += "        , SUM( CASE WHEN SD2.D2_EMISSAO > " + cIsNull + "(PISO2.B9_DATA_MAX, ?) THEN SD2.D2_QUANT                ELSE 0 END ) SD2_QUANT "  // fallback: cDtFloor
+	cQuery += "        , SUM( CASE WHEN SD2.D2_EMISSAO > " + cIsNull + "(PISO2.B9_DATA_MAX, ?) THEN SD2.D2_CUSTO" + cMoeda + " ELSE 0 END ) SD2_CUSTO "  // fallback: cDtFloor
+	cQuery += "   FROM " + RetSQLName("SD2") + " SD2 "
+	cQuery += "   INNER JOIN " + RetSQLName("SF4") + " SF4 "
+	cQuery += "   ON SF4.F4_FILIAL = ? AND SF4.F4_CODIGO = SD2.D2_TES "
+	cQuery += "      AND SF4.F4_ESTOQUE = ? AND SF4.D_E_L_E_T_ = ? "
+	cQuery += "   LEFT JOIN ( "
+	cQuery += "     SELECT B9_FILIAL, B9_COD, B9_LOCAL, MAX(B9_DATA) B9_DATA_MAX "
+	cQuery += "     FROM " + RetSQLName("SB9") + " "
+	cQuery += "     WHERE B9_DATA <= ? AND D_E_L_E_T_ = ? "                // P-A, P-B
+	cQuery += "     GROUP BY B9_FILIAL, B9_COD, B9_LOCAL "
+	cQuery += "   ) PISO2 ON PISO2.B9_FILIAL = SD2.D2_FILIAL AND PISO2.B9_COD = SD2.D2_COD AND PISO2.B9_LOCAL = SD2.D2_LOCAL "
+	cQuery += "   WHERE SD2.D2_COD  >= ? AND SD2.D2_COD  <= ? "
+	cQuery += "     AND SD2.D2_LOCAL >= ? AND SD2.D2_LOCAL <= ? "
+	cQuery += "     AND SD2.D2_EMISSAO <= ? "                              // teto
+	cQuery += "     AND SD2.D2_ORIGLAN <> ? "
+	cQuery += "     AND SD2.D2_TIPO <> ? "                                // exclui devol.compras (D2_TIPO='D') - contabilizadas em AGGDC
+	cQuery += "     AND SD2.D_E_L_E_T_ = ? "
+	cQuery += "   GROUP BY SD2.D2_FILIAL, SD2.D2_COD, SD2.D2_LOCAL "
+	cQuery += " ) AGG2 ON ( AGG2.D2_FILIAL = SB2.B2_FILIAL AND AGG2.D2_COD = SB2.B2_COD AND AGG2.D2_LOCAL = SB2.B2_LOCAL ) "
+
+	// AGG_SD3: movimentos internos pos-fechamento. Piso via PISO3. O sinal (TM<=500 soma,
+	// >500 subtrai) e combinado com o filtro de piso no mesmo CASE WHEN.
+	// Bindings PISO3: B9_DATA < cData (P-A), D_E_L_E_T_ (P-B).
+	cQuery += " LEFT JOIN ( "
+	cQuery += "   SELECT SD3.D3_FILIAL, SD3.D3_COD, SD3.D3_LOCAL "
+	cQuery += "        , SUM( CASE WHEN SD3.D3_EMISSAO > " + cIsNull + "(PISO3.B9_DATA_MAX, ?) AND SD3.D3_TM <= ? THEN  SD3.D3_QUANT "    // fallback: cDtFloor, TM<=500
+	cQuery += "                    WHEN SD3.D3_EMISSAO > " + cIsNull + "(PISO3.B9_DATA_MAX, ?) AND SD3.D3_TM >  ? THEN -SD3.D3_QUANT "    // fallback: cDtFloor, TM>500
+	cQuery += "                    ELSE 0 END ) SD3_QUANT "
+	cQuery += "        , SUM( CASE WHEN SD3.D3_EMISSAO > " + cIsNull + "(PISO3.B9_DATA_MAX, ?) AND SD3.D3_TM <= ? THEN  SD3.D3_CUSTO" + cMoeda + " "  // fallback: cDtFloor, TM<=500
+	cQuery += "                    WHEN SD3.D3_EMISSAO > " + cIsNull + "(PISO3.B9_DATA_MAX, ?) AND SD3.D3_TM >  ? THEN -SD3.D3_CUSTO" + cMoeda + " "  // fallback: cDtFloor, TM>500
+	cQuery += "                    ELSE 0 END ) SD3_CUSTO "
+	cQuery += "   FROM " + RetSQLName("SD3") + " SD3 "
+	cQuery += "   LEFT JOIN ( "
+	cQuery += "     SELECT B9_FILIAL, B9_COD, B9_LOCAL, MAX(B9_DATA) B9_DATA_MAX "
+	cQuery += "     FROM " + RetSQLName("SB9") + " "
+	cQuery += "     WHERE B9_DATA <= ? AND D_E_L_E_T_ = ? "                // P-A, P-B
+	cQuery += "     GROUP BY B9_FILIAL, B9_COD, B9_LOCAL "
+	cQuery += "   ) PISO3 ON PISO3.B9_FILIAL = SD3.D3_FILIAL AND PISO3.B9_COD = SD3.D3_COD AND PISO3.B9_LOCAL = SD3.D3_LOCAL "
+	cQuery += "   WHERE SD3.D3_COD  >= ? AND SD3.D3_COD  <= ? "
+	cQuery += "     AND SD3.D3_LOCAL >= ? AND SD3.D3_LOCAL <= ? "
+	cQuery += "     AND SD3.D3_EMISSAO <= ? "                              // teto
+	If !lD3Estor
+		cQuery += "   AND SD3.D3_ESTORNO = ? "
+	EndIf
+	cQuery += "     AND SD3.D_E_L_E_T_ = ? "
+	cQuery += "   GROUP BY SD3.D3_FILIAL, SD3.D3_COD, SD3.D3_LOCAL "
+	cQuery += " ) AGG3 ON ( AGG3.D3_FILIAL = SB2.B2_FILIAL AND AGG3.D3_COD = SB2.B2_COD AND AGG3.D3_LOCAL = SB2.B2_LOCAL ) "
+
+	// AGG_DEVVEN: devolucoes de vendas (SD1 com D1_TIPO='D') — quantidade e custo para subtracao
+	// Aplica piso SB9 via PISO4 (mesmo padrao das AGGs principais).
+	// -------------------------------------------------------------------------
+	cQuery += " LEFT JOIN ( "
+	cQuery += "   SELECT SD1.D1_FILIAL, SD1.D1_COD, SD1.D1_LOCAL "
+	cQuery += "        , SUM( CASE WHEN SD1.D1_DTDIGIT > " + cIsNull + "(PISO4.B9_DATA_MAX, ?) THEN SD1.D1_QUANT    ELSE 0 END ) DEVVEN_QUANT "  // fallback: cDtFloor
+	cQuery += "        , SUM( CASE WHEN SD1.D1_DTDIGIT > " + cIsNull + "(PISO4.B9_DATA_MAX, ?) THEN SD1." + cD1Cst + " ELSE 0 END ) DEVVEN_CUSTO " // fallback: cDtFloor
+	cQuery += "   FROM " + RetSQLName("SD1") + " SD1 "
+	cQuery += "   INNER JOIN " + RetSQLName("SF4") + " SF4 "
+	cQuery += "   ON SF4.F4_FILIAL = ? AND SF4.F4_CODIGO = SD1.D1_TES "
+	cQuery += "      AND SF4.F4_ESTOQUE = ? AND SF4.D_E_L_E_T_ = ? "
+	cQuery += "   LEFT JOIN ( "
+	cQuery += "     SELECT B9_FILIAL, B9_COD, B9_LOCAL, MAX(B9_DATA) B9_DATA_MAX "
+	cQuery += "     FROM " + RetSQLName("SB9") + " "
+	cQuery += "     WHERE B9_DATA <= ? AND D_E_L_E_T_ = ? "
+	cQuery += "     GROUP BY B9_FILIAL, B9_COD, B9_LOCAL "
+	cQuery += "   ) PISO4 ON PISO4.B9_FILIAL = SD1.D1_FILIAL AND PISO4.B9_COD = SD1.D1_COD AND PISO4.B9_LOCAL = SD1.D1_LOCAL "
+	cQuery += "   WHERE SD1.D1_COD  >= ? AND SD1.D1_COD  <= ? "
+	cQuery += "     AND SD1.D1_LOCAL >= ? AND SD1.D1_LOCAL <= ? "
+	cQuery += "     AND SD1.D1_DTDIGIT <= ? "
+	cQuery += "     AND SD1.D1_TIPO = ? "
+	cQuery += "     AND SD1.D1_ORIGLAN <> ? "
+	cQuery += "     AND SD1.D_E_L_E_T_ = ? "
+	cQuery += "   GROUP BY SD1.D1_FILIAL, SD1.D1_COD, SD1.D1_LOCAL "
+	cQuery += " ) AGGDV ON ( AGGDV.D1_FILIAL = SB2.B2_FILIAL AND AGGDV.D1_COD = SB2.B2_COD AND AGGDV.D1_LOCAL = SB2.B2_LOCAL ) "
+
+	// AGG_DEVCMP: devolucoes de compras (SD2 com D2_TIPO='D') — quantidade e custo para subtracao
+	// Aplica piso SB9 via PISO5 (mesmo padrao das AGGs principais).
+	// -------------------------------------------------------------------------
+	cQuery += " LEFT JOIN ( "
+	cQuery += "   SELECT SD2.D2_FILIAL, SD2.D2_COD, SD2.D2_LOCAL "
+	cQuery += "        , SUM( CASE WHEN SD2.D2_EMISSAO > " + cIsNull + "(PISO5.B9_DATA_MAX, ?) THEN SD2.D2_QUANT                ELSE 0 END ) DEVCMP_QUANT "  // fallback: cDtFloor
+	cQuery += "        , SUM( CASE WHEN SD2.D2_EMISSAO > " + cIsNull + "(PISO5.B9_DATA_MAX, ?) THEN SD2.D2_CUSTO" + cMoeda + " ELSE 0 END ) DEVCMP_CUSTO "  // fallback: cDtFloor
+	cQuery += "   FROM " + RetSQLName("SD2") + " SD2 "
+	cQuery += "   INNER JOIN " + RetSQLName("SF4") + " SF4 "
+	cQuery += "   ON SF4.F4_FILIAL = ? AND SF4.F4_CODIGO = SD2.D2_TES "
+	cQuery += "      AND SF4.F4_ESTOQUE = ? AND SF4.D_E_L_E_T_ = ? "
+	cQuery += "   LEFT JOIN ( "
+	cQuery += "     SELECT B9_FILIAL, B9_COD, B9_LOCAL, MAX(B9_DATA) B9_DATA_MAX "
+	cQuery += "     FROM " + RetSQLName("SB9") + " "
+	cQuery += "     WHERE B9_DATA <= ? AND D_E_L_E_T_ = ? "
+	cQuery += "     GROUP BY B9_FILIAL, B9_COD, B9_LOCAL "
+	cQuery += "   ) PISO5 ON PISO5.B9_FILIAL = SD2.D2_FILIAL AND PISO5.B9_COD = SD2.D2_COD AND PISO5.B9_LOCAL = SD2.D2_LOCAL "
+	cQuery += "   WHERE SD2.D2_COD  >= ? AND SD2.D2_COD  <= ? "
+	cQuery += "     AND SD2.D2_LOCAL >= ? AND SD2.D2_LOCAL <= ? "
+	cQuery += "     AND SD2.D2_EMISSAO <= ? "
+	cQuery += "     AND SD2.D2_TIPO = ? "
+	cQuery += "     AND SD2.D2_ORIGLAN <> ? "
+	cQuery += "     AND SD2.D_E_L_E_T_ = ? "
+	cQuery += "   GROUP BY SD2.D2_FILIAL, SD2.D2_COD, SD2.D2_LOCAL "
+	cQuery += " ) AGGDC ON ( AGGDC.D2_FILIAL = SB2.B2_FILIAL AND AGGDC.D2_COD = SB2.B2_COD AND AGGDC.D2_LOCAL = SB2.B2_LOCAL ) "
+
+	// -------------------------------------------------------------------------
+	// WHERE: filiais + faixa produto/local + soft-delete SB2.
+	// -------------------------------------------------------------------------
+	If lUseSetIn
+		cQuery += " WHERE SB2.B2_FILIAL IN (?) "
+	Else
+		// CA2050:SUPPRESS - cInFiliais construido de forma segura com FWxFilial()
+		cQuery += " WHERE SB2.B2_FILIAL IN (" + cInFiliais + ") "
+	EndIf
+	cQuery += " AND SB2.B2_COD  >= ? AND SB2.B2_COD  <= ? "
+	cQuery += " AND SB2.B2_LOCAL >= ? AND SB2.B2_LOCAL <= ? "
+	cQuery += " AND SB2.D_E_L_E_T_ = ? "
+
+	cQuery := changeQuery(cQuery)
+	oQuery := FwExecStatement():New(cQuery)
+
+	// --- Bindings (ordem textual dos placeholders) ---
+	// SB1.D_E_L_E_T_
+	oQuery:SetString(nBind++, ' ')
+	// SB9_MAX (SB9M): B9_DATA < cData, D_E_L_E_T_
+	oQuery:SetString(nBind++, cData)
+	oQuery:SetString(nBind++, ' ')
+	// SB9D (detalhe fechamento): D_E_L_E_T_
+	oQuery:SetString(nBind++, ' ')
+
+	// -----------------------------------------------------------------------
+	// AGG_SD1: CASE WHEN fallback (cDtFloor x2), SF4, PISO1, faixa, teto, ORIGLAN, [RevFlow], soft-delete
+	// -----------------------------------------------------------------------
+	oQuery:SetString(nBind++, cDtFloor)                // CASE QUANT: ISNULL(PISO1.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, cDtFloor)                // CASE CUSTO: ISNULL(PISO1.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, xFilial("SF4"))          // SF4.F4_FILIAL
+	oQuery:SetString(nBind++, 'S')                     // SF4.F4_ESTOQUE
+	oQuery:SetString(nBind++, ' ')                     // SF4.D_E_L_E_T_
+	oQuery:SetString(nBind++, cData)                   // PISO1: B9_DATA < cData
+	oQuery:SetString(nBind++, ' ')                     // PISO1: D_E_L_E_T_
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])  // D1_COD >=
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])  // D1_COD <=
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])  // D1_LOCAL >=
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])  // D1_LOCAL <=
+	oQuery:SetString(nBind++, cData)                   // D1_DTDIGIT < cData (teto)
+	oQuery:SetString(nBind++, 'LF')                    // D1_ORIGLAN <>
+	oQuery:SetString(nBind++, 'D')                     // D1_TIPO <> 'D' (exclui devol.vendas — contabilizadas em AGGDV)
+	If lRevFlow
+		oQuery:SetString(nBind++, '5')                 // D1_TIPO
+		oQuery:SetString(nBind++, '54')                // D1_TIPODOC
+		oQuery:SetString(nBind++, 'S')                 // D1_FORMUL
+	EndIf
+	oQuery:SetString(nBind++, ' ')                     // SD1.D_E_L_E_T_
+
+	// -----------------------------------------------------------------------
+	// AGG_SD2: CASE WHEN fallback (cDtFloor x2), SF4, PISO2, faixa, teto, ORIGLAN, soft-delete
+	// -----------------------------------------------------------------------
+	oQuery:SetString(nBind++, cDtFloor)                // CASE QUANT: ISNULL(PISO2.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, cDtFloor)                // CASE CUSTO: ISNULL(PISO2.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, xFilial("SF4"))          // SF4.F4_FILIAL
+	oQuery:SetString(nBind++, 'S')                     // SF4.F4_ESTOQUE
+	oQuery:SetString(nBind++, ' ')                     // SF4.D_E_L_E_T_
+	oQuery:SetString(nBind++, cData)                   // PISO2: B9_DATA < cData
+	oQuery:SetString(nBind++, ' ')                     // PISO2: D_E_L_E_T_
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])  // D2_COD >=
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])  // D2_COD <=
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])  // D2_LOCAL >=
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])  // D2_LOCAL <=
+	oQuery:SetString(nBind++, cData)                   // D2_EMISSAO < cData (teto)
+	oQuery:SetString(nBind++, 'LF')                    // D2_ORIGLAN <>
+	oQuery:SetString(nBind++, 'D')                     // D2_TIPO <> 'D' (exclui devol.compras — contabilizadas em AGGDC)
+	oQuery:SetString(nBind++, ' ')                     // SD2.D_E_L_E_T_
+
+	// -----------------------------------------------------------------------
+	// AGG_SD3: CASE WHEN (4x fallback cDtFloor + 4x TM '500'), PISO3, faixa, teto, [estorno], soft-delete
+	// Ordem dos ? no CASE: (cDtFloor, '500') x4 intercalados — ver query acima.
+	// -----------------------------------------------------------------------
+	oQuery:SetString(nBind++, cDtFloor)                // CASE QUANT TM<=: ISNULL(PISO3.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, '500')                   // CASE QUANT TM<= threshold
+	oQuery:SetString(nBind++, cDtFloor)                // CASE QUANT TM>:  ISNULL(PISO3.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, '500')                   // CASE QUANT TM> threshold
+	oQuery:SetString(nBind++, cDtFloor)                // CASE CUSTO TM<=: ISNULL(PISO3.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, '500')                   // CASE CUSTO TM<= threshold
+	oQuery:SetString(nBind++, cDtFloor)                // CASE CUSTO TM>:  ISNULL(PISO3.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, '500')                   // CASE CUSTO TM> threshold
+	oQuery:SetString(nBind++, cData)                   // PISO3: B9_DATA < cData
+	oQuery:SetString(nBind++, ' ')                     // PISO3: D_E_L_E_T_
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])  // D3_COD >=
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])  // D3_COD <=
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])  // D3_LOCAL >=
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])  // D3_LOCAL <=
+	oQuery:SetString(nBind++, cData)                   // D3_EMISSAO < cData (teto)
+	If !lD3Estor
+		oQuery:SetString(nBind++, ' ')                  // D3_ESTORNO = ''
+	EndIf
+	oQuery:SetString(nBind++, ' ')                     // SD3.D_E_L_E_T_
+	// AGG_DEVVEN: devolucoes de vendas (SD1, D1_TIPO='D') — com PISO4
+	// Ordem: fallback QUANT, fallback CUSTO, SF4, PISO4, faixa, teto, D1_TIPO, ORIGLAN, deleta
+	oQuery:SetString(nBind++, cDtFloor)                // CASE QUANT: ISNULL(PISO4.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, cDtFloor)                // CASE CUSTO: ISNULL(PISO4.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, xFilial("SF4"))          // SF4.F4_FILIAL
+	oQuery:SetString(nBind++, 'S')                     // SF4.F4_ESTOQUE
+	oQuery:SetString(nBind++, ' ')                     // SF4.D_E_L_E_T_
+	oQuery:SetString(nBind++, cData)                   // PISO4: B9_DATA < cData
+	oQuery:SetString(nBind++, ' ')                     // PISO4: D_E_L_E_T_
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])  // D1_COD >=
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])  // D1_COD <=
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])  // D1_LOCAL >=
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])  // D1_LOCAL <=
+	oQuery:SetString(nBind++, cData)                   // D1_DTDIGIT < dData
+	oQuery:SetString(nBind++, 'D')                     // D1_TIPO = 'D'
+	oQuery:SetString(nBind++, 'LF')                    // D1_ORIGLAN <>
+	oQuery:SetString(nBind++, ' ')                     // SD1.D_E_L_E_T_
+	// AGG_DEVCMP: devolucoes de compras (SD2, D2_TIPO='D') — com PISO5
+	// Ordem: fallback QUANT, fallback CUSTO, SF4, PISO5, faixa, teto, D2_TIPO, ORIGLAN, deleta
+	oQuery:SetString(nBind++, cDtFloor)                // CASE QUANT: ISNULL(PISO5.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, cDtFloor)                // CASE CUSTO: ISNULL(PISO5.B9_DATA_MAX, ?)
+	oQuery:SetString(nBind++, xFilial("SF4"))          // SF4.F4_FILIAL
+	oQuery:SetString(nBind++, 'S')                     // SF4.F4_ESTOQUE
+	oQuery:SetString(nBind++, ' ')                     // SF4.D_E_L_E_T_
+	oQuery:SetString(nBind++, cData)                   // PISO5: B9_DATA < cData
+	oQuery:SetString(nBind++, ' ')                     // PISO5: D_E_L_E_T_
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])  // D2_COD >=
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])  // D2_COD <=
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])  // D2_LOCAL >=
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])  // D2_LOCAL <=
+	oQuery:SetString(nBind++, cData)                   // D2_EMISSAO < dData
+	oQuery:SetString(nBind++, 'D')                     // D2_TIPO = 'D'
+	oQuery:SetString(nBind++, 'LF')                    // D2_ORIGLAN <>
+	oQuery:SetString(nBind++, ' ')                     // SD2.D_E_L_E_T_
+	// WHERE SB2: filiais
+	If lUseSetIn
+		oQuery:SetIn(nBind++, aFiliais)
+	EndIf
+	// WHERE SB2: faixa produto/local e soft-delete
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR01'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR02'][1])
+	oQuery:SetString(nBind++, ' ')
+
+	cAliasAtual := oQuery:OpenAlias()
+
+	While !(cAliasAtual)->(Eof())
+		// nQtd: saldo fisico = entradas - saidas +/- mov.internos + saldo fechamento
+		nQtd   := (cAliasAtual)->CALC_SD1_QUANT - (cAliasAtual)->CALC_SD2_QUANT + (cAliasAtual)->CALC_SD3_QUANT + (cAliasAtual)->B9_QINI ;
+		         + (cAliasAtual)->DEVVEN_QUANT - (cAliasAtual)->DEVCMP_QUANT
+		nTotal := (cAliasAtual)->CALC_SD1_CUSTO - (cAliasAtual)->CALC_SD2_CUSTO + (cAliasAtual)->CALC_SD3_CUSTO + (cAliasAtual)->B9_VINI ;
+		         + (cAliasAtual)->DEVVEN_CUSTO - (cAliasAtual)->DEVCMP_CUSTO
+
+		nUnit  := IIf( nQtd == 0, 0, nTotal / nQtd )
+		// Chave normalizada com RTrim  -  identica a montada no laco do getData.
+		cChave := RTrim((cAliasAtual)->B2_FILIAL) + "|" + RTrim((cAliasAtual)->B2_COD) + "|" + RTrim((cAliasAtual)->B2_LOCAL)
+		jSaldo[cChave] := { nQtd, nUnit, nTotal }
+
+		(cAliasAtual)->(DBSkip())
+	EndDo
+
+	(cAliasAtual)->(DBCloseArea())
+	oQuery:Destroy()
+
+Return jSaldo
+
+/*/{Protheus.doc} ccBpFilIn
+Monta a lista literal de filiais para clausula IN quando ha mais de 50 filiais
+(setIn() do FwExecStatement suporta no maximo 50 itens). Retorna string vazia
+quando lUseSetIn e verdadeiro (nesse caso usa-se o placeholder com setIn()).
+As filiais ja vem no formato SQL (FWxFilial), portanto a lista e segura.
+@param aFiliais , array  , filiais no formato SQL
+@param lUseSetIn, logico , .T. quando <= 50 filiais (usa setIn, nao monta lista)
+@return character, lista literal 'F1','F2',... ou "" quando usa setIn
+@author Squad Entradas
+@since 08/2026
+/*/
+Static Function ccBpFilIn(aFiliais as Array, lUseSetIn as Logical) as Character
+	Local cIn := "" as Character
+	Local nX  := 0 as Numeric
+
+	If !lUseSetIn
+		For nX := 1 to Len(aFiliais)
+			If nX > 1
+				cIn += ","
+			EndIf
+			// CA2050:SUPPRESS - lista construida com FWxFilial(), nao contem input de usuario
+			cIn += "'" + aFiliais[nX] + "'"
+		Next nX
+	EndIf
+
+Return cIn

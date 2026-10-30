@@ -1,0 +1,3 @@
+#INCLUDE "PROTHEUS.CH"
+Function ATFA070P()
+Return

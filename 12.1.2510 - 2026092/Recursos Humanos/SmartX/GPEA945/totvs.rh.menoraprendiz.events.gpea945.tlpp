@@ -1,0 +1,456 @@
+#include "fw-tlpp-core.th"
+#include "protheus.ch"
+#include "FWMVCDEF.ch"
+#include "totvs.framework.model.events.th"
+#include "totvs.rh.menoraprendiz.events.gpea945.ch"
+
+namespace totvs.rh.menoraprendiz.events
+
+Static lIntTAF
+Static lMiddleware
+
+/*/{Protheus.doc} GPEA945Events
+Classe de eventos para Informacoes Complementares Menor Aprendiz
+@type class
+@author caio.kretzer
+@since 12/08/2026
+/*/
+class GPEA945Events
+    public method new() as object
+
+    @beforeUpdateInTransaction()
+    public method beforeUpdateInTransaction(oData, oModel, oError, oSuccess) as logical
+
+    @beforeDeleteInTransaction()
+    public method beforeDeleteInTransaction(oData, oModel, oError, oSuccess) as logical
+EndClass
+
+/*/{Protheus.doc} new
+Inicializa variaveis de Integra??o
+@type method
+@author caio.kretzer
+@since 12/08/2026
+@return object, instancia da classe
+/*/
+Method new() as object class GPEA945Events
+    lIntTAF     := ((SuperGetMv("MV_RHTAF",, .F.) == .T.) .And. Val(SuperGetMv("MV_FASESOC",, " ")) >= 1)
+    lMiddleware := .F.
+
+    If cPaisLoc == "BRA" .And. FindFunction("fVerMW")
+        lMiddleware := fVerMW()
+    EndIf
+Return self
+
+/*/{Protheus.doc} beforeUpdateInTransaction
+Executa validacoes, Integração eSocial e garantia de registro RU2
+@type method
+@author caio.kretzer
+@since 12/08/2026
+@param oData, object, Dados do modelo SmartX
+@param oModel, object, Modelo
+@param oError, object, Objeto de erro
+@param oSuccess, object, Objeto de sucesso
+@return lRet, logical, .T. quando permitido salvar
+/*/
+Method beforeUpdateInTransaction(oData as object, oModel as object, oError as object, oSuccess as object) as logical class GPEA945Events
+    Local lRet          := .T.
+    Local lIntegra      := .F.
+    Local lTpMAp        := .F.
+    Local aTpAlt        := {.F., .F., .F., .F.}
+    Local aErros        := {}
+    Local aArea         := GetArea()
+    Local cVersEnvio    := ""
+    Local cMsgErro      := ""
+    Local cFunBkp       := FunName()
+    Local nTipoErro     := 1
+    Local oLegacyModel  := Nil
+    Local oLegacyRU2    := Nil
+    Local aAvisosSX     := {}
+    Local aErrMsg       := {}
+    Local cMsgSucesso   := ""
+    Local nI            := 1
+    Local cMsgArr       := ""
+
+    If FindFunction("fVersEsoc")
+        fVersEsoc("S2200", .F.,,, @cVersEnvio)
+    EndIf
+
+    lRet := gp945Vld(oData, oError, cVersEnvio)
+
+    If lRet .And. (lIntTAF .Or. lMiddleware)
+
+        gp945PosicionaSRA(oData)
+        
+        oLegacyModel := gp945BuildLegacyModel(oData)
+        oLegacyRU2 := oLegacyModel:GetModel("RU2MASTER")
+
+        gp945DetectaAlteracaoRU2(@lTpMAp, oLegacyRU2, cVersEnvio)
+
+        RegToMemory("SRA",,, .F.)
+
+        lRet := fVerTpAlt(@aTpAlt, lRet, lTpMAp, cVersEnvio)
+
+        If lRet
+            SetFunName("GPEA945")
+            If (aTpAlt[1] .Or. aTpAlt[2])
+                lIntegra := gp945IntAdmiss(oLegacyRU2, cVersEnvio, @aErros, @aAvisosSX)
+            ElseIf aTpAlt[4]
+                lIntegra := gp945Int2206(oLegacyRU2, cVersEnvio, @aErros, @aAvisosSX)
+            EndIf
+            SetFunName(cFunBkp)
+
+            If lIntegra
+                If lMiddleware
+                    cMsgSucesso := STR0001 // "Registro enviado para MIDDLEWARE."
+                Else
+                    cMsgSucesso := STR0002 // "Registro enviado para TAF."
+                EndIf
+
+                If Len(aAvisosSX) > 0
+                    cMsgArr := gp945JoinMessages(aAvisosSX)
+                    If !Empty(cMsgArr)
+                        cMsgSucesso += " "+STR0003+" " + gp945JoinMessages(aAvisosSX) // "Advertências:"
+                    Endif
+                EndIf
+
+                oSuccess:set(200, STR0004, cMsgSucesso) //"Integração eSocial"
+            Else
+                lRet := .F.
+                For nI := 1 To Len(aErros)
+                    If aErros[nI] == "000026"
+                        nTipoErro := 2
+                    EndIf
+                    FeSoc2Err(aErros[nI], @cMsgErro, nTipoErro)
+                    aAdd(aErrMsg, cMsgErro)
+                Next nI
+
+
+                If Len(aErrMsg) > 0
+                    cMsgErro := gp945JoinMessages(aErrMsg)
+                EndIf
+
+                If Empty(cMsgErro)
+                    cMsgErro := STR0005 //"Cadastro não será salvo - rever dados do cadastro e/ou eventos."
+                EndIf
+
+                oError:set(400, STR0004, cMsgErro) // "Integração eSocial"
+            EndIf
+        Else
+            oError:set(400, STR0004, STR0005) // "Integração eSocial" "Cadastro não será salvo - rever dados do cadastro e/ou eventos."
+        EndIf
+        If oLegacyModel != Nil
+            oLegacyModel:DeActivate()
+        EndIf
+        
+    EndIf
+
+    If lRet
+        lRet := gp945SyncRU2(oData, oError)
+    EndIf
+
+    RestArea(aArea)
+Return lRet
+
+/*/{Protheus.doc} beforeDeleteInTransaction
+Valida??o antes da exclus?o
+@type method
+@author caio.kretzer
+@since 12/08/2026
+@param oData, object, Dados do modelo
+@param oModel, object, Modelo
+@param oError, object, Objeto de erro
+@param oSuccess, object, Objeto de sucesso
+@return lRet, logical, .T. quando valido
+/*/
+Method beforeDeleteInTransaction(oData as object, oModel as object, oError as object, oSuccess as object) as logical class GPEA945Events
+
+    Local lRet      := .T.
+    Local aArea     := FwGetArea()
+    Local oJsonData := oData:GetData()
+    Local cFilSRA   := oJsonData["RA_FILIAL"]
+    Local cMatSRA   := oJsonData["RA_MAT"]
+
+    dbSelectArea("RU2")
+    dbSetOrder(1)
+    If !RU2->(dbSeek(xFilial("RU2", cFilSRA) + cMatSRA))
+        oError:set(400, STR0006, STR0007) //"Exclusão do Menor Aprendiz" "Não há dados a serem excluidos. Para incluir dados acesse a opção de Edicão."
+
+        lRet := .F.
+    EndIf
+
+    FwRestArea(aArea)
+Return lRet
+
+
+
+/*/{Protheus.doc} gp945Vld
+Valida campos obrigat?rios condicionais para o eSocial
+@type function
+@author caio.kretzer
+@since 12/08/2026
+@param oData, object, Dados do modelo SmartX
+@param oError, object, Objeto de erro
+@param cVersEnvio, character, Vers?o do layout eSocial
+@return lRet, logical, .T. quando valido
+/*/
+Static Function gp945Vld(oData as object, oError as object, cVersEnvio as character) as logical
+    Local lRet          := .T.
+    Local cEFDAviso     := "0"
+    Local oJsonData     := oData:GetData()
+    Local oRU2Data      := Nil
+    Local cIndMod       := ""
+    Local cTpInsc       := ""
+    Local cNumIns       := ""
+    Local cEntQa        := ""
+
+    If cPaisLoc == "BRA" .And. FindFunction("fEFDAviso")
+        cEFDAviso := fEFDAviso()
+    EndIf
+
+    If oJsonData:HasProperty("RU2")
+        oRU2Data := oJsonData["RU2"]
+    EndIf
+
+    If oRU2Data != Nil
+        cIndMod := oRU2Data["RU2_INDMOD"]
+        cTpInsc := oRU2Data["RU2_TPINSC"]
+        cNumIns := oRU2Data["RU2_NUMINS"]
+        cEntQa  := oRU2Data["RU2_ENTQA"]
+    EndIf
+
+    If cEFDAviso != "2" .And. cVersEnvio >= "9.2"
+        If cIndMod == "2" .And. (Empty(cTpInsc) .Or. Empty(cNumIns))
+            If cEFDAviso == "1"
+                oError:set(400, STR0008, STR0009) // "Validação do Menor Aprendiz" "Campos Tipo de Inscricao (RU2_TPINSC) e Numero de Inscricao (RU2_NUMINS) são obrigatórios quando Ind. Modalidade = 2."
+
+                lRet := .F.
+            EndIf
+        ElseIf cIndMod == "1" .And. Empty(cEntQa)
+            If cEFDAviso == "1"
+                oError:set(400, STR0008, STR0010) // "Validação do Menor Aprendiz" "Campo CNPJ Ent.Qa. (RU2_ENTQA) é obrigatório quando Ind. Modalidade = 1."
+                lRet := .F.
+            EndIf
+        EndIf
+    EndIf
+
+    If lRet
+        If cIndMod == "2" .And. !Empty(cEntQa)
+            oError:set(400, STR0008, STR0011) // "Validação do Menor Aprendiz" "Quando Contr. Indireta,o campo CNPJ Ent.Qa. não deve ser preenchido"
+            lRet := .F.
+        ElseIf cIndMod == "1" .And. (!Empty(cTpInsc) .Or. !Empty(cNumIns))
+            oError:set(400, STR0008, STR0012) // "Quando Contr. Direta, os campos Tipo de Inscricao (RU2_TPINSC) e Numero de Inscricao (RU2_NUMINS) não devem ser preenchidos."
+            lRet := .F.
+        EndIf
+    Endif
+Return lRet
+
+/*/{Protheus.doc} gp945SyncRU2
+Sincroniza RU2 com dados do oData (insert/update)
+@type function
+@author caio.kretzer
+@since 12/08/2026
+@param oData, object, Dados do modelo SmartX
+@param oError, object, Objeto de erro
+@return lRet, logical, .T. quando registro esta consistente
+/*/
+Static Function gp945SyncRU2(oData as object, oError as object) as logical
+    Local lRet          := .T.
+    Local aRU2Fields    := {}
+    Local cField        := ""
+    Local nX            := 0
+    Local oJsonData     := oData:GetData()
+    Local oRU2Data      := Nil
+    Local lNewRU2       := .F.
+    Local cFilSRA       := oJsonData["RA_FILIAL"]
+    Local cMatSRA       := oJsonData["RA_MAT"]
+
+    If oJsonData:HasProperty("RU2")
+        oRU2Data := oJsonData["RU2"]
+    EndIf
+
+    dbSelectArea("RU2")
+    dbSetOrder(1)
+    If !RU2->(dbSeek(xFilial("RU2", cFilSRA) + cMatSRA))
+        lNewRU2 := .T.
+    EndIf
+
+    If lNewRU2
+
+        RecLock("RU2", .T.)
+        RU2->RU2_FILIAL := xFilial("RU2", cFilSRA)
+        RU2->RU2_MAT    := cMatSRA
+        aRU2Fields      := FWSX3Util():GetAllFields("RU2", .F.)
+
+        For nX := 1 To Len(aRU2Fields)
+            cField := aRU2Fields[nX]
+            If cField != "RU2_FILIAL" .And. cField != "RU2_MAT" .And. oRU2Data != Nil .And. oRU2Data:HasProperty(cField)
+                RU2->&(cField) := oRU2Data[cField]
+            EndIf
+        Next nX
+
+        RU2->(MsUnlock())
+        RU2->(dbCommit())
+    Endif
+Return lRet
+
+/*/{Protheus.doc} gp945DetectaAlteracaoRU2
+Replica a verificacao de alteracao do legado para RU2
+@type function
+@author caio.kretzer
+@since 12/08/2026
+@param lTpMAp, logical, Retorno de alteracao RU2
+@param oMdlRU2, object, Modelo legado RU2
+@param cVersEnvio, character, Versao de envio eSocial
+/*/
+Static Function gp945DetectaAlteracaoRU2(lTpMAp as logical, oMdlRU2 as object, cVersEnvio as character)
+    Local aCpos       := {"RU2_TPINSC", "RU2_NUMINS", "RU2_INDMOD", "RU2_ENTQA", "RU2_ATPR"}
+    Local cCpoTab     := ""
+    Local cCpoMod     := ""
+    Local nI          := 0
+    Local cFilRU2     := oMdlRU2:GetValue("RU2_FILIAL")
+    Local cMatRU2     := oMdlRU2:GetValue("RU2_MAT")
+
+    Default lTpMAp := .F.
+    Default cVersEnvio := ""
+
+    dbSelectArea("RU2")
+    dbSetOrder(1)
+
+    If !RU2->(dbSeek(xFilial("RU2", cFilRU2) + cMatRU2))
+        lTpMAp := .T.
+        Return
+    EndIf
+
+    For nI := 1 To Len(aCpos)
+        cCpoTab := RU2->&(aCpos[nI])
+        cCpoMod := oMdlRU2:GetValue(aCpos[nI])
+        If cCpoTab != cCpoMod
+            lTpMAp := .T.
+            Exit
+        EndIf
+    Next nI
+Return
+
+/*/{Protheus.doc} gp945PosicionaSRA
+Posiciona alias SRA para regras de Integra??o eSocial
+@type function
+@author caio.kretzer
+@since 12/08/2026
+@param oData, object, Dados do modelo SmartX
+@return lRet, logical, .T. quando SRA localizado
+/*/
+Static Function gp945PosicionaSRA(oData as object) as logical
+    Local oJsonData := oData:GetData()
+    Local cFilSRA   := oJsonData["RA_FILIAL"]
+    Local cMatSRA   := oJsonData["RA_MAT"]
+    Local lRet      := .F.
+
+    dbSelectArea("SRA")
+    SRA->(dbSetOrder(1))
+    lRet := SRA->(dbSeek(cFilSRA + cMatSRA))
+Return lRet
+
+/*/{Protheus.doc} gp945BuildLegacyModel
+Monta LegacyModel para chamadas de fIntAdmiss/fInt2206
+@type function
+@author caio.kretzer
+@since 02/09/2026
+@param oData, object, Dados SmartX
+@return oLegacyModel, object, Modelo legado GPEA945
+/*/
+Static Function gp945BuildLegacyModel(oData as object) as object
+    Local oJsonData     := oData:GetData()
+    Local oLegacyModel  := FWLoadModel("GPEA945")
+    Local oLegacyRU2    := Nil
+    Local oRU2Data      := Nil
+    Local aFields       := {}
+    Local cField        := ""
+    Local xValue        := Nil
+    Local nField        := 0
+    Local cFilSRA       := oJsonData["RA_FILIAL"]
+    Local cMatSRA       := oJsonData["RA_MAT"]
+
+    oLegacyModel:SetOperation(MODEL_OPERATION_UPDATE)
+    oLegacyModel:Activate()
+    oLegacyRU2 := oLegacyModel:GetModel("RU2MASTER")
+    aFields    := oLegacyRU2:GetStruct():GetFields()
+
+    If oJsonData:HasProperty("RU2")
+        oRU2Data := oJsonData["RU2"]
+    EndIf
+
+    oLegacyRU2:LoadValue("RU2_FILIAL", xFilial("RU2", cFilSRA))
+    oLegacyRU2:LoadValue("RU2_MAT", cMatSRA)
+
+    If oRU2Data != Nil
+        For nField := 1 To Len(aFields)
+            cField := aFields[nField][3]
+            If oRU2Data:HasProperty(cField)
+                xValue := oRU2Data[cField]
+                oLegacyRU2:LoadValue(cField, xValue)
+            EndIf
+        Next nField
+    EndIf
+Return oLegacyModel
+
+/*/{Protheus.doc} gp945IntAdmiss
+Chama funcao padrao fIntAdmiss com LegacyModel de RU2
+@type function
+@author caio.kretzer
+@since 02/09/2026
+@param oLegacyRU2, object, Modelo legado RU2
+@param cVersEnvio, character, Versao do leiaute eSocial
+@param aErros, array, Retorno de erros
+@param aAvisosSX, array, Retorno de avisos Smart X
+@return lRet, logical, Retorno da integracao
+/*/
+Static Function gp945IntAdmiss(oLegacyRU2 as object, cVersEnvio as character, aErros as array, aAvisosSX as array) as logical
+    Local lRet := .F.
+
+    Default aErros := {}
+    Default aAvisosSX := {}
+
+    lRet := fIntAdmiss("SRA", Nil, 3, "S2200", Nil, Nil, Nil, oLegacyRU2, Nil, @aErros, cVersEnvio, Nil, Nil, Nil, Nil, Nil, Nil, Nil, .T., Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, .T., @aAvisosSX)
+Return lRet
+
+/*/{Protheus.doc} gp945Int2206
+Chama funcao padrao fInt2206 com LegacyModel de RU2
+@type function
+@author caio.kretzer
+@since 02/09/2026
+@param oLegacyRU2, object, Modelo legado RU2
+@param cVersEnvio, character, Versao do leiaute eSocial
+@param aErros, array, Retorno de erros
+@param aAvisosSX, array, Retorno de avisos Smart X
+@return lRet, logical, Retorno da integracao
+/*/
+Static Function gp945Int2206(oLegacyRU2 as object, cVersEnvio as character, aErros as array, aAvisosSX as array) as logical
+    Local lRet := .F.
+
+    Default aErros := {}
+    Default aAvisosSX := {}
+
+    lRet := fInt2206("SRA", Nil, 4, "S2206", SRA->RA_FILIAL, Nil, Nil, Nil, Nil, oLegacyRU2, cVersEnvio, Nil, Nil, Nil, Nil, @aErros, .T., Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, Nil, .F., Nil, Nil, .T., @aAvisosSX)
+Return lRet
+
+/*/{Protheus.doc} gp945JoinMessages
+Concatena mensagens de aviso em uma string unica
+@type function
+@author caio.kretzer
+@since 03/09/2026
+@param aMsgs, array, Lista de mensagens
+@return cMsgs, character, Mensagens concatenadas
+/*/
+Static Function gp945JoinMessages(aMsgs as array) as character
+    Local cMsgs := ""
+    Local nI    := 0
+
+    For nI := 1 To Len(aMsgs)
+        If !Empty(aMsgs[nI])
+            If !Empty(cMsgs)
+                cMsgs += " "
+            EndIf
+            cMsgs += aMsgs[nI]
+        EndIf
+    Next nI
+Return cMsgs

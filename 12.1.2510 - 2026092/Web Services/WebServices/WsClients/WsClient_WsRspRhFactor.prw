@@ -1,0 +1,439 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "apwebsrv.ch"
+
+/* ===============================================================================
+WSDL Location    http://localhost:8081/ws/RHFACTORS.apw?WSDL
+Gerado em        10/01/20 10:46:20
+Observa��es      C�digo-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Altera��es neste arquivo podem causar funcionamento incorreto
+                 e ser�o perdidas caso o c�digo-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _DISZMHH ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSRHFACTORS
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSRHFACTORS
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD BRWFACTORS
+	WSMETHOD BRWHABILITY
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   cUSERCODE                 AS string
+	WSDATA   cPOSITIONCODE             AS string
+	WSDATA   cCOSTCENTERCODE           AS string
+	WSDATA   oWSBRWFACTORSRESULT       AS RHFACTORS_ARRAYOFFACTORSVIEW
+	WSDATA   oWSBRWHABILITYRESULT      AS RHFACTORS_ARRAYOFHABILITYVIEW
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSRHFACTORS
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O C�digo-Fonte Client atual requer os execut�veis do Protheus Build [7.00.191205P-20200424] ou superior. Atualize o Protheus ou gere o C�digo-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSRHFACTORS
+	::oWSBRWFACTORSRESULT := RHFACTORS_ARRAYOFFACTORSVIEW():New()
+	::oWSBRWHABILITYRESULT := RHFACTORS_ARRAYOFHABILITYVIEW():New()
+Return
+
+WSMETHOD RESET WSCLIENT WSRHFACTORS
+	::cUSERCODE          := NIL 
+	::cPOSITIONCODE      := NIL 
+	::cCOSTCENTERCODE    := NIL 
+	::oWSBRWFACTORSRESULT := NIL 
+	::oWSBRWHABILITYRESULT := NIL 
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSRHFACTORS
+Local oClone := WSRHFACTORS():New()
+	oClone:_URL          := ::_URL 
+	oClone:cUSERCODE     := ::cUSERCODE
+	oClone:cPOSITIONCODE := ::cPOSITIONCODE
+	oClone:cCOSTCENTERCODE := ::cCOSTCENTERCODE
+	oClone:oWSBRWFACTORSRESULT :=  IIF(::oWSBRWFACTORSRESULT = NIL , NIL ,::oWSBRWFACTORSRESULT:Clone() )
+	oClone:oWSBRWHABILITYRESULT :=  IIF(::oWSBRWHABILITYRESULT = NIL , NIL ,::oWSBRWHABILITYRESULT:Clone() )
+Return oClone
+
+// WSDL Method BRWFACTORS of Service WSRHFACTORS
+
+WSMETHOD BRWFACTORS WSSEND cUSERCODE,cPOSITIONCODE,cCOSTCENTERCODE WSRECEIVE oWSBRWFACTORSRESULT WSCLIENT WSRHFACTORS
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<BRWFACTORS xmlns="http://localhost:8081/">'
+cSoap += WSSoapValue("USERCODE", ::cUSERCODE, cUSERCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("POSITIONCODE", ::cPOSITIONCODE, cPOSITIONCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("COSTCENTERCODE", ::cCOSTCENTERCODE, cCOSTCENTERCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</BRWFACTORS>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8081/BRWFACTORS",; 
+	"DOCUMENT","http://localhost:8081/",,"1.031217",; 
+	"http://localhost:8081/ws/RHFACTORS.apw")
+
+::Init()
+::oWSBRWFACTORSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_BRWFACTORSRESPONSE:_BRWFACTORSRESULT","ARRAYOFFACTORSVIEW",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method BRWHABILITY of Service WSRHFACTORS
+
+WSMETHOD BRWHABILITY WSSEND cUSERCODE,cPOSITIONCODE,cCOSTCENTERCODE WSRECEIVE oWSBRWHABILITYRESULT WSCLIENT WSRHFACTORS
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<BRWHABILITY xmlns="http://localhost:8081/">'
+cSoap += WSSoapValue("USERCODE", ::cUSERCODE, cUSERCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("POSITIONCODE", ::cPOSITIONCODE, cPOSITIONCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("COSTCENTERCODE", ::cCOSTCENTERCODE, cCOSTCENTERCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</BRWHABILITY>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8081/BRWHABILITY",; 
+	"DOCUMENT","http://localhost:8081/",,"1.031217",; 
+	"http://localhost:8081/ws/RHFACTORS.apw")
+
+::Init()
+::oWSBRWHABILITYRESULT:SoapRecv( WSAdvValue( oXmlRet,"_BRWHABILITYRESPONSE:_BRWHABILITYRESULT","ARRAYOFHABILITYVIEW",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure ARRAYOFFACTORSVIEW
+
+WSSTRUCT RHFACTORS_ARRAYOFFACTORSVIEW
+	WSDATA   oWSFACTORSVIEW            AS RHFACTORS_FACTORSVIEW OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHFACTORS_ARRAYOFFACTORSVIEW
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHFACTORS_ARRAYOFFACTORSVIEW
+	::oWSFACTORSVIEW       := {} // Array Of  RHFACTORS_FACTORSVIEW():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHFACTORS_ARRAYOFFACTORSVIEW
+	Local oClone := RHFACTORS_ARRAYOFFACTORSVIEW():NEW()
+	oClone:oWSFACTORSVIEW := NIL
+	If ::oWSFACTORSVIEW <> NIL 
+		oClone:oWSFACTORSVIEW := {}
+		aEval( ::oWSFACTORSVIEW , { |x| aadd( oClone:oWSFACTORSVIEW , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHFACTORS_ARRAYOFFACTORSVIEW
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_FACTORSVIEW","FACTORSVIEW",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSFACTORSVIEW , RHFACTORS_FACTORSVIEW():New() )
+			::oWSFACTORSVIEW[len(::oWSFACTORSVIEW)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFHABILITYVIEW
+
+WSSTRUCT RHFACTORS_ARRAYOFHABILITYVIEW
+	WSDATA   oWSHABILITYVIEW           AS RHFACTORS_HABILITYVIEW OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHFACTORS_ARRAYOFHABILITYVIEW
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHFACTORS_ARRAYOFHABILITYVIEW
+	::oWSHABILITYVIEW      := {} // Array Of  RHFACTORS_HABILITYVIEW():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHFACTORS_ARRAYOFHABILITYVIEW
+	Local oClone := RHFACTORS_ARRAYOFHABILITYVIEW():NEW()
+	oClone:oWSHABILITYVIEW := NIL
+	If ::oWSHABILITYVIEW <> NIL 
+		oClone:oWSHABILITYVIEW := {}
+		aEval( ::oWSHABILITYVIEW , { |x| aadd( oClone:oWSHABILITYVIEW , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHFACTORS_ARRAYOFHABILITYVIEW
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_HABILITYVIEW","HABILITYVIEW",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSHABILITYVIEW , RHFACTORS_HABILITYVIEW():New() )
+			::oWSHABILITYVIEW[len(::oWSHABILITYVIEW)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure FACTORSVIEW
+
+WSSTRUCT RHFACTORS_FACTORSVIEW
+	WSDATA   cDEGREECODE               AS string
+	WSDATA   cDEGREEDESCRIPTION        AS string
+	WSDATA   cFACTORCODE               AS string
+	WSDATA   cFACTORDESCRIPTION        AS string
+	WSDATA   nFACTORSCORE              AS float OPTIONAL
+	WSDATA   cGROUPCODE                AS string
+	WSDATA   cGROUPDESCRIPTION         AS string
+	WSDATA   cPOSITIONCODE             AS string
+	WSDATA   cPOSITIONDESCRIPTION      AS string
+	WSDATA   oWSUSERFIELDS             AS RHFACTORS_ARRAYOFUSERFIELD OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHFACTORS_FACTORSVIEW
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHFACTORS_FACTORSVIEW
+Return
+
+WSMETHOD CLONE WSCLIENT RHFACTORS_FACTORSVIEW
+	Local oClone := RHFACTORS_FACTORSVIEW():NEW()
+	oClone:cDEGREECODE          := ::cDEGREECODE
+	oClone:cDEGREEDESCRIPTION   := ::cDEGREEDESCRIPTION
+	oClone:cFACTORCODE          := ::cFACTORCODE
+	oClone:cFACTORDESCRIPTION   := ::cFACTORDESCRIPTION
+	oClone:nFACTORSCORE         := ::nFACTORSCORE
+	oClone:cGROUPCODE           := ::cGROUPCODE
+	oClone:cGROUPDESCRIPTION    := ::cGROUPDESCRIPTION
+	oClone:cPOSITIONCODE        := ::cPOSITIONCODE
+	oClone:cPOSITIONDESCRIPTION := ::cPOSITIONDESCRIPTION
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHFACTORS_FACTORSVIEW
+	Local oNode10
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cDEGREECODE        :=  WSAdvValue( oResponse,"_DEGREECODE","string",NIL,"Property cDEGREECODE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cDEGREEDESCRIPTION :=  WSAdvValue( oResponse,"_DEGREEDESCRIPTION","string",NIL,"Property cDEGREEDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cFACTORCODE        :=  WSAdvValue( oResponse,"_FACTORCODE","string",NIL,"Property cFACTORCODE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cFACTORDESCRIPTION :=  WSAdvValue( oResponse,"_FACTORDESCRIPTION","string",NIL,"Property cFACTORDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::nFACTORSCORE       :=  WSAdvValue( oResponse,"_FACTORSCORE","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cGROUPCODE         :=  WSAdvValue( oResponse,"_GROUPCODE","string",NIL,"Property cGROUPCODE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cGROUPDESCRIPTION  :=  WSAdvValue( oResponse,"_GROUPDESCRIPTION","string",NIL,"Property cGROUPDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cPOSITIONCODE      :=  WSAdvValue( oResponse,"_POSITIONCODE","string",NIL,"Property cPOSITIONCODE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cPOSITIONDESCRIPTION :=  WSAdvValue( oResponse,"_POSITIONDESCRIPTION","string",NIL,"Property cPOSITIONDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	oNode10 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode10 != NIL
+		::oWSUSERFIELDS := RHFACTORS_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode10)
+	EndIf
+Return
+
+// WSDL Data Structure HABILITYVIEW
+
+WSSTRUCT RHFACTORS_HABILITYVIEW
+	WSDATA   cCOMPETENCECODE           AS string OPTIONAL
+	WSDATA   cCOMPETENCEDESCRIPTION    AS string OPTIONAL
+	WSDATA   cCOMPETENCEITEMCODE       AS string OPTIONAL
+	WSDATA   cCOMPETENCEITEMDESCRIPTION AS string OPTIONAL
+	WSDATA   cHABILITYCODE             AS string
+	WSDATA   cHABILITYDESCRIPTION      AS string
+	WSDATA   cIMPORTANCELEVELCODE      AS string OPTIONAL
+	WSDATA   cIMPORTANCELEVELDESCRIPTION AS string OPTIONAL
+	WSDATA   cIMPORTLEVELITEMCODE      AS string OPTIONAL
+	WSDATA   cIMPORTLEVELITEMDESCRIPTION AS string OPTIONAL
+	WSDATA   nIMPORTLEVELITEMVALUE     AS integer OPTIONAL
+	WSDATA   cSCALECODE                AS string OPTIONAL
+	WSDATA   cSCALEDESCRIPTION         AS string OPTIONAL
+	WSDATA   cSCALEITEMCODE            AS string OPTIONAL
+	WSDATA   cSCALEITEMDESCRIPTION     AS string OPTIONAL
+	WSDATA   nSCALEITEMVALUE           AS integer OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHFACTORS_ARRAYOFUSERFIELD OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHFACTORS_HABILITYVIEW
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHFACTORS_HABILITYVIEW
+Return
+
+WSMETHOD CLONE WSCLIENT RHFACTORS_HABILITYVIEW
+	Local oClone := RHFACTORS_HABILITYVIEW():NEW()
+	oClone:cCOMPETENCECODE      := ::cCOMPETENCECODE
+	oClone:cCOMPETENCEDESCRIPTION := ::cCOMPETENCEDESCRIPTION
+	oClone:cCOMPETENCEITEMCODE  := ::cCOMPETENCEITEMCODE
+	oClone:cCOMPETENCEITEMDESCRIPTION := ::cCOMPETENCEITEMDESCRIPTION
+	oClone:cHABILITYCODE        := ::cHABILITYCODE
+	oClone:cHABILITYDESCRIPTION := ::cHABILITYDESCRIPTION
+	oClone:cIMPORTANCELEVELCODE := ::cIMPORTANCELEVELCODE
+	oClone:cIMPORTANCELEVELDESCRIPTION := ::cIMPORTANCELEVELDESCRIPTION
+	oClone:cIMPORTLEVELITEMCODE := ::cIMPORTLEVELITEMCODE
+	oClone:cIMPORTLEVELITEMDESCRIPTION := ::cIMPORTLEVELITEMDESCRIPTION
+	oClone:nIMPORTLEVELITEMVALUE := ::nIMPORTLEVELITEMVALUE
+	oClone:cSCALECODE           := ::cSCALECODE
+	oClone:cSCALEDESCRIPTION    := ::cSCALEDESCRIPTION
+	oClone:cSCALEITEMCODE       := ::cSCALEITEMCODE
+	oClone:cSCALEITEMDESCRIPTION := ::cSCALEITEMDESCRIPTION
+	oClone:nSCALEITEMVALUE      := ::nSCALEITEMVALUE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHFACTORS_HABILITYVIEW
+	Local oNode17
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOMPETENCECODE    :=  WSAdvValue( oResponse,"_COMPETENCECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOMPETENCEDESCRIPTION :=  WSAdvValue( oResponse,"_COMPETENCEDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOMPETENCEITEMCODE :=  WSAdvValue( oResponse,"_COMPETENCEITEMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOMPETENCEITEMDESCRIPTION :=  WSAdvValue( oResponse,"_COMPETENCEITEMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHABILITYCODE      :=  WSAdvValue( oResponse,"_HABILITYCODE","string",NIL,"Property cHABILITYCODE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cHABILITYDESCRIPTION :=  WSAdvValue( oResponse,"_HABILITYDESCRIPTION","string",NIL,"Property cHABILITYDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cIMPORTANCELEVELCODE :=  WSAdvValue( oResponse,"_IMPORTANCELEVELCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cIMPORTANCELEVELDESCRIPTION :=  WSAdvValue( oResponse,"_IMPORTANCELEVELDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cIMPORTLEVELITEMCODE :=  WSAdvValue( oResponse,"_IMPORTLEVELITEMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cIMPORTLEVELITEMDESCRIPTION :=  WSAdvValue( oResponse,"_IMPORTLEVELITEMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nIMPORTLEVELITEMVALUE :=  WSAdvValue( oResponse,"_IMPORTLEVELITEMVALUE","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cSCALECODE         :=  WSAdvValue( oResponse,"_SCALECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSCALEDESCRIPTION  :=  WSAdvValue( oResponse,"_SCALEDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSCALEITEMCODE     :=  WSAdvValue( oResponse,"_SCALEITEMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSCALEITEMDESCRIPTION :=  WSAdvValue( oResponse,"_SCALEITEMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nSCALEITEMVALUE    :=  WSAdvValue( oResponse,"_SCALEITEMVALUE","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	oNode17 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode17 != NIL
+		::oWSUSERFIELDS := RHFACTORS_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode17)
+	EndIf
+Return
+
+// WSDL Data Structure ARRAYOFUSERFIELD
+
+WSSTRUCT RHFACTORS_ARRAYOFUSERFIELD
+	WSDATA   oWSUSERFIELD              AS RHFACTORS_USERFIELD OPTIONAL
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHFACTORS_ARRAYOFUSERFIELD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHFACTORS_ARRAYOFUSERFIELD
+	::oWSUSERFIELD         := {} // Array Of  RHFACTORS_USERFIELD():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHFACTORS_ARRAYOFUSERFIELD
+	Local oClone := RHFACTORS_ARRAYOFUSERFIELD():NEW()
+	oClone:oWSUSERFIELD := NIL
+	If ::oWSUSERFIELD <> NIL 
+		oClone:oWSUSERFIELD := {}
+		aEval( ::oWSUSERFIELD , { |x| aadd( oClone:oWSUSERFIELD , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHFACTORS_ARRAYOFUSERFIELD
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_USERFIELD","USERFIELD",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSUSERFIELD , RHFACTORS_USERFIELD():New() )
+			::oWSUSERFIELD[len(::oWSUSERFIELD)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure USERFIELD
+
+WSSTRUCT RHFACTORS_USERFIELD
+	WSDATA   cUSERCOMBOBOX             AS string OPTIONAL
+	WSDATA   nUSERDEC                  AS integer OPTIONAL
+	WSDATA   cUSERF3                   AS string OPTIONAL
+	WSDATA   cUSERNAME                 AS string
+	WSDATA   lUSEROBLIG                AS boolean OPTIONAL
+	WSDATA   cUSERPICTURE              AS string OPTIONAL
+	WSDATA   nUSERSIZE                 AS integer OPTIONAL
+	WSDATA   cUSERTAG                  AS string OPTIONAL
+	WSDATA   cUSERTITLE                AS string OPTIONAL
+	WSDATA   cUSERTYPE                 AS string
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHFACTORS_USERFIELD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHFACTORS_USERFIELD
+Return
+
+WSMETHOD CLONE WSCLIENT RHFACTORS_USERFIELD
+	Local oClone := RHFACTORS_USERFIELD():NEW()
+	oClone:cUSERCOMBOBOX        := ::cUSERCOMBOBOX
+	oClone:nUSERDEC             := ::nUSERDEC
+	oClone:cUSERF3              := ::cUSERF3
+	oClone:cUSERNAME            := ::cUSERNAME
+	oClone:lUSEROBLIG           := ::lUSEROBLIG
+	oClone:cUSERPICTURE         := ::cUSERPICTURE
+	oClone:nUSERSIZE            := ::nUSERSIZE
+	oClone:cUSERTAG             := ::cUSERTAG
+	oClone:cUSERTITLE           := ::cUSERTITLE
+	oClone:cUSERTYPE            := ::cUSERTYPE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHFACTORS_USERFIELD
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cUSERCOMBOBOX      :=  WSAdvValue( oResponse,"_USERCOMBOBOX","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nUSERDEC           :=  WSAdvValue( oResponse,"_USERDEC","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cUSERF3            :=  WSAdvValue( oResponse,"_USERF3","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUSERNAME          :=  WSAdvValue( oResponse,"_USERNAME","string",NIL,"Property cUSERNAME as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lUSEROBLIG         :=  WSAdvValue( oResponse,"_USEROBLIG","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+	::cUSERPICTURE       :=  WSAdvValue( oResponse,"_USERPICTURE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nUSERSIZE          :=  WSAdvValue( oResponse,"_USERSIZE","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cUSERTAG           :=  WSAdvValue( oResponse,"_USERTAG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUSERTITLE         :=  WSAdvValue( oResponse,"_USERTITLE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUSERTYPE          :=  WSAdvValue( oResponse,"_USERTYPE","string",NIL,"Property cUSERTYPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return

@@ -1,0 +1,347 @@
+#include "tlpp-core.th"
+#include "tbiconn.ch"
+#include "totvs.ch"
+#include "fwmvcdef.ch"
+
+USING NAMESPACE totvs.protheus.backoffice.techfin.util
+USING NAMESPACE totvs.protheus.backoffice.techfin.duplicataescritural.config.dados
+
+/*/{Protheus.doc} DupesEscrituracaoExecuteResponseV1MessageReader    
+    Classe de Integração Duplicata Escritural
+    Retorno da tentativa de escrituração do título.
+
+    @type class
+    @author Squad TechFin
+    @since 3/28/2026
+/*/
+class DupesEscrituracaoExecuteResponseV1MessageReader
+
+    data jMessage as json
+    data cMock    as character
+    data lMock    as logical
+
+    public method new()  constructor
+    public method read() as logical
+    public method mock()
+
+end class
+
+/*/{Protheus.doc} DupesEscrituracaoExecuteResponseV1MessageReader::New
+    Método construtor da classe
+    @type method
+    @author Squad TechFin
+    @since 3/28/2026
+/*/
+method new() class DupesEscrituracaoExecuteResponseV1MessageReader
+    ::jMessage := JsonObject():new()
+    ::cMock    := ""
+    ::lMock    := .F.
+return Self
+/*/{Protheus.doc} DupesEscrituracaoExecuteResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 3/28/2026
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class DupesEscrituracaoExecuteResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} DupesEscrituracaoExecuteResponseV1MessageReader::read
+    Responsável pela leitura e processamento da mensagem.
+    @type method
+    @author Squad TechFin
+    @since 3/28/2025
+    @param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+    @return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as logical class DupesEscrituracaoExecuteResponseV1MessageReader
+
+    local lSuccess := .F. as logical
+    local cCompany := ""  as character
+    local cBranch  := ""  as character
+    local cPayload := ""  as character
+    local cDecoded := ""  as character
+    local cIdMsg   := ""  as character
+    local aIdent   := {}  as array
+
+    cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+	cDecoded := DecodeUTF8(cPayload)
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+    if ::jMessage:FromJSON(cPayload) == NIL
+        aIdent := StrTOKArr2(::jMessage["data"]["erpRequestId"], "|", .T.)//"erpRequestId": "cEmpAnt|cFilAnt|requestId"
+        if Len(aIdent) == 3
+            cCompany := aIdent[1]
+            cBranch  := aIdent[2]     
+            cIdMsg   := aIdent[3]                 
+            lSuccess := StartJob("TFDEscrit", GetEnvServer(), .T., cCompany, cBranch, cPayload, ::jMessage["data"]:toJson(), cIdMsg)
+        endIF
+    endIf
+    FwFreeObj(::jMessage)
+return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} TFDEscrit
+    Atualiza status da escrituração e transfere título de carteira
+    @type function
+    @author Squad TechFin
+    @since 3/28/2026
+    @param cCompany, character, Grupo Empresa
+    @param cBranch , character, Filial
+    @param cPayload, character, mensagem recebida    
+    @param cData   , character, JSON do campo data da mensagem
+    @param cIdMsg  , character, Id da mensagem de original
+    @return logical , indica que processo foi realizado
+/*/
+function TFDEscrit(cCompany as character, cBranch as character, cPayload as character, cData as character, cIdMsg as character) as logical    
+    local nX            := 0                    as numeric
+    local nY            := 0                    as numeric
+    local cErroTrf      := ""                   as character    
+    local cStatus       := ""                   as character    
+    local cOcorrencia   := ""                   as character
+    local cCarteira     := ""                   as character
+    local cLista        := ""                   as character
+    local lTransfere    := .F.                  as logical
+    local lCenarioChave := .F.                  as logical
+    local lFoundARP     := .F.                  as logical
+    local lFoundFK7     := .F.                  as logical
+    local lFoundSE1     := .F.                  as logical
+    local oModel        := nil                  as object
+    local oMdlMaster    := nil                  as object
+    local oSmartUtil    := nil                  as object
+    local jData         := JsonObject():New()   as json
+    local jAux          := JsonObject():New()   as json
+    local cBloqueio     := "2"                  as character
+    local jConfig       := JsonObject():new()   as jSon 
+    local aListas       := { ;
+        { 'lista_itens_processados', '2', '002' }, ;
+        { 'lista_itens_invalidos'  , '5', '003' }  ;
+    } as array
+
+    RPCSetType(3)
+    RPCSetEnv(cCompany, cBranch,,,'FIN') 
+    
+    jData:fromJson(cData)
+    lCenarioChave := ( AllTrim(jData["tipo_escrituracao"]) == "ESCRITURACAO_DUPLICATA_CHAVE" )
+    cCarteira    := SuperGetMv( "MV_TFDCART", .F., "0")
+    lTransfere   := SuperGetMv( "MV_TFDTRAN", .F., .F.)
+    oSmartUtil   := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+    jConfig:fromJson(getDefault())
+    If jConfig["parametros"]["bloqueiaTitulos"]
+        cBloqueio := "1"
+    EndIf
+
+    For nX := 1 to Len(aListas)
+        cLista      := aListas[nX][1]
+        cStatus     := aListas[nX][2]
+        cOcorrencia := aListas[nX][3]
+
+        If jData:hasProperty(cLista)
+
+            jAux := jData[cLista]
+            dbSelectArea('ARP')
+            dbSetOrder(1)
+
+            For nY := 1 to Len(jAux)
+                cErroTrf  := ""
+                lFoundARP := ARP->(dbSeek(FwxFilial('ARP') + jAux[nY]["erpInstallmentId"]))
+
+                If oModel == Nil
+                    oModel := FWLoadModel("totvs.protheus.backoffice.techfin.duplicataescritural.monitor.duplicatasMonitor")
+                EndIf
+
+                //-- Atualiza status: 1=Processando;2=Escriturado;3=Baixado;4=Baixa Parcial;5=Erro;6=Cancelado
+                If lFoundARP .AND. ARP->ARP_STATUS $ "1;5;6"
+
+                    Begin Transaction
+                        oModel:SetOperation(MODEL_OPERATION_UPDATE)
+                        oModel:GetModel('ARQDETAIL'):SetOptional(.T.)
+                        oModel:Activate()
+                        oMdlMaster := oModel:GetModel('ARPMASTER')
+                        oMdlMaster:SetValue("ARP_STATUS", cStatus)
+
+                        If !(oModel:VldData() .and. oModel:CommitData())
+                            oSmartUtil:addLogMSG("error", "Model validation (ARP_IDDOC):" + jAux[nY]["erpInstallmentId"], TFDModelError(oModel))
+                            DisarmTransaction()
+                            Break
+                        Else
+                            If cStatus == '2' .And. lTransfere .And. !Empty(cCarteira)
+                                //-- Transfere título para carteira Duplicatas
+                                If !Empty( cErroTrf := TFDTrfDup(cCarteira) )
+                                    oSmartUtil:addLogMSG("error", "FINA060 validation (ARP_IDDOC):" + jAux[nY]["erpInstallmentId"], cErroTrf)
+                                    DisarmTransaction()
+                                    Break
+                                EndIf
+                            EndIf
+
+                            If Empty(cErroTrf) // Só grava ocorrência se não houve erro de transferência
+                                TFDRegOcorrencia(jAux[nY], cOcorrencia)
+                            EndIf
+                        EndIf
+                    End Transaction
+
+                    oModel:DeActivate()
+
+                ElseIf !lFoundARP .AND. lCenarioChave
+                    //-- Parcela sem registro ARP no cenário ESCRITURACAO_DUPLICATA_CHAVE
+                    FK7->(dbSetOrder(1))
+                    lFoundFK7 := FK7->(msSeek(FwxFilial('FK7') + jAux[nY]["erpInstallmentId"]))
+                    
+                    If !lFoundFK7
+                        oSmartUtil:addLogMSG("error", "Parcela FK7 não localizada (FK7_IDDOC): " + jAux[nY]["erpInstallmentId"])
+                        Loop
+                    EndIf
+                    
+                    SE1->(dbSetOrder(1))
+                    lFoundSE1 := SE1->(msSeek(FK7->(FK7_FILTIT+FK7_PREFIX+FK7_NUM+FK7_PARCEL+FK7_TIPO+FK7_CLIFOR+FK7_LOJA)))
+                    
+                    If !lFoundSE1
+                        oSmartUtil:addLogMSG("error", "título SE1 não localizado (FK7_IDDOC): " + jAux[nY]["erpInstallmentId"])
+                        Loop
+                    EndIf
+
+                    Begin Transaction
+                        oModel:SetOperation(MODEL_OPERATION_INSERT)
+                        oModel:GetModel('ARQDETAIL'):SetOptional(.T.)
+                        oModel:Activate()
+                        oMdlMaster := oModel:GetModel('ARPMASTER')
+                        oMdlMaster:SetValue("ARP_IDDOC" , FK7->FK7_IDDOC)
+                        oMdlMaster:SetValue("ARP_STATUS", cStatus)
+                        oMdlMaster:SetValue("ARP_FILTIT", SE1->E1_FILORIG)
+                        oMdlMaster:SetValue("ARP_PREFIX", SE1->E1_PREFIXO)
+                        oMdlMaster:SetValue("ARP_NUMTIT", SE1->E1_NUM)
+                        oMdlMaster:SetValue("ARP_PARCEL", SE1->E1_PARCELA)
+                        oMdlMaster:SetValue("ARP_TIPO"  , SE1->E1_TIPO)
+                        oMdlMaster:SetValue("ARP_CLIENT", SE1->E1_CLIENTE)
+                        oMdlMaster:SetValue("ARP_LOJA"  , SE1->E1_LOJA)
+                        oMdlMaster:SetValue("ARP_VENCRE", SE1->E1_VENCREA)
+                        oMdlMaster:SetValue("ARP_VALOR" , SE1->E1_VALOR)
+                        oMdlMaster:SetValue("ARP_DATA"  , Date())
+                        oMdlMaster:setValue("ARP_SITUAC", cBloqueio)
+
+                        If !(oModel:VldData() .and. oModel:CommitData())
+                            oSmartUtil:addLogMSG("error", "Insert ARP (ARP_IDDOC):" + jAux[nY]["erpInstallmentId"], TFDModelError(oModel))
+                            DisarmTransaction()
+                            Break
+                        Else
+                            If cStatus == '2' .And. lTransfere .And. !Empty(cCarteira)
+                                //-- Transfere título para carteira Duplicatas
+                                If !Empty( cErroTrf := TFDTrfDup(cCarteira) )
+                                    oSmartUtil:addLogMSG("error", "FINA060 validation (ARP_IDDOC):" + jAux[nY]["erpInstallmentId"], cErroTrf)
+                                    DisarmTransaction()
+                                    Break
+                                EndIf
+                            EndIf
+
+                            If Empty(cErroTrf) // Só grava ocorrência se não houve erro de transferência
+                                TFDRegOcorrencia(jAux[nY], cOcorrencia)
+                            EndIf
+                        EndIf
+                    End Transaction
+
+                    oModel:DeActivate()
+                   
+                Else
+                    oSmartUtil:addLogMSG("error", "Status validation (ARP_IDDOC): " + jAux[nY]["erpInstallmentId"], "Status não permite atualização.")
+                EndIf
+            Next nY
+
+        Endif
+    Next nX
+
+    If oModel <> Nil
+        oModel:Destroy()
+    EndIF
+
+    oSmartUtil:setAliasMSUID("ARP", .F.)
+    oSmartUtil:logResponse(cPayload)
+    FwFreeObj(oSmartUtil)
+
+    RpcClearEnv()
+return .T.
+
+
+/*/{Protheus.doc} TFDModelError
+    Retorna a mensagem de erro do model formatada como string.
+    @type function
+    @author Squad TechFin
+    @since 30/07/2026
+    @param oModel, object, instância do model com erro
+    @return character, mensagem de erro concatenada
+/*/
+Static function TFDModelError(oModel as object) as character
+    local aMsg as array
+    aMsg := oModel:GetErrorMessage()
+return cValToChar(aMsg[4]) + " - " + cValToChar(aMsg[5]) + " - " + cValToChar(aMsg[6])
+
+/*/{Protheus.doc} TFDRegOcorrencia
+    Grava o histórico de ocorrência para o item processado.
+    @type function
+    @author Squad TechFin
+    @since 30/07/2026
+    @param jItem     , json     , objeto JSON do item (erpInstallmentId + campos de erro)
+    @param cOcorrencia, character, código da ocorrência a registrar
+/*/
+Static function TFDRegOcorrencia(jItem as json, cOcorrencia as character) as logical
+    local aErros      := {} as array
+    local oOcorrencia := nil as object
+
+    aErros      := TFGetError(jItem)
+    oOcorrencia := TechfinOccurrences():New()
+    oOcorrencia:setProduct("5")
+    oOcorrencia:setIdDoc(jItem["erpInstallmentId"])
+    oOcorrencia:makeBrowseUpdated(aErros[2])
+    oOcorrencia:setLog(aErros[1])
+    oOcorrencia:Register(cOcorrencia)
+    FwFreeObj(oOcorrencia)
+return .T.
+
+/*/{Protheus.doc} TFDTrfDup
+    Transfere título de carteira
+    @type function
+    @author Squad TechFin
+    @since 3/28/2026
+    @param cCarteira, character, código da carteira de cobrança (FRV)
+    @return cErroRet,character, motivo da falha da execução da transferência
+    
+/*/
+Static function TFDTrfDup(cCarteira as character) as character
+    local aTit      := {} as array
+    local aErroAuto := {} as array
+    local nCntErr   := 0  as numeric
+    local cErroRet  := "" as character
+    
+    private lMsErroAuto		:= .F.	as logical
+    private lAutoErrNoFile	:= .T.	as logical
+
+    // Chave do título
+    aAdd(aTit, {"E1_FILIAL"	, FwxFilial('SE1',ARP->ARP_FILTIT) ,Nil})
+    aAdd(aTit, {"E1_PREFIXO", ARP->ARP_PREFIX,Nil})
+    aAdd(aTit, {"E1_NUM"	, ARP->ARP_NUMTIT,Nil})
+    aAdd(aTit, {"E1_PARCELA", ARP->ARP_PARCEL,Nil})
+    aAdd(aTit, {"E1_TIPO"	, ARP->ARP_TIPO  ,Nil})
+
+    // Informações bancárias
+    aAdd(aTit, {"AUTDATAMOV", Date()    , Nil})
+    //aAdd(aTit, {"AUTBANCO"	, cBanco   , Nil})
+    //aAdd(aTit, {"AUTAGENCIA", cAgencia , Nil})
+    //aAdd(aTit, {"AUTCONTA"	, cConta   , Nil})
+    aAdd(aTit, {"AUTSITUACA", cCarteira , Nil})
+    //aAdd(aTit, {"AUTNUMBCO"	, cNumBco  , Nil})
+
+    MSExecAuto({|a,b| FINA060(a, b)}, 2, aTit)
+    If lMsErroAuto
+        cErroRet := 'Falha na transferência do título para carteira ' + cCarteira + CHR(13) + CHR(10)
+        aErroAuto := GetAutoGRLog()
+        For nCntErr := 1 to Len(aErroAuto)
+            cErroRet += aErroAuto[nCntErr]
+        Next
+    EndIf
+
+    FwFreeArray(aTit)
+    FwFreeArray(aErroAuto)
+Return(cErroRet)
+

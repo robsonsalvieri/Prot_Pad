@@ -1,0 +1,296 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+#include "backoffice.techfin.smartlink.contadigitalbankslipcreaterequestv1.ch"
+
+/*/{Protheus.doc} ContaDigitalBankSlipCreateRequestV1MessageReader
+
+    Classe para atualização de DDA - Conta Digital
+
+    @type class
+    @author josue.matheus
+    @since 10/20/2025
+/*/
+class ContaDigitalBankSlipCreateRequestV1MessageReader
+
+	data cMock      as character
+	data lMock      as logical
+	data jPayload   as json
+
+	public method new()  constructor
+	public method read() as logical
+	public method mock()
+	public method hasRequiredFields() as logical
+
+end class
+
+/*/{Protheus.doc} ContaDigitalBankSlipCreateRequestV1MessageReader::New
+    Método construtor da classe
+    @type method
+    @author josue.matheus
+    @since 10/20/2025
+/*/
+method new() class ContaDigitalBankSlipCreateRequestV1MessageReader
+	::cMock     := ""
+	::lMock     := .F.
+	::jPayload  := JsonObject():new()
+return Self
+
+/*/{Protheus.doc} ContaDigitalBankSlipCreateRequestV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author josue.matheus
+    @since 10/20/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class ContaDigitalBankSlipCreateRequestV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} ContaDigitalBankSlipCreateRequestV1MessageReader::read
+    Responsável pela leitura e processamento da mensagem.
+    @type method
+    @author josue.matheus
+    @since 10/20/2025
+    @param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+    @return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as logical class ContaDigitalBankSlipCreateRequestV1MessageReader
+
+	local cPayload  := ""  as character
+	local cMsgRet   := ""  as character
+	local cCompCGC  := ""  as character
+	local aEmp      := {}  as array
+	local lSuccess  := .F. as logical
+	local cIdempKey := ""  as character
+	local aSM0      := FWLoadSM0() as array
+	local jMessage  := JsonObject():new() as json
+
+	cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+
+	if ::jPayload:FromJSON(cPayload) == NIL
+		if ::hasRequiredFields()
+
+			cIdempKey := ::jPayload["data"]["idempotencyKey"]
+			cMsgRet := totvs.protheus.backoffice.techfin.util.getPayloadSmartLink("4", "ContaDigitalBankSlipCreateResponseV1", "1", cIdempKey)
+
+			::jPayload["data"]["type"] := "ContaDigitalBankSlipCreateRequestV1"
+			cCompCGC := ::jPayload["data"]["companyCnpj"]
+			aEval(aSM0,{|x| IIf( alltrim(x[18]) == alltrim(cCompCGC),aEmp := x ,{})})
+
+			if Len(aEmp) > 0
+				lSuccess := .T.
+				if empty(cMsgRet)
+					StartJob("TCSendMsg", GetEnvServer(), .T., aEmp[1], aEmp[2], ::jPayload:ToJSON(),"Received" )
+					StartJob("TCGrvDDA", GetEnvServer(), .F., aEmp[1], aEmp[2], ::jPayload:ToJSON())
+				else
+					jMessage:FromJSON(cMsgRet)
+					StartJob("TCSendMsg", GetEnvServer(), .T., aEmp[1], aEmp[2], cMsgRet , jMessage["data"]["status"])
+				endIf
+			endIf
+
+		endIf
+	endIf
+
+	FwFreeObj(jMessage)
+	FWFreeArray(aEmp)
+	FWFreeArray(aSM0)
+
+return lSuccess
+
+method hasRequiredFields() as logical class ContaDigitalBankSlipCreateRequestV1MessageReader
+	Local lRet := (::jPayload:HasProperty("data") .AND. ;
+		::jPayload["data"]:HasProperty("companyCnpj") .AND. ;
+		::jPayload["data"]:HasProperty("idempotencyKey") ) as logical
+Return lRet
+
+/*/{Protheus.doc} TCGrvDDA
+    Grava tabela FIG de acordo com payload informado
+    @type function
+    @author josue.matheus
+    @since 10/20/2025
+    @param cCompany, character, Grupo Empresa
+    @param cBranch , character, Filial
+    @param cPayload, character, mensagem recebida
+/*/
+function TCGrvDDA(cCompany as character, cBranch as character, cPayload as character)
+	Local jData       := JsonObject():New() as object
+	Local lRet        := .T. as logical
+	Local cErrorCode  := ""  as character
+	Local cErrorMsg   := ""  as character
+	Local cCGC        := ""  as character
+	Local cIdempKey   := ""  as character
+	Local aVldFields  := {}  as array
+	Local oSmartUtil  as object
+	Local oError      as object
+
+	RPCSetType(3)
+	RPCSetEnv(cCompany, cBranch,,,'FIN')
+
+	jData:FromJson(cPayload)
+	cIdempKey := iif(jData["data"]:hasProperty('idempotencyKey'),jData["data"]["idempotencyKey"],"")
+
+	oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+
+	Begin Transaction
+
+		Try
+
+			aVldFields := TCCmpDDA(cPayload)
+			If !aVldFields[1]
+				lRet        := .F.
+				cErrorCode  := "TCDDA01"
+				cErrorMsg   := STR0001 + ":" + aVldFields[2] //"Propriedades obrigatórias não informadas."
+			EndIf
+
+			If lRet
+
+				cCGC := jData["data"]["bankSlip"]["registerData"]["originalBeneficiary"]["documentNumber"]
+
+				dbSelectArea("SA2")
+				SA2->(dbSetOrder(3)) // A2_FILIAL + A2_CGC
+
+				If !SA2->(dbSeek(FWxFilial("SA2") + cCGC ))
+					lRet        := .F.
+					cErrorCode  := "TCDDA02"
+					cErrorMsg   := STR0002 +" [" + cCGC + "] " + STR0003 //"Não foi possível encontrar o CNPJ [" + cCGC + "] no cadastro de fornecedores."
+				ElseIf !TCFornDDA(SA2->A2_COD, SA2->A2_LOJA)
+					lRet        := .F.
+					cErrorCode  := "TCDDA03"
+					cErrorMsg   := STR0004 //"Fornecedor não habilitado para usar DDA do conta digital Techfin."
+				Else
+
+					RecLock("FIG", .T.)
+					FIG->FIG_FILIAL := xFilial("FIG")
+					FIG->FIG_DATA   := dDataBase
+					FIG->FIG_FORNEC := SA2->A2_COD
+					FIG->FIG_LOJA   := SA2->A2_LOJA
+					FIG->FIG_NOMFOR := SA2->A2_NREDUZ
+					FIG->FIG_TITULO := ""
+					FIG->FIG_TIPO   := ""
+					FIG->FIG_VENCTO := SToD(StrTran(jData["data"]["bankSlip"]["registerData"]["dueDate"], "-", ""))
+					FIG->FIG_VALOR  := jData["data"]["bankSlip"]["registerData"]["originalValue"]
+					FIG->FIG_CONCIL := "2"
+					FIG->FIG_CNPJ   := cCGC
+					FIG->FIG_CODBAR := jData["data"]["bankSlip"]["registerData"]["barCode"]
+					FIG->FIG_IDEKEY := cIdempKey
+					FIG->FIG_TITULO := jData["data"]["bankSlip"]["registerData"]["ourNumber"]
+					FIG->(MsUnlock())
+
+					FIG->(dbgoto(recno()))
+				EndIf
+			EndIf
+		Catch oError
+			lRet        := .F.
+			cErrorCode  := "TCDDA04"
+			cErrorMsg   := oError:Description
+			FwFreeObj(oError)
+			DisarmTransaction()
+		Endtry
+
+	End Transaction
+
+	If(!lRet)
+		oSmartUtil:addLogMSG("error", cErrorCode, cErrorMsg,.T.)
+		oSmartUtil:sendProcessingResult("Error", "ContaDigitalBankSlipCreateResponseV1", cPayload, cErrorCode, cErrorMsg,.T.)
+	Else
+		oSmartUtil:setAliasMSUID("FIG")
+		oSmartUtil:sendProcessingResult("Created", "ContaDigitalBankSlipCreateResponseV1", cPayload,,,.T.)
+	EndIf
+	oSmartUtil:logResponse(cPayload, cIdempKey)
+
+	FwFreeObj(oSmartUtil)
+	FwFreeObj(jData)
+	RpcClearEnv()
+
+Return
+
+/*/{Protheus.doc} TCFornDDA
+    Retorna se o fornecedor está habilitado para uso do DDA no Conta Digital
+    @type function
+    @author josue.matheus
+    @since 10/20/2025
+    @param cCodigo, character, Código do Fornecedor
+    @param cLoja, character, Loja do Fornecedor
+    @return logical , indica se o fornecedor está habilitado para uso do DDA no Conta Digital
+/*/
+Function TCFornDDA(cCodigo as character, cLoja as character) as logical
+	Local lRet := .F. as logical
+	If DKE->(FieldPos("DKE_DDATEC")) > 0
+		lRet := ReadValue("DKE", 1, FWxFilial('DKE') + cCodigo + cLoja, "DKE_DDATEC") <> "2"
+	EndIf
+Return lRet
+
+/*/{Protheus.doc} TCCmpDDA
+    Retorna se o payload para criação do DDA da conta digital está valido
+    @type function
+    @author josue.matheus
+    @since 10/20/2025
+    @param cPayload, character, string do payload
+    @return array , [lValid, cCamposFaltantes] - indica se os campos obrigatorios foram passados
+/*/
+Function TCCmpDDA(cPayload as character ) as array
+	local jMessage          := JsonObject():new() as json
+	local aFieldsRequired   := {"tenantId","id","companyCnpj","idempotencyKey"} as array
+	local aFieldsRegData    := {"dueDate","originalValue","barCode","ourNumber"} as array
+	Local n1                := 1 as numeric
+	Local lContinue         := .T. as logical
+	Local cPropriedade      := "" as character
+
+	If jMessage:FromJSON(cPayload) == NIL
+
+		for n1 := 1 to len(aFieldsRequired)
+			if !jMessage:hasProperty("data") .or. ;
+					!jMessage["data"]:hasProperty(aFieldsRequired[n1]) .or. ;
+					empty(jMessage["data"][aFieldsRequired[n1]])
+				if !empty(cPropriedade)
+					cPropriedade += ";"
+				endif
+				cPropriedade += aFieldsRequired[n1]
+				lContinue := .F.
+			endif
+		next n1
+
+		for n1 := 1 to len(aFieldsRegData)
+			if !jMessage["data"]["bankSlip"]["registerData"]:hasProperty(aFieldsRegData[n1]) .or. ;
+					empty(jMessage["data"]["bankSlip"]["registerData"][aFieldsRegData[n1]])
+				if !empty(cPropriedade)
+					cPropriedade += ";"
+				endif
+				cPropriedade += aFieldsRegData[n1]
+				lContinue := .F.
+			endif
+		next n1
+
+	Endif
+
+	FWFreeArray(aFieldsRequired)
+	FwFreeObj(jMessage)
+
+Return {lContinue, cPropriedade}
+
+/*/{Protheus.doc} TCSendMsg
+    envia mensagem de resposta
+    @type function
+    @author josue.matheus
+    @since 10/30/2025
+    @param cCompany, character, empresa
+    @param cBranch, character, filial
+    @param cPayload, character, payload da mensagem
+    @param cStatus, character, status da mensagem
+/*/
+Function TCSendMsg(cCompany as character, cBranch as character, cPayload as character, cStatus as character )
+	Local oSmartUtil  as object
+
+	RPCSetType(3)
+	RPCSetEnv(cCompany, cBranch,,,'FIN')
+
+	oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+	oSmartUtil:sendProcessingResult(cStatus, "ContaDigitalBankSlipCreateResponseV1", cPayload,,,.T.)
+
+	FwFreeObj(oSmartUtil)
+
+	RpcClearEnv()
+
+return

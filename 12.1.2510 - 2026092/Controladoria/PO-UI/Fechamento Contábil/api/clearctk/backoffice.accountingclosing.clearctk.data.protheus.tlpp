@@ -1,0 +1,398 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "BACKOFFICE.ACCOUNTINGCLOSING.CLEARCTK.DATA.PROTHEUS.CH"
+
+namespace totvs.protheus.backoffice.accountingclosing.clearctk
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ClearCTKProtheusData
+Classe responsável pela consulta e processamento de dados
+
+@type class
+@author Totvs
+@since 17/06/2026
+/*/
+//-------------------------------------------------------------------
+class ClearCTKProtheusData 
+    Public method new()    
+    Public method getData() As Object  
+    Public method postClearCTK()
+    Public method saveLogCV8()
+endclass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} groupPeriodsByKey
+Agrupa periodos por filial, calendario e ano
+
+@type function
+@author Totvs
+@since 19/06/2026
+@param aBlockedCTG, array, Array de JSON com calendarios bloqueados
+@return array, Array agrupado por chave [branch+calendar+year]
+/*/
+//-------------------------------------------------------------------
+Static Function groupPeriodsByKey(aBlockedCTG as Array) as Array
+    Local aGrouped  as Array
+    Local cKey      as Character
+    Local nI        as Numeric
+    Local nPos      as Numeric
+    Local jPeriod   as Json
+    Local jPeriodData as Json
+
+    aGrouped := {}
+
+    For nI := 1 To Len(aBlockedCTG)
+        jPeriod := aBlockedCTG[nI]
+        
+        // Chave: branch + calendar + year
+        cKey := AllTrim(jPeriod["branch"]) + "|" + AllTrim(jPeriod["calendar"]) + "|" + AllTrim(jPeriod["year"])
+        
+        // Verifica se a chave já existe no array agrupado
+        nPos := aScan(aGrouped, {|x| x["key"] == cKey})
+        
+        If nPos == 0
+            // Adiciona novo grupo
+            aAdd(aGrouped, JsonObject():New())
+            nPos := Len(aGrouped)
+            aGrouped[nPos]["key"]      := cKey
+            aGrouped[nPos]["branch"]   := AllTrim(jPeriod["branch"])
+            aGrouped[nPos]["calendar"] := AllTrim(jPeriod["calendar"])
+            aGrouped[nPos]["year"]     := AllTrim(jPeriod["year"])
+            aGrouped[nPos]["periods"]  := {}
+        EndIf
+        
+        // Adiciona o periodo ao grupo com suas datas
+        jPeriodData := JsonObject():New()
+        jPeriodData["period"]    := AllTrim(jPeriod["period"])
+        jPeriodData["startDate"] := AllTrim(jPeriod["startDate"])
+        jPeriodData["endDate"]   := AllTrim(jPeriod["endDate"])
+        
+        aAdd(aGrouped[nPos]["periods"], jPeriodData)
+    Next nI
+
+Return aGrouped
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} identifySequentialIntervals
+Identifica intervalos sequenciais de periodos e extrai as datas
+
+@type function
+@author Totvs
+@since 19/06/2026
+@param aPeriods, array, Array de JSON com periodos e datas
+@return array, Array de intervalos com startDate e endDate
+/*/
+//-------------------------------------------------------------------
+Static Function identifySequentialIntervals(aPeriods as Array) as Array
+    Local aIntervals    as Array
+    Local aSorted       as Array
+    Local nI            as Numeric
+    Local nCurrentStart as Numeric
+    Local nCurrentEnd   as Numeric
+    Local nPeriod       as Numeric
+    Local nPrevPeriod   as Numeric
+    Local cStartDate    as Character
+    Local cEndDate      as Character
+
+    aIntervals := {}
+    aSorted    := aClone(aPeriods)
+    
+    If Len(aSorted) > 0
+        // Ordena os periodos pelo numero do periodo
+        aSort(aSorted,,, {|x,y| Val(x["period"]) < Val(y["period"])})
+        
+        // Inicializa o primeiro intervalo
+        nCurrentStart := Val(aSorted[1]["period"])
+        nCurrentEnd   := Val(aSorted[1]["period"])
+        cStartDate    := aSorted[1]["startDate"]
+        cEndDate      := aSorted[1]["endDate"]
+        
+        For nI := 2 To Len(aSorted)
+            nPeriod     := Val(aSorted[nI]["period"])
+            nPrevPeriod := Val(aSorted[nI - 1]["period"])
+            
+            // Se o período é sequencial (diferença de 1)
+            If nPeriod == nPrevPeriod + 1
+                nCurrentEnd := nPeriod
+                cEndDate    := aSorted[nI]["endDate"]  // Atualiza a data final
+            Else
+                // Fecha o intervalo atual e inicia um novo
+                aAdd(aIntervals, JsonObject():New())
+                aIntervals[Len(aIntervals)]["startDate"] := cStartDate
+                aIntervals[Len(aIntervals)]["endDate"]   := cEndDate
+                
+                nCurrentStart := nPeriod
+                nCurrentEnd   := nPeriod
+                cStartDate    := aSorted[nI]["startDate"]
+                cEndDate      := aSorted[nI]["endDate"]
+            EndIf
+        Next nI
+        
+        // Adiciona o último intervalo
+        aAdd(aIntervals, JsonObject():New())
+        aIntervals[Len(aIntervals)]["startDate"] := cStartDate
+        aIntervals[Len(aIntervals)]["endDate"]   := cEndDate
+    EndIf
+
+Return aIntervals
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} executeCTKDelete
+Executa o DELETE na tabela CTK para o intervalo de datas
+
+@type function
+@author Totvs
+@since 19/06/2026
+@param cBranch, character, Filial
+@param cStartDate, character, Data inicial no formato YYYYMMDD
+@param cEndDate, character, Data final no formato YYYYMMDD
+@param cTpSald, character, Tipo de saldo
+@param cCodCurr, character, Código da moeda
+@param nTotalDeleted, numeric, Variável passada por referência para acumular total de registros deletados
+@return logical, .T. se sucesso, .F. caso contrário
+/*/
+//-------------------------------------------------------------------
+Static Function executeCTKDelete(cBranch as Character, cStartDate as Character, cEndDate as Character,;
+    cTpSald as Character, cCodCurr as Character, nTotalDeleted as Numeric) as Logical
+    Local oStatementCnt as Object
+    Local oStatementDel as Object
+    Local cQueryCount   as Character
+    Local cQueryDelete  as Character
+    Local nParamCount   as Numeric
+    Local lRet          as Logical
+    Local cAliasCnt     as Character
+    Local nRecCount     as Numeric
+    Local nTamMoeda     as Numeric
+    Local cEmptyMoeda   as Character
+
+    lRet        := .F.
+    nRecCount   := 0
+    nParamCount := 3
+    
+    // Obtem o tamanho do campo CTK_MOEDLC dinamicamente
+    nTamMoeda   := GetSX3Cache("CTK_MOEDLC", "X3_TAMANHO")
+    cEmptyMoeda := Space(nTamMoeda)
+    
+    // ========================================
+    // 1. Contagem de registros a serem deletados
+    // ========================================
+    oStatementCnt := FWPreparedStatement():New()
+    
+    cQueryCount := " SELECT COUNT(*) AS TOTAL "
+    cQueryCount += " FROM " + RetSqlName("CTK")
+    cQueryCount += " WHERE CTK_FILIAL = ? "
+    cQueryCount += " AND CTK_DATA BETWEEN ? AND ? "
+    
+    If cTpSald <> "ALL"
+        cQueryCount += " AND CTK_TPSALD = ? "
+    EndIf
+    
+    If cCodCurr <> "ALL"
+        // Considera a moeda especifica OU campo vazio (espacos em branco)
+        cQueryCount += " AND (CTK_MOEDLC = ? OR CTK_MOEDLC = ?) "
+    EndIf
+    
+    oStatementCnt:SetQuery(cQueryCount)
+    oStatementCnt:SetString(1, cBranch)
+    oStatementCnt:SetString(2, cStartDate)
+    oStatementCnt:SetString(3, cEndDate)
+    
+    nParamCount := 3
+    If cTpSald <> "ALL"
+        nParamCount++
+        oStatementCnt:SetString(nParamCount, cTpSald)
+    EndIf
+    
+    If cCodCurr <> "ALL"
+        nParamCount++
+        oStatementCnt:SetString(nParamCount, cCodCurr)
+        nParamCount++
+        oStatementCnt:SetString(nParamCount, cEmptyMoeda)
+    EndIf
+    
+    cQueryCount := oStatementCnt:GetFixQuery()
+    oStatementCnt:Destroy()
+    
+    cAliasCnt := MPSysOpenQuery(cQueryCount)
+    
+    If (cAliasCnt)->(!Eof())
+        nRecCount := (cAliasCnt)->TOTAL
+    EndIf
+    
+    (cAliasCnt)->(DBCloseArea())
+    
+    If nRecCount > 0 // Se não encontrou registros na CTK, não precisa deletar nada.
+        // ========================================
+        // 2. Execucao do DELETE
+        // ========================================
+        oStatementDel := FWPreparedStatement():New()
+        
+        cQueryDelete := " DELETE FROM " + RetSqlName("CTK")
+        cQueryDelete += " WHERE CTK_FILIAL = ? "
+        cQueryDelete += " AND CTK_DATA BETWEEN ? AND ? "
+        
+        If cTpSald <> "ALL"
+            cQueryDelete += " AND CTK_TPSALD = ? "
+        EndIf
+        
+        If cCodCurr <> "ALL"
+            // Considera a moeda especifica OU campo vazio (espacos em branco)
+            cQueryDelete += " AND (CTK_MOEDLC = ? OR CTK_MOEDLC = ?) "
+        EndIf
+        
+        oStatementDel:SetQuery(cQueryDelete)
+        oStatementDel:SetString(1, cBranch)
+        oStatementDel:SetString(2, cStartDate)
+        oStatementDel:SetString(3, cEndDate)
+        
+        nParamCount := 3
+        If cTpSald <> "ALL"
+            nParamCount++
+            oStatementDel:SetString(nParamCount, cTpSald)
+        EndIf
+        
+        If cCodCurr <> "ALL"
+            nParamCount++
+            oStatementDel:SetString(nParamCount, cCodCurr)
+            nParamCount++
+            oStatementDel:SetString(nParamCount, cEmptyMoeda)
+        EndIf
+        
+        cQueryDelete := oStatementDel:GetFixQuery()
+        oStatementDel:Destroy()
+        
+        If TCSQLExec(cQueryDelete) == 0
+            nTotalDeleted += nRecCount
+            lRet := .T.
+        EndIf
+    Else
+        lRet := .T.
+    EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+Método construtor
+
+@type method
+@author Totvs
+@since 17/06/2026
+@return object, Instância da classe ClearCTKProtheusData
+/*/
+//-------------------------------------------------------------------
+method new() Class ClearCTKProtheusData
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getData
+Método para chamada e validação do tratamento de dados (Singleton)
+
+@type method
+@author Totvs
+@since 17/06/2026
+@return object, Instância da classe ClearCTKProtheusData
+/*/
+//-------------------------------------------------------------------
+method getData() class ClearCTKProtheusData As Object
+    static __oActiveData As Object
+
+    If ValType(__oActiveData) == "U"
+        __oActiveData := ClearCTKProtheusData():new()
+    EndIf
+return __oActiveData
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} postClearCTK
+Método responsável pelo processamento da limpeza da tabela CTK
+
+@type method
+@author Totvs
+@since 17/06/2026
+@param cTpSald, character, Tipo de saldo
+@param cCodCurr, character, Código da moeda
+@param aBlockedCTG, array, Array de JSON com calendários bloqueados
+@return array, Array de retorno [lSucesso, nTotalDeleted]
+/*/
+//-------------------------------------------------------------------
+method postClearCTK(cTpSald as Character, cCodCurr as Character, aBlockedCTG as Array) class ClearCTKProtheusData
+    Local lResponse     as Logical
+    Local lContinue     as Logical
+    Local aGroupedPer   as Array
+    Local aIntervals    as Array
+    Local aRetClear     as Array
+    Local nI            as Numeric
+    Local nJ            as Numeric
+    Local cMsg          as Character
+    Local nTotalDeleted as Numeric
+
+    lResponse     := .F.
+    lContinue     := .T.
+    cMsg          := ""
+    nTotalDeleted := 0
+    aRetClear     := {.F., 0}
+
+    // Agrupa periodos por filial, calendario e ano
+    aGroupedPer := groupPeriodsByKey(aBlockedCTG)
+
+    // Para cada grupo (filial + calendario + ano)
+    For nI := 1 To Len(aGroupedPer)
+        
+        If lContinue
+
+            // Identifica intervalos sequenciais de periodos
+            aIntervals := identifySequentialIntervals(aGroupedPer[nI]["periods"])
+            
+            // Para cada intervalo identificado
+            For nJ := 1 To Len(aIntervals)
+
+                If lContinue
+                
+                    // Executa o DELETE na CTK para o intervalo de datas
+                    lContinue := executeCTKDelete(;
+                        aGroupedPer[nI]["branch"],;
+                        aIntervals[nJ]["startDate"],;
+                        aIntervals[nJ]["endDate"],;
+                        cTpSald,;
+                        cCodCurr,;
+                        @nTotalDeleted;
+                    )
+                    If lContinue
+                        aRetClear[1] := .T.
+                        aRetClear[2] := nTotalDeleted //Atualiza com o total
+                    EndIf
+                EndIf
+            Next nJ
+        EndIf
+    Next nI
+
+    aRetClear[1] := lContinue
+    
+Return aRetClear
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} saveLogCV8
+Método responsável pelo salvamento de log na tabela CV8
+
+@type method
+@author Totvs
+@since 17/06/2026
+@param nTotalDeleted, numeric, Quantidade total de registros deletados
+@return logical, .T. se sucesso, .F. caso contrário
+/*/
+//-------------------------------------------------------------------
+method saveLogCV8(nTotalDeleted as Numeric) class ClearCTKProtheusData
+    Local lRet      as Logical
+    Local cIdCV8    as Character
+
+    lRet := .F.
+
+    If !Empty(CV8->(IndexKey(5))) 
+        cIdCV8:= GetSXENum("CV8","CV8_IDMOV",,5)	
+        ConfirmSX8()
+        
+        GravaCV8("6", "CTBA960", STR0001 + cValToChar(nTotalDeleted), "", "", "", , cIdCV8) //"Quantidade de registros expurgados da tabela CTK: "
+        lRet := .T.
+    EndIf
+
+Return lRet

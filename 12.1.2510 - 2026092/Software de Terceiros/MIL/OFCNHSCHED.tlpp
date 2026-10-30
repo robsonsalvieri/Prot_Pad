@@ -1,0 +1,271 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "OFCNHSCHED.ch"
+
+#define LF chr(10)
+
+/*/{Protheus.doc} OFCNHSCHED
+Orquestrador de execução de geração do PRIM e comunicação cCon
+@type function
+@author Cristiam Rossi
+@since 17/09/2026
+--------------------------------------------------------------
+Configuracao no Appserver.ini:
+--------------------------------------------------------------
+[ONSTART]
+JOBS=SCHED_PRIM
+RefreshRate=60          ; tempo de execucao em segundos
+
+[SCHED_PRIM]
+MAIN=OFCNHSCHED
+ENVIRONMENT=CNH
+EMPRESA=T3
+FILIAL=C SP 30 
+SEMAFORO=OFCNHSHED1
+;FILIAIS=01,02,03
+/*/
+function OFCNHSCHED()
+local lOk       := .T.
+local cIni      := getAdv97()
+local cParEmp   := getPvProfString("SCHED_PRIM", "EMPRESA" , "01", cIni)
+local cParFil   := getPvProfString("SCHED_PRIM", "FILIAL"  , "01", cIni)
+local cSemaforo := getPvProfString("SCHED_PRIM", "SEMAFORO", "OFCNHSHED", cIni)
+local cFiliais  := getPvProfString("SCHED_PRIM", "FILIAIS" , ""  , cIni)
+local aFiliais  := {}
+local cSemaAux
+local cMsgLog   := ""
+local oError
+local oConf
+local nI
+local cProxima
+local aInterv
+
+    if ! empty( cFiliais )
+        aFiliais := strTokArr2( cFiliais, ",", .T.)
+    endif
+
+    try
+        if ( lOk := rpcSetEnv( cParEmp, cParFil,,, "OFI") )
+            if( lOk := LockByName( cSemaforo, .T., .T. ) )
+                cMsgLog += cSemaforo +": "+ STR0003 + LF        // "iniciado"
+
+                oConf := OFCNHPrimConfig():New( .T. )
+                aInterv := OA060007C_getInterval( "00:00", "23:30", {0,30}, .T. )
+
+                for nI := 1 to len( oConf:oConfig["SENHAS"] )
+                    if len( aFiliais ) > 0 .and. aScan( aFiliais, oConf:oConfig["SENHAS"][nI]["FILIAL"] ) == 0
+                        loop
+                    endif
+
+                    cMsgLog += " - "+ STR0001 +" ["+ oConf:oConfig["SENHAS"][nI]["FILIAL"] +"] - "           // Filial
+
+                    cSemaAux := 'PRIMSCHED_' + padR( oConf:oConfig["SENHAS"][nI]["FILIAL"], FWSizeFilial() )
+                    if LockByName( cSemaAux, .T., .T. )
+                        unLockByName( cSemaAux, .T., .T. )
+
+                        if ! empty( oConf:oConfig["SENHAS"][nI]["EXECUCAO"] ) .and. oConf:oConfig["SENHAS"][nI]["EXECUCAO"] != aInterv[1]
+
+                            nTipo   := 3    // 1=OFCNHA01,2=OFCNHA05,3=OFCNHA01 e OFCNHA05
+                            cTipo   := "PRIM2 + RICEC"
+                            cRotina := ""   // execução via exeblock()
+                            aParam  := {}   // parâmetros do execblock()
+
+                            if elegivel( @cProxima, oConf:oConfig["SENHAS"][nI], cTipo )
+
+                                cCodVql := registrarVQL( "OFCNHSCHED", cTipo, oConf:oConfig["SENHAS"][nI]["FILIAL"], STR0002, cProxima )   // iniciar thread
+
+				                startJob("OFCNHTHREAD", getEnvServer(), .F., cParEmp, oConf:oConfig["SENHAS"][nI]["FILIAL"], nTipo, cRotina, aParam, cCodVql )
+                                cMsgLog += STR0003 + LF      // iniciado
+                            else
+                                cMsgLog += STR0004 + cProxima + LF    // "aguardando "
+                            endif
+                        else
+                            cMsgLog += aInterv[1] + LF  // Não
+                        endif
+                    else
+                        cMsgLog += STR0005 + LF   // "em execucao"
+                    endif
+                next
+
+                unLockByName( cSemaforo, .T., .T. )
+                cMsgLog += cSemaforo +": "+ STR0006 + LF      // "finalizado"
+            else
+                cMsgLog += cSemaforo +": "+ STR0007 + LF       // "rotina em execucao (semaforo)"
+            endif
+
+            rpcClearEnv()
+        else
+            cMsgLog += cSemaforo +": "+ STR0008 +": "+ cParEmp +"/"+ cParFil + LF       // "Falha ao abrir Empresa/Filial"
+        endif
+
+    catch oError
+        cMsgLog += cSemaforo +": "+ oemToAnsi( oError:description ) + LF
+        cMsgLog += cSemaforo +": "+ STR0009 + LF     // "finalizado com erro"
+    endTry
+
+    if ! empty( cMsgLog )
+        qOut( cMsgLog + CRLF )
+    endif
+return lOk
+
+
+/*/{Protheus.doc} elegivel
+Função que retorna se está no horário de executar a Filial
+@type function
+@author Cristiam Rossi
+@since 17/09/2026
+@return logical, se executa ou não a filial
+/*/
+static function elegivel( cProxima, oFilial, cTipo )
+local lOk         := .F.
+local aInterv     := strTokArr( oFilial["RECORRENCIA"], ":" )
+local aExec       := OA060007C_getInterval( oFilial["EXECUCAO"], "23:59", { val(aInterv[1]), val(aInterv[2]) } /*aInterv*/, .F. /*lNao*/ )
+local nTolerancia := 5      // minutos para cima
+local nI
+local cQuery
+local aBind
+local cErro       := ""
+
+    cProxima := ""
+
+    for nI := 1 to len( aExec )
+        cAux := ElapTime( aExec[nI]+":00", time() )
+        nAux := HtoM( cAux )
+        if nAux <= nTolerancia
+            aBind := {}
+            cQuery := "select count(*) REGS"
+            cQuery += " from " + retSqlName("VQL") +" VQL "
+            cQuery += " where VQL_FILIAL = ?"                           ; aAdd( aBind, { "C", xFilial("VQL") } )
+            cQuery += " and   VQL_AGROUP = ?"                           ; aAdd( aBind, { "C", "OFCNHSCHED" } )
+            cQuery += " and   VQL_TIPO = ?"                             ; aAdd( aBind, { "C", cTipo } )
+            cQuery += " and   VQL_FILORI = ?"                           ; aAdd( aBind, { "C", oFilial["FILIAL"] } )
+            cQuery += " and   VQL_DATAI = ?"                            ; aAdd( aBind, { "C", DtoS( dDatabase ) } )
+            cQuery += " and   VQL_HORAI = ?"                            ; aAdd( aBind, { "N", val( strTran( aExec[nI], ":", "" ) ) } )
+            cQuery += " and VQL.D_E_L_E_T_ = ?"                         ; aAdd( aBind, { "C", " " } )
+            OFCNHA015C_ExecQuery( @cQuery, aBind, , @cErro, , .T. )
+            if FM_SQL( cQuery ) == 0
+                cProxima := aExec[nI]
+                lOk := .T.
+                exit
+            endif
+        else
+            if empty( cProxima ) .and. aExec[nI] > time()
+                cProxima := aExec[nI]
+                exit
+            endif
+        endif
+    next
+
+return lOk
+
+
+/*/{Protheus.doc} OFCNHTHREAD
+Função Thread para executar rotinas do PRIM
+@type function
+@author Cristiam Rossi
+@since 17/09/2026
+/*/
+function OFCNHTHREAD( cParEmp, cParFil, nTipo, cRotina, aParam, cCodVql )       // nTipo: 1=OFCNHA01,2=OFCNHA05,3=OFCNHA01 e OFCNHA05
+local   cMsgLog := "OFCNHTHREAD - Id: " + cValToChar( ThreadId() ) + LF
+local   lErro   := .F.
+default nTipo   := 1
+default cRotina := ""
+default aParam  := {}
+
+    cMsgLog += STR0010 +" ["+ cParEmp +"] - "+ STR0001 +" ["+ cParFil +"]" + LF      // "Empresa"      ### "Filial"
+    cMsgLog += "-----------------------------------" + LF
+
+    try
+        if rpcSetEnv( cParEmp, cParFil,,, "OFI")
+
+            dbSelectArea( "VQL" )
+            dbSetOrder( 1 )
+            dbSeek( xFilial("VQL") + cCodVql )
+            recLock( "VQL", .F. )
+            VQL->VQL_CODVQL := STR0011         // "INICIO"
+            VQL->VQL_DADOS  := "ThreadId: " + cValToChar( ThreadId() )
+            msunlock()
+
+            if nTipo == 1
+                cMsgLog += STR0012 +" "+ time() + LF        // "Inicio PRIM DIARIO"
+                OFCNHA01()  // PRIM Diário
+                cMsgLog += STR0013 +" "+ time() + LF        // "termino PRIM DIARIO"
+            elseif nTipo == 2
+                cMsgLog += STR0016 +" "+ time() + LF        // "Inicio cCON + RICEC + PRIM1"
+                OFCNHA05()  // cCon + RICEC + PRIM 1
+                cMsgLog += STR0017 +" "+ time() + LF        // "termino cCON + RICEC + PRIM1"
+            elseif nTipo == 3
+                cMsgLog += STR0012 +" "+ time() + LF       // "Inicio PRIM DIARIO"
+                OFCNHA01()  // PRIM Diário
+                cMsgLog += STR0013 +" "+ time() + LF        // "termino PRIM DIARIO"
+                cMsgLog += "-----------------------------------" + LF
+                cMsgLog += STR0016 +" "+ time() + LF        // "Inicio cCON + RICEC + PRIM1"
+                OFCNHA05()  // cCon + RICEC + PRIM 1
+                cMsgLog += STR0017 +" "+ time() + LF        // "termino cCON + RICEC + PRIM1"
+            elseif ! empty( cRotina )
+                cMsgLog += STR0014 +" "+ cRotina +" "+ time() + LF      // "Inicio"
+                execblock( cRotina, .F., .F., aParam )
+                cMsgLog += STR0015 +" "+ cRotina +" "+ time() + LF      // "termino"
+            endif
+
+            cMsgLog += "-----------------------------------" + LF
+            cMsgLog += STR0018 + LF     // "finalizado OK"
+        else
+            cMsgLog += STR0019 +": "+ cParEmp +"/"+ cParFil + LF        // "Falha ao tentar abrir Empresa/Filial"
+        endif
+    catch oError
+        cMsgLog += oemToAnsi( oError:description ) + LF
+        cMsgLog += STR0009 + LF       // "finalizado com erro"
+        lErro   := .T.
+    endTry
+
+// atualizar dados de término
+    if select( "VQL" ) > 0
+        dbSelectArea( "VQL" )
+        dbSetOrder( 1 )
+        dbSeek( xFilial("VQL") + cCodVql )
+        recLock( "VQL", .F. )
+        VQL->VQL_CODVQL := "FIM"
+        VQL->VQL_DADOS  := iif( lErro, STR0009, STR0018)      // "Finalizado com erro"       ## "Finalizado OK"
+        VQL->VQL_DATAF  := dDatabase
+        VQL->VQL_HORAF  := VAL(STRTRAN(SUBSTR( TIME() , 1, 5), ":", "" ))
+        VQL->VQL_MSGLOG := cMsgLog
+        msUnlock()
+    endif
+
+    if ! empty( cMsgLog )
+        qOut( cMsgLog + CRLF )
+    endif
+    rpcClearEnv()
+return nil
+
+
+/*/{Protheus.doc} registrarVQL
+rotina de registro de logs
+@type function
+@author Cristiam Rossi
+@since 18/09/2026
+/*/
+static function registrarVQL( cAgroup, cTipo, cFilExec, cDados, cHorario, lSendMail )
+local   oLogger  := DMS_Logger():New()
+local   cCodigo
+default cAgroup   := "OFCNHSCHED"
+default cTipo     := "PRIM2 + RICEC"
+default cFilExec  := ""
+default cDados    := ""
+default lSendMail := .F.
+
+	cCodigo := oLogger:LogToTable({;
+		{'VQL_AGROUP', cAgroup  },;
+		{'VQL_TIPO'  , cTipo    },;
+		{'VQL_DADOS' , cDados   },;
+		{'VQL_HORAI' , val( strTran( cHorario, ":", "" ) ) },;
+		{'VQL_FILORI', cFilExec } ;
+	})
+	FWFreeObj(oLogger)
+
+	if lSendMail
+//		lRet := OA060003C_sendMail( cTipo /*cAssunto*/, cDados /*cCorpo*/ )
+	endif
+
+return cCodigo

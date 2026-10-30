@@ -1,0 +1,190 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "totvs.ch"
+
+/*/{Protheus.doc} DupesOrganizationListResponseV1MessageReader
+	Classe de Integração Duplicata Escritural
+	Atualiza dados das Filiais habilitadas para operar Duplicata Escritural.
+	@type class
+	@author Squad TechFin
+	@since 3/20/2025
+/*/
+class DupesOrganizationListResponseV1MessageReader
+	data aDataOrgs as array
+	data jMSGData  as json
+	data jMessage  as json
+	data cMock     as character
+	data lMock     as logical
+
+	public method new() constructor
+	public method read()
+	public method mock()
+	method formatOrg()
+	method procOrgs()
+end class
+
+/*/{Protheus.doc} DupesOrganizationListResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 3/20/2025
+/*/
+method New() class DupesOrganizationListResponseV1MessageReader
+	::aDataOrgs := {}
+	::jMSGData  := JsonObject():new()
+	::jMessage  := JsonObject():new()
+	::cMock     := ""
+	::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} DupesOrganizationListResponseV1MessageReader::mock
+	Método para mockar a mensagem recebida para testes
+	@type method
+	@author Squad TechFin
+	@since 3/20/2025
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class DupesOrganizationListResponseV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} DupesOrganizationListResponseV1MessageReader::read
+	responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 3/20/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class DupesOrganizationListResponseV1MessageReader
+	local lSuccess  := .F. as logical
+	local cPayload  := ""  as character
+	local cDecoded  := ""  as character
+
+	cPayload := if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+	cDecoded := DecodeUTF8(cPayload)
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+	if ::jMessage:FromJSON(cPayload) == NIL
+		::jMSGData  := ::jMessage["data"]
+		If ::jMSGData == NIL
+			Return lSuccess
+		EndIf
+		::formatOrg()
+		::procOrgs()
+		lSuccess := .T.
+	endIf
+    FwFreeObj(::jMSGData)
+	FwFreeObj(::jMessage)
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} DupesOrganizationListResponseV1MessageReader::formatOrg
+	Obtem as Empresa/Filial do SYS_COMPANY
+	@type method
+	@author Squad TechFin
+	@since 3/20/2025
+/*/
+method formatOrg() class DupesOrganizationListResponseV1MessageReader
+	local aSM0         := FWLoadSM0()        as array
+	local nOrg         := 0                  as numeric
+	local nPosFil      := 0                  as numeric
+	local cBranchCNPJ  := ""                 as character
+	local cStatus      := ""                 as character
+	local cService     := ""                 as character
+	local jOrgData     := nil                as jSon
+
+	for nOrg := 1 to len(::jMSGData)
+		cBranchCNPJ  := ::jMSGData[nOrg]["cnpj"]		
+		cService	 := ::jMSGData[nOrg]["serviceType"]		
+		//Status Techfin: 0 = Inativo, 1 = Ativo
+		If ::jMSGData[nOrg]["status"] == 0
+			cStatus:="4"//Bloqueado 
+		Else
+			cStatus:="0"//Ativo
+		EndIF
+		
+		if (nPosFil := AScan(aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+			jOrgData := JsonObject():new()
+			jOrgData["ARA_GRPSM0"]	:= aSM0[nPosFil][1]
+			jOrgData["ARA_FILSM0"]	:= aSM0[nPosFil][2]
+			jOrgData["ARA_NOMFIL"]	:= aSM0[nPosFil][7]
+			jOrgData["ARA_CNPJ"]	:= cBranchCNPJ
+			jOrgData["ARA_STATUS"]	:= cStatus
+			jOrgData["service"]		:= cService
+			AADD(::aDataOrgs, {aSM0[nPosFil][1], aSM0[nPosFil][2], jOrgData:toJSON()}) //Grupo Empresa, Filial, Dados
+		endIf
+	next nOrg	
+return
+
+/*/{Protheus.doc} DupesOrganizationListResponseV1MessageReader::procOrgs
+	Inicia o processamento das organizações obtidas da mensagem de resposta do Smartlink Duplicatas Escritural.
+	@type method
+	@author Squad TechFin
+	@since 3/20/2025
+/*/
+method procOrgs() class DupesOrganizationListResponseV1MessageReader
+	local nOrg     := 0                   as numeric
+	local cPayload := ::jMessage:ToJSON() as character
+
+	for nOrg := 1 to len(::aDataOrgs)
+		StartJob("DupOrgList", GetEnvServer(), .T., ;
+			::aDataOrgs[nOrg][1] /*cCompany*/, ::aDataOrgs[nOrg][2] /*cBranch*/, ::aDataOrgs[nOrg][3], cPayload)
+	next nOrg
+return
+
+/*/{Protheus.doc} DupOrgList
+	Gravação da tabela ARA-Organization Techfin
+	@type function
+	@author Squad TechFin
+	@since 3/20/2025
+	@param cCompany, character, Grupo Empresa
+	@param cBranch , character, Filial
+	@param jData   , json     , dados da organização
+	@param cPayload, character, mensagem recebida
+/*/
+Function DupOrgList(cCompany as character, cBranch as character, cData as character, cPayload as character)
+	local lInsert    := .F.                as logical
+	local jData      := JsonObject():new() as json
+	Local jParams    := JsonObject():new() as json
+	local oSmartUtil := nil                as object
+
+	RPCSetType(3)
+	RPCSetEnv(cCompany, cBranch,,,'FIN') 
+	
+	jData:fromJson(cData)
+	dbSelectArea('ARA')
+	ARA->(dbSetOrder(1))
+	lInsert := !ARA->(dbSeek(FWxFilial('ARA') + jData["ARA_CNPJ"] + "5")) //ARA_FILIAL, ARA_CNPJ, ARA_PRODTF
+	//-- Atualiza tipo de serviço liberado para o parceiro - Sacado/Sacador/Ambos
+	If lInsert
+		//-- Constroi a estrutura padrão do jSon de parâmetros
+		jParams:fromJson(totvs.protheus.backoffice.techfin.duplicataescritural.config.dados.getDefault())
+	Else
+		jParams:fromJson(ARA->ARA_PARAMS)
+	EndIf
+	jParams['service'] := jData["service"]
+
+	BEGIN TRANSACTION
+		RecLock('ARA', lInsert)
+			if lInsert
+				ARA->ARA_FILIAL := FWxFilial('ARA')
+				ARA->ARA_GRPSM0 := jData["ARA_GRPSM0"]
+				ARA->ARA_FILSM0 := jData["ARA_FILSM0"]
+				ARA->ARA_NOMFIL := jData["ARA_NOMFIL"]
+				ARA->ARA_CNPJ   := jData["ARA_CNPJ"]
+				ARA->ARA_PRODTF := "5"// Produto: Duplicata Escritural
+			endIf
+			ARA->ARA_STATUS := jData["ARA_STATUS"]
+			ARA->ARA_PARAMS := jParams:toJson()
+		ARA->(MsUnlock())
+	END TRANSACTION
+
+	oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+	oSmartUtil:setAliasMSUID("ARA")
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oSmartUtil)
+	RpcClearEnv()
+Return

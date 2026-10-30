@@ -1,0 +1,541 @@
+#include "totvs.ch"
+#include "backoffice.sv.est.kardexbylocation.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+
+#DEFINE SX1GRUPO "ESTT005"
+
+using namespace totvs.protheus.backoffice.est.smartView.integratedProvider
+namespace totvs.protheus.backoffice.est.kardexbylocation.integratedprovider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T.,team="SIGAEST",tables="SB1,SB2,SBZ,SDB",name="Kardex por Endereço",country="ALL",customTables="ALL")
+
+class KardexByLocationTReportsBusinessObject from totvs.protheus.backoffice.est.smartView.integratedProvider.EstIntegratedProvider
+	
+	Public Method new() as object
+	Public Method getData() as object
+	Protected Method oNGetSchema()
+	Protected Method kbLoadFields()
+	Protected Method kbFilIn()
+
+	Public data cAlias			as character
+	Public data jItens			as json
+	Protected data cWhere		as character
+	Protected data aFieldsSB1	as array
+	Protected data aFieldsSB2	as array
+	Protected data aFieldsSBK	as array
+	Protected data aFieldsSDB	as array
+	Protected data lExistPergunte as logical
+
+endclass
+
+/*/{Protheus.doc} New
+Metodo de instancia da classe.
+@type  Metodo
+@author Squad Entradas
+@since  Junho 01,2023
+@return object, instancia da classe (self)
+/*/
+method new() class KardexByLocationTReportsBusinessObject
+
+Local cMsgSX1 := "" as character
+
+	_Super:new()
+
+	//Define a Área
+	self:appendArea(STR0001) // Estoque/Custos
+
+	//Define o nome do Objeto de Negócio
+	self:setDisplayName(STR0002) // Kardex por Endereço
+
+	//Define a descrição do Objeto de Negócio
+	self:setDescription( STR0003 ) // Emite um Kardex com todas as movimentações do estoque por endereço e número de série, diariamente.
+
+	//Indica o pergunte que será utilizado no relatório
+	self:lExistPergunte := self:SetPergunte(SX1GRUPO)
+	If !self:lExistPergunte
+		cMsgSX1 := OemToAnsi(I18N(STR0009,{SX1GRUPO})) //#Grupo de perguntas #1[SX1GRUPO]# nao encontrado. Verifique na tabela SX1, o grupo de perguntas informado
+		self:setErrorStatus(400,STR0010,cMsgSX1)   	  //#Sem Pergunte
+		FwLogMsg("WARN",, "SmartView ESTSV010",,,,cMsgSX1,,,)
+	EndIf
+
+	//Indica que o LookUp será do tipo padrão LookUp
+	self:setIsLookUp(.T.)
+
+return self
+
+/*/{Protheus.doc} getData
+Metodo que retorna o Objeto de dados.
+@type  Metodo
+@author Squad Entradas
+@since  Junho 01,2023
+@param  nPage  , numeric, numero da pagina requisitada pelo framework (paginacao controlada via setPageSize)
+@param  oFilter, object , objeto de filtro do Smart View (parametros e expressao SQL do filtro)
+@return object, objeto de dados preenchido (self:oData)
+/*/
+method getData(nPage as numeric, oFilter as object) as object class KardexByLocationTReportsBusinessObject
+
+Local cBkpFil	as character 
+local cDadosProd := Upper(SuperGetMV("MV_ARQPROD",.F.,"SB1")) as character
+local cEmpExec	:= "" as character
+local cFilExec	:= "" as character
+local cFilAux	:= "" as character
+local cFilAtual	:= "" as character
+local cInFiliais as character
+local cInFilSBK as character
+local cQuery	as character
+local cSeqDoc	as character
+local cProd		:= "" as character
+local cLocal	:= "" as character
+local cEndereco	:= "" as character
+local cLoteCtl	:= "" as character
+local cNumLote	:= "" as character
+local dDataDe	as date
+local dDataAte	as date
+local jParams	as json
+local nSldIni	as numeric
+local nSldFim	as numeric
+local nBind		as numeric
+Local nFil		as numeric 
+local lUseSetIn	as logical
+local aFiliais	as array
+local aFilSBK	as array
+local aFields	:= {} as array
+local oQuery	as object
+
+	If !self:SetPergunte('ESTT005')
+		Return self:oData
+	ENDIF
+
+	//Metodo para retorno do json dos parâmetros
+	jParams := oFilter:getParameters()
+
+    //Retorno da tela de multi filiais com as filiais selecionadas ou somente a filial corrente
+    //oFilter e passado para que retFils popule self:cWhereFiltroSV (filtro do Smart View) na classe pai
+    self:aFils := self:retFils(jParams['SV_MULTBRANCH'], oFilter)
+
+	aFiliais  := {}
+	For nFil := 1 to len(self:aFils)
+		aAdd(aFiliais, FWxFilial("SB2", self:aFils[nFil]))
+	Next nFil
+	lUseSetIn  := (Len(aFiliais) <= 50)
+	// kbFilIn retorna a lista literal quando > 50 filiais; vazio quando usa setIn()
+	cInFiliais := self:kbFilIn(aFiliais, lUseSetIn)
+
+	// Lista de filiais no formato da SBK (o nivel de compartilhamento da SBK pode diferir
+	// da SB2). Usada para filtrar a filial DENTRO da derived table do saldo inicial (SBKA)
+	// e da subconsulta correlacionada de MAX(BK_DATA) (SBKD), evitando que o BK_QINI de
+	// outra filial seja retornado como saldo inicial em ambiente com tabela compartilhada.
+	aFilSBK   := {}
+	For nFil := 1 to len(self:aFils)
+		aAdd(aFilSBK, FWxFilial("SBK", self:aFils[nFil]))
+	Next nFil
+	cInFilSBK := self:kbFilIn(aFilSBK, lUseSetIn)
+
+	//Define a quantidade máxima por página (Default 100)
+	self:setPageSize(500)
+
+	//Retorna o próximo Alias disponível
+	self:cAlias:= GetNextAlias()
+
+	nBind      := 1
+	dDataDe    := if(!empty(jParams['MV_PAR13'][1]), FwDateTimeToLocal(jParams['MV_PAR13'][1])[1], dDataBase)
+	dDataAte   := if(!empty(jParams['MV_PAR14'][1]), FwDateTimeToLocal(jParams['MV_PAR14'][1])[1], dDataBase)
+	
+	If jParams['MV_PAR17'][1] == 2
+		// Sem prefixo de tabela: usado no ORDER BY da query externa (derived table) - DENTRINO_CAPEX-675
+		cSeqDoc := "DB_DOC"
+	Else
+		cSeqDoc := "DB_NUMSEQ"
+	EndIf
+	//Retorna a estrutura de campos do schema (nome/tipo) para montagem generica do jItens
+	aFields := self:getStructFields()
+	
+	cQuery := " SELECT * FROM ( "
+	cQuery += " SELECT DISTINCT  " + self:getSQLFields(.T.) 
+	cQuery += " , CASE WHEN SDB.DB_TM <= '500' OR SUBSTRING(SDB.DB_TM,1,1) IN ('P','D') THEN SDB.DB_QUANT ELSE 0 END NENTRADA "
+	cQuery += " , CASE WHEN SDB.DB_TM <= '500' OR SUBSTRING(SDB.DB_TM,1,1) IN ('P','D') THEN 0 ELSE SDB.DB_QUANT END NSAIDA "
+	cQuery += " FROM " + RetSqlName("SB2") + " SB2 "
+
+	cQuery += " INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += "	ON " + FWJoinFilial("SB2", "SB1")
+	cQuery += " AND SB1.B1_COD = SB2.B2_COD "
+	if cDadosProd == 'SB1'
+		cQuery += "	AND SB1.B1_LOCALIZ	= ? "
+	endif
+	cQuery += "	AND SB1.D_E_L_E_T_	= ? " 
+
+	cQuery += " LEFT JOIN " + RetSqlName("SBZ") + " SBZ "
+	cQuery += "	ON " + FWJoinFilial("SB1", "SBZ")
+	cQuery += " AND SBZ.BZ_COD = SB1.B1_COD "
+	if cDadosProd == 'SBZ'
+		cQuery += " AND SBZ.BZ_LOCALIZ = ? "
+	endif
+	cQuery += " AND SBZ.D_E_L_E_T_ = ? "
+
+	cQuery += " LEFT JOIN " + RetSqlName("SDB") + " SDB "
+	cQuery += "	ON " + FWJoinFilial("SB2", "SDB")
+	cQuery += "	AND SDB.DB_PRODUTO = SB2.B2_COD "
+	cQuery += "	AND SDB.DB_LOCAL = SB2.B2_LOCAL "
+	cQuery += "	AND SDB.DB_LOCALIZ BETWEEN ? AND ? "
+	cQuery += "	AND SDB.DB_NUMSERI BETWEEN ? AND ? "
+	cQuery += "	AND SDB.DB_LOTECTL BETWEEN ? AND ? "
+	cQuery += "	AND SDB.DB_NUMLOTE BETWEEN ? AND ? "
+	cQuery += "	AND SDB.DB_DATA BETWEEN ? AND ? "
+	if jParams['MV_PAR16'][1] == 2
+		cQuery += "	AND SDB.DB_ESTORNO = ? " 
+	endif
+	cQuery += "	AND SDB.DB_ATUEST = ? " 
+	cQuery += "	AND SDB.D_E_L_E_T_ = ? "
+
+	cQuery += " LEFT JOIN ( "
+	cQuery += " SELECT "
+	cQuery += " SBKA.BK_FILIAL "
+	cQuery += " ,SBKA.BK_DATA "
+	cQuery += " ,SBKA.BK_COD "
+	cQuery += " ,SBKA.BK_LOCAL "
+	cQuery += " ,SBKA.BK_QINI "
+	cQuery += " ,SBKA.BK_LOTECTL "
+	cQuery += " ,SBKA.BK_NUMLOTE "
+	cQuery += " ,SBKA.BK_LOCALIZ "
+	cQuery += " ,SBKA.BK_NUMSERI "
+	cQuery += " FROM " + RetSqlName("SBK") + " SBKA "
+	cQuery += " WHERE "
+	cQUery += " SBKA.BK_DATA <= ? "
+	cQuery += " AND SBKA.D_E_L_E_T_ = ? "
+	// Filtro de filial na derived table do saldo inicial: sem ele a SBKA retorna registros
+	// de todas as filiais antes do JOIN externo (em tabela compartilhada o FWJoinFilial nao
+	// isola), podendo trazer o BK_QINI de outra filial como saldo inicial.
+	if lUseSetIn
+		cQuery += " AND SBKA.BK_FILIAL IN (?) "
+	else
+		// CA2050:SUPPRESS - cInFilSBK e construido de forma segura usando FWxFilial()
+		cQuery += " AND SBKA.BK_FILIAL IN (" + cInFilSBK + ") "
+	endif
+	cQuery += " AND SBKA.BK_DATA = ( SELECT MAX(SBKD.BK_DATA) FROM " + RetSqlName("SBK") + " SBKD "
+	cQuery += "                       WHERE SBKD.BK_FILIAL = SBKA.BK_FILIAL "
+	cQuery += "                         AND SBKD.BK_COD = SBKA.BK_COD "
+	cQuery += "                         AND SBKD.BK_LOCAL = SBKA.BK_LOCAL "
+	cQuery += "                         AND SBKD.BK_LOTECTL = SBKA.BK_LOTECTL "
+	cQuery += "                         AND SBKD.BK_NUMLOTE = SBKA.BK_NUMLOTE "
+	cQuery += "                         AND SBKD.BK_LOCALIZ = SBKA.BK_LOCALIZ "
+	cQuery += "                         AND SBKD.BK_NUMSERI = SBKA.BK_NUMSERI "
+	cQuery += "                         AND SBKD.BK_DATA <= ? "
+	cQuery += "                         AND SBKD.D_E_L_E_T_ = ? "
+	// Mesmo filtro de filial na subconsulta correlacionada do MAX(BK_DATA): garante que a
+	// data mais recente considerada seja da propria filial, nao de outra em ambiente compartilhado.
+	if lUseSetIn
+		cQuery += "                         AND SBKD.BK_FILIAL IN (?) "
+	else
+		// CA2050:SUPPRESS - cInFilSBK e construido de forma segura usando FWxFilial()
+		cQuery += "                         AND SBKD.BK_FILIAL IN (" + cInFilSBK + ") "
+	endif
+	cQuery += "                     ) "
+	cQuery += " ) SBK "
+	cQuery += " ON " + FWJoinFilial("SBK","SB2")
+	cQuery += " AND SBK.BK_COD = SB2.B2_COD "
+	cQuery += " AND SBK.BK_LOCAL = SB2.B2_LOCAL "
+	if jParams['MV_PAR15'][1] == 2
+		cQuery += " AND SBK.BK_LOTECTL = SDB.DB_LOTECTL "
+		cQuery += " AND SBK.BK_NUMLOTE = SDB.DB_NUMLOTE "
+		cQuery += " AND SBK.BK_LOCALIZ = SDB.DB_LOCALIZ "
+		cQuery += " AND SBK.BK_NUMSERI = SDB.DB_NUMSERI "
+	endif
+
+	cQuery += " WHERE "
+	if lUseSetIn
+		// Usa placeholder para setIn() - mais seguro e performatico
+		cQuery += " SB2.B2_FILIAL IN (?) "
+	else
+		// CA2050:SUPPRESS - cInFiliais e construido de forma segura usando FWxFilial()
+		cQuery += " SB2.B2_FILIAL IN (" + cInFiliais + ") "
+	endif
+	cQuery += " AND	SB2.B2_LOCAL BETWEEN ? AND ? "
+	cQuery += "	AND ( CASE WHEN( SBZ.BZ_COD IS NOT NULL ) THEN ( SBZ.BZ_COD ) ELSE ( SB1.B1_COD ) END ) BETWEEN ? AND ? "
+	cQuery += "	AND SB2.D_E_L_E_T_ = ? " 
+
+	if jParams['MV_PAR15'][1] == 2
+		cQuery += " AND SDB.DB_FILIAL IS NOT NULL "
+	endif
+
+	// Fecha a query interna (derived table). O filtro do Smart View e o ORDER BY ficam na
+	// query externa, onde NENTRADA/NSAIDA
+	cQuery += " ) KBEXT "
+
+	cQuery += " WHERE 1 = 1 "
+
+	//Os filtros sero setados na interface do Smart View (self:cWhereFiltroSV preenchido em retFils na classe pai)
+	cQuery += " ? "
+	cQuery += self:cWhere
+
+	// ORDER BY na query externa: colunas sem prefixo de tabela (a derived table expoe os nomes
+	// das colunas do SELECT interno). O ? recebe o cSeqDoc (DB_DOC/DB_NUMSEQ, sem prefixo).
+	cQuery += " ORDER BY B2_FILIAL,B1_COD,DB_LOCAL,DB_LOCALIZ,DB_LOTECTL,DB_NUMLOTE,"
+	cQuery += " DB_NUMSERI,DB_ITEM,DB_DATA,?,DB_SERIE"
+	cQuery := ChangeQuery(cQuery)
+	
+	oQuery := FwExecStatement():New(cQuery)
+	
+	cBkpFil := cFilant 
+
+	nBind    := 1
+
+	if cDadosProd == 'SB1'
+		oQuery:SetString(nBind++, 'S')
+	endif
+	
+	oQuery:SetString(nBind++, ' ')
+	
+	if cDadosProd == 'SBZ'
+		oQuery:SetString(nBind++, 'S')
+	endif
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetString(nBind++, jParams['MV_PAR05'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR06'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR07'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR08'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR09'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR10'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR11'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR12'][1])
+	oQuery:SetString(nBind++, dtos(dDataDe))
+	oQuery:SetString(nBind++, dtos(dDataAte))
+	if jParams['MV_PAR16'][1] == 2
+		oQuery:SetString(nBind++, ' ')
+	endif
+	oQuery:SetString(nBind++, 'S')
+	oQuery:SetString(nBind++, ' ')
+	oQuery:SetString(nBind++, dtos(dDataDe))
+	oQuery:SetString(nBind++, ' ')
+	// Bind do filtro de filial da derived table SBKA (setIn quando <= 50 filiais; caso
+	// contrario o IN literal cInFilSBK ja esta no texto e nao consome placeholder).
+	if lUseSetIn
+		oQuery:SetIn(nBind++, aFilSBK)
+	endif
+	// Bind da subconsulta correlacionada SBKD (correcao BK_QINI fora do GROUP BY) - mesma
+	// data de corte e mesmo filtro de D_E_L_E_T_ usados pela SBKA acima.
+	oQuery:SetString(nBind++, dtos(dDataDe))
+	oQuery:SetString(nBind++, ' ')
+	// Bind do filtro de filial da subconsulta SBKD (mesmo criterio da SBKA).
+	if lUseSetIn
+		oQuery:SetIn(nBind++, aFilSBK)
+	endif
+
+	// contrario o IN literal (cInFiliais) ja esta no texto da query e nao consome placeholder
+	if lUseSetIn
+		oQuery:SetIn(nBind++, aFiliais)
+	endif
+	oQuery:SetString(nBind++, jParams['MV_PAR03'][1])
+	oQuery:SetString(nBind++, jParams['MV_PAR04'][1])
+	oQuery:SetString(nBind++, jParams["MV_PAR01"][1])
+	oQuery:SetString(nBind++, jParams["MV_PAR02"][1])
+	oQuery:SetString(nBind++, ' ')
+	oQuery:setUnsafe(nBind++, self:cWhereFiltroSV)
+	oQuery:setUnsafe(nBind++, cSeqDoc)
+
+	oQuery:OpenAlias(self:cAlias)
+
+	while !(self:cAlias)->(Eof())
+
+		// Resolve o nome da empresa (EMPNOME) e da filial (FILNOME) via getInfoEmp() apenas na
+		// quebra de filial, evitando releitura do SM0 por linha.
+		if cFilAux <> (self:cAlias)->B2_FILIAL
+			cFilAux  := (self:cAlias)->B2_FILIAL
+			cEmpExec := self:getInfoEmp("M0_NOME"	, cFilAux)
+			cFilExec := self:getInfoEmp("M0_FILIAL"	, cFilAux)
+		endif
+
+		if !alltrim((self:cAlias)->(B2_FILIAL+B1_COD+if(empty(DB_LOCAL),B2_LOCAL,DB_LOCAL)+DB_LOCALIZ+DB_LOTECTL+DB_NUMLOTE)) == alltrim(cFilAtual+cProd+cLocal+cEndereco+cLoteCtl+cNumLote)
+				cFilAtual	:= (self:cAlias)->B2_FILIAL
+				//Mantido por seguranca de contexto - padrao das demais correcoes multi-filial
+				//(costComparison/balanceinprocess) para chamadas que dependam de cFilAnt.
+				cFilAnt		:= cFilAtual
+				cProd		:= (self:cAlias)->B1_COD
+				cEndereco	:= (self:cAlias)->(if(empty(BK_LOCALIZ),if(empty(DB_LOCALIZ),"",DB_LOCALIZ),BK_LOCALIZ))
+				cLoteCtl	:= (self:cAlias)->(if(empty(BK_LOTECTL),if(empty(DB_LOTECTL),"",DB_LOTECTL),BK_LOTECTL))
+				cNumLote	:= (self:cAlias)->(if(empty(BK_NUMLOTE),if(empty(DB_NUMLOTE),"",DB_NUMLOTE),BK_NUMLOTE))
+				cLocal		:= (self:cAlias)->(if(empty(DB_LOCAL),B2_LOCAL,DB_LOCAL))
+				nSldIni		:= (self:cAlias)->(if(empty((BK_QINI)),0,BK_QINI))
+				nSldFim		:= nSldIni
+			endif
+
+			// EMPNOME/FILNOME resolvidos via getInfoEmp() na quebra de filial
+			self:jItens := JsonObject():New()
+			self:jItens["EMPNOME"	]	:= cEmpExec
+			self:jItens["FILNOME"	]	:= cFilExec
+
+			// Carrega os dados do Cadastro do Produto (SB1) - copia generica via getStructFields()
+			self:kbLoadFields(aFields, "SB1")
+			
+			if empty((self:cAlias)->DB_FILIAL)
+
+				self:jItens["DB_LOCAL"  ]	:= cLocal
+				self:jItens["DB_LOCALIZ"]	:= cEndereco
+				self:jItens["DB_LOTECTL"]	:= cLoteCtl
+				self:jItens["DB_NUMLOTE"]	:= cNumLote
+				self:jItens["NSALDOINI" ]	:= nSldIni
+				self:jItens["NSAIDA"	]	:= 0
+				self:jItens["NENTRADA"	]	:= 0
+				self:jItens["NSALDO"	]	:= nSldFim
+
+			else
+				
+				self:jItens["NSALDOINI" ] := nSldIni
+				
+				// Carrega a Posicao de Estoque (SB2) e as movimentacoes do endereco (SDB) via getStructFields()
+				self:kbLoadFields(aFields, "SB2")
+				self:kbLoadFields(aFields, "SDB")
+
+				// Classificação do movimento de Entrada/Saida, impresso na linha do movimento
+				if (self:cAlias)->DB_TM <= "500" .Or. Substr((self:cAlias)->DB_TM,1,1) $ "PD"
+					self:jItens["NENTRADA"] := (self:cAlias)->DB_QUANT
+					self:jItens["NSAIDA"]	:= 0
+				else
+					self:jItens["NSAIDA"]	:= (self:cAlias)->DB_QUANT
+					self:jItens["NENTRADA"] := 0
+				endif
+
+				// Montagem do saldo final após a movimentação, impresso na linha de cada movimento.
+				if self:jItens["NENTRADA"] > 0 .Or. self:jItens["NSAIDA"] > 0
+					nSldFim += if(empty((self:cAlias)->DB_ESTORNO), self:jItens["NENTRADA"	], 0)
+					nSldFim -= if(empty((self:cAlias)->DB_ESTORNO), self:jItens["NSAIDA"	], 0)
+				endif
+
+				self:jItens["NSALDO" ] := nSldFim
+			
+			endif
+
+			self:processData()
+			self:appendData(self:jItens)
+
+			(self:cAlias)->(dbSkip())
+
+	enddo
+
+	(self:cAlias)->( DBCloseArea() )
+
+	oQuery:Destroy()
+
+	cFilAnt := cBkpFil
+
+return self:oData
+
+/*/{Protheus.doc} oNGetSchema
+Metodo que retorna a Estrutura de dados.
+@type  Metodo
+@author Squad Entradas
+@since  Junho 01,2023
+/*/
+method oNGetSchema() class KardexByLocationTReportsBusinessObject
+
+// EMPNOME/FILNOME e os saldos acumulados (NSALDOINI/NSALDO) sao calculados em AdvPL e NAO
+// existem como coluna na query, portanto continuam nao filtraveis em SQL 
+local lCanFilter := .F. as logical
+// NENTRADA/NSAIDA passaram a ser projetados via CASE WHEN na query (derived table KBEXT),
+// logo podem ser filtrados em SQL pelo Smart View 
+local lCanFiltMov := .T. as logical
+
+	self:aFieldsSB1 := {"B1_FILIAL","B1_COD","B1_DESC","B1_UM","B1_TIPO","B1_GRUPO"}
+	self:aFieldsSB2 := {"B2_FILIAL","B2_LOCAL"}
+	self:aFieldsSBK := {"BK_QINI","BK_LOCALIZ","BK_LOTECTL","BK_NUMLOTE","BK_NUMSERI"}
+	self:aFieldsSDB := FWSX3Util():GetAllFields("SDB",.F.)
+	
+	self:AliasToSchema("SB1",self:aFieldsSB1)
+	self:AliasToSchema("SB2",self:aFieldsSB2)
+	self:AliasToSchema("SBK",self:aFieldsSBK)
+	self:AliasToSchema("SDB",self:aFieldsSDB)
+
+	self:oSchema:addProperty("EMPNOME"  , STR0004, "string", STR0004, "EMPNOME", , , , lCanFilter)
+	self:oSchema:addProperty("FILNOME"  , STR0005, "string", STR0005, "FILNOME", , , , lCanFilter)
+	self:oSchema:addProperty("NSALDOINI", STR0006, "number", STR0006, "NSALDOINI", , , , lCanFilter)
+	self:oSchema:addProperty("NENTRADA" , STR0007, "number", STR0007, "NENTRADA", , , , lCanFiltMov)
+	self:oSchema:addProperty("NSAIDA"   , STR0008, "number", STR0008, "NSAIDA", , , , lCanFiltMov)
+	self:oSchema:addProperty("NSALDO"   , STR0011, "number", STR0011, "NSALDO", , , , lCanFilter)
+
+return
+
+/*/{Protheus.doc} kbLoadFields
+Copia genericamente para self:jItens os campos do schema (obtidos via
+self:getStructFields()) que pertencem a tabela informada, usando o nome (getName)
+e o tipo (getType) de cada campo. Campos do tipo "date" sao convertidos para
+timestamp do TReports. Substitui a antiga preparacao de tipos via estGetCpo,
+usando a estrutura do proprio schema como fonte de nome/tipo dos campos.
+@type  Metodo
+@author Squad Entradas
+@since  Maio 16,2023
+@param  aFields   , array    , estrutura de campos retornada por getStructFields()
+@param  cAliasTab , character, alias da tabela cujos campos serao carregados (SB1, SB2, SDB)
+/*/
+Method kbLoadFields(aFields as array, cAliasTab as character) class KardexByLocationTReportsBusinessObject
+
+local cPref		:= "" as character
+local cFldName	:= "" as character
+local cReal		:= "" as character
+local cFldType	:= "" as character
+local nX		:= 0  as numeric
+
+	// Prefixo dos campos por tabela (evita consulta ao dicionario dentro do laco)
+	do case
+		case cAliasTab == "SB1"
+			cPref := "B1_"
+		case cAliasTab == "SB2"
+			cPref := "B2_"
+		case cAliasTab == "SDB"
+			cPref := "DB_"
+	endcase
+
+	for nX := 1 to len(aFields)
+
+		// getRealName(): nome real da coluna na tabela/alias (usado para posicionar no filtro
+		// por tabela e para acessar o valor no alias da query)
+		cReal := alltrim(aFields[nX]:getRealName())
+
+		// So carrega os campos reais que pertencem a tabela solicitada
+		if !(Left(cReal, Len(cPref)) == cPref)
+			loop
+		endif
+
+		// getName(): ID do campo no schema (chave usada na montagem do jItens/JSON)
+		// getType(): tipo do campo no schema (define o tratamento posterior a atribuicao)
+		cFldName := alltrim(aFields[nX]:getName())
+		cFldType := alltrim(aFields[nX]:getType())
+
+		if cFldType == "date"
+			if !Empty((self:cAlias)->&(cFldName))
+				self:jItens[cFldName] := totvs.framework.treports.date.dateToTimeStamp(StoD((self:cAlias)->&(cFldName)))
+			endif
+		else
+			self:jItens[cFldName] := (self:cAlias)->&(cFldName)
+		endif
+
+	next nX
+
+Return
+
+/*/{Protheus.doc} kbFilIn
+Monta a lista literal de filiais para clausula IN quando ha mais de 50 filiais
+(setIn() do FwExecStatement suporta no maximo 50 itens). Retorna string vazia
+quando lUseSetIn e verdadeiro (nesse caso usa-se o placeholder com setIn()).
+As filiais ja vem no formato SQL (FWxFilial), portanto a lista e segura.
+@type Static Function
+@param aFiliais , array  , filiais no formato SQL (FWxFilial)
+@param lUseSetIn, logico , .T. quando <= 50 filiais (usa setIn, nao monta lista)
+@return character, lista literal 'F1','F2',... ou "" quando usa setIn
+@author Squad Entradas
+@since 09/2026
+/*/
+Method kbFilIn(aFiliais as array, lUseSetIn as logical) class KardexByLocationTReportsBusinessObject
+
+local cIn := "" as character
+local nX  := 0 as numeric
+
+	If !lUseSetIn
+		For nX := 1 to Len(aFiliais)
+			If nX > 1
+				cIn += ","
+			EndIf
+			// CA2050:SUPPRESS - lista construida com FWxFilial(), nao contem input de usuario
+			cIn += "'" + aFiliais[nX] + "'"
+		Next nX
+	EndIf
+
+Return cIn

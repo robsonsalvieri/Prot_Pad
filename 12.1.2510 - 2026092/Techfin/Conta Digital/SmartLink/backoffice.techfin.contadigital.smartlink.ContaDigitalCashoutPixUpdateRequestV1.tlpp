@@ -1,0 +1,326 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+
+Static __cStatBx    := "7" //Baixado
+Static __cStatErro  := "9" //Retorno de erro pela TechFin
+Static __cStAgenCan := "8" //Retorno de Cancelamento pela Tecfin
+Static __cStAproRej := "0" //Retorno de Cancelamento pela Tecfin
+
+/*/{Protheus.doc} ContaDigitalCashoutPixUpdateRequestV1MessageReader
+	Classe de Integração Novo Antecipa
+	Cadastra conta digital no cadastro de bancos.
+	@type class
+	@author Squad TechFin
+	@since 24/04/2026
+/*/
+class ContaDigitalCashoutPixUpdateRequestV1MessageReader
+	data jMessage  as json
+	data cMock     as character
+	data lMock     as logical
+
+	public method new() constructor
+	public method read() as logical
+	public method mock()
+end class
+
+/*/{Protheus.doc} ContaDigitalCashoutPixUpdateRequestV1 MessageReader::New
+	Método construtor da classe
+	@type method
+	@author squad TechFin
+	@since 24/04/2026
+/*/
+method New() class ContaDigitalCashoutPixUpdateRequestV1MessageReader
+	::jMessage  := JsonObject():new()
+	::cMock     := ""
+	::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} ContaDigitalCashoutPixUpdateRequestV1MessageReader::mock
+	Método para mockar a mensagem recebida para testes
+	@type method
+	@author Squad TechFin
+	@since 24/04/2026
+	@param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class ContaDigitalCashoutPixUpdateRequestV1MessageReader
+	::cMock := cData
+	::lMock := .T.
+return
+
+/*/{Protheus.doc} ContaDigitalCashoutPixUpdateRequestV1 MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 24/04/2026
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) as Logical class ContaDigitalCashoutPixUpdateRequestV1MessageReader 
+	local lSuccess      := .F.        as logical
+	local cPayload      := ""         as character
+	local aSM0          := {}         as array
+    local aRequestId    := {}         as array
+	local cBranchCNPJ   := ""         as character
+	local nPosFil       := 0          as numeric
+	local cCompany      := ""         as character
+	local cBranch       := ""         as character
+	local aError        := {}         as array
+	local oSmartUtil    := nil        as object
+	local cType         := "ContaDigitalCashoutPixUpdateResponseV1" as character
+
+	cPayload   :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+
+	if ::jMessage:FromJSON(cPayload) == NIL
+
+		cBranchCNPJ  := ::jMessage["data"]["companyCnpj"]
+		aSM0         := FwLoadSM0()
+		if (nPosFil := AScan(aSM0, { |x| AllTrim(x[18]) $ AllTrim(cBranchCNPJ)})) > 0
+			cCompany := aSM0[nPosFil][1]
+			cBranch  := aSM0[nPosFil][2]
+            If ::jMessage["data"]["status"] == "CONFIRMED"
+       			lSuccess := StartJob("cashOutPixConfirmed", GetEnvServer(), .T., cCompany, cBranch, cPayload)
+            Else
+       			lSuccess := StartJob("cashOutPixError", GetEnvServer(), .T., cCompany, cBranch, cPayload)
+            EndIf
+		else
+			oSmartUtil := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():New()
+			oSmartUtil:sendProcessingResult("Received", cType, cPayload,,,.T.)
+			oSmartUtil:addLogMSG("error", "TechFin branch", "Filial não localizada") 
+			oSmartUtil:sendProcessingResult("Error", cType, cPayload, "TechFin branch", "Filial não localizada",.T.) 
+			oSmartUtil:logResponse(cPayload, ::jMessage["data"]["body"]["id"])
+			FwFreeObj(oSmartUtil)
+		endIf
+	endIf
+	FwFreeArray(aSM0)
+	FwFreeArray(aError)
+	FwFreeArray(aRequestId)
+
+Return lSuccess // .T. apaga a mensagem da fila do smartlink
+
+/*/{Protheus.doc} cashOutPixConfirmed
+	Responsável pela resposta da confirmação de pagamento via PIX (chave/EMV/Manual) e execução da baixa do título.
+	@type Function
+	@author Squad TechFin
+	@since 10/12/2025
+	@param cCompany, character, empresa
+	@param cBranch, character, filial
+	@param cPayload, character, payload da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+Function cashOutPixConfirmed(cCompany as character, cBranch as character, cPayload as character) as logical
+	local aAutoSE2      := {}                  as Array
+	local nIndex        := 1                   as Numeric
+	local aError        := {}                  as Array
+    local aRequestId    := {}                  as Array
+    local aRetExtrato   := {}                  as Array
+	local cErrorCode    := ""                  as Character
+    local cErrorContent := ""                  as Character
+	local jData         := JsonObject():New()  as json
+    local cIdSEA        := ""                  as character
+    local cIdSA6        := ""                  as character
+    local cMotBx        := ""                  as character
+    local cInitType     := ""                  as character
+    local cMvMotivo     := ""                  as character
+    local lProcessa     := .T.                 as logical
+    local lBaixaOk      := .T.                 as logical
+    local dBaixa        := Date()              as date
+    Local oError                               as object
+	local oSmartUtil    := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new() as Object
+	local cType         := "ContaDigitalCashoutPixUpdateResponseV1"                     as character
+
+	Private lMsErroAuto    := .F. as Logical
+	Private lAutoErrNoFile := .T. as Logical
+	Private lMsHelpAuto    := .T. as Logical
+
+	jData:FromJSON(cPayload)
+	RPCSetEnv(cCompany,cBranch)
+
+	oSmartUtil:sendProcessingResult("Received", cType, cPayload,,,.T.)
+
+    //RN05 - Identifica a submodalidade PIX pelo initiationType do payload de retorno
+    cInitType := jData["data"]["body"]["initiationType"]
+    Do Case
+        Case cInitType == "DICT"
+            cMvMotivo := "MV_TFMOTPX"
+        Case cInitType == "STATIC_QRCODE" .Or. cInitType == "DYNAMIC_QRCODE"
+            cMvMotivo := "MV_TFMOTPE"
+        Case cInitType == "MANUAL"
+            cMvMotivo := "MV_TFMOTPM"
+        OtherWise
+            //Não bloqueia o extrato (RN edge case) - apenas a baixa não é realizada. Erro registrado apenas em log interno.
+            lBaixaOk := .F.
+            oSmartUtil:addLogMSG("error", "Pix Payment Error", "Tipo de iniciação PIX não suportado: " + AllTrim(cInitType))
+    EndCase
+
+    Begin Transaction
+        Try
+
+            If lBaixaOk
+                cMotBx := SuperGetMv(cMvMotivo,.F.,"DEB")
+
+                //RN02 - Para as novas modalidades (TED/PIX), se o motivo não movimenta banco, usa "DEB" automaticamente e segue com a baixa (não bloqueia)
+                If !MovBcoBx( cMotBx )
+                    oSmartUtil:addLogMSG("info", "Pix Motivo Baixa Fallback", "Motivo de baixa '" + AllTrim(cMotBx) + "' configurado em " + cMvMotivo + " não movimenta banco. Utilizando 'DEB' automaticamente.")
+                    cMotBx := "DEB"
+                EndIf
+            EndIf
+
+            cIdSA6 := jData["data"]["bankAccountId"]
+            SA6->(DbSetOrder(4))
+            If !SA6->(msSeek(FWxFilial("SA6") + cIdSA6))
+                lProcessa := .F.
+                cErrorCode    := "Techfin Account Error"
+                cErrorContent := "Conta bancária não encontrada."
+            EndIf
+
+            If lProcessa .And. lBaixaOk .And. Empty(jData["data"]["erpId"])
+                lBaixaOk := .F. 
+            ElseIf lProcessa .And. lBaixaOk
+                aRequestId := StrToArray(jData["data"]["erpId"],"|")
+                cIdSEA := aRequestId[3]
+                If !totvs.protheus.backoffice.techfin.util.setPositionByUUID("SEA", cIdSEA)
+                    lBaixaOk      := .F.
+                    lProcessa     := .F.
+                    cErrorCode    := "Pix Payment Error"
+                    cErrorContent := "Título não encontrado para baixa"
+                EndIf
+            EndIf
+
+            If lProcessa .And. lBaixaOk
+                dBaixa := StoD(StrTran(SubStr(jData["data"]["body"]["createDate"],1,10),"-",""))
+                aAutoSE2   := {}
+                Aadd(aAutoSE2, {"E2_PREFIXO", SEA->(EA_PREFIXO), NIL})
+                Aadd(aAutoSE2, {"E2_NUM"    , SEA->(EA_NUM)    , NIL})
+                Aadd(aAutoSE2, {"E2_PARCELA", SEA->(EA_PARCELA), NIL})
+                Aadd(aAutoSE2, {"E2_TIPO"   , SEA->(EA_TIPO)   , NIL})
+                Aadd(aAutoSE2, {"E2_FORNECE", SEA->(EA_FORNECE), NIL})
+                Aadd(aAutoSE2, {"E2_LOJA"   , SEA->(EA_LOJA)   , NIL})
+                Aadd(aAutoSE2, {"E2_BAIXA"  , dBaixa           , NIL})
+                Aadd(aAutoSE2, {"AUTMOTBX"  , cMotBx           , NIL})
+                Aadd(aAutoSE2, {"AUTBANCO"  , SA6->(A6_COD)    , NIL})
+                Aadd(aAutoSE2, {"AUTAGENCIA", SA6->(A6_AGENCIA), NIL})
+                Aadd(aAutoSE2, {"AUTCONTA"  , SA6->(A6_NUMCON) , NIL})
+
+                aAutoSE2 := FwVetByDic(aAutoSE2, "SE2")
+                MSExecAuto( {|x,y| FINA080( x, y ) }, aAutoSE2, 3 )
+                If(lMsErroAuto)
+                    cErrorCode := "ExecAuto FINA080 Error"
+                    aError := GetAutoGRLog()
+                    For nIndex := 1 To Len(aError)
+                        cErrorContent += aError[nIndex] + Chr(13) + Chr(10)
+                    Next nIndex
+                Else
+                    totvs.protheus.backoffice.techfin.util.setPositionByUUID("SEA", cIdSEA)
+                    SEA->(RecLock("SEA",.F.))
+                    SEA->EA_STTFIN := __cStatBx
+                    SEA->(MsUnlock())
+                EndIf
+            EndIf
+
+        Catch oError
+            cErrorCode    := "TFCDCashoutPixUpdateError"
+            cErrorContent := oError:Description
+	        FwFreeObj(oError)
+            DisarmTransaction()
+            break
+        Endtry
+    End Transaction
+
+    If cErrorContent != ""
+        oSmartUtil:addLogMSG("error", cErrorCode, cErrorContent)
+        oSmartUtil:sendProcessingResult("Error", cType, cPayload, cErrorCode, cErrorContent,.T.)
+    Else
+        //Grava o extrato bancário da conta digital
+        If tlpp.ffunc("totvs.protheus.backoffice.techfin.contadigital.extrato.procExtrato")
+            aRetExtrato := totvs.protheus.backoffice.techfin.contadigital.extrato.procExtrato(jData["data"]["bankAccountId"], jData["data"]["body"]["amount"], Date(), cType)
+            If aRetExtrato[1] == .F.
+                cErrorCode    := "Techfin Extract Error"
+                oSmartUtil:addLogMSG("error", cErrorCode, aRetExtrato[2])
+                oSmartUtil:sendProcessingResult("Error", cType, cPayload, cErrorCode, aRetExtrato[2],.T.)
+            Else
+                oSmartUtil:sendProcessingResult("Created", cType, cPayload,,,.T.)
+            EndIf
+        EndIf
+    EndIf
+    oSmartUtil:logResponse(cPayload, jData["data"]["body"]["id"])
+
+	FwFreeObj(oSmartUtil)
+	FwFreeArray(aAutoSE2)
+	FwFreeArray(aError)
+	FwFreeObj(jData)
+	RpcClearEnv()
+return .T.
+
+
+/*/{Protheus.doc} ContaDigitalBankAccountCreateRequestV1MessageReader::cashOutPixError
+	Responsável pela resposta do erro de pagamento.
+	@type Function
+	@author Squad TechFin
+	@since 10/12/2025
+	@param 
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+Function cashOutPixError(cCompany as character, cBranch as character, cPayload as character) as logical
+	local aRequestId    := {}                  as Array
+	local jData         := JsonObject():New()  as json
+    local cIdSEA        := ""                  as character
+    local lProcessa     := .T.                 as logical
+	local cErrorCode    := ""                  as Character
+    local cErrorContent := ""                  as Character
+    Local oError                               as object
+	local oSmartUtil    := totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new() as Object
+	local cType         := "ContaDigitalCashoutPixUpdateResponseV1"                     as character
+	
+	jData:FromJSON(cPayload)
+	RPCSetEnv(cCompany,cBranch)
+	
+	oSmartUtil:sendProcessingResult("Received", cType, cPayload,,,.T.)
+
+    Begin Transaction
+        Try
+            aRequestId := StrToArray(jData["data"]["erpId"],"|")
+            cIdSEA := aRequestId[3]
+            If !totvs.protheus.backoffice.techfin.util.setPositionByUUID("SEA", cIdSEA)
+                lProcessa     := .F.
+                cErrorCode    := "TFCDCashoutPixUpdateError"
+                cErrorContent := "Título não encontrado para baixa"
+            EndIf
+
+            If lProcessa
+                If jData["data"]["status"] == "ERROR"
+                    SEA->(RecLock("SEA",.F.))
+                    SEA->EA_STTFIN := __cStatErro
+                    SEA->(MsUnlock())
+                ElseIf jData["data"]["status"] == "CANCELLED"
+                    SEA->(RecLock("SEA",.F.))
+                    If SEA->EA_STTFIN == '4'
+                        SEA->EA_STTFIN := __cStAgenCan
+                    Else
+                        SEA->EA_STTFIN := __cStAproRej
+                    EndIf
+                    SEA->(MsUnlock())
+                EndIf
+            EndIf
+        Catch oError
+            cErrorCode    := "TFCDCashoutPixUpdateError"
+            cErrorContent := oError:Description
+        	FwFreeObj(oError)
+            DisarmTransaction()
+            break
+        Endtry
+    End Transaction
+
+    If cErrorContent != ""
+        oSmartUtil:addLogMSG("error", cErrorCode, cErrorContent)
+        oSmartUtil:sendProcessingResult("Error", cType, cPayload, cErrorCode, cErrorContent,.T.)
+    Else
+        oSmartUtil:sendProcessingResult("Created", cType, cPayload,,,.T.)
+    EndIf
+
+    oSmartUtil:logResponse(cPayload, jData["data"]["body"]["id"])
+
+	FwFreeObj(oSmartUtil)
+	FwFreeObj(jData)
+	RpcClearEnv()
+
+return .T.

@@ -1,0 +1,641 @@
+#include 'fw-tlpp-core.th'
+#include "protheus.ch"
+#include "FWMVCDEF.ch"
+#include "totvs.framework.model.events.th"
+#include "totvs.rh.sucessaovinculos.events.gpea926.ch"
+
+namespace totvs.rh.sucessaovinculos.events
+
+Static lIntTAF
+Static lMiddleware
+Static cEFDAviso
+Static cVersEnvio
+Static cVersGPE
+
+class GPEA926
+    public method new() as object
+
+    @beforeUpdateInTransaction()
+    public method beforeUpdateInTransaction(oData, oModel, oError, oSuccess) as logical
+EndClass
+
+Method new() as object class GPEA926
+    lIntTAF     := ((SuperGetMv("MV_RHTAF",, .F.) == .T.) .And. Val(SuperGetMv("MV_FASESOC",, " ")) >= 1)
+    lMiddleware := .F.
+    cEFDAviso   := SuperGetMv("MV_EFDAVIS",, "0")
+    cVersEnvio  := ""
+    cVersGPE    := ""
+
+    If cPaisLoc == "BRA" .And. FindFunction("fVerMW")
+        lMiddleware := fVerMW()
+    EndIf
+
+    If cPaisLoc == "BRA" .And. FindFunction("fEFDAviso")
+        cEFDAviso := fEFDAviso()
+    EndIf
+
+    If FindFunction("fVersEsoc")
+        fVersEsoc("S2200", .F.,,, @cVersEnvio, @cVersGPE)
+    EndIf
+
+    If Empty(cVersGPE)
+        cVersGPE := cVersEnvio
+    EndIf
+return self
+
+method beforeUpdateInTransaction(oData as object, oModel as object, oError as object, oSuccess as object) as logical class GPEA926
+return gp926BeforeSave(oData, oError, oSuccess)
+
+Static Function gp926BeforeSave(oData as object, oError as object, oSuccess as object) as logical
+    Local lRet    As Logical
+    Local aErrors As Array
+    Local aWarns  As Array
+    Local aArea   As Array
+    Local cSuccess As Character
+
+    aErrors := {}
+    aWarns  := {}
+    aArea   := GetArea()
+    cSuccess := ""
+
+    If lIntTAF .And. !lMiddleware .And. cVersGPE <> cVersEnvio .And. (cVersGPE >= "9.0" .Or. cVersEnvio >= "9.0")
+        aAdd(aErrors, STR0001 + cVersGPE + STR0002 + cVersEnvio + STR0003) // "A versão do leiaute GPE é " + cVersGPE + " e a do TAF é " + cVersEnvio + ", sendo assim, estão divergentes. A rotina será encerrada."
+        lRet := .F.
+    Else
+        lRet := gp926ValidatePayload(oData, @aErrors, @aWarns)
+        If lRet
+            lRet := gp926CommitESocial(oData, @aErrors, @aWarns, @cSuccess)
+        EndIf
+    EndIf
+
+    RestArea(aArea)
+    gp926SetMessages(aErrors, aWarns, cSuccess, oError, oSuccess)
+return lRet
+
+Static Function gp926ValidatePayload(oData as object, aErrors as array, aWarns as array) as logical
+    Local oJsonData     As Json
+    Local aRFZ          As Array
+    Local aArea         As Array
+    Local cFilSRA       As Character
+    Local cCgcFil       As Character
+    Local dAdmissa      As Date
+    Local lRet          As Logical
+    Local lHasPrcad     As Logical
+    Local lHasDtTra     As Logical
+    Local nX            As Numeric
+
+    lRet      := .T.
+    aRFZ      := {}
+    cCgcFil   := ""
+    lHasPrcad := gp926HasField("RFZ", "RFZ_PRCAD")
+    lHasDtTra := gp926HasField("RFZ", "RFZ_DTTRA")
+
+    oJsonData := oData:GetData()
+
+    If oJsonData:HasProperty("RFZ")
+        aRFZ := oJsonData["RFZ"]
+    EndIf
+
+    cFilSRA   := gp926GetSRAField(oJsonData, "RA_FILIAL")
+    dAdmissa  := gp926ToDate(gp926GetSRAField(oJsonData, "RA_ADMISSA"))
+    aArea     := GetArea()
+
+    dbSelectArea("SM0")
+    If SM0->(dbSeek(cEmpAnt + cFilSRA))
+        cCgcFil := AllTrim(SM0->M0_CGC)
+    EndIf
+
+    RestArea(aArea)
+
+    For nX := 1 To Len(aRFZ)
+        If gp926LinhaDeletada(aRFZ[nX])
+            Loop
+        EndIf
+
+        If !gp926ValidateLinha(aRFZ[nX], nX, cCgcFil, dAdmissa, lHasPrcad, lHasDtTra, @aErrors, @aWarns)
+            lRet := .F.
+        EndIf
+    Next nX
+return lRet
+
+Static Function gp926ValidateLinha(oLinha as json, nLinha as numeric, cCgcFil as character, dAdmissa as date, lHasPrcad as logical, lHasDtTra as logical, aErrors as array, aWarns as array) as logical
+    Local lRet   As Logical
+    Local cTpAdm As Character
+    Local cMsg   As Character
+
+    lRet   := .T.
+    cTpAdm := AllTrim(gp926JsonChar(oLinha, "RFZ_TPADM"))
+    cMsg   := ""
+
+    If !gp926ValidateWhen(oLinha, @aErrors)
+        Return .F.
+    EndIf
+
+    If cEFDAviso == "2"
+        Return lRet
+    EndIf
+
+    If Empty(gp926JsonChar(oLinha, "RFZ_INDADM"))
+        gp926AddAviso(STR0005, @aErrors, @aWarns) // "O campo Indic. Admiss. é de preenchimento obrigatório!"
+        lRet := lRet .And. (cEFDAviso <> "1")
+    EndIf
+
+    If Empty(gp926JsonChar(oLinha, "RFZ_INDPEM"))
+        gp926AddAviso(STR0006, @aErrors, @aWarns) // "O campo Ind. Prim. Emp. é de preenchimento obrigatório!"
+        lRet := lRet .And. (cEFDAviso <> "1")
+    EndIf
+
+    If gp926TpAdmAnterior(cTpAdm) .And. (Empty(gp926JsonChar(oLinha, "RFZ_CNPJAN")) .Or. ;
+                                        Empty(gp926JsonChar(oLinha, "RFZ_MATANT")) .Or. ;
+                                        Empty(gp926JsonDate(oLinha, "RFZ_DTADAN")))
+        aAdd(aErrors, STR0027) // "Se forem selecionadas as opções 2, 3 ou 4 em Tp. Admissão, os campos 'Insc. Empresa', 'Mat. Anterior' e 'Dt. Admissão' serão de preenchimento obrigatório!"
+        lRet := .F.
+    EndIf
+
+    If gp926TpAdmAnterior(cTpAdm) .And. !gp926InscOk(gp926JsonChar(oLinha, "RFZ_CNPJAN"), gp926JsonChar(oLinha, "RFZ_TPINSC"), cCgcFil, @cMsg)
+        gp926AddAviso(cMsg + STR0007 + cValToChar(nLinha) + STR0008, @aErrors, @aWarns) // " Linha " + cValToChar(nLinha) + "."
+        lRet := lRet .And. (cEFDAviso <> "1")
+    EndIf
+
+    If !gp926ValidateDates(oLinha, dAdmissa, @aErrors)
+        lRet := .F.
+    EndIf
+
+    If lHasPrcad .And. !Empty(gp926JsonChar(oLinha, "RFZ_PRCAD")) .And. gp926JsonChar(oLinha, "RFZ_INDADM") <> "3"
+        aAdd(aErrors, STR0009 + AllTrim(TITSX3("RFZ_PRCAD")[1]) + STR0010 + AllTrim(TITSX3("RFZ_INDADM")[1]) + STR0011) // "Campo: " + AllTrim(TITSX3("RFZ_PRCAD")[1]) + " só deve ser preenchido quando " + AllTrim(TITSX3("RFZ_INDADM")[1]) + " for igual a 3."
+        lRet := .F.
+    EndIf
+
+    If lHasDtTra .And. cVersGPE >= "2.4" .And. cTpAdm <> "1" .And. Empty(gp926JsonDate(oLinha, "RFZ_DTTRA"))
+        aAdd(aErrors, STR0012) // "Quando o Tipo de Admissão for diferente de '1', o preenchimento do campo 'Data de transferência' é obrigatório."
+        lRet := .F.
+    EndIf
+return lRet
+
+Static Function gp926ValidateWhen(oLinha as json, aErrors as array) as logical
+    Local lRet   As Logical
+    Local cTpAdm As Character
+
+    lRet   := .T.
+    cTpAdm := AllTrim(gp926JsonChar(oLinha, "RFZ_TPADM"))
+
+    If !gp926TpAdmAnterior(cTpAdm) .And. (!Empty(gp926JsonChar(oLinha, "RFZ_CNPJAN")) .Or. ;
+                                          !Empty(gp926JsonChar(oLinha, "RFZ_MATANT")) .Or. ;
+                                          !Empty(gp926JsonDate(oLinha, "RFZ_DTADAN")))
+        aAdd(aErrors, STR0028) // "Os campos 'Insc. Empresa', 'Mat. Anterior' e 'Dt. Admissão' não devem ser preenchidos para o Tipo de Admissão informado."
+        lRet := .F.
+    EndIf
+
+    If cTpAdm <> "4" .And. !Empty(gp926JsonChar(oLinha, "RFZ_ONUS"))
+        aAdd(aErrors, STR0029) // "O campo 'Ônus da Cessão' somente deve ser preenchido quando o Tipo de Admissão for igual a '4'."
+        lRet := .F.
+    EndIf
+
+    If cTpAdm == "1" .And. !Empty(gp926JsonDate(oLinha, "RFZ_DTTRA"))
+        aAdd(aErrors, STR0030) // "O campo 'Data de transferência' não deve ser preenchido quando o Tipo de Admissão for igual a '1'."
+        lRet := .F.
+    EndIf
+return lRet
+
+Static Function gp926TpAdmAnterior(cTpAdm as character) as logical
+return cTpAdm == "2" .Or. cTpAdm == "3" .Or. cTpAdm == "4"
+
+Static Function gp926ValidateDates(oLinha as json, dAdmissa as date, aErrors as array) as logical
+    Local lRet     As Logical
+    Local dDtAdAnt As Date
+    // Regra de RFZ_DTADCE desativada enquanto o frame SmartX não disponibiliza o campo.
+    // Local dDtAdCed As Date
+
+    lRet     := .T.
+    dDtAdAnt := gp926JsonDate(oLinha, "RFZ_DTADAN")
+    // dDtAdCed := gp926JsonDate(oLinha, "RFZ_DTADCE")
+
+    If !Empty(dAdmissa) .And. !Empty(dDtAdAnt) .And. dDtAdAnt > dAdmissa
+        aAdd(aErrors, STR0013 + DtoC(dAdmissa)) // "A data de início do vínculo trabalhista deve ser anterior à data de admissão do trabalhador na empresa declarante. Funcionário admitido em: " + DtoC(dAdmissa)
+        lRet := .F.
+    EndIf
+
+    // If !Empty(dAdmissa) .And. !Empty(dDtAdCed) .And. dDtAdCed > dAdmissa
+    //     aAdd(aErrors, STR0014 + DtoC(dAdmissa)) // "A data de admissão do trabalhador no empregador de origem (cedente) deve ser anterior à data de admissão do trabalhador na empresa declarante. Funcionário admitido em: " + DtoC(dAdmissa)
+    //     lRet := .F.
+    // EndIf
+return lRet
+
+Static Function gp926CommitESocial(oData as object, aErrors as array, aWarns as array, cSuccess as character) as logical
+    Local oJsonData   As Json
+    Local aRFZ        As Array
+    Local aTpAlt      As Array
+    Local aErros      As Array
+    Local aInfoC      As Array
+    Local aFilInTaf   As Array
+    Local aArrayFil   As Array
+    Local cStatus     As Character
+    Local cStat1      As Character
+    Local cCod        As Character
+    Local cCateg      As Character
+    Local cTrabVincu  As Character
+    Local cTSV        As Character
+    Local cFilEnv     As Character
+    Local cChaveMid   As Character
+    Local cTpInsc     As Character
+    Local cNrInsc     As Character
+    Local cMsgLog     As Character
+    Local cFunBkp     As Character
+    Local lRet        As Logical
+    Local lGeraMat    As Logical
+    Local lAdmPubl    As Logical
+    Local oLegacyModel As Object
+    Local oLegacyRFZ   As Object
+    Local nCont       As Numeric
+    Local nX          As Numeric
+
+    lRet       := .T.
+    lGeraMat   := .F.
+    lAdmPubl   := .F.
+    aTpAlt     := {.F., .F., .F., .F.}
+    aErros     := {}
+    aInfoC     := {}
+    aFilInTaf  := {}
+    aArrayFil  := {}
+    cStatus    := "-1"
+    cStat1     := "-1"
+    cCod       := ""
+    cCateg     := ""
+    cTrabVincu := fCatTrabEFD("TCV")
+    cTSV       := "410"
+    cFilEnv    := ""
+    cChaveMid  := ""
+    cTpInsc    := ""
+    cNrInsc    := "0"
+    cMsgLog    := ""
+
+    If (!lIntTAF .And. !lMiddleware) .Or. !gp926PosicionaSRA(oData)
+        Return lRet
+    EndIf
+
+    cCateg := AllTrim(SRA->RA_CATEFD)
+
+    If Empty(SRA->RA_CIC) .Or. Empty(cCateg)
+        Return lRet
+    EndIf
+
+    If SRA->(ColumnPos("RA_DESCEP")) > 0 .And. SRA->RA_DESCEP == "1"
+        lGeraMat := .T.
+    EndIf
+
+    oJsonData := oData:GetData()
+    If oJsonData:HasProperty("RFZ")
+        aRFZ := oJsonData["RFZ"]
+        For nX := 1 To Len(aRFZ)
+            If gp926LinhaDeletada(aRFZ[nX])
+                Loop
+            EndIf
+
+            If AllTrim(gp926JsonChar(aRFZ[nX], "RFZ_CATEG")) $ cTrabVincu .And. !Empty(gp926JsonChar(aRFZ[nX], "RFZ_ONUS"))
+                aAdd(aWarns, STR0015) // "Para funcionários com vínculo, não é necessário o preenchimento do campo Ônus de Cessão. O campo não será considerado."
+                oData:setFieldValue("RFZ", "RFZ_ONUS", StrZero(nX, 5), "")
+            EndIf
+        Next nX
+    EndIf
+
+    If !lMiddleware
+        fGp23Cons(@aFilInTaf, @aArrayFil, @cFilEnv)
+    EndIf
+
+    RegToMemory("SRA")
+
+    If cCateg $ cTrabVincu .And. Empty(SRA->RA_CODUNIC)
+        aAdd(aErrors, STR0016) // "Funcionário sem Matrícula Única gerada. Acesse o Cadastro de Funcionário ou realize a Carga Inicial. A alteração não poderá ser efetivada no TAF."
+        Return .F.
+    EndIf
+
+    If Empty(cFilEnv)
+        cFilEnv := cFilAnt
+    EndIf
+
+    If !lMiddleware
+        If cCateg <> cTSV
+            cCod    := AllTrim(SRA->RA_CIC) + ";" + AllTrim(SRA->RA_CODUNIC)
+            cStatus := TAFGetStat("S-2200", cCod, cEmpAnt, cFilEnv)
+        Else
+            cCod := AllTrim(SRA->RA_CIC) + ";"
+            If lGeraMat
+                cCod += SRA->RA_CODUNIC
+            EndIf
+            cCod += ";" + AllTrim(SRA->RA_CATEFD) + ";" + DtoS(SRA->RA_ADMISSA)
+            cStatus := TAFGetStat("S-2300", cCod, cEmpAnt, cFilEnv)
+        EndIf
+
+        If Empty(AllTrim(cStatus))
+            cStatus := "-1"
+        EndIf
+    Else
+        fPosFil(cEmpAnt, SRA->RA_FILIAL)
+        aInfoC := fXMLInfos()
+
+        If Len(aInfoC) >= 4
+            cTpInsc  := aInfoC[1]
+            lAdmPubl := aInfoC[4]
+            cNrInsc  := aInfoC[2]
+        EndIf
+
+        If cTpInsc == "1" .And. !lAdmPubl
+            cChaveMid := cTpInsc + PadR(SubStr(cNrInsc, 1, 8), 14) + "S2200" + PadR(SRA->RA_CODUNIC, 40, " ")
+        Else
+            cChaveMid := cTpInsc + PadR(cNrInsc, 14) + "S2200" + PadR(SRA->RA_CODUNIC, 40, " ")
+        EndIf
+
+        GetInfRJE(2, cChaveMid, @cStatus)
+    EndIf
+
+    If cStatus == "2" .And. cStat1 <> "2"
+        If lMiddleware
+            aAdd(aErrors, STR0017) // "Registro de admissão do funcionário em trânsito ao RET. A alteração não será efetivada."
+        Else
+            aAdd(aErrors, STR0018) // "Registro de admissão do funcionário em transmissão TAF × RET. A alteração não será efetivada."
+        EndIf
+        Return .F.
+    EndIf
+
+    fStatusTAF(@aTpAlt, cStatus, cStat1,,)
+
+    If cCateg $ cTrabVincu .Or. cCateg == cTSV
+        If aTpAlt[1]
+            oLegacyModel := gp926BuildLegacyModel(oData)
+            oLegacyRFZ   := oLegacyModel:GetModel("RFZDETAIL")
+            cFunBkp      := FunName()
+            SetFunName("GPEA926")
+
+            If cCateg $ cTrabVincu
+                lRet := fIntAdmiss("SRA", Nil, MODEL_OPERATION_UPDATE, "S2200", Nil, Nil, Nil, oLegacyModel, Nil, @aErros, cVersEnvio, oLegacyRFZ)
+            Else
+                lRet := fInt2300New("SRA",,,"S2300",,,cVersEnvio,,,,,oLegacyRFZ)
+            EndIf
+
+            SetFunName(cFunBkp)
+            oLegacyModel:DeActivate()
+
+            If lRet
+                If lMiddleware
+                    cSuccess := STR0026 // "Registro enviado ao Middleware com sucesso."
+                Else
+                    cSuccess := STR0025 // "Registro enviado para o TAF com sucesso!"
+                EndIf
+            EndIf
+        Else
+            lRet := .F.
+        EndIf
+    EndIf
+
+    If lRet .And. ExistFunc("fEFDMsg")
+        fEFDMsg()
+    ElseIf Len(aErros) > 0
+        For nCont := 1 To Len(aErros)
+            If aErros[nCont] == "TPJORN"
+                cMsgLog += " " + STR0019 // " " + "O Tipo de Jornada não foi localizado. Verifique o cadastro do funcionário para que ele seja integrado corretamente."
+            Else
+                cMsgLog += " " + aErros[nCont]
+            EndIf
+        Next nCont
+
+        aAdd(aErrors, AllTrim(cMsgLog))
+    EndIf
+return lRet
+
+Static Function gp926BuildLegacyModel(oData as object) as object
+    Local oJsonData    As Json
+    Local oLegacyModel As Object
+    Local oLegacyRFZ   As Object
+    Local aRFZ         As Array
+    Local aFields      As Array
+    Local aSeek        As Array
+    Local cField       As Character
+    Local xValue       As Variant
+    Local nField       As Numeric
+    Local nLineInt     As Numeric
+    Local nX           As Numeric
+
+    aRFZ    := {}
+    aFields := {}
+    aSeek   := {}
+    nLineInt := 0
+    oJsonData    := oData:GetData()
+    oLegacyModel := FWLoadModel("GPEA926")
+    oLegacyModel:SetOperation(MODEL_OPERATION_UPDATE)
+    oLegacyModel:Activate()
+    oLegacyRFZ := oLegacyModel:GetModel("RFZDETAIL")
+    aFields    := oLegacyRFZ:GetStruct():GetFields()
+
+    If oJsonData:HasProperty("RFZ")
+        aRFZ := oJsonData["RFZ"]
+
+        For nX := 1 To Len(aRFZ)
+            aSeek := {{"RFZ_FILIAL", gp926JsonChar(aRFZ[nX], "RFZ_FILIAL")}, ;
+                      {"RFZ_MAT", gp926JsonChar(aRFZ[nX], "RFZ_MAT")}, ;
+                      {"RFZ_TPADM", gp926JsonChar(aRFZ[nX], "RFZ_TPADM")}}
+
+            If !oLegacyRFZ:SeekLine(aSeek) .And. !oLegacyRFZ:IsEmpty()
+                oLegacyRFZ:AddLine()
+            EndIf
+
+            If gp926LinhaDeletada(aRFZ[nX])
+                nLineInt := oLegacyRFZ:GetLine()
+                oLegacyRFZ:DeleteLine()
+                Loop
+            EndIf
+
+            For nField := 1 To Len(aFields)
+                cField := aFields[nField][3]
+                If aRFZ[nX]:HasProperty(cField)
+                    xValue := aRFZ[nX][cField]
+                    If cField $ "RFZ_DTADAN*RFZ_DTADCE*RFZ_DTTRA"
+                        xValue := gp926ToDate(xValue)
+                    EndIf
+                    oLegacyRFZ:LoadValue(cField, xValue)
+                EndIf
+            Next nField
+
+            If oLegacyRFZ:IsUpdated() .Or. oLegacyRFZ:IsInserted()
+                nLineInt := oLegacyRFZ:GetLine()
+            EndIf
+        Next nX
+    EndIf
+
+    If nLineInt > 0
+        oLegacyRFZ:GoLine(nLineInt)
+    EndIf
+return oLegacyModel
+
+Static Function gp926PosicionaSRA(oData as object) as logical
+    Local oJsonData As Json
+    Local cFilSRA   As Character
+    Local cMatSRA   As Character
+    Local lRet      As Logical
+
+    lRet      := .F.
+    oJsonData := oData:GetData()
+    cFilSRA   := gp926GetSRAField(oJsonData, "RA_FILIAL")
+    cMatSRA   := AllTrim(gp926GetSRAField(oJsonData, "RA_MAT"))
+
+    If !Empty(cMatSRA)
+        dbSelectArea("SRA")
+        SRA->(dbSetOrder(1))
+        lRet := SRA->(dbSeek(cFilSRA + cMatSRA))
+    EndIf
+return lRet
+
+Static Function gp926InscOk(cInsc as character, cTpInsc as character, cCgcFil as character, cMsg as character) as logical
+    Local lRet    As Logical
+    Local cInscAux As Character
+    Local cTpAux  As Character
+
+    lRet     := .T.
+    cInscAux := gp926OnlyDigits(cInsc)
+    cTpAux   := AllTrim(cTpInsc)
+    cMsg     := ""
+
+    If Empty(cInscAux)
+        Return lRet
+    EndIf
+
+    If cInscAux == gp926OnlyDigits(cCgcFil)
+        cMsg := STR0022 // "O número de inscrição informado deve ser diferente do número de inscrição da filial de cadastro do participante."
+        Return .F.
+    EndIf
+
+    If cInscAux == "00000000000000"
+        cMsg := STR0023 // "O CNPJ informado não é válido!"
+        Return .F.
+    EndIf
+
+    If cTpAux == "2"
+        lRet := ChkCPF(cInscAux) .And. Len(cInscAux) == 11
+    ElseIf cTpAux == "1"
+        lRet := CGC(cInscAux) .And. Len(cInscAux) == 14
+    ElseIf cTpAux == "5" .Or. cTpAux == "6"
+        lRet := Len(cInscAux) == 14 .And. IsDigit(cInscAux)
+    Else
+        cMsg := STR0033 // "Selecione um Tipo de Inscrição válido antes de informar a inscrição da empresa."
+        Return .F.
+    EndIf
+
+    If !lRet
+        If cTpAux == "2"
+            cMsg := STR0031 // "O CPF informado não é válido!"
+        ElseIf cTpAux == "1"
+            cMsg := STR0023 // "O CNPJ informado não é válido!"
+        Else
+            cMsg := STR0032 // "A inscrição informada deve possuir 14 dígitos para o Tipo de Inscrição selecionado."
+        EndIf
+    EndIf
+return lRet
+
+Static Function gp926SetMessages(aErrors as array, aWarns as array, cSuccess as character, oError as object, oSuccess as object)
+    Local cMsg As Character
+
+    cMsg := gp926JoinMessages(aErrors)
+
+    If Len(aErrors) > 0
+        oError:set(400, STR0020, cMsg) // "Validação"
+    ElseIf !Empty(cSuccess) .And. oSuccess != Nil
+        If Len(aWarns) > 0
+            cSuccess += " | " + gp926JoinMessages(aWarns)
+        EndIf
+        oSuccess:set(200, STR0024, cSuccess) // "Integração eSocial"
+    ElseIf Len(aWarns) > 0 .And. oSuccess != Nil
+        cMsg := gp926JoinMessages(aWarns)
+        oSuccess:set(200, STR0021, cMsg) // "Avisos"
+    EndIf
+return
+
+Static Function gp926AddAviso(cMsg as character, aErrors as array, aWarns as array)
+    If cEFDAviso == "1"
+        aAdd(aErrors, cMsg)
+    Else
+        aAdd(aWarns, cMsg)
+    EndIf
+return
+
+Static Function gp926JoinMessages(aMsgs as array) as character
+    Local cMsg As Character
+    Local nX   As Numeric
+
+    cMsg := ""
+
+    For nX := 1 To Len(aMsgs)
+        If !Empty(cMsg)
+            cMsg += " | "
+        EndIf
+        cMsg += aMsgs[nX]
+    Next nX
+return cMsg
+
+Static Function gp926HasField(cAlias as character, cField as character) as logical
+    Local aArea As Array
+    Local lRet  As Logical
+
+    aArea := GetArea()
+    lRet  := .F.
+
+    If ChkFile(cAlias)
+        dbSelectArea(cAlias)
+        lRet := (cAlias)->(ColumnPos(cField)) > 0
+    EndIf
+
+    RestArea(aArea)
+return lRet
+
+Static Function gp926GetSRAField(oJsonData as json, cField as character) as variant
+    Local xValue As Variant
+
+    xValue := ""
+
+    If oJsonData:HasProperty(cField)
+        xValue := oJsonData[cField]
+    EndIf
+return xValue
+
+Static Function gp926JsonChar(oJson as json, cField as character) as character
+    Local cRet As Character
+
+    cRet := ""
+
+    If oJson:HasProperty(cField)
+        cRet := AllTrim(cValToChar(oJson[cField]))
+    EndIf
+return cRet
+
+Static Function gp926JsonDate(oJson as json, cField as character) as date
+    Local dRet As Date
+
+    dRet := CtoD("//")
+
+    If oJson:HasProperty(cField)
+        dRet := gp926ToDate(oJson[cField])
+    EndIf
+return dRet
+
+Static Function gp926ToDate(xVal as variant) as date
+    Local dRet As Date
+    Local cVal As Character
+
+    dRet := CtoD("//")
+
+    If ValType(xVal) == "C" .And. !Empty(xVal)
+        cVal := StrTran(xVal, "-", "")
+        dRet := StoD(cVal)
+    EndIf
+return dRet
+
+Static Function gp926OnlyDigits(cValue as character) as character
+    Local cRet As Character
+
+    cRet := AllTrim(cValue)
+    cRet := StrTran(cRet, ".", "")
+    cRet := StrTran(cRet, "-", "")
+    cRet := StrTran(cRet, "/", "")
+    cRet := StrTran(cRet, " ", "")
+return cRet
+
+Static Function gp926LinhaDeletada(oLinha as json) as logical
+return ValType(oLinha["lDeleted"]) == "L" .And. oLinha["lDeleted"]

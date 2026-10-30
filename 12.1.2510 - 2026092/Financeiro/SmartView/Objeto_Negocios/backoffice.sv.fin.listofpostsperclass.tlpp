@@ -1,0 +1,223 @@
+#include "totvs.ch"
+#include "msobject.ch"
+#include "tlpp-rest.th"
+#include "tlpp-core.th"
+#include "totvs.framework.treports.integratedprovider.th"
+#include "backoffice.sv.fin.listofposts.ch"
+
+namespace totvs.protheus.backoffice.fin.smartView.integratedProvider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team="SIGAFIN", tables="SE1,SE2,FK1,FK2,FK5,F7G,SED", name="Relação de baixas por natureza", country="ALL")
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ListOfPostsPerClassSmartViewBusinessObject
+    Classe do Objeto de Negócio Relação de baixas por natureza
+    @author guilherme.sordi@totvs.com.br
+    @since 21/06/2023
+    @version 12.1.2210
+*/
+//-------------------------------------------------------------------
+class ListOfPostsPerClassSmartViewBusinessObject from totvs.protheus.backoffice.fin.smartView.integratedProvider.ListOfPostsSmartViewBusinessObject
+    protected data lExpandProration as logical
+
+    public method new() as object
+    public method handleData() as json
+    public method handleSchema() as object
+    public method initializeBusinessObject()
+    public method loadParameters()
+
+    public method getPostingClassSelect() as character
+    public method getPostingClassJoin() as character
+    protected method getProratedAmounts()
+
+endclass
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} new
+    Construtor
+    @author guilherme.sordi@totvs.com.br
+    @since 21/06/2023
+    @version 12.1.2210
+*/
+//-------------------------------------------------------------------
+method new() class ListOfPostsPerClassSmartViewBusinessObject
+    _Super:new()
+return self
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} loadParameters
+    Carrega os parametros do objeto de negocio.
+    A decisao de expandir o rateio multinatureza depende de self:lPagar,
+    que so recebe o valor de MV_PAR01 apos o loadParameters() da classe pai
+    (chamado dentro do getData() do FinIntegratedProvider). Por isso a leitura
+    dos parametros MV_MULNATP / MV_MULNATR e feita aqui, e nao no construtor.
+    @author matheus.monteiro@totvs.com.br
+    @since 09/09/2026
+    @version 12.1.2510
+*/
+//-------------------------------------------------------------------
+method loadParameters() class ListOfPostsPerClassSmartViewBusinessObject
+    _Super:loadParameters()
+
+    if self:lPagar
+        self:lExpandProration := SuperGetMv("MV_MULNATP", .F., .F.)
+    else
+        self:lExpandProration := SuperGetMv("MV_MULNATR", .F., .F.)
+    endIf
+
+    If self:lExpandProration
+        self:lIsListOfPostsPerClassProration  := .T.
+    EndIf
+
+return
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} initializeBusinessObject
+
+@author Fábio Andrade
+@since 08/01/2024
+@version 1.0
+*/
+//-------------------------------------------------------------------
+method initializeBusinessObject() class ListOfPostsPerClassSmartViewBusinessObject
+    self:setDisplayName(STR0012) //"Relação de baixas por natureza"
+    self:setDescription(STR0012) //"Relação de baixas por natureza"
+
+    self:setPergunte("FINT001")
+
+return
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} handleSchema
+    Complementa a estrutura dos campos e conjunto de parametros
+    @author guilherme.sordi@totvs.com.br
+    @since 21/06/2023
+    @version 12.1.2210
+*/
+//-------------------------------------------------------------------
+method handleSchema() as object class ListOfPostsPerClassSmartViewBusinessObject
+
+    self:finAddProperty("CADEIA_NATUREZA", STR0013, "string") //"Cadeia de naturezas"
+
+return self:oSchema
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} handleData
+    Complementa os dados retornados pelo objeto de negócio.
+    Quando a baixa possui rateio multinatureza, a query externa (getPostingClassJoin) 
+    expande a baixa em uma linha por natureza rateada (SEV)
+    neste caso a CADEIA_NATUREZA passa a refletir a natureza rateada
+    e os valores são distribuídos pelo percentual EV_PERC.
+    @author guilherme.sordi@totvs.com.br
+    @since 21/06/2023
+    @version 12.1.2210
+*/
+//-------------------------------------------------------------------
+method handleData() class ListOfPostsPerClassSmartViewBusinessObject
+    _Super:handleData()
+
+    if self:lExpandProration .And. !Empty((self:cAlias)->EV_NATUREZ)
+        self:jData["CADEIA_NATUREZA"] := self:oFinClassUtil:getClassChain((self:cAlias)->EV_NATUREZ)
+        self:getProratedAmounts()
+    else
+        self:jData["CADEIA_NATUREZA"] := self:oFinClassUtil:getClassChain((self:cAlias)->NATURE)
+    endIf
+
+return self:jData
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getPostingClassSelect
+    Sobrescreve o método para trazer as colunas do rateio multinatureza
+    (EV_NATUREZ e EV_PERC) no SELECT principal da query de baixas.
+    @return character: fragmento de colunas do rateio
+    @author matheus.monteiro@totvs.com.br
+    @since 18/08/2026
+    @version 12.1.2510
+*/
+//-------------------------------------------------------------------
+method getPostingClassSelect() as character class ListOfPostsPerClassSmartViewBusinessObject
+    local cSelect := "" as character
+
+    if self:lExpandProration
+        cSelect := " , SEVRAT.EV_NATUREZ EV_NATUREZ, SEVRAT.EV_PERC EV_PERC "
+    endIf
+
+return cSelect
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getPostingClassJoin
+    Sobrescreve o método para inclusão doLEFT JOIN da tabela de rateio de
+    naturezas (SEV) na query principal de baixas. Quando a baixa possui
+    rateio multinatureza ,o JOIN gera uma linha por natureza rateada, do contrário
+    a query irá retornar apenas uma linha
+
+    @param cCarteira, character, "R" para receber ou "P" para pagar
+    @return character
+    @author matheus.monteiro@totvs.com.br
+    @since 18/08/2026
+    @version 12.1.2510
+*/
+//-------------------------------------------------------------------
+method getPostingClassJoin(cCarteira as character) as character class ListOfPostsPerClassSmartViewBusinessObject
+    local cJoin       := "" as character
+    local cQueryAlias := "" as character
+    local cPref       := "" as character
+    local cCliFor     := "" as character
+    local cSeqCol     := "" as character
+    local cRecPag     := "" as character
+
+    if !self:lExpandProration
+        Return ""
+    endIf
+
+    if cCarteira == "P"
+        cQueryAlias := "QUERYPAGAR"
+        cPref       := "E2_"
+        cCliFor     := "E2_FORNECE"
+        cSeqCol     := "FK2_SEQ"
+        cRecPag     := "P"
+    else
+        cQueryAlias := "QUERYRECEBER"
+        cPref       := "E1_"
+        cCliFor     := "E1_CLIENTE"
+        cSeqCol     := "FK1_SEQ"
+        cRecPag     := "R"
+    endIf
+
+    cJoin := " LEFT JOIN " + RetSQLName("SEV") + " SEVRAT "
+    cJoin += "  ON SEVRAT.EV_FILIAL = "   + cQueryAlias + "." + cPref + "FILIAL "
+    cJoin += "  AND SEVRAT.EV_PREFIXO = " + cQueryAlias + "." + cPref + "PREFIXO "
+    cJoin += "  AND SEVRAT.EV_NUM = "     + cQueryAlias + "." + cPref + "NUM "
+    cJoin += "  AND SEVRAT.EV_PARCELA = " + cQueryAlias + "." + cPref + "PARCELA "
+    cJoin += "  AND SEVRAT.EV_TIPO = "    + cQueryAlias + "." + cPref + "TIPO "
+    cJoin += "  AND SEVRAT.EV_CLIFOR = "  + cQueryAlias + "." + cCliFor + " "
+    cJoin += "  AND SEVRAT.EV_LOJA = "    + cQueryAlias + "." + cPref + "LOJA "
+    cJoin += "  AND SEVRAT.EV_RECPAG = '" + cRecPag + "' "
+    cJoin += "  AND SEVRAT.D_E_L_E_T_ =  ? "
+
+return cJoin
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getProratedAmounts
+    Distribui os valores da baixa pelo percentual do rateio da
+    natureza.
+    @author matheus.monteiro@totvs.com.br   
+    @since 18/08/2026
+    @version 12.1.2510
+*/
+//-------------------------------------------------------------------
+method getProratedAmounts() class ListOfPostsPerClassSmartViewBusinessObject
+    local nPerc := (self:cAlias)->EV_PERC as numeric
+
+    self:jData["E2_VALOR"]        := self:jData["E2_VALOR"] * nPerc
+    self:jData["E2_SALDO"]        := self:jData["E2_SALDO"] * nPerc
+    self:jData["FK2_VALOR"]       := self:jData["FK2_VALOR"] * nPerc
+    self:jData["ABATIMENTO"]      := self:jData["ABATIMENTO"] * nPerc
+    self:jData["IMPOSTOS"]        := self:jData["IMPOSTOS"] * nPerc
+    self:jData["VALOR_CORRECAO"]  := self:jData["VALOR_CORRECAO"] * nPerc
+    self:jData["VALOR_ACESSORIO"] := self:jData["VALOR_ACESSORIO"] * nPerc
+    self:jData["JUROS"]           := self:jData["JUROS"] * nPerc
+    self:jData["MULTA"]           := self:jData["MULTA"] * nPerc
+    self:jData["JUROSMULTA"]      := self:jData["JUROSMULTA"] * nPerc
+    self:jData["DESCONTO"]        := self:jData["DESCONTO"] * nPerc
+
+return

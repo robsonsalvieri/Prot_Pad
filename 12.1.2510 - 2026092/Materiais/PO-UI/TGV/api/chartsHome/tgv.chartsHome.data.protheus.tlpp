@@ -1,0 +1,591 @@
+#include 'tlpp-core.th'
+#include 'tgv.chartshome.data.protheus.ch'
+#include "fwlibversion.ch"
+
+Static __aPrepared  := {}
+
+namespace tgv.chartsHome
+using namespace tgv.util
+
+#DEFINE YEARLY	"1" // Periodo Anual
+#DEFINE MONTHLY "2"	// Periodo Mensal
+#DEFINE STARTDATE 1	// Data Inicial
+#DEFINE FINALDATE 2	// Data final
+#DEFINE AMOUNT 1	// Gráfico de Valor
+#DEFINE QUANTITY 2	// Grafico de Quantidade
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData
+	API para consulta dos Graficos de Indicadores de Venda.
+	@type		class
+	@author		Squad CRM & Faturamento
+	@since		06/01/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Class ChartsHomeProtheusData
+	Private Data aBilledAmounts 	as Array
+	Private Data aBilledQuantity	as Array
+	Private Data aCharts			as Array
+	Private Data aDatesSearched		as Array
+	Private Data aLabels			as Array
+	Private Data aUnbilledAmounts 	as Array
+	Private Data aUnbilledQuantity	as Array
+	Private Data oStatementSC5		as Object
+	Private Data oStatementSF2		as Object
+	Private Data isAdmin 			as Logical
+
+	Public Method New() as Object
+	Public Method GetAll() as Character
+	Private Method GetSeller() as Character
+	Private Method GetDiffDate() as Numeric
+	Private Method AddDatesByYear() as Numeric
+	Private Method AddDatesByMonth() as Numeric
+	Private Method SearchInvoiceItems()
+	Private Method SearchSalesOrderItems()
+	Private Method AddDataSets()
+	Private Method AddCharts()
+EndClass
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::New
+	Cria um novo objeto de Graficos de Indicadores de Venda.
+	@type		Method
+	@sample		ChartsHomeProtheusData:New()
+	@author		Squad CRM & Faturamento
+	@since		06/01/2020
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method New() as Object Class ChartsHomeProtheusData
+	::aBilledQuantity := {}
+	::aBilledAmounts := {}
+	::aCharts := {}
+	::aUnbilledAmounts := {}
+	::aUnbilledQuantity := {}
+	::aLabels := {}
+	::aDatesSearched := {}
+	::isAdmin := FwIsAdmin()
+Return Self
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::GetSeller() as Character
+	Obtem o Código do Vendedor.
+	@type		method
+	@version	12.1.27
+	@author		Danilo Salve / Squad CRM & Faturamento
+	@since		07/01/2020
+	@return		character, Código do vendedor
+/*/
+//------------------------------------------------------------------------------
+Method GetSeller() as Character Class ChartsHomeProtheusData
+	Local cReturn as Character
+
+	IF !::isAdmin
+		cReturn := getSellerFromFilter(::isAdmin, .T.) //Retorna o codigo do Vendedor
+	Else
+		cReturn := ""
+	Endif
+Return cReturn
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::GetAll() as Character
+	Obtem todos os graficos de Indicadores de venda
+	@type		method
+	@param		cType       , Character, Tipo do Grafico
+	@param		dInitialDAte, Date, Data Inicial utilizada para filtrar os registros
+	@param		dFinalDate	, Date, Data Final utilizada para filtrar os registros
+	@return		character	, JSON com todos os valores dos gráficos.
+	@author		Squad CRM & Faturamento
+	@since		06/01/2020
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method GetAll(cType as Character, dInitialDate as Date, dFinalDate as Date) as Character Class ChartsHomeProtheusData
+	Local cBranchSC5	:= FwxFilial("SC5")
+	Local cBranchSD2	:= FWxFilial("SD2")
+	Local cSeller		:= ::GetSeller()
+	Local cResponse		as Character
+	Local nDiffDate		as Numeric
+	Local nLoop			as Integer
+	Local jResponse		:= JsonObject():New()
+
+	If canExecutewithUser(::isAdmin, cSeller)
+		nDiffDate := ::GetDiffDate(cType, dInitialDate, dFinalDate)
+
+		::oStatementSC5	:= GetStatementSC5(cSeller)
+		::oStatementSF2	:= GetStatementSF2(cSeller)
+
+		For nLoop := 1 To nDiffDate
+			::SearchInvoiceItems(cBranchSD2, ::aDatesSearched[nLoop, STARTDATE], ::aDatesSearched[nLoop, FINALDATE])
+			::SearchSalesOrderItems(cBranchSC5, ::aDatesSearched[nLoop, STARTDATE], ::aDatesSearched[nLoop, FINALDATE])
+		Next
+
+		::AddDataSets(::aBilledAmounts, ::aUnBilledAmounts, AMOUNT )
+		::AddDataSets(::aBilledQuantity, ::aUnbilledQuantity, QUANTITY )
+
+		jResponse["hasNext"] := .F.
+		jResponse["items"] := ::aCharts
+		cResponse := jResponse:ToJson()
+
+	Endif
+
+	FreeObj(jResponse)
+
+	aSize(::aCharts, 0)
+	aSize(::aLabels, 0)
+	aSize(::aDatesSearched, 0)
+	aSize(::aBilledQuantity, 0)
+	aSize(::aBilledAmounts, 0)
+	aSize(::aUnbilledAmounts, 0)
+	aSize(::aUnbilledQuantity, 0)
+Return cResponse
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::GetDiffDate() as Numeric
+	Obtem a Diferença de Dias entre a Data Inicial e Data Final e as Labels e
+	Range de datas utilizado nas consultas conforme tipo informado
+	@type		method
+	@param		cType       , Character, Tipo do Grafico
+	@param		dInitialDAte, Date, Data Inicial utilizada para filtrar os registros
+	@param		dFinalDate	, Date, Data Final utilizada para filtrar os registros
+	@return		Numeric, Diferença de dias entre as datas informadas
+	@response	Character	, JSON com todos os valores dos gráficos.
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method GetDiffDate(cType as Character, dInitialDate as Date, dFinalDate as Date) as Numeric Class ChartsHomeProtheusData
+	Local nDiffDate as Numeric
+
+	::aLabels := {}
+	::aDatesSearched := {}
+
+	If cType == YEARLY
+		nDiffDate := ::AddDatesByYear(dInitialDate, dFinalDate)
+	Else
+		nDiffDate := ::AddDatesByMonth(dInitialDate, dFinalDate)
+	Endif
+
+Return nDiffDate
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::AddDatesByYear() as Numeric
+	Preenche os Arrays de Labels e Range de datas para Graficos de tipo Anual
+	@type		Method
+	@sample		oCharts:AddDatesByYear(dInitialDate, dFinalDate)
+	@param		dInitialDAte, Date, Data Inicial utilizada para filtrar os registros
+	@param		dFinalDate	, Date, Data Final utilizada para filtrar os registros
+	@return		Numeric, Diferença de dias entre as datas informadas
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method AddDatesByYear(dInitialDate as Date, dFinalDate as Date) as Numeric Class ChartsHomeProtheusData
+	Local cYear 	:= CValToChar(Year(dInitialDate))
+	Local nDiffDate := DateDiffYear(dInitialDate, dFinalDate) + 1
+	Local nLoop 	as Integer
+
+	For nLoop := 1 To nDiffDate
+		aAdd(::aLabels, cYear)
+		aAdd(::aDatesSearched, { DtoS(CtoD("01/01/" + cYear)), DtoS(CToD("31/12/" + cYear))})
+		cYear := Soma1(cYear)
+	Next
+Return nDiffDate
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::AddDatesByMonth() as numeric
+	Preenche os Arrays de Labels e Range de datas para Graficos de tipo Mensal
+	@type		Method
+	@sample		oCharts:AddDatesByMonth(dInitialDate, dFinalDate)
+	@param		dInitialDAte, Date, Data Inicial utilizada para filtrar os registros
+	@param		dFinalDate	, Date, Data Final utilizada para filtrar os registros
+	@return		Numeric, Diferença de dias entre as datas informadas
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method AddDatesByMonth(dInitialDate as Date, dFinalDate as Date) as Numeric Class ChartsHomeProtheusData
+	Local dDataRef  := dInitialDate
+	Local nDiffDate := DateDiffMonth(dInitialDate, dFinalDate) + 1
+	Local nLoop 	as Integer
+
+	For nLoop := 1 To nDiffDate
+		aAdd(::aLabels, cMonth(dDataRef))
+		aAdd(::aDatesSearched, {DtoS(FirstDate(dDataRef)), DtoS(LastDate(dDataRef))})
+		dDataRef := MonthSum(dDataRef, 1)
+	Next
+Return nDiffDate
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::SearchInvoiceItems
+	Efetua a busca dos Items já faturados.
+	@type		Method
+	@sample		oCharts:SearchInvoiceItems('D MG 01 ', '20210101', '20210131')
+	@param		cBranchSD2	, Character	, Filial da Tabela SD2
+	@param		cInicialDate, Character	, Data inicial
+	@param		cFinalDate	, Character	, Data final
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method SearchInvoiceItems(cBranchSD2 as Character, cInicialDate as Character, cFinalDate as Character) Class ChartsHomeProtheusData
+	Local cAliasSD2	:= GetNextAlias()
+
+	::oStatementSF2:SetString(1, cBranchSD2)
+	::oStatementSF2:SetString(2, cInicialDate)
+	::oStatementSF2:SetString(3, cFinalDate)
+
+	execQueryAPrepared(cAliasSD2, ::oStatementSF2)
+
+	While (cAliasSD2)->(!Eof())
+		aAdd(::aBilledAmounts, (cAliasSD2)->TOTALVALOR)
+		aAdd(::aBilledQuantity, (cAliasSD2)->TOTALQTD)
+		(cAliasSD2)->(DbSkip())
+	EndDo
+
+	(cAliasSD2)->(DBCloseArea())
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::SearchSalesOrderItems
+	Efetua a busca dos Items já faturados.
+	@type		Method
+	@sample		oCharts:SearchSalesOrderItems('D MG 01 ', '20210101', '20210131')
+	@param		cBranchSC5	, Character	, Filial da Tabela SC5
+	@param		cInicialDate, Character	, Data inicial
+	@param		cFinalDate	, Character	, Data final
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method SearchSalesOrderItems(cBranchSC5 as Character, cInicialDate as Character, cFinalDate as Character) Class ChartsHomeProtheusData
+	Local cAliasSC6	:= GetNextAlias()
+
+	::oStatementSC5:SetString(1, cBranchSC5)
+	::oStatementSC5:SetString(2, cInicialDate)
+	::oStatementSC5:SetString(3, cFinalDate)
+
+	execQueryAPrepared(cAliasSC6, ::oStatementSC5)
+
+	While (cAliasSC6)->(!Eof())
+		aAdd(::aUnbilledAmounts, (cAliasSC6)->TOTALVALOR)
+		aAdd(::aUnbilledQuantity, (cAliasSC6)->TOTALQTD)
+		(cAliasSC6)->(DbSkip())
+	EndDo
+
+	(cAliasSC6)->(DBCloseArea())
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::AddDataSets
+	Adiciona os DataSets de Quantidade e Valores.
+	@type		method
+	@version	12.1.27
+	@author		Danilo Salve / Squad CRM & Faturamento
+	@since		14/06/2021
+	@param		aBilled		, array, Itens faturados
+	@param		aUnbilled	, array, Itens não faturados
+	@param		nTypeofChart, numeric, Tipo de gráfico (1 - Valor / 2 - Quantidade)
+/*/
+//------------------------------------------------------------------------------
+Method AddDataSets(aBilled as Array, aUnbilled as Array, nTypeofChart as Numeric) Class ChartsHomeProtheusData
+	Local aDataSet	:= {} as Array
+	Local jBilled 	:= BuildChart(STR0003, "#00b28e", aBilled) as Json
+	Local jUnBilled := BuildChart(STR0004, "#29b6c5", aUnbilled) as Json
+	Local jDataSet	:= JsonObject():New() as json
+
+	aAdd(aDataSet, jBilled)
+	aAdd(aDataSet, jUnBilled)
+
+	jDataSet['labels'] := ::aLabels
+	jDataSet['datasets'] := aDataSet
+
+	If nTypeofChart == AMOUNT
+		::AddCharts('billingValue', jDataSet:ToJson(), BuildOptionsValues()) //"Faturamento (Valor)"
+	Else
+		::AddCharts(STR0002, jDataSet:ToJson(), BuildOptionsQuantity()) //"Faturamento (Quantidade)"
+	Endif
+
+	aSize(aDataSet, 0)
+
+	FreeObj(jUnBilled)
+	FreeObj(jBilled)
+	FreeObj(jDataSet)
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} ChartsHomeProtheusData::AddCharts
+	Cria e adiciona um gráfico no Array de Gráficos, conforme parametros informados.
+	@type		Method
+	@sample		oCharts:AddCharts()
+	@author		Danilo Salve
+	@since		14/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Method AddCharts(cTitulo as Character, cJson as Character, cOptions as Character) Class ChartsHomeProtheusData
+	Local jCharts	:= JsonObject():New()
+
+	jCharts['titulo'] := cTitulo
+	jCharts["chart_dataset"] := cJson
+	jCharts["chart_option"]  := cOptions
+
+	aAdd(::aCharts, jCharts)
+
+	FreeObj(jCharts)
+Return Nil
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} GetStatementSF2
+	Obter objeto FwPrepareStatament para consultar Itens faturados e com notas
+	Fiscais.
+	@type		Method
+	@sample		GetStatementSF2("FAT001")
+	@param		cSeller, Character,	Código do Vendedor
+	@return		Object, Objecto FwPrepareStatament
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Static Function GetStatementSF2(cSeller as Character) as Object
+	Local cQuery        as Character
+	Local oStatement    as Object
+	Local nPosStatement as Numeric
+
+	cQuery := " SELECT SUM(D2_TOTAL) TOTALVALOR, SUM(D2_QUANT) TOTALQTD "
+	cQuery += " FROM " + RetSqlName("SD2")+ " SD2 "
+	cQuery += " INNER JOIN " + RetSqlName("SF2")+ " SF2 "
+	cQuery += " ON SD2.D2_FILIAL = SF2.F2_FILIAL "
+	cQuery += " AND SD2.D2_DOC = SF2.F2_DOC "
+	cQuery += " AND SD2.D2_SERIE = SF2.F2_SERIE "
+	cQuery += " AND SD2.D2_CLIENTE = SF2.F2_CLIENTE "
+	cQuery += " AND SD2.D2_LOJA = SF2.F2_LOJA "
+	cQuery += " WHERE SD2.D2_FILIAL = ? "
+	cQuery += " AND SD2.D2_EMISSAO >= ? "
+	cQuery += " AND SD2.D2_EMISSAO <= ? "
+
+	If !Empty(cSeller)
+		cQuery += " AND SF2.F2_VEND1 = '" + cSeller + "' "
+	Endif
+
+	cQuery += " AND SD2.D_E_L_E_T_ = ' ' "
+	cQuery += " AND SF2.D_E_L_E_T_ = ' ' "
+
+	nPosStatement := chargeAPrepared(cQuery)
+	oStatement := __aPrepared[nPosStatement][1]
+
+Return oStatement
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} GetStatementSC5
+	Obter objeto FwPrepareStatament para consultar Itens não faturados
+	@type		Method
+	@sample		GetStatementSF2("FAT001")
+	@param		cSeller, Character,	Código do Vendedor
+	@return		Object, Objecto FwPrepareStatament
+	@author		Danilo Salve
+	@since		11/06/2021
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Static Function GetStatementSC5(cSeller as Character) as Object
+	Local cQuery        as Character
+	Local oStatement    as Object
+	Local nPosStatement as Numeric
+
+	cQuery := " SELECT SUM(C6_PRCVEN * (C6_QTDVEN - C6_QTDENT)) TOTALVALOR, SUM(C6_QTDVEN - C6_QTDENT) TOTALQTD "
+	cQuery += " FROM " + RetSqlName("SC6")+ " SC6 "
+	cQuery += " INNER JOIN " + RetSqlName("SC5")+ " SC5 ON SC5.C5_FILIAL = SC6.C6_FILIAL AND SC5.C5_NUM = SC6.C6_NUM "
+	cQuery += " WHERE SC5.C5_FILIAL = ? "
+
+	If !Empty(cSeller)
+		cQuery += " AND SC5.C5_VEND1 = '" + cSeller + "' "
+	Endif
+
+	cQuery += " AND SC5.C5_EMISSAO >= ? "
+	cQuery += " AND SC5.C5_EMISSAO <= ? "
+	cQuery += " AND SC5.C5_TIPO = 'N' "
+	cQuery += " AND SC6.C6_BLQ <> 'R' "
+	cQuery += " AND SC6.C6_QTDVEN > C6_QTDENT "
+	cQuery += " AND SC6.D_E_L_E_T_ = ' ' "
+	cQuery += " AND SC5.D_E_L_E_T_ = ' ' "
+
+	nPosStatement := chargeAPrepared(cQuery)
+	oStatement := __aPrepared[nPosStatement][1]
+
+Return oStatement
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} BuildChart
+	Deve Construir um Gráfico
+	@type	Method
+	@sample	BuildChart("A Faturar", "#29b6c5", {1, 2, 3, 4, 5, 6, 7, 8, 9, 10 })
+	@param	cLabel		, Character	, Titulo do Gráfico
+	@param	cBorderColor, Character	, Cor da borda do gráfico
+	@param	aData		, Array		, Dados do DataSet
+	@return	Json		, Deve retornar um Json com as caracteristicas de um Gráfico
+	@author	Danilo Salve
+	@since	11/06/2021
+	@version	12.1.27
+/*/
+//-----------------------------------------------------------------------------
+Static Function BuildChart(cLabel as Character, cBorderColor as Character, aData as Array) as Json
+	Local jDataSet := JsonObject():New()
+
+	jDataSet["label"] := cLabel
+	jDataSet["data"] := {}
+	jDataSet["backgroundColor"] := "rgba(0, 0, 0, 0.0)"
+	jDataSet["borderColor"] := cBorderColor
+	jDataSet["pointStyle"] := "circle"
+	jDataSet["borderWidth"] := 2
+	jDataSet["pointBorderColor"] := cBorderColor
+	jDataSet["pointBackgroundColor"] := "rgba(255, 255, 255)"
+	jDataSet["pointBorderWidth"] := 2
+	jDataSet["data"] := aData
+
+Return jDataSet
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} BuildOptionsValues
+	Deve construir o Json com as opções de um grafico de valor
+	@type		function
+	@sample		BuildOptionsValues()
+	@author		Squad CRM & Faturamento
+	@since		06/01/2020
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Static Function BuildOptionsValues() as Character
+	Local cJson as Character
+
+	cJson := '{ '
+	cJson += '   "maintainAspectRatio":false, '
+	cJson += '   "legend":{ '
+	cJson += '      "display":true '
+	cJson += '   }, '
+	cJson += '   "elements":{ '
+	cJson += '      "line":{ '
+	cJson += '         "tension":0 '
+	cJson += '      } '
+	cJson += '   }, '
+	cJson += '   "scales":{ '
+	cJson += '      "yAxes":[ '
+	cJson += '         { '
+	cJson += '            "stacked":false, '
+	cJson += '            "ticks": { '
+	cJson += '                "callback": "(label) => {}"'
+	cJson += '              } '
+	cJson += '         } '
+	cJson += '      ] '
+	cJson += '   }, '
+	cJson += '             "tooltips": { '
+	cJson += '                "callbacks": { '
+	cJson += '                    "label": "(a, data) => {}"'
+	cJson += '                    } '
+	cJson += '              } '
+	cJson += '} '
+Return cJson
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} BuildOptionsQuantity()
+	Deve construir o Json com as opções de um grafico de quantidade
+	@type		function
+	@sample		BuildOptionsQuantity()
+	@author		Squad CRM & Faturamento
+	@since		06/01/2020
+	@version	12.1.27
+/*/
+//------------------------------------------------------------------------------
+Static Function BuildOptionsQuantity() as Character
+	Local cJson as Character
+
+	cJson := '{ '
+	cJson += '   "maintainAspectRatio":false, '
+	cJson += '   "legend":{ '
+	cJson += '      "display":true '
+	cJson += '   }, '
+	cJson += '   "elements":{ '
+	cJson += '      "line":{ '
+	cJson += '         "tension":0 '
+	cJson += '      } '
+	cJson += '   }, '
+	cJson += '   "scales":{ '
+	cJson += '      "yAxes":[ '
+	cJson += '         { '
+	cJson += '            "stacked":false '
+	cJson += '         } '
+	cJson += '      ] '
+	cJson += '   } '
+	cJson += '} '
+Return cJson
+
+//-------------------------------------------------------------------------------------
+/*/{Protheus.doc} chartsHomeFWExecStat
+	Função utilizada para validar a data da LIB para utilização da classe FWExecStatement
+	@type       Function
+	@return     __chartsHomeVerLib, lógico, se pode ser utilizado a classe FWExecStatement
+	@author     Squad CRM/Faturamento
+	@since      12/04/2022
+	@version    12.1.33
+	
+/*/
+//-------------------------------------------------------------------------------------
+Static Function chartsHomeFWExecStat()
+	Static __chartsHomeVerLib := Nil
+
+	If __chartsHomeVerLib == Nil
+		__chartsHomeVerLib := FWLibVersion() >= "20211116"
+	EndIf
+Return __chartsHomeVerLib
+
+//---------------------------------------------------------------------------------------------
+/*/{Protheus.doc} chargeAPrepared
+	Carrega o array __aPrepared com o objeto
+	@type function
+	@param      cQuery      , character, query a ser consultada/incluida no array __aPrepared
+	@return		nPosPrepared, numeric  , posição do array com o objeto da query a ser utilizado.
+	@author		Squad CRM & Faturamento
+	@since		12/04/2022
+	@version	12.1.33
+/*/
+//---------------------------------------------------------------------------------------------
+Static Function chargeAPrepared(cQuery)
+	Local oStatement 	 as Object 
+	Local cMD5           as Character
+	Local nPosPrepared   as Numeric
+
+	cMD5 := MD5(cQuery)
+	If (nPosPrepared := Ascan(__aPrepared,{|x| x[2] == cMD5})) == 0
+		cQuery	:= ChangeQuery(cQuery)
+		oStatement := IIf(chartsHomeFWExecStat(), FwExecStatement():New(cQuery), FWPreparedStatement():New(cQuery))
+		Aadd(__aPrepared,{oStatement, cMD5})
+		nPosPrepared := Len(__aPrepared)
+	EndIf
+Return nPosPrepared
+
+//----------------------------------------------------------------------------------------------------
+/*/{Protheus.doc} execQueryAPrepared
+	Executa a query contida na posicao indicada por parametro do array __aPrepared
+	@type function
+	@return     Nil
+	@param		cAlias     , character, alias a ser utilizado para a workarea da query
+	@param		oStatement , object   , objeto do prepared ou exec statement para executar a query
+	@author		Squad CRM & Faturamento
+	@since		12/04/2022
+	@version	12.1.33
+/*/
+//----------------------------------------------------------------------------------------------------
+Static Function execQueryAPrepared(cAlias as Character, oStatement as Object)
+	If chartsHomeFWExecStat()
+		oStatement:OpenAlias(cAlias) 
+	Else
+		DbUseArea(.T.,"TOPCONN",TcGenQry(,,oStatement:GetFixQuery()),cAlias,.T.,.T.)
+	EndIf
+Return Nil

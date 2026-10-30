@@ -1,0 +1,672 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+
+Static cQuerySTG
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} mntInsightsExpectedResult
+Função executada pela rota "mnt-insight/expected-result/:equipment"
+Valida os parâmetros enviados e realiza o envio da response
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 25/03/2026
+
+@return Nil  
+/*/ 
+//------------------------------------------------------------------------------
+@Get ( endpoint = 'mnt-insight/expected-result/:equipment' )
+@Get ( endpoint = 'mnt-insight/expected-result' )
+function mntInsightsExpectedResult()
+
+    Local oError
+	Local bLastError
+    Local aResponse  := { Nil ,200 }
+    Local cEquipment := ''
+    Local jPathParam := oRest:getPathParamsRequest()
+
+	bLastError := ErrorBlock( { | oError | MntWSError( oError ), .F., Break( oError ) } )
+
+    Begin Sequence
+
+        dbSelectArea( 'ST9' )
+		dbSetOrder( 1 )
+        If jPathParam:HasProperty( 'equipment' ) .And. !Empty( jPathParam[ 'equipment' ] ) .And.;
+        msSeek( FWxFilial( 'ST9' ) + jPathParam[ 'equipment' ] )
+
+            cEquipment := jPathParam[ 'equipment' ]
+
+        EndIf
+
+        // Caso não seja enviado equipamento os Insights serão gerados considerando todos os equipamentos
+        aResponse := fExpectedResult( cEquipment )
+
+        oRest:SetStatusCode( aResponse[ 1 ] )
+        oRest:SetResponse( aResponse[ 2 ] )
+
+	End Sequence
+    
+    ErrorBlock( bLastError )
+
+return
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fExpectedResult
+Função responsável por realizar o levantamento dos Insights e retornar o Response
+da requisição
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 25/03/2026
+@param, cEquipment, caractere, Código do Equipamento (Opcional)
+
+@return array, A primeira posição contém o código de retorno e a segunda 
+contém a response da requisição  
+/*/ 
+//------------------------------------------------------------------------------
+static function fExpectedResult( cEquipment )
+
+    Local cAliasQry      := GetNextAlias()
+    Local cQuery         := ''
+    Local cBemIni        := ''
+    Local cBemFim        := ''
+    Local cCostIni       := ''
+    Local cCostFim       := ''
+    Local cCTrabIni      := ''
+    Local cCTrabFim      := ''
+    Local cStatus        := ''
+    Local cSequence      := ''
+    Local aStoppedTime   := { {}, {}, {} } // Tempo parado inicial (Horas, Valor) / Tempo parado atual (Horas, Valor) / Tempo parado previsto (Horas, Valor)
+    Local aInsightTotals := { 0, 0, 0 }    // Totais / Completos / Não completados
+    Local aTypeTotals    := { 0, 0, 0 }    // new_preventive_from_corrective / suggest_executing_preventive / update_existing_preventive
+    Local aMTBF          := { 0, 0, 0 }    // MTBF inicial e MTBF atual
+    Local aMTTR          := { 0, 0, 0 }    // MTTR inicial e MTTR atual
+    Local aDisp          := { 0, 0, 0 }    // Disponibilidade inicial e disponibilidade atual
+    Local aServices      := {}             // Serviços encontrados nos Insights
+    Local aInsights      := {}
+    Local nCostManut     := 0              // Custo de realizar as Manutenções da I21
+    Local nI             := 0
+    Local nDisp042       := 0
+    Local dDtProc        := STOD('')
+    Local dDtAtu         := Date()
+    Local oPaylod
+    Local oReturn
+
+    Default cEquipment := ''
+
+    // Busca todos os Insights que se encaixem no intervalo recebido
+    cQuery := 'SELECT '
+    cQuery += 'I21.R_E_C_N_O_ AS RECNO, '
+    cQuery += 'I21.I21_KEY AS KEYI21, '
+    cQuery += 'I21.I21_DTPROC AS DTPROC '
+    cQuery += 'FROM ' + RetSqlName( 'I21' ) + ' I21 '
+    cQuery += 'WHERE '
+    cQuery +=   'I21.I21_KEY LIKE '
+
+    If !Empty( cEquipment )
+
+	    cQuery += ValToSQL( cEmpAnt + '|' + AllTrim( FWxFilial( 'ST9' ) ) + '|' + cEquipment ) + ' '
+	
+    Else
+
+	    cQuery += ValToSQL( cEmpAnt + '|' + AllTrim( FWxFilial( 'ST9' ) ) + '|%' ) + ' '
+
+    EndIf
+
+    cQuery +=   "AND I21.I21_MODULO = 'MNT' "
+    cQuery +=   "AND I21.I21_INSIGT = 'SuggestPreventives' "
+    cQuery +=   "AND I21.D_E_L_E_T_ = ' ' "
+    cQuery += 'ORDER BY I21.I21_DTPROC DESC '
+
+    cQuery := ChangeQuery( cQuery )
+    dbUseArea( .T.,'TOPCONN',TcGenQry( , , cQuery ), cAliasQry, .T., .T. )
+
+    dbSelectArea( cAliasQry )
+    dbGoTop()
+    If (cAliasQry)->( !Eof() )
+
+        dDtProc := STOD( StrTran( SubStr( (cAliasQry)->DTPROC, 1, 10 ), '-', '' ) )
+
+        While (cAliasQry)->( !Eof() )
+            
+            If Empty( cEquipment )
+
+                // Extrai o código do Bem do campo I21_KEY
+                cBemIni := SubStr( SubStr( (cAliasQry)->KEYI21, At( '|', (cAliasQry)->KEYI21 ) + 1 ), At( '|', SubStr( (cAliasQry)->KEYI21, At( '|', (cAliasQry)->KEYI21 ) + 1 ) ) + 1 )
+
+            Else
+
+                cBemIni := cEquipment
+
+            EndIf
+
+            dbSelectArea( 'I21' )
+            dbGoTo( (cAliasQry)->RECNO )
+
+            // Transforma o Paylod em um JSON manipulável
+            oPaylod := JsonObject():New()
+            oPaylod:FromJson( StrTran( SubStr( I21->I21_PAYLOD, 2, ( Len( I21->I21_PAYLOD ) - 2 ) ), '\', '' ) )
+
+            // Percorre todos os Insights presentes no Paylod
+            nI := 0
+            For nI := 1 To Len( oPaylod )
+
+                cStatus := ''
+                cSequence := ''
+
+                If oPaylod[ nI ]:HasProperty( 'status' ) .And. !Empty( oPaylod[ nI, 'status' ] )
+
+                    cStatus := oPaylod[ nI, 'status' ]
+
+                EndIf
+
+                If oPaylod[ nI ]:HasProperty( 'sequence' ) .And. !Empty( oPaylod[ nI, 'sequence' ] )
+
+                    cSequence := oPaylod[ nI, 'sequence' ]
+
+                EndIf
+
+                // Verifica se o Insight já não foi processado em uma execução anterior
+                If aScan( aInsights, {|x| x[1] == (cAliasQry)->KEYI21 .And. x[2] == oPaylod[ nI, 'prediction_type' ] .And. x[3] == oPaylod[ nI, 'service' ];
+                .And. x[4] == cStatus .And. x[5] == cSequence .And. x[6] == oPaylod[ nI, 'last_execution' ] } ) == 0
+
+                    aAdd( aInsights, { (cAliasQry)->KEYI21, oPaylod[ nI, 'prediction_type' ], oPaylod[ nI, 'service' ], cStatus, cSequence, oPaylod[ nI, 'last_execution' ] } )
+                    // Adiciona ao totalizador de Insights
+                    aInsightTotals[ 1 ] += 1
+
+                    If oPaylod[ nI ]:HasProperty( 'status' ) .And. !Empty( oPaylod[ nI, 'status' ] ) .And. oPaylod[ nI, 'status' ] == 'completed'
+                        // Adiciona ao totalizador de Insights completos
+                        aInsightTotals[ 2 ] += 1
+
+                    Else
+                        // Adiciona ao totalizador de Insights incompletos
+                        aInsightTotals[ 3 ] += 1
+
+                    EndIf
+
+                    If oPaylod[ nI ]:HasProperty( 'service' ) .And. !Empty( oPaylod[ nI, 'service' ] ) .And. aScan( aServices, oPaylod[ nI, 'service' ] ) == 0
+
+                        aAdd( aServices, oPaylod[ nI, 'service' ] )
+
+                    EndIf
+
+                    // Realiza o cálculo do custo da realização do Insight e soma os totalizadores de tipos de Insights
+                    If ValType( oPaylod[ nI, 'prediction_type' ] ) == 'C' .And. ValType( oPaylod[ nI, 'inputs', 'prediction' ] ) == 'A' .And.;
+                     ((oPaylod[ nI, 'prediction_type' ] $ 'new_preventive_from_corrective' .And. oPaylod[ nI, 'inputs', 'prediction_type' ] == 'multi_label_classification') .Or.;
+                     !(oPaylod[ nI, 'prediction_type' ] $ 'new_preventive_from_corrective'))
+
+                        DO CASE
+                            CASE oPaylod[ nI, 'prediction_type' ] $ 'new_preventive_from_corrective'
+                                // Insumos são pegos direto do Paylod da I21
+                                aTypeTotals[ 1 ] += 1
+                                
+                                If oPaylod[ nI, 'status' ] == 'completed'
+                                    
+                                    nCostManut += fCalcCost( 1, oPaylod[ nI, 'inputs', 'prediction' ] )
+                                
+                                EndIf
+
+                            CASE oPaylod[ nI, 'prediction_type' ] $ 'suggest_executing_preventive'
+                                // Insumos são buscados na STG
+                                aTypeTotals[ 2 ] += 1
+                                
+                                If oPaylod[ nI, 'status' ] == 'completed'
+                                
+                                    nCostManut += fCalcCost( 2, { cBemIni, oPaylod[ nI, 'service' ], oPaylod[ nI, 'sequence' ] } )
+                                
+                                EndIf
+                            
+                            CASE oPaylod[ nI, 'prediction_type' ] $ 'update_existing_preventive'
+
+                                aTypeTotals[ 3 ] += 1
+
+                        END CASE
+
+                    EndIf
+
+                EndIf
+
+            Next nI
+
+            cBemIni := ''
+            ( cAliasQry )->( dbSkip() )
+
+        End
+
+    EndIf
+
+    (cAliasQry)->( DbCloseArea() )
+
+    // Seta os parâmetros para a execução dos indicadores de MTBF, MTTR e Disponibilidade
+    dbSelectArea( 'ST9' )
+    dbSetOrder( 1 ) // T9_FILIAL + T9_CODBEM
+    If !Empty( cEquipment ) .And. msSeek( FWxFilial( 'ST9' ) + cEquipment )
+
+        cBemIni := cEquipment
+        cBemFim := cEquipment
+        cCostIni := ST9->T9_CCUSTO
+        cCostFim := ST9->T9_CCUSTO
+        cCTrabIni := ST9->T9_CENTRAB
+        cCTrabFim := ST9->T9_CENTRAB
+
+    Else
+
+        cBemIni := ' '
+        cBemFim := Replicate( 'Z', FWTamSX3( 'T9_CODBEM' )[ 1 ] )
+        cCostIni := ' '
+        cCostFim := Replicate( 'Z', FWTamSX3( 'T9_CCUSTO' )[ 1 ] )
+        cCTrabIni := ''
+        cCTrabFim := Replicate( 'Z', FWTamSX3( 'T9_CENTRAB' )[ 1 ] )
+
+    EndIf
+
+    aStoppedTime[ 1 ] := fStoppedTime( cEquipment, dDtProc )
+    aStoppedTime[ 2 ] := fStoppedTime( cEquipment )       
+    aStoppedTime[ 3 ] := fStoppedTime( cEquipment, , aServices )
+
+    aMTBF[ 1 ] := MNTV033( MonthSub( dDtProc, 6 ), dDtProc, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim )
+    aMTBF[ 2 ] := MNTV033( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim )
+    aMTBF[ 3 ] := MNTV033( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, aServices )
+
+    aMTTR[ 1 ] := MNTV003( MonthSub( dDtProc, 6 ), dDtProc, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , , '2' ) / ;
+    MNTV002( MonthSub( dDtProc, 6 ), dDtProc, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , '2' )
+
+    aMTTR[ 2 ] := MNTV003( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , , '2' ) / ;
+    MNTV002( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , '2' )
+
+    aMTTR[ 3 ] := MNTV003( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , , '2', aServices ) / ;
+    MNTV002( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , '2', , aServices )
+
+    nDisp042 := MNTV042( MonthSub( dDtProc, 6 ), dDtProc, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim )
+    aDisp[ 1 ] := ( ( nDisp042 - MNTV044( MonthSub( dDtProc, 6 ), dDtProc, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim ) ) / ;
+    nDisp042 ) * 100
+
+    nDisp042 := MNTV042( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim )
+    aDisp[ 2 ] := ( ( nDisp042 - MNTV044( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim ) ) / ;
+    nDisp042 ) * 100
+
+    nDisp042 := MNTV042( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim )
+    aDisp[ 3 ] := ( ( nDisp042 - ;
+    MNTV044( MonthSub( dDtAtu, 6 ), dDtAtu, cBemIni, cBemFim, cCostIni, cCostFim, cCTrabIni, cCTrabFim, , , aServices ) ) / ;
+    nDisp042 ) * 100
+
+    oReturn := fMontaJson( aInsightTotals, aTypeTotals, aStoppedTime, aMTBF, aMTTR, aDisp, dDtProc, cEquipment, nCostManut )
+
+    FwFreeArray( aInsightTotals )
+    FwFreeArray( aStoppedTime )
+    FwFreeArray( aTypeTotals )
+    FwFreeArray( aServices )
+    FwFreeArray( aInsights )
+    FwFreeArray( aMTBF )
+    FwFreeArray( aMTTR )
+    FwFreeArray( aDisp )
+
+return { 200, oReturn }
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fStoppedTime
+Função responsável por cálcular o tempo parado de um Bem no periodo de 6 meses até
+a data informada ou a data atual e o valor desse tempo considerando o custo hora do bem
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 25/03/2026
+@param cCodBem, caractere, Código do Bem
+@param dDataPar, data, Data de início
+@param aIgnoreServices, array, Lista de serviços a serem ignorados
+
+@return array, A primeira posição contém a quantidade de horas parado e a segunda
+contém o valor referente a esse tempo parado
+/*/ 
+//------------------------------------------------------------------------------
+Static Function fStoppedTime( cCodBem, dDataPar, aIgnoreServices )
+
+    Local cQuery      := ''
+    Local cAliasQry   := GetNextAlias()
+    Local aData       := {}
+    Local nHoursTotal := 0
+    Local nValueTotal := 0
+    Local nI          := 0
+    Local dDtFim      := STOD('')
+
+    Default dDataPar        := Date()
+    Default aIgnoreServices := {}
+    Default cCodBem         := ''
+
+    aData := { dDataPar, MonthSub( dDataPar, 6 ) }
+
+    cQuery := 'SELECT '
+    cQuery +=   'STJ.TJ_CODBEM AS CODBEM, '
+    cQuery +=   'STJ.TJ_DTPRINI AS DTPRINI, '
+    cQuery +=   'STJ.TJ_HOPRINI AS HOPRINI, '
+    cQuery +=   'STJ.TJ_DTPRFIM AS DTPRFIM, '
+    cQuery +=   'STJ.TJ_HOPRFIM AS HOPRFIM '
+    cQuery += 'FROM ' + RetSqlName( 'STJ' ) + ' STJ '
+    cQuery += 'WHERE '
+    cQuery +=   'STJ.TJ_FILIAL = ' + ValToSQL( FWxFilial( 'ST9' ) ) + ' '
+
+    If !Empty( cCodBem )
+
+        cQuery += 'AND STJ.TJ_CODBEM = ' + ValToSQL( cCodBem ) + ' '
+    
+    EndIf
+
+    cQuery +=   'AND STJ.TJ_DTMPINI >= ' + ValToSQL( DTOS( aData[ 2 ] ) ) + ' '
+    cQuery +=   'AND STJ.TJ_DTMPINI <= ' + ValToSQL( DTOS( aData[ 1 ] ) ) + ' '
+    cQuery +=   'AND STJ.TJ_DTPRINI <> ' + ValToSQL( ' ' ) + ' '
+    cQuery +=   'AND STJ.TJ_DTPRFIM <> ' + ValToSQL( ' ' ) + ' '
+    cQuery +=   'AND STJ.TJ_TERMINO = ' + ValToSQL( 'S' ) + ' '
+    cQuery +=   'AND STJ.TJ_SITUACA = ' + ValToSQL( 'L' )
+
+    If Len( aIgnoreServices ) > 0
+
+        cQuery += 'AND STJ.TJ_SERVICO NOT IN ( '
+
+        For nI := 1 To Len( aIgnoreServices )
+
+            cQuery += ValToSQL( aIgnoreServices[ nI ] )
+
+            If nI < Len( aIgnoreServices )
+
+                cQuery += ', '
+
+            EndIf
+
+        Next nI
+
+        cQuery += ' ) '
+    
+    EndIf
+
+    cQuery +=   "AND STJ.D_E_L_E_T_ = ' ' "
+
+    cQuery := ChangeQuery( cQuery )
+
+    dbUseArea( .T.,'TOPCONN',TcGenQry( , , cQuery ), cAliasQry, .T., .T. )
+
+    dbSelectArea( cAliasQry )
+    dbGoTop()
+    While (cAliasQry)->( !Eof() )
+
+        dbSelectArea( 'ST9' )
+        dbSetOrder( 1 ) // T9_FILIAL + T9_CODBEM
+        msSeek( FWxFilial( 'ST9' ) + (cAliasQry)->CODBEM )
+
+        If STOD( (cAliasQry)->DTPRFIM ) > aData[ 1 ]
+
+            dDtFim := aData[ 1 ]
+
+        Else
+
+            dDtFim := STOD( (cAliasQry)->DTPRFIM )
+
+
+        EndIf
+        
+        // Calcula a quantidade total de horas do periodo e soma a quantidade total
+        nHoursTotal += NGCALENHORA( STOD( (cAliasQry)->DTPRINI ), (cAliasQry)->HOPRINI, dDtFim, (cAliasQry)->HOPRFIM, ST9->T9_CALENDA )
+        // Multiplica a quantidade total de horas pelo custo hora do veiculo e soma ao valor total
+        nValueTotal += nHoursTotal * ST9->T9_CUSTOHO
+
+        (cAliasQry)->( dbSkip() )   
+
+    End
+
+    (cAliasQry)->( DbCloseArea() )
+    FwFreeArray( aData )
+
+Return { nHoursTotal, nValueTotal }
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fCalcCost
+Função responsável por cálcular o Custo total de uma Manutenção
+A função lida com manutenções cadastradas e manutenções da I21
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 25/03/2026
+@param nType, numerico, Tipo da Manutenção (1 - Vinda da I21 / 2 - Já cadastrada na STF)
+@param aData, array, Caso o nType seja igual a 1 o valor esperado no parâmetro é o Objeto
+de Insumos exatamente como está na I21, caso contrário o array recebe na primeira posição
+o Código do Bem, na segunda posição o Código do Serviço e na terceira posição a Sequência
+
+@return numerico, Retorna o valor total da manutenção
+/*/ 
+//------------------------------------------------------------------------------
+static function fCalcCost( nType, aData )
+
+    Local cAliasQry := ''
+    Local cTipHr    := ''
+    Local nCost     := 0
+    Local nI        := 0
+    Local aBind     := {}
+
+    // Calcula o custo da manutenção com base nos Insumos da I21
+    If nType == 1
+
+        For nI := 1 To Len( aData )
+
+            If ValType( aData[ nI, 'tl_codigo' ] ) == 'C' .And. ValType( aData[ nI, 'tl_tiporeg' ] ) == 'C';
+            .And. ValType( aData[ nI, 'tl_quantid' ] ) == 'N'
+
+                If AllTrim( aData[ nI, 'tl_tiporeg' ] ) == 'P'
+
+                    cTipHr := NGSEEK( 'SB1', AllTrim( aData[ nI, 'tl_codigo' ] ), 1, 'B1_UM' )
+
+                ElseIf AllTrim( aData[ nI, 'tl_tiporeg' ] ) == 'M'
+
+                    cTipHr := 'H'
+
+                EndIf
+
+                nCost += NGCALCUSTI( AllTrim( aData[ nI, 'tl_codigo' ] ), AllTrim( aData[ nI, 'tl_tiporeg' ] ),;
+                 aData[ nI, 'tl_quantid' ], , cTipHr )
+
+            EndIf
+
+        Next nI
+
+    Else
+    // Calcula os custos da manutenção através dos Insumos registrados na STG
+
+        cAliasQry := GetNextAlias()
+
+        If Empty( cQuerySTG )
+
+            cQuerySTG := 'SELECT '
+            cQuerySTG +=   'STG.TG_CODIGO AS CODE, '
+            cQuerySTG +=   'STG.TG_TIPOREG AS TYPE, '
+            cQuerySTG +=   'STG.TG_QUANTID AS QUANTITY, '
+            cQuerySTG +=   'STG.TG_UNIDADE AS UNIT '
+            cQuerySTG += 'FROM ' + RetSqlName( 'STG' ) + ' STG '
+            cQuerySTG += 'WHERE '
+            cQuerySTG +=   'STG.TG_CODBEM = ? '
+            cQuerySTG +=   'AND STG.TG_SERVICO = ? '
+            cQuerySTG +=   'AND STG.TG_SEQRELA = ? '
+            cQuerySTG +=   "AND STG.D_E_L_E_T_ = ? "
+
+            cQuerySTG := ChangeQuery( cQuerySTG )
+
+        EndIf
+
+        aBind := {}
+        aAdd( aBind, aData[ 1 ] )
+        aAdd( aBind, aData[ 2 ] )
+        aAdd( aBind, aData[ 3 ] )
+        aAdd( aBind, ' ' )
+
+        dbUseArea( .T., 'TOPCONN', TcGenQry2( , , cQuerySTG, aBind ), cAliasQry, .T., .T. )
+
+        While (cAliasQry)->( !Eof() )
+
+            nCost += NGCALCUSTI( (cAliasQry)->CODE, (cAliasQry)->TYPE,;
+                 (cAliasQry)->QUANTITY, , (cAliasQry)->UNIT )
+
+            (cAliasQry)->( dbSkip() )   
+
+        End
+
+    EndIf
+
+    FwFreeArray( aBind )
+
+return nCost
+
+//------------------------------------------------------------------------------
+/*/{Protheus.doc} fMontaJson
+Função responsável por montar o JSON que será usado no Response da API
+
+@type Function
+
+@author João Ricardo Santini Zandoná
+@since 25/03/2026
+@param aInsightTotals, array, Array contendo os totalizadores dos Insights Aplicados e Não Aplicados
+@param aTypeTotals, array, Array contendo os totalizadores dos Insights por Tipo
+@param aStoppedTime, array, Array contendo os tempos de parada e seus custos
+@param aMTBF, array, Array contendo os valores do Indicador MTBF
+@param aMTTR, array, Array contendo os valores do Indicador MTTR
+@param aDisp, array, Array contendo os valores do Indicador de Disponibilidade
+@param dDtProc, data, Data base do processamento dos Insights
+@param cEquipment, caractere, Código do equipamento
+@param nCostManut, numerico, Custo total dos Insights realizados
+
+@return Json, Retorna um Objeto JSON que deve ser utilizado no Response da API
+/*/ 
+//------------------------------------------------------------------------------
+static function fMontaJson( aInsightTotals, aTypeTotals, aStoppedTime, aMTBF, aMTTR, aDisp, dDtProc, cEquipment, nCostManut )
+
+    Local oJson              := JsonObject():New()
+    Local cDtProc := ''
+
+    Default dDtProc := STOD('')
+
+    If !Empty( dDtProc )
+
+        cDtProc := SubStr( DTOS( dDtProc ), 1, 4 ) + '-' + SubStr( DTOS( dDtProc ), 5, 2 ) + '-' + SubStr( DTOS( dDtProc ), 7, 2 )
+
+    EndIf
+
+    oJson['insights_generation_date'] := cDtProc
+    oJson['dashboard_date']           := SubStr( DTOS( Date() ), 1, 4 ) + '-' + SubStr( DTOS( Date() ), 5, 2 ) + '-' + SubStr( DTOS( Date() ), 7, 2 )
+    oJson['projection_date_6_months'] := SubStr( DTOS( MonthSum( Date(), 6 ) ), 1, 4 ) + '-' + SubStr( DTOS( MonthSum( Date(), 6 ) ), 5, 2 ) + '-' + SubStr( DTOS( MonthSum( Date(), 6 ) ), 7, 2 )
+
+    oJson['insights']                       := JsonObject():New()
+    oJson['insights']['total_generated']    := Round( aInsightTotals[ 1 ], 2 )
+    oJson['insights']['total_applied']      := Round( aInsightTotals[ 2 ], 2 )
+    oJson['insights']['applied_percentage'] := Round( ( aInsightTotals[ 2 ] * 100 ) / aInsightTotals[ 1 ], 2 )
+
+    oJson['insights']['distribution'] := JsonObject():New()
+    oJson['insights']['distribution']['no_maintenance_registered'] := Round( aTypeTotals[ 1 ], 2 )
+    oJson['insights']['distribution']['maintenance_not_executed']  := Round( aTypeTotals[ 2 ], 2 )
+    oJson['insights']['distribution']['maintenance_adjustment']    := Round( aTypeTotals[ 3 ], 2 )
+
+    oJson['indicators'] := {}
+    aAdd( oJson['indicators'], JsonObject():New() )
+    oJson['indicators'][1]['name'] := 'downtime'
+
+    oJson['indicators'][1]['initial']          := JsonObject():New()
+    oJson['indicators'][1]['initial']['value'] := Round( aStoppedTime[ 1, 1 ], 2 )
+    oJson['indicators'][1]['initial']['unit']  := 'hour'
+
+    oJson['indicators'][1]['current']          := JsonObject():New()
+    oJson['indicators'][1]['current']['value'] := Round( aStoppedTime[ 2, 1 ], 2 )
+    oJson['indicators'][1]['current']['unit']  := 'hour'
+
+    oJson['indicators'][1]['ai_impact']               := JsonObject():New()
+    oJson['indicators'][1]['ai_impact']['value']      := Round( ( aStoppedTime[ 2, 1 ] - aStoppedTime[ 1, 1 ] ) * ( oJson['insights']['applied_percentage'] / 100 ), 2 )
+    oJson['indicators'][1]['ai_impact']['percentage'] := Round( oJson['indicators'][1]['ai_impact']['value'] / aStoppedTime[ 1, 1 ] * 100, 2 )
+    oJson['indicators'][1]['ai_impact']['unit']       := 'hour'
+
+    oJson['indicators'][1]['projection_6_months']          := JsonObject():New()
+    oJson['indicators'][1]['projection_6_months']['value'] := Round( aStoppedTime[ 3, 1 ], 2 )
+    oJson['indicators'][1]['projection_6_months']['unit']  := 'hour'
+
+    aAdd( oJson['indicators'], JsonObject():New() )
+    oJson['indicators'][2]['name'] := 'lost_profit'
+
+    oJson['indicators'][2]['initial']          := JsonObject():New()
+    oJson['indicators'][2]['initial']['value'] := Round( aStoppedTime[ 1, 2 ], 2 )
+    oJson['indicators'][2]['initial']['unit']  := 'currency'
+
+    oJson['indicators'][2]['current']          := JsonObject():New()
+    oJson['indicators'][2]['current']['value'] := Round( aStoppedTime[ 2, 2 ], 2 )
+    oJson['indicators'][2]['current']['unit']  := 'currency'
+
+    oJson['indicators'][2]['ai_impact']               := JsonObject():New()
+    oJson['indicators'][2]['ai_impact']['value']      := Round( ( (aStoppedTime[ 1, 2 ] ) - ( aStoppedTime[ 2, 2 ] ) ) * ( oJson['insights']['applied_percentage'] / 100 ), 2 )
+    oJson['indicators'][2]['ai_impact']['percentage'] := Round( oJson['indicators'][2]['ai_impact']['value'] / ( aStoppedTime[1, 2] ) * 100, 2 )
+    oJson['indicators'][2]['ai_impact']['unit']       := 'currency'
+
+    oJson['indicators'][2]['projection_6_months'] := JsonObject():New()
+    oJson['indicators'][2]['projection_6_months']['value'] := Round( aStoppedTime[ 3, 2 ], 2 )
+    oJson['indicators'][2]['projection_6_months']['unit']  := 'currency'
+
+    aAdd( oJson['indicators'], JsonObject():New() )
+    oJson['indicators'][3]['name'] := 'mtbf'
+
+    oJson['indicators'][3]['initial'] := JsonObject():New()
+    oJson['indicators'][3]['initial']['value'] := Round( aMTBF[ 1 ], 2 )
+    oJson['indicators'][3]['initial']['unit']  := 'hour'
+
+    oJson['indicators'][3]['current'] := JsonObject():New()
+    oJson['indicators'][3]['current']['value'] := Round( aMTBF[ 2 ], 2 )
+    oJson['indicators'][3]['current']['unit']  := 'hour'
+
+    oJson['indicators'][3]['ai_impact'] := JsonObject():New()
+    oJson['indicators'][3]['ai_impact']['value']      := Round( ( aMTBF[ 2 ] - aMTBF[ 1 ] ) * ( oJson['insights']['applied_percentage'] / 100 ), 2 )
+    oJson['indicators'][3]['ai_impact']['percentage'] := Round( oJson['indicators'][3]['ai_impact']['value'] / aStoppedTime[ 1, 1 ] * 100, 2 )
+    oJson['indicators'][3]['ai_impact']['unit']       := 'hour'
+
+    oJson['indicators'][3]['projection_6_months']          := JsonObject():New()
+    oJson['indicators'][3]['projection_6_months']['value'] := Round( aMTBF[ 3 ], 2 )
+    oJson['indicators'][3]['projection_6_months']['unit']  := 'hour'
+
+    aAdd( oJson['indicators'], JsonObject():New() )
+    oJson['indicators'][4]['name'] := 'mttr'
+
+    oJson['indicators'][4]['initial'] := JsonObject():New()
+    oJson['indicators'][4]['initial']['value'] := Round( aMTTR[ 1 ], 2 )
+    oJson['indicators'][4]['initial']['unit']  := 'hour'
+
+    oJson['indicators'][4]['current'] := JsonObject():New()
+    oJson['indicators'][4]['current']['value'] := Round( aMTTR[ 2 ], 2 )
+    oJson['indicators'][4]['current']['unit']  := 'hour'
+
+    oJson['indicators'][4]['ai_impact'] := JsonObject():New()
+    oJson['indicators'][4]['ai_impact']['value']      := Round( ( aMTTR[ 2 ] - aMTTR[ 1 ] ) * ( oJson['insights']['applied_percentage'] / 100 ), 2 )
+    oJson['indicators'][4]['ai_impact']['percentage'] := Round( oJson['indicators'][4]['ai_impact']['value'] / aStoppedTime[ 1, 1 ] * 100, 2 )
+    oJson['indicators'][4]['ai_impact']['unit']       := 'hour'
+
+    oJson['indicators'][4]['projection_6_months']          := JsonObject():New()
+    oJson['indicators'][4]['projection_6_months']['value'] := Round( aMTTR[ 3 ], 2 )
+    oJson['indicators'][4]['projection_6_months']['unit']  := 'hour'
+
+    aAdd( oJson['indicators'], JsonObject():New() )
+    oJson['indicators'][5]['name'] := 'availability'
+
+    oJson['indicators'][5]['initial']          := JsonObject():New()
+    oJson['indicators'][5]['initial']['value'] := Round( aDisp[ 1 ], 2 )
+    oJson['indicators'][5]['initial']['unit']  := 'percentage'
+
+    oJson['indicators'][5]['current']          := JsonObject():New()
+    oJson['indicators'][5]['current']['value'] := Round( aDisp[ 2 ], 2 )
+    oJson['indicators'][5]['current']['unit']  := 'percentage'
+
+    oJson['indicators'][5]['ai_impact']               := JsonObject():New()
+    oJson['indicators'][5]['ai_impact']['value']      := Round( ( aDisp[ 2 ] - aDisp[ 1 ] ) * ( oJson['insights']['applied_percentage'] / 100 ), 2 )
+    oJson['indicators'][5]['ai_impact']['percentage'] := Round( oJson['indicators'][5]['ai_impact']['value'] / aStoppedTime[ 1, 1 ] * 100, 2 )
+    oJson['indicators'][5]['ai_impact']['unit']       := 'percentage'
+
+    oJson['indicators'][5]['projection_6_months']          := JsonObject():New()
+    oJson['indicators'][5]['projection_6_months']['value'] := Round( aDisp[ 3 ], 2 )
+    oJson['indicators'][5]['projection_6_months']['unit']  := 'percentage'
+
+    oJson['insights']['economic_potential']          := JsonObject():New()
+    oJson['insights']['economic_potential']['value'] := Round( ( oJson['indicators'][2]['initial']['value'] - oJson['indicators'][2]['current']['value'] ) - nCostManut, 2 )
+    oJson['insights']['economic_potential']['unit']  := 'currency'
+
+return oJson

@@ -1,0 +1,1371 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "retail.autoparts.catalog.product.controller.ch"
+
+// WIDE_DENSITY_THRESHOLD: limite de densidade do termo (Gatilho 1).
+// Minimo de registros que um termo precisa ter na base para justificar o uso
+// do indice alfabetico (Nested Loop). Se o Peek achar menos que este valor,
+// o termo e considerado espalhado e forcamos Hash Match.
+#define WIDE_DENSITY_THRESHOLD 200
+
+namespace totvs.protheus.retail.autoparts.catalog.product.controller
+
+/*/{Protheus.doc} RetailAutopartsCatalogProductController
+    API relacionadas a produto do catalogo de autopecas
+    @type   class
+    @author Bruno Almeida
+    @since  09/06/2026
+/*/
+Class RetailAutopartsCatalogProductController
+
+    private data lHasNext   as Logical
+    private data nStart     as Numeric
+    private data nEnd       as Numeric
+    private data cErrMsg    as Character
+
+    private Method FindProduct(cAlias as Character) as Array
+    private Method ExecQuery(cCode as Character, cName as Character, lTotal as Logical, cStatus as Character) as Character
+    private Method FindProductWide(cAlias as Character) as Array
+    private Method ExecPeekWide(cQ as Character, cStatus as Character, nLimit as Numeric) as Numeric
+    private Method ExecQueryWide(cQ as Character, cStatus as Character, lTotal as Logical) as Character
+    private Method BuildFiltroBuscaSql() as Character
+    private Method BindFiltroBuscaParams(oStmt as Object, nSeq as Numeric, cTerm as Character) as Numeric
+    private Method ValidateInput(cCode as Character, cName as Character, cMark as Character, cSendPdv as Character, cPdvPri as Character) as Logical
+    private Method UpdateSB1(cCode as Character, cName as Character) as Logical
+    private Method UpdateD4Z(cCode as Character, cMark as Character, cSendPdv as Character, cPdvPri as Character) as Logical
+    private Method SetDefaultHeaders() as Logical
+    private Method CountPendingPdv() as Numeric
+    private Method CountProductsByStatus() as Object
+
+    public Method New()
+
+    @Get("/api/retail/v1/retailAutopartsCatalogProduct/getDataForProduct", description="Consulta os produtos do catalogo de auto pecas.")
+    public Method getDataForProduct()
+
+    @Get("/api/retail/v1/retailAutopartsCatalogProduct/wideSearch", description="Busca ampla de produtos no catalogo SB1, pesquisando em codigo, descricao, marca, grupo, referencias, codigos de barras adicionais, caracteristicas e categorias.")
+    public Method wideSearch()
+
+    @Get("/api/retail/v1/retailAutopartsCatalogProduct/getCountPendingPdv", description="Retorna a contagem de produtos com Envio PDV pendente (D4Z_ENVPDV = 1).")
+    public Method getCountPendingPdv()
+
+    @Get("/api/retail/v1/retailAutopartsCatalogProduct/getCountProductsByStatus", description="Retorna a contagem de produtos pendentes, liberados e o total geral.")
+    public Method getCountProductsByStatus()
+
+    @Put("/api/retail/v1/retailAutopartsCatalogProduct/putDataForProduct", description="Atualiza os produtos do catalogo de auto pecas.")
+    public Method putDataForProduct()
+
+EndClass
+
+/*/{Protheus.doc} New
+    Metodo construtor
+    @type   method
+    @author Bruno Almeida
+    @since  09/06/2026
+/*/
+Method New() Class RetailAutopartsCatalogProductController
+    self:lHasNext := .F.    
+Return self
+
+/*/{Protheus.doc} SetDefaultHeaders
+    Define os headers padroes para as respostas dessa API
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @return  logical, retorno padrão .T.
+/*/
+Method SetDefaultHeaders() Class RetailAutopartsCatalogProductController
+    oRest:setKeyHeaderResponse("Content-Type", "application/json")
+Return .T.
+
+/*/{Protheus.doc} getDataForProduct
+    Retorna os produtos do catalogo de auto pecas
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @return  logical, retorno padrão .T.
+/*/
+Method getDataForProduct() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo    as Object
+    Local oJParametr    as Object
+    Local aItens        as Array
+    Local cCode         as Character
+    Local cName         as Character
+    Local nPage         as Numeric
+    Local nPageSize     as Numeric
+    Local cStatus       as Character
+    Local cAliasQry     as Character
+    Local aArea         as Array
+
+    Self:SetDefaultHeaders()
+
+    aArea       := GetArea()
+    oJsonRespo  := JsonObject():New()
+    aItens      := {}
+    oJParametr  := oRest:getQueryRequest()
+
+    If oJParametr['code'] == Nil .Or. Empty(oJParametr['code'])
+        cCode := ""
+    Else
+        cCode := oJParametr['code']
+    EndIf
+
+    If oJParametr['name'] == Nil .Or. Empty(oJParametr['name'])
+        cName := ""
+    Else
+        cName := oJParametr['name']
+    EndIf
+
+    If oJParametr['page'] == Nil .Or. Empty(oJParametr['page'])
+        nPage := 1
+    Else
+        nPage := Val(oJParametr['page'])
+    EndIf
+
+    If oJParametr['pagesize'] == Nil .Or. Empty(oJParametr['pagesize'])
+        nPageSize := 20
+    Else
+        nPageSize := Val(oJParametr['pagesize'])
+    EndIf
+
+    If oJParametr['status'] == Nil .Or. Empty(oJParametr['status'])
+        cStatus := ""
+    Else
+        cStatus := oJParametr['status']
+    EndIf
+
+    Self:nStart := (nPage - 1) * nPageSize + 1
+
+    //-- O +1 é necessário para corrigir o cálculo da linha final, pois a função ROW_NUMBER() inicia a contagem em 1
+    Self:nEnd := nPage * nPageSize + 1
+    cAliasQry := Self:ExecQuery(cCode, cName, .F., cStatus)
+
+    If !Empty(cAliasQry)
+        aItens := Self:FindProduct(cAliasQry)
+    EndIf
+
+    If Len(aItens) > 0
+        cAliasQry := ""
+        cAliasQry := Self:ExecQuery(cCode, cName, .T., cStatus)
+
+        oJsonRespo["items"]                      := aItens
+        oJsonRespo["pagination"]                 := JsonObject():New()
+        oJsonRespo["pagination"]["page"]         := nPage
+        oJsonRespo["pagination"]["pagesize"]     := nPageSize
+        oJsonRespo["pagination"]["totalitems"]   := (cAliasQry)->TOTAL
+        oJsonRespo["pagination"]["totalpages"]   := Int(((cAliasQry)->TOTAL + nPageSize - 1) / nPageSize)
+        oJsonRespo["pagination"]["nextpage"]     := self:lHasNext
+        oJsonRespo["pagination"]["previouspage"] := nPage > 1
+
+        (cAliasQry)->(dbCloseArea())
+
+        oRest:setStatusCode(200)
+    Else
+        oJsonRespo["items"]   := {}
+        oJsonRespo["message"] := STR0001 //"Dados não encontrados para o filtro informado"
+        oRest:setStatusCode(404)
+    EndIf
+
+    oRest:setResponse(oJsonRespo:toJson())
+    
+    RestArea(aArea)
+    FreeObj(oJsonRespo)
+    FreeObj(oJParametr)
+
+Return .T.
+
+
+/*/{Protheus.doc} FindProduct
+    Consulta produtos do catalogo de auto pecas
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @param   cAlias, Character, alias temporario
+    @return  array,  Array,     array de itens encontrados
+/*/
+Method FindProduct(cAliasQry as Character) as Array Class RetailAutopartsCatalogProductController
+    Local jItem         as Object
+    Local aItens        as Array
+
+    aItens := {}
+
+    While (cAliasQry)->(!EOF())
+
+        If (cAliasQry)->LINHA > (Self:nEnd - 1)
+            Self:lHasNext := .T.
+            Exit
+        EndIf
+
+        jItem := JsonObject():New()
+        jItem["branch"]   := AllTrim((cAliasQry)->B1_FILIAL)
+        jItem["code"]     := AllTrim((cAliasQry)->B1_COD)
+        jItem["ncm"]      := AllTrim((cAliasQry)->B1_POSIPI)
+        jItem["un"]       := AllTrim((cAliasQry)->B1_UM)
+        jItem["mark"]     := AllTrim((cAliasQry)->MG0_NOME)
+        jItem["name"]     := AllTrim((cAliasQry)->B1_DESC)
+        jItem["group"]    := AllTrim((cAliasQry)->BM_DESC)
+        jItem["type"]     := AllTrim((cAliasQry)->X5_DESCRI)
+
+        If AllTrim((cAliasQry)->D4Z_ENVPDV) == "1"
+            jItem["sendpdv"]  := "Pendente"
+        ElseIf AllTrim((cAliasQry)->D4Z_ENVPDV) == "2"
+            jItem["sendpdv"]  := "Liberado"
+        Else
+            jItem["sendpdv"]  := ""
+        EndIf
+
+        If AllTrim((cAliasQry)->D4Z_PDVPRI) == "1"
+            jItem["priority"] := "Sim"
+        ElseIf AllTrim((cAliasQry)->D4Z_PDVPRI) == "2"
+            jItem["priority"] := "Não"
+        Else
+            jItem["priority"] := ""
+        EndIf
+
+        aAdd(aItens, jItem)
+        jItem := Nil
+        (cAliasQry)->(dbSkip())
+    EndDo
+
+    (cAliasQry)->(dbCloseArea())
+
+Return(aItens)
+
+
+/*/{Protheus.doc} ExecQuery
+    Consulta produtos do catalogo de auto pecas
+    @type    method
+    @author  Bruno Almeida
+    @since   09/06/2026
+    @version p12
+    @param   cCode   , Character , filtro pelo codigo do fornecedor
+    @param   cName   , Character , filtro pelo nome do fornecedor
+    @param   lTotal  , Logical   , indica se deve retornar o total de itens
+    @param   cStatus , Character , filtro pelo status do envio PDV (1 = Pendente, 2 = Liberado)
+    @return  cTable  , Character , alias temporario com os itens encontrados
+/*/
+Method ExecQuery(cCode as Character, cName as Character, lTotal as Logical, cStatus as Character) as Character Class RetailAutopartsCatalogProductController
+
+    Local cTable    as Character
+    Local cQry      as Character
+    Local oQueryQry as Object
+    Local nSeq      as Numeric
+
+    Default lTotal := .F.
+
+    nSeq := 1
+
+    dbSelectArea("D4Z")
+
+    If !lTotal
+        cQry := " SELECT * FROM ("
+        cQry += " SELECT ROW_NUMBER() OVER(ORDER BY SB1.B1_DESC ASC) AS LINHA, B1_FILIAL, B1_COD, B1_POSIPI, B1_UM, MG0_NOME, B1_DESC, BM_DESC, X5_DESCRI, D4Z_ENVPDV, D4Z_PDVPRI "
+    Else
+        cQry := " SELECT COUNT(SB1.B1_COD) AS TOTAL "
+    EndIf
+
+    cQry += "   FROM " + RetSqlName("SB1") + " SB1 "
+    cQry += "        LEFT JOIN " + RetSqlName("D4Z") + " D4Z ON D4Z.D4Z_FILIAL = SB1.B1_FILIAL AND D4Z.D4Z_COD = SB1.B1_COD "
+    cQry += "        LEFT JOIN " + RetSqlName("MG0") + " MG0 ON MG0.MG0_FILIAL = ?  AND MG0.MG0_CODMAR = D4Z.D4Z_CODMAR "
+    cQry += "        LEFT JOIN " + RetSqlName("SX5") + " SX5 ON SX5.X5_TABELA  = ?  AND SX5.X5_CHAVE   = SB1.B1_TIPO "
+    cQry += "        LEFT JOIN " + RetSqlName("SBM") + " SBM ON SBM.BM_FILIAL  = ?  AND SBM.BM_GRUPO   = SB1.B1_GRUPO "
+    cQry += "  WHERE SB1.B1_FILIAL = ? AND "
+
+    If !Empty(cCode)
+        cQry += " SB1.B1_COD = ? AND "
+    ElseIf !Empty(cName)
+        cQry += " SB1.B1_DESC LIKE ? AND "
+    EndIf
+
+    If !Empty(cStatus)
+        cQry += " D4Z.D4Z_ENVPDV = ? AND "
+    EndIf
+
+    cQry += " SB1.D_E_L_E_T_ = ? "
+
+    If !lTotal
+        cQry += ") TAB"
+        cQry += " WHERE LINHA BETWEEN ? AND ?"
+    EndIf
+    
+    cQry := ChangeQuery(cQry)
+
+    oQueryQry := FwExecStatement():New(cQry)
+
+    oQueryQry:SetString(nSeq++, xFilial("MG0"))
+    oQueryQry:SetString(nSeq++, "02")
+    oQueryQry:SetString(nSeq++, xFilial("SBM"))
+    oQueryQry:SetString(nSeq++, xFilial("SB1"))
+
+    If !Empty(cCode)
+        oQueryQry:SetString(nSeq++, cCode)
+    ElseIf !Empty(cName)
+        //-- Ajuste para evitar problemas com acentos na consulta
+        cName := DecodeUTF8(cName, "cp1252")
+        oQueryQry:SetString(nSeq++, "%" + Upper(cName) + "%")
+    EndIf
+
+    If !Empty(cStatus)
+        oQueryQry:SetString(nSeq++, cStatus)
+    EndIf
+
+    oQueryQry:SetString(nSeq++, Space(1))
+
+    If !lTotal
+        oQueryQry:SetNumeric(nSeq++, Self:nStart)
+        oQueryQry:SetNumeric(nSeq++, Self:nEnd)
+    EndIf
+
+    cTable := oQueryQry:OpenAlias(GetNextAlias())
+
+    oQueryQry:Destroy()
+    oQueryQry := Nil
+
+Return cTable
+
+/*/{Protheus.doc} ValidateInput
+    Valida os dados de entrada do metodo putDataForProduct
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @param   cCode, Character, codigo do produto
+    @param   cName, Character, nova descricao do produto
+    @param   cMark, Character, codigo da marca (D4Z_CODMAR). Vazio = nao atualiza
+    @param   cSendPdv, Character, valor do envio PDV (D4Z_ENVPDV). Vazio = nao atualiza
+    @param   cPdvPri, Character, indica se o produto tem prioridade de pesquisa (D4Z_PDVPRI). Vazio = nao atualiza
+    @return  logical, Logical, .T. se os dados sao validos, .F. caso contrario
+/*/
+Method ValidateInput(cCode as Character, cName as Character, cMark as Character, cSendPdv as Character, cPdvPri as Character) as Logical Class RetailAutopartsCatalogProductController
+    Local nTamDesc  as Numeric
+
+    If Empty(cCode)
+        self:cErrMsg := STR0009 //"Código do produto é obrigatório"
+        oRest:setStatusCode(422)
+        Return .F.
+    EndIf
+
+    //-- Valida que ao menos um campo de atualizacao foi enviado
+    If Empty(cName) .And. Empty(cMark) .And. Empty(cSendPdv) .And. Empty(cPdvPri)
+        self:cErrMsg := STR0002 //"Nenhuma informação enviada para atualização"
+        oRest:setStatusCode(422)
+        Return .F.
+    EndIf
+
+    //-- Valida tamanho e conteudo da descricao
+    If !Empty(cName)
+        nTamDesc := TamSx3("B1_DESC")[1]
+        If Len(AllTrim(cName)) > nTamDesc
+            self:cErrMsg := STR0003 + cValToChar(nTamDesc) + STR0004 //"Descrição inválida ou maior que o tamanho permitido (" # " caracteres)"
+            oRest:setStatusCode(422)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida valor do campo envio PDV
+    If !Empty(cSendPdv)
+        If cSendPdv != "1" .And. cSendPdv != "2"
+            self:cErrMsg := STR0005 //"Valor inválido para envio PDV. Informe 1 ou 2"
+            oRest:setStatusCode(422)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida valor do campo prioridade
+    If !Empty(cPdvPri)
+        If Upper(cPdvPri) != "SIM" .And. Upper(cPdvPri) != "NÃO"
+            self:cErrMsg := STR0011 //"Valor inválido para prioridade de pesquisa. Informe Sim ou Não"
+            oRest:setStatusCode(422)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida existencia da marca na MG0
+    If !Empty(cMark)
+        dbSelectArea("MG0")
+        MG0->(dbSetOrder(1))
+        If !MG0->(dbSeek(xFilial("MG0") + padR(cMark , TamSx3("MG0_CODMAR")[1])))
+            self:cErrMsg := STR0006 //"Código de marca não encontrado"
+            oRest:setStatusCode(404)
+            Return .F.
+        EndIf
+    EndIf
+
+    //-- Valida existencia do produto na SB1
+    dbSelectArea("SB1")
+    SB1->(dbSetOrder(1))
+    If !SB1->(dbSeek(xFilial("SB1") + cCode))
+        self:cErrMsg := STR0007 //"Produto não encontrado"
+        oRest:setStatusCode(404)
+        Return .F.
+    EndIf
+
+Return .T.
+
+/*/{Protheus.doc} UpdateSB1
+    Atualiza a descricao do produto na tabela SB1
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @param   cCode  , Character, codigo do produto
+    @param   cName  , Character, nova descricao do produto
+    @return  logical, Logical, .T. se atualizou com sucesso, .F. caso contrario
+/*/
+Method UpdateSB1(cCode as Character, cName as Character) as Logical Class RetailAutopartsCatalogProductController
+
+    RecLock("SB1",.F.,,,IsBlind())
+
+    SB1->B1_DESC := Upper(cName)
+
+    SB1->(MsUnlock())
+
+Return .T.
+
+/*/{Protheus.doc} UpdateD4Z
+    Atualiza ou cria o registro do produto na tabela D4Z (marca e envio PDV)
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @param   cCode    , Character, codigo do produto
+    @param   cMark    , Character, codigo da marca (D4Z_CODMAR). Vazio = nao atualiza
+    @param   cSendPdv , Character, valor do envio PDV (D4Z_ENVPDV). Vazio = nao atualiza
+    @param   cPdvPri  , Character, indica se o produto tem prioridade de pesquisa (D4Z_PDVPRI). Vazio = nao atualiza
+    @return  logical, Logical, .T. se atualizou/criou com sucesso, .F. caso contrario
+/*/
+Method UpdateD4Z(cCode as Character, cMark as Character, cSendPdv as Character, cPdvPri as Character) as Logical Class RetailAutopartsCatalogProductController
+
+    dbSelectArea("D4Z")
+    D4Z->(dbSetOrder(1))
+
+    If D4Z->(dbSeek(xFilial("D4Z") + cCode))
+        //-- Registro existente: atualiza
+        RecLock("D4Z",.F.,,,IsBlind())
+    Else
+        //-- Registro nao existe: cria novo
+        RecLock("D4Z", .T.)
+        D4Z->D4Z_FILIAL := xFilial("D4Z")
+        D4Z->D4Z_COD    := cCode
+    EndIf
+
+    If !Empty(cMark)
+        D4Z->D4Z_CODMAR := cMark
+    EndIf
+
+    If !Empty(cSendPdv)
+        D4Z->D4Z_ENVPDV := cSendPdv
+    EndIf
+
+    If !Empty(cPdvPri)
+        If Upper(cPdvPri) == "SIM"
+            D4Z->D4Z_PDVPRI := "1"
+        Else
+            D4Z->D4Z_PDVPRI := "2"
+        EndIf
+    EndIf
+
+    D4Z->(MsUnlock())
+
+Return .T.
+
+/*/{Protheus.doc} putDataForProduct
+    Atualiza os dados do produto do catalogo de auto pecas.
+    Campos atualizaveis: descricao (SB1.B1_DESC), marca (D4Z.D4Z_CODMAR) e envio PDV (D4Z.D4Z_ENVPDV).
+    Ao menos um dos tres campos deve ser informado.
+    A atualizacao e atomica: se qualquer gravacao falhar, um RollBack e realizado em todas as tabelas.
+    @type    method
+    @author  Bruno Almeida
+    @since   12/06/2026
+    @version p12
+    @return  logical, Logical, retorno padrao .T.
+/*/
+Method putDataForProduct() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo as Object
+    Local oBody      as Object
+    Local cCode      as Character
+    Local cName      as Character
+    Local cMark      as Character
+    Local cSendPdv   as Character
+    Local cPdvPri    as Character
+    Local aArea      as Array
+    Local lOk        as Logical
+    Local oErr       as Object
+
+    Self:SetDefaultHeaders()
+
+    aArea      := GetArea()
+    oJsonRespo := JsonObject():New()
+    lOk        := .T.
+
+    //-- Desserializa o body
+    oBody := JsonObject():New()
+    oBody:fromJson(oRest:getBodyRequest())
+
+    self:cErrMsg := ""
+
+    //-- Extrai os valores do body para as variaveis locais
+    cCode    := ""
+    cName    := ""
+    cMark    := ""
+    cSendPdv := ""
+    cPdvPri  := ""
+
+    If oBody['code'] != Nil .And. !Empty(oBody['code'])
+        cCode := padR(AllTrim(oBody['code']), TamSx3("B1_COD")[1])
+    EndIf
+
+    If oBody['name'] != Nil .And. !Empty(oBody['name'])
+        cName := AllTrim(oBody['name'])
+        cName := DecodeUTF8(cName, "cp1252")
+    EndIf
+
+    If oBody['mark'] != Nil .And. !Empty(oBody['mark'])
+        cMark := AllTrim(oBody['mark'])
+    EndIf
+
+    If oBody['sendpdv'] != Nil .And. !Empty(oBody['sendpdv'])
+        cSendPdv := AllTrim(oBody['sendpdv'])
+    EndIf
+
+    If oBody['priority'] != Nil .And. !Empty(oBody['priority'])
+        cPdvPri := AllTrim(oBody['priority'])
+        cPdvPri := DecodeUTF8(cPdvPri, "cp1252")
+    EndIf
+
+    //-- Valida os dados de entrada
+    If !Self:ValidateInput(cCode, cName, cMark, cSendPdv, cPdvPri)
+        oJsonRespo['success'] := .F.
+        oJsonRespo["message"] := self:cErrMsg
+        oRest:setResponse(oJsonRespo:toJson())
+        RestArea(aArea)
+        FreeObj(oJsonRespo)
+        FreeObj(oBody)
+        Return .T.
+    EndIf
+
+    //-- Atualiza dentro de transacao atomica
+    Begin Transaction
+        Try
+            If !Empty(cName)
+                Self:UpdateSB1(cCode, cName)
+            EndIf
+
+            If lOk .And. (!Empty(cMark) .Or. !Empty(cSendPdv) .Or. !Empty(cPdvPri))
+                Self:UpdateD4Z(cCode, cMark, cSendPdv, cPdvPri)
+            EndIf
+        Catch oErr
+            DisarmTransaction()
+            lOk          := .F.
+            self:cErrMsg := oErr:Description
+        EndTry
+
+    End Transaction
+
+    If lOk
+        oRest:setStatusCode(200)
+        oJsonRespo['success']  := .T.
+        oJsonRespo["message"] := STR0008 //"Dados atualizados com sucesso"
+    Else
+        oRest:setStatusCode(500)
+        oJsonRespo['success']  := .F.
+        oJsonRespo["message"] := self:cErrMsg
+    EndIf
+
+    oRest:setResponse(oJsonRespo:toJson())
+
+    RestArea(aArea)
+    FreeObj(oJsonRespo)
+    FreeObj(oBody)
+
+Return .T.
+
+/*/{Protheus.doc} getCountPendingPdv
+    Retorna a contagem de produtos com Envio PDV pendente (D4Z_ENVPDV = 1)
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version p12
+    @return  logical, retorno padrao .T.
+/*/
+Method getCountPendingPdv() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo := JsonObject():New() as Object
+
+    Self:SetDefaultHeaders()
+
+    oJsonRespo['total'] := Self:CountPendingPdv()
+    oRest:setStatusCode(200)
+    oRest:setResponse(oJsonRespo:toJson())
+
+    FreeObj(oJsonRespo)
+
+Return .T.
+
+/*/{Protheus.doc} getCountProductsByStatus
+    Retorna a contagem de produtos pendentes, liberados e o total geral.
+    O total e obtido da SB1 (todos os produtos), independente de registro na D4Z.
+    @type    method
+    @author  Bruno Almeida
+    @since   29/06/2026
+    @version p12
+    @return  logical, retorno padrao .T.
+/*/
+Method getCountProductsByStatus() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo := JsonObject():New() as Object
+    Local jResult    := Nil as Object
+
+    Self:SetDefaultHeaders()
+
+    jResult := Self:CountProductsByStatus()
+
+    oJsonRespo['pending']  := jResult['pending']
+    oJsonRespo['released'] := jResult['released']
+    oJsonRespo['total']    := jResult['total']
+
+    oRest:setStatusCode(200)
+    oRest:setResponse(oJsonRespo:toJson())
+
+    FreeObj(jResult)
+    FreeObj(oJsonRespo)
+
+Return .T.
+
+/*/{Protheus.doc} CountPendingPdv
+    Retorna a quantidade de registros D4Z com D4Z_ENVPDV = '1' (Pendente)
+    Aplica filtro de filial e descarta registros excluidos logicamente
+    @type    method
+    @author  eduardo.FLima
+    @since   18/06/2026
+    @version p12
+    @return  Numeric, Quantidade de produtos com Envio PDV pendente
+/*/
+Method CountPendingPdv() as Numeric Class RetailAutopartsCatalogProductController
+    Local oQueryQry := Nil as Object
+    Local cQry      := "" as Character
+    Local nSeq      := 1 as Numeric
+    Local nTotal    := 0 as Numeric
+    Local aArea     := GetArea() as Array
+
+    cQry := " SELECT COUNT(1) AS TOTAL "
+    cQry += " FROM " + RetSqlName('D4Z') + " D4Z "
+    cQry += " WHERE D4Z.D4Z_FILIAL = ? "
+    cQry += " AND D4Z.D4Z_ENVPDV  = ? "
+    cQry += " AND D4Z.D_E_L_E_T_  = ? "
+
+    cQry := ChangeQuery(cQry)
+
+    oQueryQry := FwExecStatement():New(cQry)
+    oQueryQry:SetString(nSeq++, xFilial('D4Z'))
+    oQueryQry:SetString(nSeq++, "1")
+    oQueryQry:SetString(nSeq++, Space(1))
+    nTotal := Val(cValToChar(oQueryQry:ExecScalar('TOTAL')))
+
+    oQueryQry:Destroy()
+    oQueryQry := Nil
+
+    RestArea(aArea)
+
+Return nTotal
+
+/*/{Protheus.doc} CountProductsByStatus
+    Retorna a quantidade de produtos pendentes (D4Z_ENVPDV = '1'), liberados (D4Z_ENVPDV = '2')
+    e o total geral de produtos cadastrados na SB1, em uma unica query com LEFT JOIN.
+    Produtos sem registro na D4Z sao contabilizados apenas no total.
+    @type    method
+    @author  Bruno Almeida
+    @since   29/06/2026
+    @version p12
+    @return  Object, JsonObject com as chaves pending, released e total
+/*/
+Method CountProductsByStatus() as Object Class RetailAutopartsCatalogProductController
+    Local oQueryQry := Nil                as Object
+    Local cQry      := ""                 as Character
+    Local nSeq      := 1                  as Numeric
+    Local jResult   := JsonObject():New() as Object
+    Local cAlias    := ""                 as Character
+    Local aArea     := GetArea()          as Array
+
+    cQry := " SELECT "
+    cQry += "   COUNT(CASE WHEN D4Z.D4Z_ENVPDV = ? THEN 1 END) AS PENDING, "
+    cQry += "   COUNT(CASE WHEN D4Z.D4Z_ENVPDV = ? THEN 1 END) AS RELEASED, "
+    cQry += "   COUNT(SB1.B1_COD) AS TOTAL "
+    cQry += " FROM " + RetSqlName("SB1") + " SB1 "
+    cQry += " LEFT JOIN " + RetSqlName("D4Z") + " D4Z "
+    cQry += "        ON D4Z.D4Z_FILIAL  = SB1.B1_FILIAL "
+    cQry += "       AND D4Z.D4Z_COD     = SB1.B1_COD "
+    cQry += "       AND D4Z.D_E_L_E_T_  = ? "
+    cQry += " WHERE SB1.B1_FILIAL  = ? "
+    cQry += "   AND SB1.D_E_L_E_T_ = ? "
+
+    cQry := ChangeQuery(cQry)
+
+    oQueryQry := FwExecStatement():New(cQry)
+    oQueryQry:SetString(nSeq++, "1")
+    oQueryQry:SetString(nSeq++, "2")
+    oQueryQry:SetString(nSeq++, Space(1))
+    oQueryQry:SetString(nSeq++, xFilial("SB1"))
+    oQueryQry:SetString(nSeq++, Space(1))
+
+    cAlias := oQueryQry:OpenAlias(GetNextAlias())
+
+    jResult['pending']  := Val(cValToChar((cAlias)->PENDING))
+    jResult['released'] := Val(cValToChar((cAlias)->RELEASED))
+    jResult['total']    := Val(cValToChar((cAlias)->TOTAL))
+
+    (cAlias)->(dbCloseArea())
+
+    oQueryQry:Destroy()
+    oQueryQry := Nil
+
+    RestArea(aArea)
+
+Return jResult
+
+/*/{Protheus.doc} wideSearch
+    Busca ampla de produtos no catalogo SB1, pesquisando simultaneamente em:
+    codigo, descricao, tipo e codigo de barras (SB1), nome da marca (MG0 via D4Z),
+    descricao do grupo (SBM), codigos de referencia (MG5), codigos de barras
+    adicionais (SLK), caracteristicas do produto (D4X+D4V) e categorias (ACV+ACU).
+    cte s e LEFT JOINs sao usados para evitar o colapso alfabetico do Nested Loop.
+    A busca e case-insensitive e ignora acentos.
+    @type    method
+    @author  eduardo.FLima
+    @since   28/07/2026
+    @version p12
+    @param   q        , Character , termo de busca livre (obrigatorio, case-insensitive)
+    @param   status   , Character , filtro de status D4Z_ENVPDV: '1'=Pendente, '2'=Liberado (opcional)
+    @param   page     , Character , pagina atual (opcional, default 1)
+    @param   pagesize , Character , tamanho da pagina (opcional, default 20)
+    @return  Logical  , sempre .T.
+/*/
+Method wideSearch() Class RetailAutopartsCatalogProductController
+    Local oJsonRespo    as Object
+    Local oJParametr    as Object
+    Local aItens        as Array
+    Local cQ            as Character
+    Local cStatus       as Character
+    Local nPage         as Numeric
+    Local nPageSize     as Numeric
+    Local nPeekLimit    as Numeric
+    Local nPeekCnt      as Numeric
+    Local nTotalItems   as Numeric
+    Local cAliasQry     as Character
+    Local aArea         as Array
+
+    Self:SetDefaultHeaders()
+
+    aArea       := GetArea()
+    oJsonRespo  := JsonObject():New()
+    aItens      := {}
+    cQ          := ""
+    cStatus     := ""
+    nPage       := 1
+    nPageSize   := 20
+    oJParametr  := oRest:getQueryRequest()
+    Self:lHasNext := .F.
+    
+    // ==========================================
+    // Extrai parametros da requisicao
+    // ==========================================
+    If oJParametr['q'] != Nil .And. !Empty(oJParametr['q'])
+        cQ := oJParametr['q']
+    EndIf
+
+    If oJParametr['status'] != Nil .And. !Empty(oJParametr['status'])
+        cStatus := oJParametr['status']
+    EndIf
+
+    If oJParametr['page'] != Nil .And. !Empty(oJParametr['page'])
+        nPage := Val(oJParametr['page'])
+        If nPage < 1
+            nPage := 1
+        EndIf
+    EndIf
+
+    If oJParametr['pagesize'] != Nil .And. !Empty(oJParametr['pagesize'])
+        nPageSize := Val(oJParametr['pagesize'])
+        If nPageSize < 1
+            nPageSize := 20
+        EndIf
+    EndIf
+
+    // ==========================================
+    // Valida parametro obrigatorio
+    // ==========================================
+    If Empty(cQ)
+        oRest:setStatusCode(400)
+        oJsonRespo['success'] := .F.
+        oJsonRespo['message'] := STR0010 //"Parametro 'q' (termo de busca) e obrigatorio"
+        oRest:setResponse(oJsonRespo:toJson())
+        RestArea(aArea)
+        FreeObj(oJsonRespo)
+        FreeObj(oJParametr)
+        Return .T.
+    EndIf
+
+    // ==========================================
+    // Calcula intervalo de paginacao (mesmo padrao de ExecQuery)
+    // O +1 e necessario para detectar se ha proxima pagina
+    // ==========================================
+    Self:nStart := (nPage - 1) * nPageSize + 1
+    Self:nEnd   := nPage * nPageSize + 1
+
+    // ==========================================
+    // Estrategia adaptativa via peek query :
+    // Peek: conta TOP (WIDE_DENSITY_THRESHOLD+1) registros que atendem ao filtro.
+    // Se retornar < (WIDE_DENSITY_THRESHOLD+1), o total real ja e conhecido e
+    // o SELECT COUNT(*) separado e dispensado (economia de ~1-2s).
+    // A query de dados usa SEMPRE Hash Match para evitar o colapso alfabetico do
+    // Nested Loop.
+    // ==========================================
+    nPeekLimit  := WIDE_DENSITY_THRESHOLD + 1
+    nPeekCnt    := Self:ExecPeekWide(cQ, cStatus, nPeekLimit)
+
+    // ==========================================
+    // Executa query de dados paginada 
+    // ==========================================
+    cAliasQry := Self:ExecQueryWide(cQ, cStatus, .F.)
+
+    If !Empty(cAliasQry)
+        aItens := Self:FindProductWide(cAliasQry)
+    EndIf
+
+    If Len(aItens) > 0
+        // Decide a fonte do total:
+        // - Se Peek retornou < (WIDE_DENSITY_THRESHOLD+1), o total real ja e
+        //   conhecido (todos os matches cabem abaixo do limite do TOP).
+        // - Caso contrario, paga o COUNT separado (~1-2s) que usa Hash Match
+        //   via os LEFT JOINs padrão (sem ORDER BY, otimizador ja escolhe Hash).
+        If nPeekCnt < nPeekLimit
+            nTotalItems := nPeekCnt
+        Else
+            cAliasQry   := Self:ExecQueryWide(cQ, cStatus, .T.)
+            nTotalItems := (cAliasQry)->TOTAL
+            (cAliasQry)->(dbCloseArea())
+        EndIf
+
+        oJsonRespo["items"]                      := aItens
+        oJsonRespo["pagination"]                 := JsonObject():New()
+        oJsonRespo["pagination"]["page"]         := nPage
+        oJsonRespo["pagination"]["pagesize"]     := nPageSize
+        oJsonRespo["pagination"]["totalitems"]   := nTotalItems
+        oJsonRespo["pagination"]["totalpages"]   := Int((nTotalItems + nPageSize - 1) / nPageSize)
+        oJsonRespo["pagination"]["nextpage"]     := self:lHasNext
+        oJsonRespo["pagination"]["previouspage"] := nPage > 1
+
+        oRest:setStatusCode(200)
+    Else
+        oJsonRespo["items"]   := {}
+        oJsonRespo["message"] := STR0001 //"Dados nao encontrados para o filtro informado"
+        oRest:setStatusCode(404)
+    EndIf
+
+    oRest:setResponse(oJsonRespo:toJson())
+
+    RestArea(aArea)
+    FreeObj(oJsonRespo)
+    FreeObj(oJParametr)
+
+Return .T.
+
+/*/{Protheus.doc} FindProductWide
+    Itera o alias resultante de ExecQueryWide e monta o array de itens
+    @type    method
+    @author  eduardo.FLima
+    @since   28/07/2026
+    @version p12
+    @param   cAliasQry , Character , alias temporario aberto por ExecQueryWide
+    @return  aItens    , Array     , array de JsonObjects com os itens paginados
+/*/
+Method FindProductWide(cAliasQry as Character) as Array Class RetailAutopartsCatalogProductController
+    Local jItem     as Object
+    Local aItens    as Array
+
+    aItens := {}
+
+    While (cAliasQry)->(!EOF())
+
+        If (cAliasQry)->LINHA > (Self:nEnd - 1)
+            Self:lHasNext := .T.
+            Exit
+        EndIf
+
+        jItem := JsonObject():New()
+        jItem["codigo"]   := AllTrim((cAliasQry)->B1_COD)
+        jItem["descricao"]:= AllTrim((cAliasQry)->B1_DESC)
+        jItem["ncm"]      := AllTrim((cAliasQry)->B1_POSIPI)
+        jItem["unidade"]  := AllTrim((cAliasQry)->B1_UM)
+        jItem["marca"]    := AllTrim((cAliasQry)->MG0_NOME)
+        jItem["grupo"]    := AllTrim((cAliasQry)->BM_DESC)
+        jItem["tipo"]     := AllTrim((cAliasQry)->X5_DESCRI)
+
+        If AllTrim((cAliasQry)->D4Z_ENVPDV) == "1"
+            jItem["enviopdv"] := "Pendente"
+        ElseIf AllTrim((cAliasQry)->D4Z_ENVPDV) == "2"
+            jItem["enviopdv"] := "Liberado"
+        Else
+            jItem["enviopdv"] := ""
+        EndIf
+
+        If AllTrim((cAliasQry)->D4Z_PDVPRI) == "1"
+            jItem["prioridade"] := "Sim"
+        ElseIf AllTrim((cAliasQry)->D4Z_PDVPRI) == "2"
+            jItem["prioridade"] := "Não"
+        Else
+            jItem["prioridade"] := ""
+        EndIf
+
+        aAdd(aItens, jItem)
+        jItem := Nil
+        (cAliasQry)->(dbSkip())
+    EndDo
+
+    (cAliasQry)->(dbCloseArea())
+
+Return(aItens)
+
+/*/{Protheus.doc} BuildFiltroBuscaSql
+    Monta o SQL do CTE FiltroBusca: UNION de mini-queries independentes que
+    retornam candidatos B1_COD para o termo de busca livre.
+    Cada mini-query ataca uma tabela isoladamente, permitindo ao SQL Server
+    usar seek direto no indice adequado ao inves de Nested Loop sobre EXISTS.
+    O UNION (sem ALL) ja deduplica os B1_COD entre as tabelas.
+    Ordem de parametros (36 no total) definida em BindFiltroBuscaParams.
+    @type    method
+    @author  eduardo.FLima
+    @since   03/08/2026
+    @version p12
+    @return  cSql , Character , trecho de UNION (sem envelope externo)
+/*/
+Method BuildFiltroBuscaSql() as Character Class RetailAutopartsCatalogProductController
+    Local cSql as Character
+
+    cSql := ""
+
+    // -- Branch 1: SB1 direto (COD, DESC, TIPO, CODBAR)
+    cSql += " SELECT SB1U.B1_COD FROM " + RetSqlName("SB1") + " SB1U "
+    cSql += " WHERE SB1U.B1_FILIAL   = ? "                                     // 1  SB1U_FIL
+    cSql += "   AND SB1U.D_E_L_E_T_  = ? "                                     // 2  SB1U_DEL
+    cSql += "   AND ( SB1U.B1_COD    LIKE ? "                                  // 3  term COD
+    cSql += "      OR SB1U.B1_DESC   LIKE ? "                                  // 4  term DESC
+    cSql += "      OR SB1U.B1_TIPO   LIKE ? "                                  // 5  term TIPO
+    cSql += "      OR SB1U.B1_CODBAR LIKE ? ) "                                // 6  term CODBAR
+
+    cSql += " UNION "
+
+    // -- Branch 2: MG5 (referencias)
+    cSql += " SELECT MG5U.MG5_CODPRD AS B1_COD FROM " + RetSqlName("MG5") + " MG5U "
+    cSql += " WHERE MG5U.MG5_FILIAL  = ? "                                     // 7  MG5U_FIL
+    cSql += "   AND MG5U.D_E_L_E_T_  = ? "                                     // 8  MG5U_DEL
+    cSql += "   AND ( MG5U.MG5_CODREF LIKE ? "                                 // 9  term CODREF
+    cSql += "      OR MG5U.MG5_REFSUB LIKE ? ) "                               // 10 term REFSUB
+
+    cSql += " UNION "
+
+    // -- Branch 3: D4Z + MG0 (nome da marca)
+    cSql += " SELECT D4ZU.D4Z_COD AS B1_COD FROM " + RetSqlName("D4Z") + " D4ZU "
+    cSql += " INNER JOIN " + RetSqlName("MG0") + " MG0U "
+    cSql += "    ON MG0U.MG0_FILIAL   = ? "                                    // 11 MG0U_FIL
+    cSql += "   AND MG0U.MG0_CODMAR   = D4ZU.D4Z_CODMAR "
+    cSql += "   AND MG0U.D_E_L_E_T_   = ? "                                    // 12 MG0U_DEL
+    cSql += " WHERE D4ZU.D4Z_FILIAL   = ? "                                    // 13 D4ZU_FIL
+    cSql += "   AND D4ZU.D_E_L_E_T_   = ? "                                    // 14 D4ZU_DEL
+    cSql += "   AND MG0U.MG0_NOME LIKE ? "                                     // 15 term MG0_NOME
+
+    cSql += " UNION "
+
+    // -- Branch 4: SB1 + SBM (descricao do grupo)
+    cSql += " SELECT SB1S.B1_COD FROM " + RetSqlName("SB1") + " SB1S "
+    cSql += " INNER JOIN " + RetSqlName("SBM") + " SBMU "
+    cSql += "    ON SBMU.BM_FILIAL    = ? "                                    // 16 SBMU_FIL
+    cSql += "   AND SBMU.BM_GRUPO     = SB1S.B1_GRUPO "
+    cSql += "   AND SBMU.D_E_L_E_T_   = ? "                                    // 17 SBMU_DEL
+    cSql += " WHERE SB1S.B1_FILIAL    = ? "                                    // 18 SB1S_FIL
+    cSql += "   AND SB1S.D_E_L_E_T_   = ? "                                    // 19 SB1S_DEL
+    cSql += "   AND SBMU.BM_DESC LIKE ? "                                      // 20 term BM_DESC
+
+    cSql += " UNION "
+
+    // -- Branch 5: SLK (codigos de barras adicionais)
+    cSql += " SELECT SLKU.LK_CODIGO AS B1_COD FROM " + RetSqlName("SLK") + " SLKU "
+    cSql += " WHERE SLKU.LK_FILIAL    = ? "                                    // 21 SLKU_FIL
+    cSql += "   AND SLKU.D_E_L_E_T_   = ? "                                    // 22 SLKU_DEL
+    cSql += "   AND SLKU.LK_CODBAR LIKE ? "                                    // 23 term LK_CODBAR
+
+    cSql += " UNION "
+
+    // -- Branch 6: D4X (valor de caracteristica)
+    cSql += " SELECT D4XU.D4X_PROD AS B1_COD FROM " + RetSqlName("D4X") + " D4XU "
+    cSql += " WHERE D4XU.D4X_FILIAL   = ? "                                    // 24 D4XU_FIL
+    cSql += "   AND D4XU.D_E_L_E_T_   = ? "                                    // 25 D4XU_DEL
+    cSql += "   AND D4XU.D4X_VALOR LIKE ? "                                    // 26 term D4X_VALOR
+
+    cSql += " UNION "
+
+    // -- Branch 7: D4X + D4V (nome de caracteristica)
+    cSql += " SELECT D4XN.D4X_PROD AS B1_COD FROM " + RetSqlName("D4X") + " D4XN "
+    cSql += " INNER JOIN " + RetSqlName("D4V") + " D4VN "
+    cSql += "    ON D4VN.D4V_FILIAL   = ? "                                    // 27 D4VN_FIL
+    cSql += "   AND D4VN.D4V_COD      = D4XN.D4X_CARAC "
+    cSql += "   AND D4VN.D_E_L_E_T_   = ? "                                    // 28 D4VN_DEL
+    cSql += " WHERE D4XN.D4X_FILIAL   = ? "                                    // 29 D4XN_FIL
+    cSql += "   AND D4XN.D_E_L_E_T_   = ? "                                    // 30 D4XN_DEL
+    cSql += "   AND D4VN.D4V_NOME LIKE ? "                                     // 31 term D4V_NOME
+
+    cSql += " UNION "
+
+    // -- Branch 8: ACV + ACU (categoria)
+    cSql += " SELECT ACVU.ACV_CODPRO AS B1_COD FROM " + RetSqlName("ACV") + " ACVU "
+    cSql += " INNER JOIN " + RetSqlName("ACU") + " ACUU "
+    cSql += "    ON ACUU.ACU_FILIAL   = ? "                                    // 32 ACUU_FIL
+    cSql += "   AND ACUU.ACU_COD      = ACVU.ACV_CATEGO "
+    cSql += "   AND ACUU.D_E_L_E_T_   = ? "                                    // 33 ACUU_DEL
+    cSql += " WHERE ACVU.ACV_FILIAL   = ? "                                    // 34 ACVU_FIL
+    cSql += "   AND ACVU.D_E_L_E_T_   = ? "                                    // 35 ACVU_DEL
+    cSql += "   AND ACUU.ACU_DESC LIKE ? "                                     // 36 term ACU_DESC
+
+Return cSql
+
+/*/{Protheus.doc} BindFiltroBuscaParams
+    Faz o bind dos 36 parametros do CTE FiltroBusca (BuildFiltroBuscaSql),
+    respeitando a ordem posicional das mini-queries UNION.
+    @type    method
+    @author  eduardo.FLima
+    @since   03/08/2026
+    @version p12
+    @param   oStmt , Object    , FwExecStatement ja instanciado
+    @param   nSeq  , Numeric   , sequencia inicial de bind
+    @param   cTerm , Character , termo de busca ja formatado ("%TERMO%")
+    @return  nSeq  , Numeric   , nova sequencia (nSeq + 36)
+/*/
+Method BindFiltroBuscaParams(oStmt as Object, nSeq as Numeric, cTerm as Character) as Numeric Class RetailAutopartsCatalogProductController
+
+    // Branch 1: SB1 (6 params)
+    oStmt:SetString(nSeq++, xFilial("SB1"))       // 1  SB1U_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 2  SB1U_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 3  B1_COD
+    oStmt:SetString(nSeq++, cTerm)                // 4  B1_DESC
+    oStmt:SetString(nSeq++, cTerm)                // 5  B1_TIPO
+    oStmt:SetString(nSeq++, cTerm)                // 6  B1_CODBAR
+
+    // Branch 2: MG5 (4 params)
+    oStmt:SetString(nSeq++, xFilial("MG5"))       // 7  MG5U_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 8  MG5U_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 9  MG5_CODREF
+    oStmt:SetString(nSeq++, cTerm)                // 10 MG5_REFSUB
+
+    // Branch 3: D4Z + MG0 (5 params)
+    oStmt:SetString(nSeq++, xFilial("MG0"))       // 11 MG0U_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 12 MG0U_DEL
+    oStmt:SetString(nSeq++, xFilial("D4Z"))       // 13 D4ZU_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 14 D4ZU_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 15 MG0_NOME
+
+    // Branch 4: SB1 + SBM (5 params)
+    oStmt:SetString(nSeq++, xFilial("SBM"))       // 16 SBMU_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 17 SBMU_DEL
+    oStmt:SetString(nSeq++, xFilial("SB1"))       // 18 SB1S_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 19 SB1S_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 20 BM_DESC
+
+    // Branch 5: SLK (3 params)
+    oStmt:SetString(nSeq++, xFilial("SLK"))       // 21 SLKU_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 22 SLKU_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 23 LK_CODBAR
+
+    // Branch 6: D4X valor (3 params)
+    oStmt:SetString(nSeq++, xFilial("D4X"))       // 24 D4XU_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 25 D4XU_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 26 D4X_VALOR
+
+    // Branch 7: D4X + D4V nome (5 params)
+    oStmt:SetString(nSeq++, xFilial("D4V"))       // 27 D4VN_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 28 D4VN_DEL
+    oStmt:SetString(nSeq++, xFilial("D4X"))       // 29 D4XN_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 30 D4XN_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 31 D4V_NOME
+
+    // Branch 8: ACV + ACU (5 params)
+    oStmt:SetString(nSeq++, xFilial("ACU"))       // 32 ACUU_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 33 ACUU_DEL
+    oStmt:SetString(nSeq++, xFilial("ACV"))       // 34 ACVU_FIL
+    oStmt:SetString(nSeq++, Space(1))             // 35 ACVU_DEL
+    oStmt:SetString(nSeq++, cTerm)                // 36 ACU_DESC
+
+Return nSeq
+
+/*/{Protheus.doc} ExecPeekWide
+    Executa uma query leve de "olhadela" para estimar o numero de resultados
+    antes de executar a query paginada completa.
+    Estrategia: SELECT COUNT(*) FROM (SELECT TOP nLimit FB.B1_COD ...) PEEK
+    Onde FB e o CTE UNION (BuildFiltroBuscaSql) que ja retorna B1_COD deduplicado
+    por cada tabela envolvida, indo direto ao indice de cada uma isoladamente.
+    Envelope externo aplica EXISTS(SB1) para garantir integridade referencial
+    e, se informado cStatus, EXISTS(D4Z) para filtrar por D4Z_ENVPDV.
+    @type    method
+    @author  eduardo.FLima
+    @since   28/07/2026
+    @version p12
+    @param   cQ      , Character , termo de busca livre
+    @param   cStatus , Character , filtro D4Z_ENVPDV (vazio=todos)
+    @param   nLimit  , Numeric   , limite TOP (normalmente WIDE_DENSITY_THRESHOLD+1)
+    @return  nCount  , Numeric   , quantidade retornada (0..nLimit)
+/*/
+Method ExecPeekWide(cQ as Character, cStatus as Character, nLimit as Numeric) as Numeric Class RetailAutopartsCatalogProductController
+    Local cQry      as Character
+    Local cTerm     as Character
+    Local oPeekQry  as Object
+    Local nCount    as Numeric
+    Local nSeq      as Numeric
+
+    nSeq   := 1
+    nCount := 0
+
+    cTerm := "%" + Upper(AllTrim(DecodeUTF8(cQ, "cp1252"))) + "%"
+
+    // ==========================================
+    // Envelope: TOP nLimit sobre o UNION + filtros de integridade e status.
+    // TOP com valor literal — SQL Server nao aceita bind (@P1) na clausula TOP.
+    // ==========================================
+    cQry := " SELECT COUNT(*) AS CNT FROM ( "
+    cQry += "   SELECT TOP " + cValToChar(nLimit) + " FB.B1_COD FROM ( "
+    cQry += Self:BuildFiltroBuscaSql()
+    cQry += "   ) FB "
+    cQry += "   WHERE EXISTS ( "
+    cQry += "     SELECT 1 FROM " + RetSqlName("SB1") + " SB1V "
+    cQry += "     WHERE SB1V.B1_FILIAL   = ? "                                     // SB1V_FIL
+    cQry += "       AND SB1V.B1_COD      = FB.B1_COD "
+    cQry += "       AND SB1V.D_E_L_E_T_  = ? "                                     // SB1V_DEL
+    cQry += "   ) "
+
+    If !Empty(cStatus)
+        cQry += "   AND EXISTS ( "
+        cQry += "     SELECT 1 FROM " + RetSqlName("D4Z") + " D4ZP "
+        cQry += "     WHERE D4ZP.D4Z_FILIAL  = ? "                                 // D4ZP_FIL
+        cQry += "       AND D4ZP.D4Z_COD     = FB.B1_COD "
+        cQry += "       AND D4ZP.D4Z_ENVPDV  = ? "                                 // D4ZP_ENVPDV
+        cQry += "       AND D4ZP.D_E_L_E_T_  = ? "                                 // D4ZP_DEL
+        cQry += "   ) "
+    EndIf
+
+    cQry += " ) PEEK "
+
+    cQry := ChangeQuery(cQry)
+
+    oPeekQry := FwExecStatement():New(cQry)
+
+    nSeq := 1
+
+    // Binds do CTE FiltroBusca (36 parametros)
+    nSeq := Self:BindFiltroBuscaParams(oPeekQry, nSeq, cTerm)
+
+    // EXISTS SB1 (2 parametros)
+    oPeekQry:SetString(nSeq++, xFilial("SB1"))       // SB1V_FIL
+    oPeekQry:SetString(nSeq++, Space(1))             // SB1V_DEL
+
+    If !Empty(cStatus)
+        // EXISTS D4Z (3 parametros)
+        oPeekQry:SetString(nSeq++, xFilial("D4Z"))   // D4ZP_FIL
+        oPeekQry:SetString(nSeq++, cStatus)          // D4ZP_ENVPDV
+        oPeekQry:SetString(nSeq++, Space(1))         // D4ZP_DEL
+    EndIf
+
+    nCount := Val(cValToChar(oPeekQry:ExecScalar("CNT")))
+
+    oPeekQry:Destroy()
+    oPeekQry := Nil
+
+Return nCount
+
+/*/{Protheus.doc} ExecQueryWide
+    Monta e executa a query de busca ampla de produtos usando arquitetura
+    UNION + Late Row Lookup (via CTE FiltroBusca).
+    Passo 1: O CTE FiltroBusca (BuildFiltroBuscaSql) faz UNION das mini-queries
+    de cada tabela alvo (SB1, MG5, D4Z+MG0, SB1+SBM, SLK, D4X, D4X+D4V, ACV+ACU),
+    permitindo ao SQL Server ir direto ao indice de cada uma isoladamente.
+    O UNION (sem ALL) ja deduplica B1_COD entre as tabelas.
+    Passo 2 (dados): INNER JOIN com SB1 (e D4Z se cStatus) para obter B1_DESC e
+    ranquear via ROW_NUMBER; apos isolar apenas as n linhas da pagina, executa
+    os LEFT JOINs pesados (MG0, SBM, SX5, D4Z de display).
+    Passo 2 (count): apenas COUNT(*) sobre CTE + INNER JOIN SB1 (+ D4Z se cStatus).
+    Todos os parametros passados via FwExecStatement (PreparedStatement).
+    @type    method
+    @author  eduardo.FLima
+    @since   28/07/2026
+    @version p12
+    @param   cQ          , Character , termo de busca livre (obrigatorio)
+    @param   cStatus     , Character , filtro D4Z_ENVPDV: '1'=Pendente, '2'=Liberado (vazio=todos)
+    @param   lTotal      , Logical   , .T. retorna COUNT, .F. retorna linhas paginadas
+    @return  cTable      , Character , alias temporario com o resultado
+/*/
+Method ExecQueryWide(cQ as Character, cStatus as Character, lTotal as Logical) as Character Class RetailAutopartsCatalogProductController
+    Local cTable    as Character
+    Local cQry      as Character
+    Local cTerm     as Character
+    Local cOrderBy  as Character
+    Local oQueryQry as Object
+    Local nSeq      as Numeric
+
+    Default lTotal     := .F.
+
+    nSeq := 1
+
+    // ==========================================
+    // Prepara termo de busca: UPPER + wildcards
+    // Trata encoding para evitar problemas com acentos
+    // ==========================================
+    cTerm := "%" + Upper(AllTrim(DecodeUTF8(cQ, "cp1252"))) + "%"
+
+
+    // ==========================================
+    // ORDER BY: LTRIM/RTRIM 
+    // Com a arquitetura CTE, o Sort acontece somente sobre os codigos candidatos
+    // (ja deduplicados pelo UNION), volume muito menor que a base inteira.
+    // ==========================================
+    cOrderBy := "LTRIM(RTRIM(SB1.B1_DESC)) ASC"
+
+    // ==========================================
+    // CTE: candidatos B1_COD via UNION isolado por tabela
+    // ==========================================
+    cQry := " WITH FiltroBusca AS ( "
+    cQry += Self:BuildFiltroBuscaSql()
+    cQry += " ) "
+
+    If !lTotal
+        // ==========================================
+        // Path DADOS - Late Row Lookup:
+        // 1) TAB = INNER JOIN entre FiltroBusca e SB1 (+ D4Z se cStatus)
+        //    calculando ROW_NUMBER na ordem de B1_DESC.
+        // 2) SELECT externo faz LEFT JOIN pesados (MG0/SBM/SX5 [+D4Z sem status])
+        //    apenas nas linhas da pagina (BETWEEN nStart AND nEnd).
+        // ==========================================
+        cQry += " SELECT TAB.B1_FILIAL, TAB.B1_COD, TAB.B1_POSIPI, TAB.B1_UM, TAB.B1_DESC, "
+        cQry += "        COALESCE(MG0.MG0_NOME, '') AS MG0_NOME, "
+        cQry += "        COALESCE(SBM.BM_DESC, '')  AS BM_DESC, "
+        cQry += "        COALESCE(SX5.X5_DESCRI, '') AS X5_DESCRI, "
+        If !Empty(cStatus)
+            // cStatus obriga INNER JOIN D4Z ja em TAB - D4Z_ENVPDV vem da subconsulta
+            cQry += "        TAB.D4Z_ENVPDV, "
+            cQry += "        COALESCE(TAB.D4Z_PDVPRI, '') AS D4Z_PDVPRI, "
+        Else
+            // Sem cStatus, D4Z e LEFT JOIN de display apenas
+            cQry += "        COALESCE(D4Z.D4Z_ENVPDV, '') AS D4Z_ENVPDV, "
+            cQry += "        COALESCE(D4Z.D4Z_PDVPRI, '') AS D4Z_PDVPRI, "
+        EndIf
+        cQry += "        TAB.LINHA "
+        cQry += " FROM ( "
+        cQry += "     SELECT ROW_NUMBER() OVER (ORDER BY " + cOrderBy + ") AS LINHA, "
+        cQry += "            SB1.B1_FILIAL, SB1.B1_COD, SB1.B1_POSIPI, SB1.B1_UM, "
+        cQry += "            SB1.B1_DESC, SB1.B1_TIPO, SB1.B1_GRUPO "
+        If !Empty(cStatus)
+            cQry += "          , D4ZR.D4Z_ENVPDV, D4ZR.D4Z_CODMAR, D4ZR.D4Z_PDVPRI "
+        EndIf
+        cQry += "     FROM FiltroBusca FB "
+        cQry += "     INNER JOIN " + RetSqlName("SB1") + " SB1 "
+        cQry += "        ON SB1.B1_FILIAL   = ? "                              // TAB_SB1_FIL
+        cQry += "       AND SB1.B1_COD      = FB.B1_COD "
+        cQry += "       AND SB1.D_E_L_E_T_  = ? "                              // TAB_SB1_DEL
+        If !Empty(cStatus)
+            cQry += "     INNER JOIN " + RetSqlName("D4Z") + " D4ZR "
+            cQry += "        ON D4ZR.D4Z_FILIAL  = SB1.B1_FILIAL "
+            cQry += "       AND D4ZR.D4Z_COD     = SB1.B1_COD "
+            cQry += "       AND D4ZR.D4Z_ENVPDV  = ? "                         // D4ZR_ENVPDV
+            cQry += "       AND D4ZR.D_E_L_E_T_  = ? "                         // D4ZR_DEL
+        EndIf
+        cQry += " ) TAB "
+
+        // Late lookups - executados apenas nas linhas da pagina
+        If Empty(cStatus)
+            cQry += " LEFT JOIN " + RetSqlName("D4Z") + " D4Z "
+            cQry += "        ON D4Z.D4Z_FILIAL   = TAB.B1_FILIAL "
+            cQry += "       AND D4Z.D4Z_COD      = TAB.B1_COD "
+            cQry += "       AND D4Z.D_E_L_E_T_   = ? "                         // D4Z_DEL (display)
+        EndIf
+        cQry += " LEFT JOIN " + RetSqlName("MG0") + " MG0 "
+        cQry += "        ON MG0.MG0_FILIAL   = ? "                             // MG0_FIL
+        If !Empty(cStatus)
+            cQry += "       AND MG0.MG0_CODMAR  = TAB.D4Z_CODMAR "
+        Else
+            cQry += "       AND MG0.MG0_CODMAR  = D4Z.D4Z_CODMAR "
+        EndIf
+        cQry += "       AND MG0.D_E_L_E_T_  = ? "                              // MG0_DEL
+        cQry += " LEFT JOIN " + RetSqlName("SX5") + " SX5 "
+        cQry += "        ON SX5.X5_TABELA   = ? "                              // SX5_TABELA
+        cQry += "       AND SX5.X5_CHAVE    = TAB.B1_TIPO "
+        cQry += " LEFT JOIN " + RetSqlName("SBM") + " SBM "
+        cQry += "        ON SBM.BM_FILIAL   = ? "                              // SBM_FIL
+        cQry += "       AND SBM.BM_GRUPO    = TAB.B1_GRUPO "
+        cQry += "       AND SBM.D_E_L_E_T_  = ? "                              // SBM_DEL
+        cQry += " WHERE TAB.LINHA BETWEEN ? AND ? "                            // nStart / nEnd
+        cQry += " ORDER BY TAB.LINHA "
+        cQry += " OPTION (FORCE ORDER)" // garante que o SQL Server respeite a ordem de LINHA e nao tente otimizar com Nested Loop
+    Else
+        // ==========================================
+        // Path COUNT - conta candidatos que existem em SB1 (+ D4Z se cStatus).
+        // UNION ja deduplicou, entao COUNT(*) e correto.
+        // ==========================================
+        cQry += " SELECT COUNT(*) AS TOTAL "
+        cQry += " FROM FiltroBusca FB "
+        cQry += " INNER JOIN " + RetSqlName("SB1") + " SB1 "
+        cQry += "        ON SB1.B1_FILIAL   = ? "                              // COUNT_SB1_FIL
+        cQry += "       AND SB1.B1_COD      = FB.B1_COD "
+        cQry += "       AND SB1.D_E_L_E_T_  = ? "                              // COUNT_SB1_DEL
+        If !Empty(cStatus)
+            cQry += " INNER JOIN " + RetSqlName("D4Z") + " D4ZR "
+            cQry += "        ON D4ZR.D4Z_FILIAL  = SB1.B1_FILIAL "
+            cQry += "       AND D4ZR.D4Z_COD     = SB1.B1_COD "
+            cQry += "       AND D4ZR.D4Z_ENVPDV  = ? "                         // COUNT_D4ZR_ENVPDV
+            cQry += "       AND D4ZR.D_E_L_E_T_  = ? "                         // COUNT_D4ZR_DEL
+        EndIf
+    EndIf
+
+    // não usa ChangeQuery() pois o ChangeQuery nao aceita query com with e ela é necessario para a arquitetura de busca ampla (wide search) com CTE em relção a performance
+
+    oQueryQry := FwExecStatement():New(cQry)
+
+    // ==========================================
+    // Bind de parametros
+    // ==========================================
+
+    // 1) Binds do CTE FiltroBusca (36 parametros)
+    nSeq := Self:BindFiltroBuscaParams(oQueryQry, nSeq, cTerm)
+
+    // 2) INNER JOIN SB1 (subconsulta TAB no path DADOS ou FROM no path COUNT)
+    oQueryQry:SetString(nSeq++, xFilial("SB1"))              // SB1.B1_FILIAL
+    oQueryQry:SetString(nSeq++, Space(1))                    // SB1.D_E_L_E_T_
+
+    // 3) INNER JOIN D4Z condicional (aplica-se a ambos os paths)
+    If !Empty(cStatus)
+        oQueryQry:SetString(nSeq++, cStatus)                 // D4ZR.D4Z_ENVPDV
+        oQueryQry:SetString(nSeq++, Space(1))                // D4ZR.D_E_L_E_T_
+    EndIf
+
+    // 4) Binds exclusivos do path DADOS
+    If !lTotal
+        // LEFT JOIN D4Z display (apenas quando sem cStatus)
+        If Empty(cStatus)
+            oQueryQry:SetString(nSeq++, Space(1))            // D4Z.D_E_L_E_T_ (display)
+        EndIf
+        // LEFT JOIN MG0
+        oQueryQry:SetString(nSeq++, xFilial("MG0"))          // MG0.MG0_FILIAL
+        oQueryQry:SetString(nSeq++, Space(1))                // MG0.D_E_L_E_T_
+        // LEFT JOIN SX5
+        oQueryQry:SetString(nSeq++, "02")                    // SX5.X5_TABELA (tipo produto)
+        // LEFT JOIN SBM
+        oQueryQry:SetString(nSeq++, xFilial("SBM"))          // SBM.BM_FILIAL
+        oQueryQry:SetString(nSeq++, Space(1))                // SBM.D_E_L_E_T_
+        // Paginacao
+        oQueryQry:SetNumeric(nSeq++, Self:nStart)
+        oQueryQry:SetNumeric(nSeq++, Self:nEnd)
+    EndIf
+
+    cTable := oQueryQry:OpenAlias(GetNextAlias())
+    oQueryQry:Destroy()
+    oQueryQry := Nil
+
+Return cTable
+
+

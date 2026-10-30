@@ -1,0 +1,910 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "framework.mcp.message_status.th"
+#include "dtarunagent.ch"
+
+namespace totvs.protheus.manufacturing.agent
+
+#DEFINE STATUS_STARTING "0"
+#DEFINE STATUS_RUNNING  "1"
+#DEFINE STATUS_FINISHED "2"
+#DEFINE STATUS_ERROR    "3"
+#DEFINE REQUEST_TIMEOUT 2000
+
+#DEFINE POOLING_TRY           120
+#DEFINE POOLING_SLEEP         5000
+#DEFINE START_NEW_THREAD_WAIT 5000
+Static _jSizes as Json
+
+/*/{Protheus.doc} DTARunAgent
+Classe para controle da execução dos agentes do PCP
+
+@type class
+@author lucas.franca
+@since 28/01/2026
+@version P12
+/*/
+Class DTARunAgent
+
+	Private Data cAgentKey      as Character
+	Private Data cAgentName     as Character
+	Private Data cProjectName   as Character
+	Private Data cAnswerAgent   as Character
+	Private Data cAgentID       as Character
+	Private Data cApiKey        as Character
+	Private Data cEndpointDTA   as Character
+	Private Data cProcessId     as Character
+	Private Data cTransactionID as Character
+	Private Data jPayload       as Json
+	Private Data lAgentJob      as Logical
+	Private Data lUseAPI        as Logical
+
+	Public Method new() Constructor
+	Public Method loadDataFromHZP(cProcessID as Character) as Logical
+	Public Method registerError(cErrorMessage as Character)
+	Public Method run()
+	Public Method runAsync()
+	Public Method setAgentKey(cKey as Character)
+	Public Method setContent(cContent as Character)
+	Public Method setData(cKey as Character, xValue as Variant)
+
+	Private Method agentMCPIsFinished() as Logical
+	Private Method agentJobIsFinished(cResult as Character) as Logical
+	Private Method registerProcess(cStatus as Character)
+	Private Method executeAgentRequest() as Logical
+	Private Method getHeaders() as Array
+	Private Method getPayload(lEncodeUTF8 as Logical) as Character
+	Private Method getTraceId() as Character
+	Private Method loadAgentConfig()
+	Private Method poolingAgentResult() as Logical
+	Private Method poolingAPIResult() as Logical
+	Private Method registerFinishProcess()
+	Private Method saveTransactionID()
+	Private Method setAgentName(cName as Character)
+	Private Method waitAgentJobFinish() as Logical
+
+	Static Method canRunAgents() as Logical
+	Static Method findAgentProcessById(cProcessID as Character) as Logical
+	Static Method findAgentProcessByKey(cAgentName as Character, cAgentKey as Character) as Logical
+	Static Method loadFieldsSize()
+	Static Method startProcessById(cProcessID as Character, cAgentName as Character)
+	Static Method updateAgentResult(aResponses as Array)
+	Static Method useAgentAPI() as Logical
+	Static Method getApiKey() as Character
+	Static Method getProjectName() as Character
+	Static Method getAgentID(lUseAPI as Logical) as Character
+	Static Method isPermissionGranted() as Logical
+EndClass
+
+/*/{Protheus.doc} new
+Método construtor da classe.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cAgentName, Character, Nome do agente que será utilizado, conforme definições do método loadAgentConfig
+@return Self, Object, Instância da classe
+/*/
+Method new(cAgentName as Character) Class DTARunAgent
+
+	Self:lAgentJob      := .F.
+	Self:lUseAPI        := .F.
+	Self:cProcessId     := ""
+	Self:cAgentID       := ""
+	Self:cTransactionID := ""
+	Self:jPayload       := {"content": "", "data": JsonObject():New()}
+	Self:setAgentName(cAgentName)
+	Self:loadAgentConfig()
+	Self:setAgentKey("")
+Return Self
+
+/*/{Protheus.doc} loadAgentConfig
+Carrega as configurações do agente utilizado
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return Nil
+/*/
+Method loadAgentConfig() Class DTARunAgent
+	Do Case
+		Case Self:cAgentName == "MRPEVENTS"
+			Self:lUseAPI   := DTARunAgent():useAgentAPI()
+			Self:lAgentJob := .T.
+			Self:cAgentID  := DTARunAgent():getAgentID(Self:lUseAPI)
+			If Self:lUseAPI
+				Self:cProjectName := DTARunAgent():getProjectName()
+				Self:cApiKey      := DTARunAgent():getApiKey()
+				Self:cEndpointDTA := "https://totvs.dta.totvs.ai/api/agents/projects/"+Self:cProjectName+"/agents/"+Self:cAgentID+"/jobs"
+			EndIf
+			Self:jPayload["agent"] := Self:cAgentID
+		Otherwise
+			UserException(STR0001) //"Agente não existe."
+	EndCase
+Return
+
+/*/{Protheus.doc} setAgentName
+Define qual é o nome do agente, registrado na coluna HZP_AGENTE.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cName, Character, Nome do agente.
+@return Nil
+/*/
+Method setAgentName(cName as Character) Class DTARunAgent
+	Self:cAgentName := AllTrim(cName)
+Return
+
+/*/{Protheus.doc} setAgentKey
+Define qual é a chave de execução do agente, registrado na coluna HZP_CHAVE.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cKey, Character, Chave de execução do agente.
+@return Nil
+/*/
+Method setAgentKey(cKey as Character) Class DTARunAgent
+	Self:cAgentKey := cKey
+Return
+
+/*/{Protheus.doc} setContent
+Define qual é o Content que será enviado para a execução do agente
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cContent, Character, Texto que será enviado como content para a execução do agente.
+@return Nil
+/*/
+Method setContent(cContent as Character) Class DTARunAgent
+	Self:jPayload["content"] := cContent
+Return
+
+/*/{Protheus.doc} setData
+Adiciona um valor para ser enviado ao agente, dentro das informações de "data".
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cKey  , Character, Chave que identifica o valor
+@param 02 xValue, Variant  , Valor que será enviado
+@return Nil
+/*/
+Method setData(cKey as Character, xValue as Variant) Class DTARunAgent
+	Self:jPayload["data"][cKey] := xValue
+Return
+
+/*/{Protheus.doc} getPayload
+Retorna o payload em formato texto e encoding UTF8 que será enviado ao DTA Agents conforme dados definidos na classe.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 lEncodeUTF8, Logical, Indica se o payload deve ser convertido para UTF8. Se falso, retorna payload sem conversão de encoding.
+@return cPayload, Character, Payload para requisição
+/*/
+Method getPayload(lEncodeUTF8 as Logical) as Character Class DTARunAgent
+	Local cPayload as Character
+
+	Default lEncodeUTF8 := .T.
+
+	cPayload := Self:jPayload:ToJson()
+	If lEncodeUTF8
+		cPayload := DTAUtils():encodeUTF8(cPayload)
+	EndIf
+
+Return cPayload
+
+/*/{Protheus.doc} getHeaders
+Retorna os headers que serão utilizados na requisição para o DTA
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return aHeaders, Array, Array com os headers necessários para a requisição
+/*/
+Method getHeaders() as Array Class DTARunAgent
+	Local aHeaders := {} as Array
+
+	aAdd(aHeaders, "x-dta-api-key: " + Self:cApiKey)
+	aAdd(aHeaders, "Accept: application/json, text/plain, */*")
+	aAdd(aHeaders, "Content-Type: application/json")
+	aAdd(aHeaders, "x-dta-project: " + Self:cProjectName)
+Return aHeaders
+
+/*/{Protheus.doc} loadDataFromHZP
+Carrega as informações da tabela HZP nas propriedades da classe.
+Utiliza as informações de HZP_AGENTE e HZP_CHAVE ou HZP_ID, conforme parâmetro cProcessID, para busca das informações na tabela HZP.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cProcessID, Character, ID para busca do processo. Se não enviado, utiliza Self:cAgentName e Self:cAgentKey
+@return lFound, Logical, Identifica se encontrou o processo
+/*/
+Method loadDataFromHZP(cProcessID as Character) as Logical Class DTARunAgent
+	Local lFound := .F. as Logical
+
+	If cProcessID == Nil
+		lFound := DTARunAgent():findAgentProcessByKey(Self:cAgentName, Self:cAgentKey)
+	Else
+		lFound := DTARunAgent():findAgentProcessById(cProcessID)
+	EndIf
+
+	If lFound
+		Self:cProcessId := HZP->HZP_ID
+		Self:jPayload:fromJson(HZP->HZP_DADOS)
+		Self:setAgentName(HZP->HZP_AGENTE)
+		Self:setAgentKey(HZP->HZP_CHAVE)
+	EndIf
+Return lFound
+
+/*/{Protheus.doc} registerProcess
+Cria um novo processo na tabela HZP
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cStatus, Character, Status do processamento (0,1,2,3)
+@return Nil
+/*/
+Method registerProcess(cStatus as Character) Class DTARunAgent
+	Local lInsert := .F. as Logical
+
+	If Empty(Self:cProcessID)
+		Self:cProcessId := GetSXENum("HZP", "HZP_ID", "HZP", 1)
+		ConfirmSX8()
+		lInsert := .T.
+	Else
+		DTARunAgent():findAgentProcessById(Self:cProcessID)
+	EndIf
+	Self:setData("process_id", Self:cProcessId)
+
+	RecLock("HZP", lInsert)
+		If lInsert
+			HZP->HZP_FILIAL := xFilial("HZP")
+			HZP->HZP_ID     := Self:cProcessId
+			HZP->HZP_AGENTE := Self:cAgentName
+			HZP->HZP_CHAVE  := Self:cAgentKey
+			HZP->HZP_DADOS  := Self:getPayload(.F.)
+		EndIf
+		If HZP->HZP_STATUS != STATUS_STARTING
+			HZP->HZP_DTINI  := dDatabase
+			HZP->HZP_HRINI  := Time()
+		EndIf
+		HZP->HZP_STATUS := cStatus
+	HZP->(MsUnLock())
+Return
+
+/*/{Protheus.doc} registerFinishProcess
+Registra o término do processamento na tabela HZP
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return Nil
+/*/
+Method registerFinishProcess() Class DTARunAgent
+	Local jResponse as Json
+
+	If DTARunAgent():findAgentProcessById(Self:cProcessId)
+		RecLock("HZP", .F.)
+			HZP->HZP_DTFIM  := dDatabase
+			HZP->HZP_HRFIM  := Time()
+			HZP->HZP_STATUS := STATUS_FINISHED
+		HZP->(MsUnLock())
+
+		jResponse := {"type": "api_response", "message": JsonObject():New()}
+		jResponse["message"]:fromJson(Self:cAnswerAgent)
+		DTARunAgent():updateAgentResult({jResponse})
+		FreeObj(jResponse)
+	EndIf
+Return
+
+/*/{Protheus.doc} updateAgentResult
+Atualiza o resultado do agente na tabela HZP (HZP_RESULT). A tabela HZP já deve estar posicionada no registro correto para atualização.
+
+@type method
+@author lucas.franca
+@since 01/09/2026
+@version P12
+@param 01 aResponses, Array, Lista de respostas no formato {"type", "message"}
+@return Nil
+/*/
+Method updateAgentResult(aResponses as Array) Class DTARunAgent
+	Local jData  as Json
+	Local nIndex as Integer
+	
+	jData := JsonObject():New()
+	jData:fromJson(HZP->HZP_RESULT)
+	
+	For nIndex := 1 To Len(aResponses)
+		jData[aResponses[nIndex]["type"]] := aResponses[nIndex]["message"]
+	Next nIndex
+	
+	RecLock("HZP", .F.)
+		HZP->HZP_RESULT := jData:toJson()
+	HZP->(MsUnLock())
+	FreeObj(jData)
+Return
+
+/*/{Protheus.doc} registerError
+Registra status de erro na tabela HZP para o processo do agente.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cErrorMessage, Character, Mensagem de erro que será registrada
+@return Nil
+/*/
+Method registerError(cErrorMessage as Character) Class DTARunAgent
+	Local jResponse as Json
+	
+	Default cErrorMessage := STR0002 //"Erro indeterminado"
+
+	If !DTARunAgent():findAgentProcessByKey(Self:cAgentName, Self:cAgentKey)
+		Self:registerProcess(STATUS_ERROR)
+	EndIf
+
+	RecLock("HZP", .F.)
+		HZP->HZP_DTFIM  := dDatabase
+		HZP->HZP_HRFIM  := Time()
+		HZP->HZP_STATUS := STATUS_ERROR
+	HZP->(MsUnLock())
+
+	jResponse := {"type": "error_message", "message": cErrorMessage}
+	DTARunAgent():updateAgentResult({jResponse})
+	FreeObj(jResponse)
+Return
+
+/*/{Protheus.doc} run
+Aciona o agente com as configurações definidas
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return Nil
+/*/
+Method run() Class DTARunAgent
+	Local lContinue as Logical
+
+	Self:registerProcess(STATUS_RUNNING)
+	lContinue := Self:executeAgentRequest()
+	If lContinue .And. Self:lAgentJob 
+		lContinue := Self:waitAgentJobFinish()
+	EndIf
+	If lContinue
+		Self:registerFinishProcess()
+	EndIf
+Return
+
+/*/{Protheus.doc} waitAgentJobFinish
+Realiza o pooling do status do job do agente até a finalização ou limite de tentativas.
+
+@type method
+@author lucas.franca
+@since 08/06/2026
+@version P12
+@return Nil
+/*/
+Method waitAgentJobFinish() as Logical Class DTARunAgent
+	Local lFinished as Logical
+
+	If Self:lUseAPI
+		lFinished := Self:poolingAPIResult()
+	Else
+		lFinished := Self:poolingAgentResult()
+	EndIf
+	If !lFinished
+		Self:registerError(STR0003) //"Limite de tentativas atingido para pooling do status do job do agente."
+	EndIf
+Return lFinished
+
+/*/{Protheus.doc} poolingAPIResult
+Realiza o pooling na API do Lynn para obter o status do job do agente até a finalização ou limite de tentativas.
+
+@type method
+@author lucas.franca
+@since 08/06/2026
+@version P12
+@return Nil
+/*/
+Method poolingAPIResult() as Logical Class DTARunAgent
+	Local aHeaders  as Array
+	Local cResult   as Character
+	Local cTraceId  as Character
+	Local lFinished as Logical
+	Local nTry      as Integer
+
+	cTraceId := Self:getTraceId()
+	aHeaders := Self:getHeaders()
+
+	For nTry := 1 To POOLING_TRY
+		cResult := HTTPGet("https://totvs.dta.totvs.ai/api/flows/jobs/" + cTraceId, Nil, 60, aHeaders)
+		lFinished := Self:agentJobIsFinished(cResult)
+		If lFinished
+			Self:cAnswerAgent := DTAUtils():decodeUTF8(cResult)
+			Exit
+		EndIf
+		Sleep(POOLING_SLEEP)
+	Next nTry
+	aSize(aHeaders, 0)
+Return lFinished
+
+/*/{Protheus.doc} poolingAgentResult
+Realiza o pooling no agente para obter o status do job até a finalização ou limite de tentativas.
+
+@type method
+@author lucas.franca
+@since 08/06/2026
+@version P12
+@return Nil
+/*/
+Method poolingAgentResult() as Logical Class DTARunAgent
+	Local lFinished as Logical
+	Local nTry      as Integer
+
+	For nTry := 1 To POOLING_TRY
+		lFinished := Self:agentMCPIsFinished()
+		If lFinished
+			Exit
+		EndIf
+
+		Sleep(POOLING_SLEEP)
+	Next nTry
+Return lFinished
+
+/*/{Protheus.doc} agentMCPIsFinished
+Valida a resposta de status do agente e identifica se o processamento foi finalizado.
+
+@type method
+@author lucas.franca
+@since 08/06/2026
+@version P12
+@return lFinished, Logical, Indica se o agente terminou
+/*/
+Method agentMCPIsFinished() as Logical Class DTARunAgent
+	Local aAgentCalls as Array
+	Local lFinished   as Logical
+
+	lFinished   := .F.
+	aAgentCalls := totvs.framework.mcp.agent.getCalls(, Self:cTransactionID)
+	If Len(aAgentCalls) == 0
+		lFinished := .T.
+	Else
+		If aAgentCalls[1]["status"] $ MCP_TRIGGER_STATUS_REJECT + "|" + MCP_TRIGGER_STATUS_SUCCESS + "|" + MCP_TRIGGER_STATUS_AGENT_ERROR + "|" + MCP_TRIGGER_STATUS_SEND_ERROR
+			Self:cAnswerAgent := aAgentCalls[1]:toJson()
+			lFinished := .T.
+		EndIf
+	EndIf
+	aSize(aAgentCalls, 0)
+
+Return lFinished
+
+/*/{Protheus.doc} agentJobIsFinished
+Valida a resposta de status do job e identifica se o processamento foi finalizado.
+
+@type method
+@author lucas.franca
+@since 08/06/2026
+@version P12
+@param 01 cResult, Character, Conteúdo retornado pelo endpoint de status do job
+@return lFinished, Logical, Indica se o job terminou com status success ou error
+/*/
+Method agentJobIsFinished(cResult as Character) as Logical Class DTARunAgent
+	Local jData     as Json
+	Local lFinished as Logical
+
+	lFinished := .F.
+
+	If !Empty(cResult)
+		jData := JsonObject():New()
+		jData:FromJson(cResult)
+		If jData:hasProperty("status")
+			If jData["status"] $ "|success|error|failed|"
+				lFinished := .T.
+			EndIf
+		EndIf
+		FreeObj(jData)
+	EndIf
+Return lFinished
+
+/*/{Protheus.doc} getTraceId
+Extrai o trace_id da resposta inicial do agente para consultas de status do job.
+
+@type method
+@author lucas.franca
+@since 08/06/2026
+@version P12
+@return cTraceId, Character, Identificador do job para consulta de status
+/*/
+Method getTraceId() as Character Class DTARunAgent
+	Local cTraceId as Character
+	Local jData    as Json
+
+	jData := JsonObject():New()
+	jData:FromJson(Self:cAnswerAgent)
+	If jData:hasProperty("dta_extras") .And. jData["dta_extras"]:hasProperty("trace_id")
+		cTraceId := jData["dta_extras"]["trace_id"]
+	EndIf
+	FreeObj(jData)
+Return cTraceId
+
+/*/{Protheus.doc} runAsync
+Inicia o agente de forma assíncrona (em uma nova thread). Não fica aguardando a finalização.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return Nil
+/*/
+Method runAsync() Class DTARunAgent
+	Local cErrorUID  as Character
+	Local cRecover   as Character
+	Local lSuccess   as Logical
+	Local nTry       as Integer
+	Local oPCPThread as Object
+
+	Self:registerProcess(STATUS_STARTING) //cria registro na HZP, salvando as configurações deste agente
+
+	cErrorUID := UUIDRandom()
+	cRecover  := "totvs.protheus.manufacturing.agent.DTARunAgentError('" + cErrorUID + "', '" + Self:cAgentName + "','" + Self:cAgentKey + "')"
+	lSuccess  := .F.
+	nTry      := 0
+	While lSuccess == .F. .And. nTry < 10
+		If oPCPThread != Nil
+			oPCPThread:Destroy()
+			FreeObj(oPCPThread)
+			Sleep(START_NEW_THREAD_WAIT) //não conseguiu abrir a thread, espera um pouco para tentar novamente
+		EndIf
+		oPCPThread := PCPMultiThreadError():New(cErrorUID, .T.)
+		oPCPThread:startJob("totvs.protheus.manufacturing.agent.DTARunAgentStart", GetEnvServer(), .F., cEmpAnt, cFilAnt, Self:cProcessID, Self:cAgentName, cErrorUID,,,,,,,,, cRecover)
+		lSuccess := oPCPThread:abriuUltimaThread() .And. !oPCPThread:possuiErro()
+		nTry++
+	End
+	FreeObj(oPCPThread)
+
+	If !lSuccess
+		Self:registerError(STR0004) //"Falha ao iniciar processamento assíncrono para este agente."
+	EndIf
+Return
+
+/*/{Protheus.doc} executeAgentRequest
+Faz a requisição para o serviço do DTA, executando o agente com as configurações definidas.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return Nil
+/*/
+Method executeAgentRequest() as Logical Class DTARunAgent
+	Local lRet := .T.    as Logical
+
+	If Self:lUseAPI
+		Self:cAnswerAgent := HTTPPost(Self:cEndpointDTA, "", Self:getPayload(), REQUEST_TIMEOUT, Self:getHeaders())
+		Self:cAnswerAgent := DTAUtils():decodeUTF8(Self:cAnswerAgent)
+	Else
+		lRet := totvs.framework.mcp.callAgent(Self:jPayload, @Self:cTransactionID)
+		Self:saveTransactionID()
+		If !lRet
+			Self:registerError(STR0005) //"Falha ao publicar gatilho do agente."
+		EndIf
+	EndIf
+Return lRet
+
+/*/{Protheus.doc} startProcessById
+Método utilizado para disparar uma nova tentativa de execução do agente, sem criar um novo ID de processamento.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cProcessID, Character, ID do agente para processamento
+@param 02 cAgentName , Character, Nome do agente para processamento
+@return Nil
+/*/
+Method startProcessById(cProcessID as Character, cAgentName as Character) Class DTARunAgent
+	Local oRunAgent as Object
+
+	oRunAgent := DTARunAgent():New(cAgentName)
+	If oRunAgent:loadDataFromHZP(cProcessID)
+		oRunAgent:run()
+	EndIf
+	FreeObj(oRunAgent)
+Return
+
+/*/{Protheus.doc} findAgentProcessByKey
+Faz a busca na tabela HZP pela execução de um agente através de sua chave
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cAgentName, Character, Nome do agente em execução
+@param 02 cAgentKey , Character, Chave do agente em execução
+@return lFound, Logical, indica se encontrou ou não o registro
+/*/
+Method findAgentProcessByKey(cAgentName as Character, cAgentKey as Character) as Logical Class DTARunAgent
+	Local lFound as Logical
+
+	DTARunAgent():loadFieldsSize()
+
+	cAgentName := PadR(cAgentName, _jSizes["HZP_AGENTE"])
+	cAgentKey  := PadR(cAgentKey , _jSizes["HZP_CHAVE" ])
+	HZP->(dbSetOrder(2))
+	lFound := HZP->(dbSeek(xFilial("HZP") + cAgentName + cAgentKey))
+Return lFound
+
+/*/{Protheus.doc} findAgentProcessById
+Faz a busca na tabela HZP pela execução de um agente através de seu ID
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cProcessId, Character, ID do agente para busca
+@return lFound, Logical, Indica se encontrou o registro
+/*/
+Method findAgentProcessById(cProcessID as Character) as Logical Class DTARunAgent
+	Local lFound as Logical
+
+	DTARunAgent():loadFieldsSize()
+
+	cProcessID := PadR(cProcessID, _jSizes["HZP_ID"])
+	HZP->(dbSetOrder(1))
+	lFound := HZP->(dbSeek(xFilial("HZP") + cProcessID))
+Return lFound
+
+/*/{Protheus.doc} loadFieldsSize
+Carrega cache com o tamanho dos campos utilizados
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return Nil
+/*/
+Method loadFieldsSize() Class DTARunAgent
+
+	If _jSizes == Nil
+		_jSizes := JsonObject():New()
+		_jSizes["HZP_ID"    ] := GetSX3Cache("HZP_ID"    , "X3_TAMANHO")
+		_jSizes["HZP_AGENTE"] := GetSX3Cache("HZP_AGENTE", "X3_TAMANHO")
+		_jSizes["HZP_CHAVE" ] := GetSX3Cache("HZP_CHAVE" , "X3_TAMANHO")
+	EndIf
+Return
+
+/*/{Protheus.doc} useAgentAPI
+Verifica se deve utilizar o agente via API
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return lUseAPI, Logical, Indica se deve utilizar a API do agente
+/*/
+Method useAgentAPI() as Logical Class DTARunAgent
+	Local aArea   as Array
+	Local lUseAPI as Logical
+
+	aArea := HZU->(GetArea())
+	HZU->(dbSetOrder(1))
+	lUseAPI := HZU->(dbSeek(xFilial("HZU") + "agent_api")) .And. AllTrim(HZU->HZU_VALOR) == ".T."
+	
+	HZU->(RestArea(aArea))
+	aSize(aArea, 0)
+Return lUseAPI
+
+/*/{Protheus.doc} getApiKey
+Retorna a chave de API do agente, caso exista
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return cApiKey, Character, Chave de API do agente, caso exista
+/*/
+Method getApiKey() as Character Class DTARunAgent
+	Local aArea   as Array
+	Local cApiKey as Character
+
+	aArea   := HZU->(GetArea())
+	cApiKey := ""
+	HZU->(dbSetOrder(1))
+	If HZU->(dbSeek(xFilial("HZU") + "agent_api_key"))
+		cApiKey := AllTrim(HZU->HZU_VALOR)
+	EndIf
+	
+	HZU->(RestArea(aArea))
+	aSize(aArea, 0)
+Return cApiKey
+
+/*/{Protheus.doc} getProjectName
+Retorna o nome do projeto do agente, caso exista
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return cProjectName, Character, Nome do projeto do agente, caso exista
+/*/
+Method getProjectName() as Character Class DTARunAgent
+	Local aArea        as Array
+	Local cProjectName as Character
+
+	aArea        := HZU->(GetArea())
+	cProjectName := ""
+	HZU->(dbSetOrder(1))
+	If HZU->(dbSeek(xFilial("HZU") + "agent_project_name"))
+		cProjectName := AllTrim(HZU->HZU_VALOR)
+	EndIf
+	
+	HZU->(RestArea(aArea))
+	aSize(aArea, 0)
+Return cProjectName
+
+/*/{Protheus.doc} getAgentID
+Retorna o ID do agente, caso exista
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 lUseAPI, Logical, Indica se deve utilizar a versão API do agente
+@return cAgentID, Character, ID do agente, caso exista
+/*/
+Method getAgentID(lUseAPI as Logical) as Character Class DTARunAgent
+	Local aArea    as Array
+	Local cKey     as Character
+	Local cAgentID as Character
+
+	If lUseAPI
+		cKey := "agent_api_id"
+	Else
+		cKey := "agent_id"
+	EndIf
+
+	aArea    := HZU->(GetArea())
+	cAgentID := ""
+	HZU->(dbSetOrder(1))
+	If HZU->(dbSeek(xFilial("HZU") + cKey))
+		cAgentID := AllTrim(HZU->HZU_VALOR)
+	EndIf
+	
+	HZU->(RestArea(aArea))
+	aSize(aArea, 0)
+Return cAgentID
+
+/*/{Protheus.doc} saveTransactionID
+Salva o ID da transação do agente no resultado do processo (HZP)
+
+@type method
+@author lucas.franca
+@since 01/09/2026
+@version P12
+@return Nil
+/*/
+Method saveTransactionID() Class DTARunAgent
+	Local jResponse as Json
+
+	If DTARunAgent():findAgentProcessById(Self:cProcessId)
+		jResponse := {"type": "transaction_id", "message": Self:cTransactionID}
+		DTARunAgent():updateAgentResult({jResponse})
+		FreeObj(jResponse)
+	EndIf
+Return
+
+/*/{Protheus.doc} canRunAgents
+Verifica se possui as dependências necessárias para iniciar a execução de um agente
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return lCanRun, Logical, Indica se possui as dependências necessárias para iniciar a execução de um agente
+/*/
+Method canRunAgents() as Logical Class DTARunAgent
+	Local lCanRun as Logical
+
+	lCanRun := DTARunAgent():isPermissionGranted()
+	If lCanRun
+		lCanRun := DTARunAgent():useAgentAPI()
+		If !lCanRun
+			lCanRun := FindFunction("totvs.framework.mcp.callAgent")
+		EndIf
+	EndIf
+
+Return lCanRun
+
+/*/{Protheus.doc} DTARunAgentStart
+Função executada em nova thread para execução assíncrona do agente.
+
+@type function
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cProcessID, Character, ID do processo (HZP) que deve ser processado
+@param 02 cAgentName, Character, Nome do agente
+@param 03 cErrorUID , Character, UUID de controle de erros das threads
+@return Nil
+/*/
+Function DTARunAgentStart(cProcessID as Character, cAgentName as Character, cErrorUID as Character)
+	Local oPCPThread as Object
+
+	DTARunAgent():startProcessById(cProcessID, cAgentName)
+
+	oPCPThread := PCPMultiThreadError():New(cErrorUID, .F.)
+	oPCPThread:Destroy()
+	FreeObj(oPCPThread)
+Return
+
+/*/{Protheus.doc} DTARunAgentError
+Função disparada diante de exceções na execução do processo. Limpa memória e registra erro na tabela HZP.
+
+@type function
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@param 01 cErrorUID , Character, Chave do processo, utilizada na classe PCPMultiThreadError
+@param 02 cAgentName, Character, Nome do agente em execução
+@param 03 cAgentKey , Character, Chave do agente em execução
+@return Nil
+/*/
+Function DTARunAgentError(cErrorUID as Character, cAgentName as Character, cAgentKey as Character)
+	Local cErrorMessage as Character
+	Local oRunAgent     as Object
+	Local oPCPThread    as Object
+
+	oPCPThread := PCPMultiThreadError():New(cErrorUID, .F.)
+	cErrorMessage := oPCPThread:getcError()
+	oPCPThread:Destroy()
+	FreeObj(oPCPThread)
+
+	If !Empty(cAgentName) .And. !Empty(cAgentKey)
+		oRunAgent := DTARunAgent():New(cAgentName)
+		oRunAgent:setAgentKey(cAgentKey)
+		oRunAgent:registerError(cErrorMessage)
+		FreeObj(oRunAgent)
+	EndIf
+Return
+
+/*/{Protheus.doc} isPermissionGranted
+Verifica se pode executar agentes, seja via API ou função nativa.
+
+@type method
+@author lucas.franca
+@since 28/01/2026
+@version P12
+@return lCanRun, Logical, Indica se pode executar agentes, seja via API ou função nativa
+/*/
+Method isPermissionGranted() as Logical Class DTARunAgent
+	Local aArea    as Array
+	Local lGranted as Logical
+
+	lGranted := .F.
+	If AliasInDic("HZU")
+		aArea := HZU->(GetArea())
+		HZU->(dbSetOrder(1))
+		lGranted := HZU->(dbSeek(xFilial("HZU") + "agent_available")) .And. AllTrim(HZU->HZU_VALOR) == ".T."
+		
+		HZU->(RestArea(aArea))
+		aSize(aArea, 0)
+	EndIf
+Return lGranted

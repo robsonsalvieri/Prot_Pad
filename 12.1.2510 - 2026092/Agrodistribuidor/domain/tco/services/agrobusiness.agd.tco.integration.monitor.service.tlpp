@@ -1,0 +1,308 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "agrobusiness.agd.tco.integration.monitor.service.ch"
+
+namespace totvs.protheus.agrobusiness.agd  
+
+/*/{Protheus.doc} TCOIntegrationMonitorService
+Service do Monitor de Integração.
+Responsável por orquestrar regras de negócio, paginação e enriquecimento dos dados
+recuperados do repositório (tabela XX3), além de preparar a resposta padrão da API.
+@type class
+@version 12
+@author rodrigo.nsoledade
+@since 24/10/2025
+/*/
+class TCOIntegrationMonitorService from UtilsService
+
+    public method New()
+    public method listar()
+	public method enviarFeatureAdapter()
+	public method enviarEAI()
+
+	public method agdGetIndicePosicao()
+	public method agdChaveBusca()
+	public method agdGetValorPayloadIndice()
+
+endclass
+
+/*/{Protheus.doc} New
+Construtor do Service.
+@type method
+@since 24/10/2025
+@author rodrigo.nsoledade
+/*/
+method New() class TCOIntegrationMonitorService
+	_Super:New()
+return Self
+
+/*/{Protheus.doc} listar
+Executa a listagem paginada/ordenada das requisições do Monitor, buscando pelo codigo da feature o id do XX3_PROUTE para filtrar os dados.
+@type method
+@version 12
+@since 27/10/2025
+@author rodrigo.nsoledade
+@return logical, true
+/*/
+method listar(cCodigoFeature as character, nPage, nPageSize, oJsonQryParam) class TCOIntegrationMonitorService
+	Local oMonitorRepository As Object
+	Local oTCOrepository As Object
+	Default nPage     := 1
+	Default nPageSize := 10
+	Default oJsonQryParam := nil
+
+    oTCOrepository  := TCORepository():New()
+	oFeatureClass   := oTCOrepository:getFeatureClassById(cCodigoFeature)
+	cIdIntegracao  := oFeatureClass:getIdentificaoIntegracao()
+    oJsonQryParam['pRoute'] := cIdIntegracao
+
+	oMonitorRepository := TCOIntegrationMonitorRepository():New()
+	//oRepository:find(nPage, nPageSize, oJsonQryParam)
+    oMonitorRepository:findIntegracoes(nPage, nPageSize, oJsonQryParam)
+	Self:setFullResponse(oMonitorRepository)
+
+	oMonitorRepository:DeActivate()
+	FreeObj(oMonitorRepository)
+	FreeObj(oTCOrepository)
+Return nil
+
+/*/{Protheus.doc} enviarFeatureAdapter
+Dispara integração EAI da feature usando AGDEAIENV com payload do frontend.
+@type method
+@version 12
+@author felipe.savelar
+@since 08/07/2026
+@param cCodigoFeature, character, codigo da feature
+@param jPayload, json, payload de dados enviado pelo frontend
+@return variant, nil
+/*/
+method enviarFeatureAdapter(cCodigoFeature as character, jPayload as json) class TCOIntegrationMonitorService
+	Local oRepository      as object
+	Local oFeatureClass    as object
+	Local aAdapters        as array
+	Local cRotinaAdapter   as character
+	Local nPosAdapter      as numeric
+	Local lProcessado      as logical
+
+	Default jPayload := nil
+	cRotinaAdapter := ""
+
+	oRepository   := TCORepository():New()
+	oFeatureClass := oRepository:getFeatureClassById(AllTrim(cCodigoFeature))
+
+	If oFeatureClass == nil
+		Self:setError(STR0003, 404)//"Feature inválida"
+		FWFreeObj(oRepository)
+		Return nil
+	EndIf
+
+	aAdapters := oFeatureClass:getAdapter()
+
+	If ValType(jPayload) == "J" .And. jPayload:hasProperty("rotina")
+		cRotinaAdapter := AllTrim(jPayload["rotina"])
+	EndIf
+
+	If Empty(cRotinaAdapter)
+		Self:setError(STR0004, 400)//"Não foi possível identificar a rotina do adapter para envio EAI."
+		FWFreeObj(oFeatureClass)
+		FWFreeObj(oRepository)
+		Return nil
+	EndIf
+
+	nPosAdapter := AScanX(aAdapters, {|x| Upper(AllTrim(x['rotina'])) == Upper(cRotinaAdapter)})
+	If nPosAdapter <= 0
+		Self:setError(STR0005, 404)//"Rotina do adapter não encontrada para a feature informada."
+		FWFreeObj(oFeatureClass)
+		FWFreeObj(oRepository)
+		Return nil
+	EndIf
+
+	lProcessado := self:enviarEAI(AllTrim(cCodigoFeature), cRotinaAdapter, jPayload)
+
+	If lProcessado
+		Self:setSuccess({;
+			"feature" : AllTrim(cCodigoFeature),;
+			"rotina"  : cRotinaAdapter,;
+			"enviado" : .T.;
+		})
+	Else
+		Self:setError(STR0006, 500)//"Falha ao enviar integração para o adapter informado."
+	EndIf
+
+	FWFreeObj(oFeatureClass)
+	FWFreeObj(oRepository)
+
+return nil
+
+
+/*/{Protheus.doc} AGDEAIENV
+Localiza a posição do índice correspondente à chave única da tabela do adapter.
+@type function
+@author jean.schulze
+@since 07/07/2026
+@param cFeature, character, nome da feature usada para instanciar o adapter.
+@param cRotina, character, rotina usada para localizar o adapter.
+@param jPayload, json, payload recebido pela integração.
+@return logical, retorno padrão da rotina.
+/*/
+method enviarEAI(cFeature, cRotina, jPayload ) class TCOIntegrationMonitorService
+	Local cIndiceUnico := ""
+	Local cChaveBusca := ""
+	Local cClassFeature := ""
+	Local nPosIndiceUnico := 0
+	Local nPos := 0
+	Local lEncontrouRegistro := .F.
+	Local lRetorno := .F.
+	Local oFeature as object
+	Local aAdapters := {}
+	Local aUnico := {}
+	Local aIndices := {}
+	Local aRet := {}
+
+	// FWHasEAI/FWIntegDef exigem contexto de operacao no thread corrente.
+	Private INCLUI := .T.
+	Private ALTERA := .F.
+
+	
+		//colocar no mesmo namespace do feature
+		cClassFeature := totvs.protheus.agrobusiness.agd.FeatureTCOEnum():getById(cFeature)
+
+		if !empty(cClassFeature)
+			oFeature := &("totvs.protheus.agrobusiness.agd."+cClassFeature+":new()")
+			aAdapters := oFeature:getAdapter()
+			
+			nPos := AScanX(aAdapters,{|x| x['rotina'] == cRotina })
+
+			if nPos > 0 .and. !empty(aAdapters[nPos]['tabela']) 
+				If FWHasEAI(aAdapters[nPos]['rotina'],.T.,,.T.)
+					//busca o sx2 da tabela
+					aUnico   := FwSX2Util():GetSX2data(aAdapters[nPos]['tabela'], {"X2_UNICO"}) 
+					aIndices := FWSIXUtil():GetAliasIndexes( aAdapters[nPos]['tabela'] ) 
+					cIndiceUnico := AllTrim(aUnico[1][2])
+					nPosIndiceUnico := Self:agdGetIndicePosicao(aIndices, cIndiceUnico)
+					
+					If nPosIndiceUnico > 0
+						cChaveBusca := Self:agdChaveBusca(aIndices[nPosIndiceUnico], jPayload, aAdapters[nPos]['tabela'])
+						(aAdapters[nPos]['tabela'])->(DbSetOrder(nPosIndiceUnico))
+						lEncontrouRegistro := (aAdapters[nPos]['tabela'])->(DbSeek(cChaveBusca))
+					EndIf
+						
+					If lEncontrouRegistro
+						aRet := FWIntegDef(aAdapters[nPos]['rotina'],,,,aAdapters[nPos]['rotina'])
+						If aRet[1]
+							lRetorno := .T.
+						EndIf
+					EndIf
+				EndIf
+			EndIf
+		EndIf
+
+	FWFreeObj(oFeature)
+
+	Return lRetorno
+
+
+/*/{Protheus.doc} agdGetIndicePosicao
+Retorna a ordem do índice cuja composição de campos corresponde ao índice informado.
+@type function
+@author jean.schulze
+@since 07/07/2026
+@param aIndices, array, lista de índices retornada por FWSIXUtil():GetAliasIndexes().
+@param cIndiceUnico, character, composição do índice no formato CAMPO1+CAMPO2+... .
+@return numeric, posição encontrada no array ou 0 quando não localizar.
+/*/
+method agdGetIndicePosicao(aIndices, cIndiceUnico) class TCOIntegrationMonitorService
+	Local nX := 0
+
+	If !Empty(aIndices) 
+		For nX := 1 To Len(aIndices) 
+			If fChaveIndice(aIndices[nX]) == cIndiceUnico
+				Return nX
+			EndIf
+		Next nX
+	EndIf
+
+Return 0
+
+/*/{Protheus.doc} agdChaveBusca
+Monta a chave de busca do índice a partir dos valores recebidos no payload.
+@type function
+@author jean.schulze
+@since 07/07/2026
+@param aIndex, array, campos que compõem o índice selecionado.
+@param jPayload, json, payload com os valores de cada campo.
+@param cAlias, character, alias da tabela do índice.
+@return character, chave formatada para uso em DbSeek.
+/*/
+method agdChaveBusca(aIndex, jPayload, cAlias) class TCOIntegrationMonitorService
+	Local nX := 0
+	Local cCampo := ""
+	Local cChaveBusca := ""
+	Local xValorCampo := Nil
+
+	For nX := 1 To Len(aIndex)
+		cCampo := AllTrim(aIndex[nX])
+
+		If Empty(cCampo)
+			Loop
+		EndIf
+
+		xValorCampo := Self:agdGetValorPayloadIndice(jPayload, cCampo, cAlias)
+		cChaveBusca += AvKey(xValorCampo, cCampo)
+	Next nX
+
+Return cChaveBusca
+
+/*/{Protheus.doc} agdGetValorPayloadIndice
+Obtém o valor de um campo do índice a partir do payload, com fallback para filial corrente.
+@type function
+@author jean.schulze
+@since 07/07/2026
+@param jPayload, json, payload com os valores do registro.
+@param cCampo, character, campo procurado no payload.
+@param cAlias, character, alias da tabela do índice.
+@return variant, valor do campo conforme informado no payload.
+/*/
+method agdGetValorPayloadIndice(jPayload, cCampo, cAlias) class TCOIntegrationMonitorService
+	Local xValorCampo := ""
+	Local cCampoLower := Lower(cCampo)
+	Local cCampoUpper := Upper(cCampo)
+
+	If ValType(jPayload) == "J"
+		If jPayload:hasProperty(cCampo)
+			xValorCampo := jPayload[cCampo]
+		ElseIf jPayload:hasProperty(cCampoLower)
+			xValorCampo := jPayload[cCampoLower]
+		ElseIf jPayload:hasProperty(cCampoUpper)
+			xValorCampo := jPayload[cCampoUpper]
+		EndIf
+	EndIf
+
+	If Empty(xValorCampo) .And. Right(cCampo, 7) == "_FILIAL"
+		xValorCampo := FWxFilial(cAlias)
+	EndIf
+
+Return xValorCampo
+
+/*/{Protheus.doc} agdChaveIndice
+Monta a chave textual de um índice a partir da lista de campos retornada pela SIX.
+@type function
+@author jean.schulze
+@since 07/07/2026
+@param aIndex, array, campos que compõem o índice.
+@return character, chave do índice no formato CAMPO1+CAMPO2+... .
+/*/
+static Function fChaveIndice(aIndex)
+	Local nX := 0
+	Local cChave := ""
+
+	For nX := 1 To Len(aIndex)
+		If !Empty(AllTrim(aIndex[nX]))
+			If !Empty(cChave)
+				cChave += "+"
+			EndIf
+			cChave += AllTrim(aIndex[nX])
+		EndIf
+	Next nX
+
+Return cChave

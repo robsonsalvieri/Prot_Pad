@@ -1,0 +1,330 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} FiscalMovementRepository
+Repositório responsável por consultar e agrupar as movimentações fiscais (notas de saída SF2/SD2 e de entrada SF1/SD1) 
+no layout de rebate exigido pela Bayer/Corteva. 
+@type class
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+/*/
+class FiscalMovementRepository from UtilsRepository
+	private data cFilialUsada  As character
+	public method new()
+	public method find()
+	public method getFields() as array
+
+	private method getQueryJoin()        as array
+	private method getFiscalMovQuery(jQueryParams)   as character
+	private method getIntercompanyJoin() as character
+	private method getIntercompanyCase(cExpressaoTrue as character, cExpressaoFalse as character, lNegado as logical) as character
+	private method getSeedCaseExpression() as character
+endclass
+
+/*/{Protheus.doc} new
+Inicializa a instância do repositório.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@return object, instância da classe
+/*/
+method new() class FiscalMovementRepository
+	Self:cFilialUsada := cFilAnt
+	_Super:new("SFT", self:getFields(), self:getQueryJoin())
+return self
+
+/*/{Protheus.doc} find
+Realiza a consulta paginada das movimentações fiscais agrupadas (saída + entrada) para a integração de rebate.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@param nPage, numeric, Número da página a ser consultada.
+@param nPageSize, numeric, Quantidade de registros por página.
+@param jQueryParams, object, Objeto JSON contendo os filtros da consulta (ex.: codi_rev, ano_ven, mes_ven).
+@return nil
+/*/
+method find(nPage, nPageSize, jQueryParams) class FiscalMovementRepository
+	local aArea     as array
+	local cOrder    as character
+	local cWhere    as character
+	local jResponse as object
+
+	Default nPage        := 1
+	Default nPageSize    := 10
+	Default jQueryParams := Nil
+
+	If self:lOk
+
+		If jQueryParams != Nil .And. jQueryParams:HasProperty("codi_rev") .And. !Empty(jQueryParams["codi_rev"])
+			Self:cFilialUsada := jQueryParams["codi_rev"]
+		EndIf
+
+		aArea  := FWGetArea()
+		cOrder := self:getOrderQueryParam(jQueryParams, self:getFields())
+		cWhere := self:getWhereQueryParam(jQueryParams, self:getFields())
+
+		self:setFieldsConsulta(self:getFields())
+		self:setPage(nPage)
+		self:setPageSize(nPageSize)
+		self:SetQuery(self:getQueryDefault({}, self:getFiscalMovQuery(jQueryParams)))
+		self:SetWhere(self:SetWhere(if(Empty(cWhere), "1=1", cWhere)))
+		self:SetUrlFilter(self:getFilterAdvancedQueryParam(jQueryParams))
+		self:SetOrder(cOrder)
+
+		If self:Execute()
+			self:FillGetResponse()
+			If self:lOk
+				jResponse := self:convertToJson(self:getJSONResponse())
+				self:setSuccess(jResponse)
+			EndIf
+		EndIf
+
+		FWRestArea(aArea)
+		FWFreeArray(aArea)
+		FreeObj(jResponse)
+	EndIf
+return nil
+
+/*/{Protheus.doc} getFields
+Retorna o mapeamento dos campos disponíveis entre a API e o Protheus.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@return array, campos do repositório.
+/*/
+method getFields() as array class FiscalMovementRepository
+	local aFields := {}
+
+	aAdd(aFields, {"codi_rev", "CODI_REV", "C", .T.})
+	aAdd(aFields, {"mes_ven" , "MES_VEN" , "N", .T.})
+	aAdd(aFields, {"ano_ven" , "ANO_VEN" , "N", .T.})
+	aAdd(aFields, {"modl_ven", "MODL_VEN", "C", .T.})
+	aAdd(aFields, {"oper_ven", "OPER_VEN", "C", .T.})
+	aAdd(aFields, {"cfop_ven", "CFOP_VEN", "C", .T.})
+	aAdd(aFields, {"desc_opr", "DESC_OPR", "C", .T.})
+	aAdd(aFields, {"ncmp_pro", "NCMP_PRO", "C", .T.})
+	aAdd(aFields, {"sina_opr", "SINA_OPR", "C", .T.})
+	aAdd(aFields, {"valf_ven", "VALF_VEN", "N", .T.})
+	aAdd(aFields, {"volf_ven", "VOLF_VEN", "N", .T.})
+	aAdd(aFields, {"volu_ven", "VOLU_VEN", "N", .T.})
+	aAdd(aFields, {"volr_ven", "VOLR_VEN", "N", .T.})
+return aFields
+
+/*/{Protheus.doc} getQueryJoin
+Retorna os joins das consultas SQL para a busca de movimentações fiscais.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@return array, vazio
+/*/
+method getQueryJoin() as array class FiscalMovementRepository
+return {}
+
+/*/{Protheus.doc} getFiscalMovQuery
+Monta a consulta SQL contra a SFT (Livro Fiscal por Item de NF), já unificando entrada e saída por linha (FT_TIPOMOV = 'S'/'E'), 
+agrupada conforme a especificação de negócio.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@return character, query SQL completa
+/*/
+method getFiscalMovQuery(jQueryParams) as character class FiscalMovementRepository
+	local cJoinGrupo    := self:getIntercompanyJoin()
+	local cQtdSemente   := self:getSeedCaseExpression()
+	local cValorFat     := self:getIntercompanyCase("FT.FT_TOTAL", "0", .F.)
+	local cVolFat 	    := self:getIntercompanyCase(cQtdSemente, "0", .F.)
+	local cValorOutro   := self:getIntercompanyCase("FT.FT_TOTAL", "0", .T.)
+	local cVolOutro     := self:getIntercompanyCase(cQtdSemente, "0", .T.)
+	local cChaveNFe     := " COALESCE(SF2.F2_CHVNFE, SF1.F1_CHVNFE) "
+	local cQuery 	    := ""
+	local cDataIni      := ""
+	local cDataFim      := ""
+	local cFabricanteID := ""
+	local oStatement    := FWPreparedStatement():New()
+	local aBindParam    := {}
+	local nParamPos     := 1
+	local nX            := 0
+
+	Default jQueryParams := Nil
+
+	If ValType(jQueryParams) == "J"
+		If jQueryParams:HasProperty("data_ini")
+			cDataIni := AllTrim(jQueryParams["data_ini"])
+		EndIf
+
+		If jQueryParams:HasProperty("data_fim")
+			cDataFim := AllTrim(jQueryParams["data_fim"])
+		EndIf
+
+		If jQueryParams:HasProperty("fabricanteID")
+			cFabricanteID := AllTrim(jQueryParams["fabricanteID"])
+		EndIf
+	EndIf
+
+	cQuery := " SELECT "
+	cQuery += "        SM0.M0_CODFIL AS CODI_REV, "
+	cQuery += "        MONTH(FT.FT_EMISSAO) AS MES_VEN, "
+	cQuery += "        YEAR(FT.FT_EMISSAO) AS ANO_VEN, "
+	cQuery += "        SUBSTRING(" + cChaveNFe + ", 21, 2) AS MODL_VEN, "
+	cQuery += "        FT.FT_CFOP AS OPER_VEN, "
+	cQuery += "        FT.FT_CFOP AS CFOP_VEN, "
+	cQuery += "        SF4.F4_TEXTO AS DESC_OPR, "
+	cQuery += "        SB1.B1_POSIPI AS NCMP_PRO, "
+	cQuery += "        FT.FT_TIPOMOV AS SINA_OPR, "
+	cQuery += "        SUM(" + cValorFat + ") AS VALF_VEN, "
+	cQuery += "        SUM(" + cVolFat + ") AS VOLF_VEN, "
+	cQuery += "        SUM(" + cValorOutro + ") AS VOLU_VEN, "
+	cQuery += "        SUM(" + cVolOutro + ") AS VOLR_VEN "
+
+	cQuery += "   FROM " + RetSqlName("SFT") + " FT "
+
+	cQuery += "  INNER JOIN " + RetSqlName("SM0") + " SM0 "
+	cQuery += "     ON SM0.M0_CODFIL = FT.FT_FILIAL "
+
+	cQuery += "  INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += "     ON SB1.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB1.B1_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB1", Self:cFilialUsada))
+	cQuery += "    AND SB1.B1_COD = FT.FT_PRODUTO "
+
+	cQuery += "  INNER JOIN " + RetSqlName("NCR") + " NCR "
+	cQuery += "     ON NCR.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND NCR.NCR_FILIAL = SB1.B1_FILIAL "
+	cQuery += "    AND NCR.NCR_PROD = SB1.B1_COD "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SB5") + " SB5 "
+	cQuery += "     ON SB5.B5_FILIAL = SB1.B1_FILIAL "
+	cQuery += "    AND SB5.B5_COD = SB1.B1_COD "
+	cQuery += "    AND SB5.D_E_L_E_T_ = ' ' "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SF4") + " SF4 "
+	cQuery += "     ON SF4.F4_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SF4", Self:cFilialUsada))
+	cQuery += "    AND SF4.F4_CODIGO = FT.FT_CFOP "
+	cQuery += "    AND SF4.D_E_L_E_T_ = ' ' "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SF2") + " SF2 "
+	cQuery += "     ON SF2.F2_FILIAL = FT.FT_FILIAL "
+	cQuery += "    AND SF2.F2_DOC = FT.FT_NFISCAL "
+	cQuery += "    AND SF2.F2_SERIE = FT.FT_SERIE "
+	cQuery += "    AND SF2.F2_CLIENTE = FT.FT_CLIEFOR "
+	cQuery += "    AND SF2.F2_LOJA = FT.FT_LOJA "
+	cQuery += "    AND SF2.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND FT.FT_TIPOMOV = 'S' "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SF1") + " SF1 "
+	cQuery += "     ON SF1.F1_FILIAL = FT.FT_FILIAL "
+	cQuery += "    AND SF1.F1_DOC = FT.FT_NFISCAL "
+	cQuery += "    AND SF1.F1_SERIE = FT.FT_SERIE "
+	cQuery += "    AND SF1.F1_FORNECE = FT.FT_CLIEFOR "
+	cQuery += "    AND SF1.F1_LOJA = FT.FT_LOJA "
+	cQuery += "    AND SF1.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND FT.FT_TIPOMOV = 'E' "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SA1") + " SA1 "
+	cQuery += "     ON SA1.A1_FILIAL = FT.FT_FILIAL "
+	cQuery += "    AND SA1.A1_COD = FT.FT_CLIEFOR "
+	cQuery += "    AND SA1.A1_LOJA = FT.FT_LOJA "
+	cQuery += "    AND SA1.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND FT.FT_TIPOMOV = 'S' "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SA2") + " SA2 "
+	cQuery += "     ON SA2.A2_FILIAL = FT.FT_FILIAL "
+	cQuery += "    AND SA2.A2_COD = FT.FT_CLIEFOR "
+	cQuery += "    AND SA2.A2_LOJA = FT.FT_LOJA "
+	cQuery += "    AND SA2.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND FT.FT_TIPOMOV = 'E' "
+
+	cQuery += " " + cJoinGrupo + " "
+
+	cQuery += "  WHERE FT.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND FT.FT_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SFT", Self:cFilialUsada))
+
+	If !Empty(cDataIni)
+		cQuery += "    AND FT.FT_EMISSAO >= ? "
+		AAdd(aBindParam, cDataIni)
+	EndIf
+
+	If !Empty(cDataFim)
+		cQuery += "    AND FT.FT_EMISSAO <= ? "
+		AAdd(aBindParam, cDataFim)
+	EndIf
+
+	If !Empty(cFabricanteID)
+		cQuery += "    AND NCR.NCR_FABCOD = ? "
+		AAdd(aBindParam, SubStr(cFabricanteID, 1, TAMSX3("NCR_FABCOD")[1]))
+	EndIf
+
+	cQuery += " GROUP BY "
+	cQuery += "        SM0.M0_CODFIL, "
+	cQuery += "        YEAR(FT.FT_EMISSAO), "
+	cQuery += "        MONTH(FT.FT_EMISSAO), "
+	cQuery += "        SUBSTRING(" + cChaveNFe + ", 21, 2), "
+	cQuery += "        FT.FT_CFOP, "
+	cQuery += "        SF4.F4_TEXTO, "
+	cQuery += "        SB1.B1_POSIPI, "
+	cQuery += "        FT.FT_TIPOMOV "
+
+	oStatement:SetQuery(cQuery)
+
+	For nX := 1 To Len(aBindParam)
+		oStatement:SetString(nParamPos++, aBindParam[nX])
+	Next nX
+
+	cQuery := ChangeQuery(oStatement:GetFixQuery())
+
+Return cQuery
+
+/*/{Protheus.doc} getIntercompanyJoin
+Regra de "mesmo grupo economico" implementada comparando a raiz do CNPJ (8 primeiros digitos) do parceiro (cliente na saida / fornecedor na entrada, 
+resolvido via COALESCE(SA1.A1_CGC, SA2.A2_CGC)) contra o CNPJ das filiais cadastradas em SM0.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@return character, clausula LEFT JOIN completa
+/*/
+method getIntercompanyJoin() as character class FiscalMovementRepository
+	local cJoin := ""
+
+	cJoin := " LEFT JOIN (SELECT DISTINCT SUBSTRING(SM0X.M0_CGC, 1, 8) AS CGC8 "
+	cJoin += " FROM " + RetSqlName("SM0") + " SM0X WHERE SM0X.D_E_L_E_T_ = ' ') GRP "
+	cJoin += " ON GRP.CGC8 = SUBSTRING(COALESCE(SA1.A1_CGC, SA2.A2_CGC), 1, 8) "
+return cJoin
+
+/*/{Protheus.doc} getIntercompanyCase
+Monta a expressao CASE WHEN usada dentro do SUM(), testando se o parceiro pertence (ou nao) ao mesmo grupo economico, com base no 
+resultado do LEFT JOIN feito por getIntercompanyJoin().
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@param cExpressaoTrue, character, expressao retornada quando a condicao e satisfeita
+@param cExpressaoFalse, character, expressao retornada quando a condicao nao e satisfeita
+@param lNegado, logical, .T. para testar "nao pertence ao grupo" (IS NULL), .F. para "pertence ao grupo" (IS NOT NULL)
+@return character, expressao CASE WHEN
+/*/
+method getIntercompanyCase(cExpressaoTrue as character, cExpressaoFalse as character, lNegado as logical) as character class FiscalMovementRepository
+	local cCondicao := ""
+
+	Default lNegado := .F.
+
+	cCondicao := "GRP.CGC8 IS " + if(lNegado, "NULL", "NOT NULL")
+return " CASE WHEN " + cCondicao + " THEN " + cExpressaoTrue + " ELSE " + cExpressaoFalse + " END "
+
+/*/{Protheus.doc} getSeedCaseExpression
+Divide a quantidade por 60 (conversao para sacas) quando o produto e da categoria.
+@type method
+@author beatriz.dantas
+@since 06/08/2026
+@version p12
+@return character, expressao CASE WHEN de conversao de quantidade
+/*/
+method getSeedCaseExpression() as character class FiscalMovementRepository
+return " CASE WHEN SB5.B5_SEMENTE = '1' THEN FT.FT_QUANT / 60 ELSE FT.FT_QUANT END "

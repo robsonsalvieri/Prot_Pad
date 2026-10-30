@@ -1,0 +1,538 @@
+#Include 'tlpp-core.th'
+#Include 'tlpp-rest.th'
+#Include "FWLIBVERSION.CH"
+#include "PLSMGER.CH"
+#include "Fileio.ch"
+#include 'Protheus.ch'
+
+class HealthPortalLoginService from CenRequest
+
+	Data lPortalOperadora as logical
+
+	Public Method new()
+	Public Method valida()
+	Public Method getUserLogin()
+	Public Method changePassword()
+	Public Method checkPassword()
+	Public Method checkParameters()
+	Public Method getCustomStyle()
+
+	private method setContracts(cUserCode as character)
+	private method getItemsMenu(cAccessProfile as character, cMingleAccessProfile as character, cPortalType as character)
+
+endClass
+
+Method New(oRest) class HealthPortalLoginService
+	_Super:new(oRest,,.T.)
+	self:lPortalOperadora := .F.
+Return self
+
+//nTp 1-getUserLogin;2-changePassword
+Method valida(nTp) class HealthPortalLoginService
+	local cFields   := ""
+	default nTp     := 1
+	self:lSuccess := _Super:checkBody(.t.)
+	BSW->(dbsetorder(1))
+
+	self:lPortalOperadora := iif(empty(cvaltochar(self:jRequest['healthInsurerPortal'])) .OR. self:jRequest['healthInsurerPortal'] == "false", .F., .T.)
+
+	if self:lSuccess .and. empty(cvaltochar(self:jRequest['login']))
+		cFields += iif(!empty(cFields),',','')+"'login'"
+	endif
+	if self:lSuccess .and. nTp == 1 .and. empty(cvaltochar(self:jRequest['password']))
+		cFields += iif(!empty(cFields),',','')+"'password'"
+	endif
+	if self:lSuccess .and. nTp == 2 .and. empty(cvaltochar(self:jRequest['email']))
+		cFields += iif(!empty(cFields),',','')+"'email'"
+	endif
+	if self:lSuccess .and. nTp == 2 .and. empty(cvaltochar(self:jRequest['newpassword']))
+		cFields += iif(!empty(cFields),',','')+"'newpassword'"
+	endif
+	if self:lSuccess .and. BSW->(fieldpos("BSW_PERAC2")) <= 0
+		self:lSuccess := .f.
+		self:cFaultDesc   := "Campo obrigatório não existe no ambiente BSW_PERAC2"
+	endif
+
+	if !empty(cFields)
+		self:lSuccess := .f.
+		self:cFaultDesc   := "Campos obrigatórios não informados:" + cFields
+	endif
+Return self:lSuccess
+
+Method getUserLogin() class HealthPortalLoginService
+
+	local cSql := ""
+	local cSubstrOperatorSQL := iif(upper(TCGetDB()) $ "ORACLE|DB2|POSTGRES|INFORMIX", "SUBSTR", "SUBSTRING")
+	local nX := 1
+	local oExecStmt as object
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local cFilOld := cFilAnt as character
+
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? BSW "
+	cQuery += " WHERE "
+	cQuery += "		BSW.BSW_LOGUSR = ? AND "
+	cQuery += "		BSW.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BSW_FILIAL, BSW_TPPOR, BSW_CODUSR, BSW_LOGUSR, BSW_EMAIL, BSW_NOMUSR, BSW_PERAC2, BSW_PERACE, BSW_SENHA")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BSW"))
+	oExecStmt:setString(nOrder++, upper(alltrim(cValToChar(self:jRequest['login']))))
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	self:oRespBody :=  jsonObject():new()
+	self:oRespBody["loginDetails"]  := jsonObject():new()
+
+	if !(cAlias)->(eof()) .and. self:checkPassword((cAlias)->BSW_SENHA)
+		cFilAnt := FXRetFil("BSW", (cAlias)->BSW_FILIAL)
+
+		self:oRespBody["loginDetails"]["code"] := alltrim((cAlias)->BSW_CODUSR)
+		self:oRespBody["loginDetails"]["username"] := alltrim((cAlias)->BSW_LOGUSR)
+		self:oRespBody["loginDetails"]["email"] := alltrim((cAlias)->BSW_EMAIL)
+		self:oRespBody["loginDetails"]["name"] := alltrim((cAlias)->BSW_NOMUSR)
+		self:oRespBody["loginDetails"]["portalType"] := alltrim((cAlias)->BSW_TPPOR)
+		self:oRespBody["loginDetails"]["healthInsurerCode"] := plsIntPad()
+		self:oRespBody["loginDetails"]["tenantId"] := cEmpAnt + "," + cFilAnt
+
+		if (cAlias)->BSW_TPPOR == '3'
+			self:oRespBody["beneficiaries"] := {}
+
+			cSql := " SELECT B49_BENEFI,BA1_NOMUSR,BA1_TIPUSU "
+			cSql += " FROM " + retsqlname("B49") + " B49 "
+			cSql += " INNER JOIN "+RetSqlName("BA1")+" BA1 "
+			cSql += "   ON BA1.BA1_FILIAL = '"+xFilial("BA1")+"' "
+			cSql += "  AND BA1.BA1_CODINT = "+cSubstrOperatorSQL+"(B49.B49_BENEFI, 1, 4) "
+			cSql += "  AND BA1.BA1_CODEMP = "+cSubstrOperatorSQL+"(B49.B49_BENEFI, 5, 4) "
+			cSql += "  AND BA1.BA1_MATRIC = "+cSubstrOperatorSQL+"(B49.B49_BENEFI, 9, 6) "
+			cSql += "  AND BA1.BA1_TIPREG = "+cSubstrOperatorSQL+"(B49.B49_BENEFI, 15, 2) "
+			cSql += "  AND BA1.BA1_DIGITO = "+cSubstrOperatorSQL+"(B49.B49_BENEFI, 17, 1) "
+			cSql += "  AND BA1.D_E_L_E_T_ = ' ' "
+			cSql += " WHERE B49_FILIAL = '" + xFilial("B49") + "' "
+			cSql += " AND B49_CODUSR = '" + upper(alltrim((cAlias)->BSW_CODUSR)) + "'  "
+			cSql += " AND B49.D_E_L_E_T_ = ' ' "
+
+			if existBlock("PTBQLGN")
+				cSql := execBlock("PTBQLGN", .F., .F., {cSql, self:oRespBody["loginDetails"]})
+			endif
+
+			dbUseArea(.T.,"TOPCONN",TcGenQry(,,cSql),"TrbB49",.T.,.F.)
+
+			while !TrbB49->(eof())
+				aadd(self:oRespBody["beneficiaries"], jsonObject():new())
+
+				self:oRespBody["beneficiaries"][nX]['subscriberId'] := alltrim(TrbB49->B49_BENEFI)
+				self:oRespBody["beneficiaries"][nX]['name'] := alltrim(TrbB49->BA1_NOMUSR)
+				self:oRespBody["beneficiaries"][nX]['subscriberType'] := alltrim(TrbB49->BA1_TIPUSU)
+
+				TrbB49->(dbSkip())
+				nX++
+			enddo
+
+			TrbB49->(dbCloseArea())
+		elseif (cAlias)->BSW_TPPOR == '2'
+			self:setContracts(alltrim((cAlias)->BSW_CODUSR))
+		endif
+
+		self:getItemsMenu((cAlias)->BSW_PERACE, (cAlias)->BSW_PERAC2, (cAlias)->BSW_TPPOR)
+
+		self:cResponse := self:oRespBody:toJson()
+	elseif self:lSuccess
+		self:cFaultDesc   := "Login não encontrado"
+	endif
+
+	(cAlias)->(dbCloseArea())
+
+	if !empty(self:cFaultDesc)
+		self:lSuccess       := .f.
+		self:nFault         := 400
+		self:cFaultDesc     := iif(empty(self:cFaultDesc),"Nenhum registro localizado",self:cFaultDesc)
+	endif
+
+	oExecStmt:destroy()
+	freeObj(oExecStmt)
+
+	cFilAnt := cFilOld
+
+Return
+
+Method changePassword() class HealthPortalLoginService
+
+	local cSenhaCrip := SHA256(self:jRequest['newpassword'])
+	local lNotFound := .F.
+	local lUpdMingle := iif(self:jRequest['updateMingle'] <> nil .AND. ValType(self:jRequest['updateMingle']) == 'L', self:jRequest['updateMingle'], .T.)
+	local lUpdPLS := .F.
+	local oExecStmt as object
+	local cQuery as character
+	local nOrder := 1 as numeric
+	local cAlias as character
+
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? BSW "
+	cQuery += " WHERE "
+	cQuery += " 	BSW.BSW_FILIAL = ? AND "
+	cQuery += "		BSW.BSW_LOGUSR = ? AND "
+	cQuery += "		BSW.BSW_EMAIL = ? AND "
+	cQuery += "		BSW.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(cQuery)
+
+	oExecStmt:setUnsafe(nOrder++, "BSW_CODUSR, BSW_LOGUSR, BSW_EMAIL, BSW_NOMUSR, BSW_SENHA, R_E_C_N_O_ Recno")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BSW"))
+	oExecStmt:setString(nOrder++, xFilial("BSW"))
+	oExecStmt:setString(nOrder++, upper(alltrim(cValToChar(self:jRequest['login']))))
+	oExecStmt:setString(nOrder++, upper(alltrim(cValToChar(self:jRequest['email']))))
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	self:oRespBody :=  jsonObject():new()
+	self:oRespBody["loginDetails"]  := jsonObject():new()
+
+	if !(cAlias)->(eof())
+		if self:checkParameters()
+			if lUpdMingle
+				if PLMINGCRUD(K_Alterar, Alltrim((cAlias)->BSW_LOGUSR), cSenhaCrip, "3", .F.) //Sincronizacao da atualizacao de senha no Mingle
+					lUpdPLS := .T.
+				endif
+			else
+				lUpdPLS := .T.
+			endif
+
+			if lUpdPLS
+				BSW->(dbgoto((cAlias)->Recno))
+				BSW->(Reclock("BSW",.F.))
+				BSW->BSW_SENHA := cSenhaCrip
+				BSW->(msUnlock())
+				self:oRespBody["loginDetails"]["code"]      := alltrim((cAlias)->BSW_CODUSR)
+				self:oRespBody["loginDetails"]["username"]  := alltrim((cAlias)->BSW_LOGUSR)
+				self:oRespBody["loginDetails"]["email"]     := alltrim((cAlias)->BSW_EMAIL)
+				self:oRespBody["loginDetails"]["name"]      := alltrim((cAlias)->BSW_NOMUSR)
+				self:cResponse := self:oRespBody:toJson()
+			endif
+		else
+			self:lSuccess       := .F.
+			self:nFault         := 400
+			self:cFaultDetail   := "Verifique se os parâmetros MV_MINGURL, MV_MINGIUS e MV_MINGTOK estão preenchidos!"
+			self:cFaultDesc     := "Parâmetro(s) MV_MINGURL, MV_MINGIUS e/ou MV_MINGTOK não preenchido(s)"
+		endif
+	else
+		lNotFound := .T.
+	endif
+
+	(cAlias)->(dbCloseArea())
+
+	if empty(self:oRespBody["loginDetails"]["code"])
+		self:lSuccess       := .F.
+		self:nFault         := 400
+		self:cFaultDetail   := "Não foi possível atualizar a senha. Tente novamente!" //Mensagem para erro no Mingle.
+		self:cFaultDesc     := "Erro ao atualizar senha"
+	endif
+
+	if lNotFound
+		self:lSuccess       := .f.
+		self:nFault         := 400
+		self:cFaultDetail   := "Nenhum registro localizado" //Mensagem para login nao encontrado
+		self:cFaultDesc     := "Login/Email não encontrado"
+	endif
+
+	oExecStmt:destroy()
+	freeObj(oExecStmt)
+
+Return
+
+method checkPassword(cSenha) class HealthPortalLoginService
+	if !(alltrim(cSenha) == alltrim(self:jRequest['password']) .or. alltrim(cSenha) == alltrim(SHA256(self:jRequest['password'])))
+		self:lSuccess := .f.
+		self:cFaultDesc := "Senha inválida"
+	endif
+return self:lSuccess
+
+method checkParameters() class HealthPortalLoginService
+return !Empty(GETNEWPAR("MV_MINGURL","")) .AND. !Empty(GETNEWPAR("MV_MINGIUS","")) .AND. !Empty(GETNEWPAR("MV_MINGTOK",""))
+
+method getCustomStyle(jQueryParams as json) class HealthPortalLoginService
+
+	local cBlob as character
+	local nSize as numeric
+	local nHandle as numeric
+	local cDiretory := "portais-saude/portal-beneficiario/images/" as character
+	local cDiretory2 := "portais-saude\portal-beneficiario\images" as character
+	local aFiles as array
+	local cFile as character
+	local nAux as numeric
+	local nLenArray as numeric
+
+	self:oRespBody := JsonObject():new()
+
+	self:oRespBody["theme"] := superGetMV("MV_PLTHEME", .F., "classic")
+
+	if jQueryParams["portalType"] == "2"
+		cDiretory := "portais-saude/portal-empresa/images/"
+		cDiretory2 := "portais-saude\portal-empresa\images"
+	elseif jQueryParams["portalType"] == "3"
+		cDiretory := "portais-saude/portal-operadora/images/"
+		cDiretory2 := "portais-saude\portal-operadora\images"
+	endif
+
+	cDiretory2 := PLSMudSis(cDiretory2)
+
+	aFiles := directory(cDiretory + "*.*", "D")
+	nLenArray := len(aFiles)
+
+	for nAux := 1 To nLenArray
+		if alltrim(aFiles[nAux][1]) != '.' .and. alltrim(aFiles[nAux][1]) != '..'
+			cFile := aFiles[nAux][1]
+			nSize := aFiles[nAux][2]
+
+			nHandle := fopen(PLSMudSis(cDiretory2 + '\' + upper(cFile)) , FO_READWRITE + FO_SHARED )
+			cString := ""
+
+			fRead( nHandle, cString, nSize )
+			cBlob := encode64(cString)
+			cFile := substr(cFile, 1, at(".", cFile) - 1)
+
+			do case
+			case upper(cFile) == 'LOGO'
+				self:oRespBody["logo"] := cBlob
+
+			case upper(cFile) == 'SHORT-LOGO'
+				self:oRespBody["shortLogo"] := cBlob
+
+			case upper(cFile) == 'BANNER-LOGIN'
+				self:oRespBody["bannerLogin"] := cBlob
+			endcase
+
+			fclose(nHandle)
+		endif
+	next nAux
+
+	self:cResponse := self:oRespBody:toJson()
+
+	fwFreeArray(aFiles)
+
+return self:lSuccess
+
+/*/{Protheus.doc} setContracts
+Define os contratos associados a um usuário no portal da empresa
+@type method
+@version 12.1.2510
+@author vinicius.queiros
+@since 04/04/2025
+@param cUserCode, character, Código do usuário para o qual os contratos serão definidos.
+*/
+method setContracts(cUserCode as character) class HealthPortalLoginService
+
+	local cQuery as character
+	local oExecStmt as object
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local jCompany as json
+	local dDataBloq as date
+
+	self:oRespBody["contracts"] := {}
+
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? B40 "
+	cQuery += " INNER JOIN ? BG9 ON "
+	cQuery += "		BG9.BG9_FILIAL = ? AND "
+	cQuery += "		BG9.BG9_CODINT = B40.B40_CODINT AND "
+	cQuery += "		BG9.BG9_CODIGO = B40.B40_CODEMP AND "
+	cQuery += "		BG9.D_E_L_E_T_ = ? "
+	cQuery += " INNER JOIN ? BQC ON "
+	cQuery += "		BQC.BQC_FILIAL = ? AND "
+	cQuery += "		BQC.BQC_CODIGO = B40.B40_CODINT || B40.B40_CODEMP AND "
+	cQuery += "		BQC.BQC_NUMCON = B40.B40_NUMCON AND "
+	cQuery += "		BQC.BQC_VERCON = B40.B40_VERCON AND "
+	cQuery += "		BQC.BQC_SUBCON = B40.B40_SUBCON AND "
+	cQuery += "		BQC.BQC_VERSUB = B40.B40_VERSUB AND "
+	cQuery += "		BQC.D_E_L_E_T_ = ? "
+	cQuery += " WHERE "
+	cQuery += "		B40.B40_FILIAL = ? AND "
+	cQuery += "		B40.B40_CODUSR = ? AND "
+	cQuery += "		B40.D_E_L_E_T_ = ? "
+
+	oExecStmt := FwExecStatement():new(changeQuery(cQuery))
+
+	oExecStmt:setUnsafe(nOrder++, "B40.B40_CODINT, B40.B40_CODEMP, B40.B40_NUMCON, B40.B40_VERCON, B40.B40_SUBCON, B40.B40_VERSUB, BQC.BQC_DESCRI, BG9.BG9_DESCRI, BQC.BQC_DATBLO")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("B40"))
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BG9"))
+	oExecStmt:setString(nOrder++, xFilial("BG9"))
+	oExecStmt:setString(nOrder++, " ")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("BQC"))
+	oExecStmt:setString(nOrder++, xFilial("BQC"))
+	oExecStmt:setString(nOrder++, " ")
+	oExecStmt:setString(nOrder++, xFilial("B40"))
+	oExecStmt:setString(nOrder++, cUserCode)
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	while !(cAlias)->(eof())
+		jCompany := JsonObject():new()
+
+		jCompany["healthInsurerCode"] := alltrim((cAlias)->B40_CODINT)
+		jCompany["companyCode"] := alltrim((cAlias)->B40_CODEMP)
+		jCompany["companyDescription"] := alltrim((cAlias)->BG9_DESCRI)
+		jCompany["contractCode"] := alltrim((cAlias)->B40_NUMCON)
+		jCompany["contractVersion"] := alltrim((cAlias)->B40_VERCON)
+		jCompany["subcontractCode"] := alltrim((cAlias)->B40_SUBCON)
+		jCompany["subcontractVersion"] := alltrim((cAlias)->B40_VERSUB)
+		jCompany["subcontractDescription"] := alltrim((cAlias)->BQC_DESCRI)
+		jCompany["contractFullKey"] := (cAlias)->B40_CODINT + "|" + (cAlias)->B40_CODEMP + "|" + (cAlias)->B40_NUMCON + "|" +;
+									   (cAlias)->B40_VERCON + "|" + (cAlias)->B40_SUBCON + "|" + (cAlias)->B40_VERSUB
+		
+		dDataBloq := SToD((cAlias)->BQC_DATBLO)
+
+		do case
+    		case Empty(dDataBloq)
+        		jCompany["status"] := "A"
+
+    		case dDataBloq > dDatabase
+        		jCompany["status"] := "F"
+
+    		otherwise
+        		jCompany["status"] := "B"
+		endcase
+		
+		aAdd(self:oRespBody["contracts"], jCompany)
+		(cAlias)->(dbSkip())
+	enddo
+
+	(cAlias)->(dbCloseArea())
+
+	freeObj(oExecStmt)
+	freeObj(jCompany)
+
+return
+
+/*/{Protheus.doc} getItemsMenu
+Obtém os itens de menu disponíveis para o usuário conforme o perfil de acesso e o tipo de portal
+@type method
+@version 12.1.2610
+@author giovanna.charlo
+@since 19/02/2026
+@param cAccessProfile, character, Perfil de acesso utilizado no portal da operadora.
+@param cMingleAccessProfile, character, Perfil de acesso utilizado para integração com o Mingle.
+@param cPortalType, character, Código do tipo de portal utilizado para filtrar e estruturar os menus.
+*/
+method getItemsMenu(cAccessProfile as character, cMingleAccessProfile as character, cPortalType as character) class HealthPortalLoginService
+
+	local cQuery as character
+	local oExecStmt as object
+	local nOrder := 1 as numeric
+	local cAlias as character
+	local lHasAccessProfile as logical
+	local lHasCustomFields as logical
+	local cPortalCode as character
+	local jMenuItem as json
+	local nPosItem as numeric
+	local lIsSubItems as logical
+
+	lHasCustomFields := AI8->(fieldPos("AI8_ICON")) > 0 .and. AI8->(fieldPos("AI8_URL")) > 0 .and. AI8->(fieldPos("AI8_HTML")) > 0
+	lHasAccessProfile := iif(self:lPortalOperadora, !empty(cAccessProfile), !empty(cMingleAccessProfile))
+	cPortalCode := iif(self:lPortalOperadora, "000014", iif(cPortalType == "2", "000015", "000013"))
+
+	cQuery := " SELECT ? "
+	cQuery += " FROM ? AI8 "
+
+	if lHasAccessProfile
+		cQuery += " INNER JOIN ? B7J ON "
+		cQuery += "		B7J.B7J_FILIAL = ? AND "
+		cQuery += "		B7J.B7J_CODPER = ? AND "
+		cQuery += "		B7J.B7J_CODMNU = AI8_CODMNU AND "
+		cQuery += "		B7J.B7J_PERACE = ? AND "
+		cQuery += "		B7J.D_E_L_E_T_ =  ? "
+	endif
+
+	cQuery += " WHERE "
+	cQuery += "		AI8.AI8_FILIAL = ? AND "
+	cQuery += "		AI8.AI8_PORTAL = ? AND "
+	cQuery += "		AI8.D_E_L_E_T_ = ? "
+	cQuery += " ORDER BY AI8_CODPAI, AI8_ORDEM "
+
+	oExecStmt := FwExecStatement():new(changeQuery(cQuery))
+
+	oExecStmt:setUnsafe(nOrder++, "AI8.R_E_C_N_O_ RECNO ")
+	oExecStmt:setUnsafe(nOrder++, retSqlName("AI8"))
+	
+	if lHasAccessProfile
+		oExecStmt:setUnsafe(nOrder++, retSqlName("B7J"))
+		oExecStmt:setString(nOrder++, xFilial("B7J"))
+		oExecStmt:setString(nOrder++, iif(self:lPortalOperadora, alltrim(cAccessProfile), alltrim(cMingleAccessProfile)))
+		oExecStmt:setString(nOrder++, "1")
+		oExecStmt:setString(nOrder++, " ")
+	endif
+	
+	oExecStmt:setString(nOrder++, xFilial("AI8"))
+	oExecStmt:setString(nOrder++, cPortalCode)
+	oExecStmt:setString(nOrder++, " ")
+
+	cAlias := oExecStmt:openAlias()
+
+	self:oRespBody["menus"] := {}
+	self:oRespBody["menuItems"] := {}
+	
+	while !(cAlias)->(eof())
+		AI8->(dbGoTo((cAlias)->Recno))
+
+		if cPortalType == "2"	
+			jMenuItem := JsonObject():new()
+
+			jMenuItem["menuCode"] := AI8->AI8_CODMNU
+			jMenuItem["label"] := alltrim(AI8->AI8_TEXTO)
+			jMenuItem["shortLabel"] := alltrim(AI8->AI8_TEXTO)
+			jMenuItem["link"] := alltrim(AI8->AI8_ROTINA)
+
+			if lHasCustomFields
+				jMenuItem["icon"] := lower(alltrim(AI8->AI8_ICON))
+				jMenuItem["url"] := alltrim(AI8->AI8_URL)
+				jMenuItem["html"] := alltrim(AI8->AI8_HTML)
+			endif
+
+			lIsSubItems := !empty(AI8->AI8_CODPAI)
+
+			if lIsSubItems
+				nPosItem := aScan(self:oRespBody["menuItems"], {|x| x['menuCode'] == AI8->AI8_CODPAI})
+
+				if nPosItem > 0
+					if !self:oRespBody["menuItems"][nPosItem]:hasProperty("subItems")
+						self:oRespBody["menuItems"][nPosItem]['subItems'] := {}
+					endif
+
+					aadd(self:oRespBody["menuItems"][nPosItem]['subItems'], jMenuItem)		
+				endif
+			else
+				aAdd(self:oRespBody["menuItems"], jMenuItem)
+			endif
+
+			if !empty(AI8->AI8_ROTINA)
+				jMenuItem := JsonObject():new()
+				jMenuItem["name"] := alltrim(AI8->AI8_TEXTO)
+				jMenuItem["module"] := alltrim(AI8->AI8_ROTINA)
+
+				aAdd(self:oRespBody["menus"], jMenuItem)
+			endif
+		else
+			jMenuItem := JsonObject():new()
+			jMenuItem["name"] := alltrim(AI8->AI8_TEXTO)
+			jMenuItem["module"] := alltrim(AI8->AI8_ROTINA)
+
+			aAdd(self:oRespBody["menus"], jMenuItem)
+		endif
+
+		(cAlias)->(dbSkip())
+	enddo
+
+	(cAlias)->(dbCloseArea())
+
+	oExecStmt:destroy()
+
+	freeObj(oExecStmt)
+	freeObj(jMenuItem)
+
+return

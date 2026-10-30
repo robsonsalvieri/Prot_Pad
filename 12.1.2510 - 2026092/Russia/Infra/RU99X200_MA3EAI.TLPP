@@ -1,0 +1,2240 @@
+#Include 'FWMVCDef.ch'
+#INCLUDE "TOTVS.CH"
+#INCLUDE "RU99X200.CH"
+#INCLUDE 'tlpp-core.th'
+#include 'tlpp-rest.th'
+
+NameSpace np.framework.eai
+
+#DEFINE REC_OPER   "1"
+#DEFINE SEND_OPER  "2"
+#DEFINE MVC_TYPE   "1"
+#DEFINE MILE_TYPE  "2"
+#DEFINE CUSTOM_TYPE  "3"
+
+#DEFINE FORMAT_JSON     "JSON"
+#DEFINE FORMAT_XML      "XML"
+
+#DEFINE REST "1"
+#DEFINE AMQP "2"
+
+#DEFINE AUTH_BASIC "1"
+#DEFINE AUTH_TOKEN "2"
+#DEFINE AUTH_NONE "3"
+
+#DEFINE SEMAPHORE "NPEAIIPC"
+
+#DEFINE STATUS_QUEUED "1" //Saved on the queue
+#DEFINE STATUS_READY_TO_BE_PROCESSED "2" //Transformed (if transform algorithm defined)
+#DEFINE STATUS_RETRY_PENDING "3" //Failed but still with retries pending
+#DEFINE STATUS_FAILED       "4" //Failed (after tried n times)
+#DEFINE STATUS_BLOCKED      "5" //Blocked by user on queue manager
+#DEFINE STATUS_INTEGRATED   "6" //Sent, but still not confirmed (when confirmation rule set on send messages)
+#DEFINE STATUS_SUCCESS      "7" //Integrated and validated
+#DEFINE STATUS_PURGED       "0" //Purged
+
+#DEFINE MSG_FATAL   "9"
+#DEFINE MSG_ERROR   "8"
+#DEFINE MSG_DEBUG   "7"
+#DEFINE MSG_WARNING "5"
+#DEFINE MSG_INFO    "1"
+#define AMQP_AUTODELETE .T.
+#define AMQP_EXCLUSIVE .T.
+#define AMQP_DURABLE .T.
+#define AMQP_PERSISTENT .T.
+#define AMQP_AUTOACK .T.
+#define fixed_channel_id 1
+#DEFINE MAXTIMESWAIT     20
+
+Static _cLogLevel := MSG_INFO
+Static _oTokensData := JsonObject():New() as Json // seems like it destroys parallel work in JOBS, only one job remains?
+Static _cDataBaseEncoding := IIf(GetSrvProfString("STRINGCODEPAGE", "0") == "0", "cp1252", IIf(GetSrvProfString("STRINGCODEPAGE", "0") == "1", "cp1251", IIf(GetSrvProfString("STRINGCODEPAGE", "0") == "3", "utf-8", Nil))) // Assume that appserver is set to the same encoding as a database
+
+/*/{Protheus.doc} MVCEvent
+    MVC event on models for EAI integration. Works with 
+    message queue (EAIQueue), it's schedule and jobs.
+    Example of implementation mode on MVC model:
+    Local oEAIEVENT := np.framework.eai.MVCEvent():New('RU06D01')
+    oModel:InstallEvent("EAI"	,,oEAIEVENT)
+    @type class
+    @version  
+    @author bsobieski
+    @since 15/12/2023
+/*/
+Class MVCEvent From FwModelEvent
+
+	Protected Data cModelSource	 as Character
+	Protected Data aAdapters as Array
+	Data lHasAdapter	 as Logical
+
+	Public Method New() CONSTRUCTOR
+	Public Method INTTS()
+
+EndClass
+
+/*/{Protheus.doc} MVCEvent::INTTS
+    Calls event inside TTS. Is called during 
+    recording of MVC model state into database 
+    @type method
+    @author bsobieski
+    @since 15/12/2023
+    @param oModel, object, Model Object
+    @param cModelId, character, Model ID
+/*/
+Method INTTS(oModel, cModelId) Class MVCEvent
+
+	IF ::lHasAdapter
+        If oModel:GetSource() == ::cModelSource
+            EAISendQueue(::aAdapters,oModel) // Adds message to be send to EAI queue
+        Else
+            Conout(I18n(STR0103,{cModelId,oModel:GetSource(),::cModelSource})) // [MVCEvent::INTTS][Warning]: Model '#1' based on '#2' source, but '#3' source is required
+        Endif
+	Endif
+
+Return Nil
+
+/*/{Protheus.doc} MVCEvent::New
+    Constructor. WIll define if it has adapters defined to be integrated
+    @type method
+    @version  1
+    @author bsobieski
+    @since 15/12/2023
+    @param cModelSource, character, Model source name
+/*/
+Method New(cModelSource) Class MVCEvent
+	::cModelSource  := cModelSource
+	::aAdapters := {}
+	If !IsInCallStack('NP.FRAMEWORK.EAI.RU99X20011_MA3EAIRECEIVE')
+		::aAdapters := RU99X20001_GetADAPTERS(::cModelSource,SEND_OPER,"")
+	Endif
+	::lHasAdapter:= Len(::aAdapters) > 0
+Return Nil
+
+/*/{Protheus.doc} RU99X20001_GetADAPTERS
+    Get adapters defined for the MODEL, Adapter operation (SEND/RECEIVE)
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cMvcSource, Character, MVC source name be required from Adapters to be found
+    @param cOper, Character, Operation (SEND/RECEIVE) to be required from Adapters to be found
+    @param cModelOper, Character, MVC Model operations to be required from Adapters to be found
+    @param cAdapterCode, Character, Adapter code to be required from Adapters to be found
+    @return Array, List of adapters
+/*/
+Function RU99X20001_GetAdapters(cMvcSource as Character, cOper as Character, cModelOper as Character, cAdapterCode as Character)
+
+	Local cAlias    := GetNextAlias() as Character
+	Local aAdapters := {} as Array
+	Local aArea := FwGetArea() as Array
+	Local cQuery := ""  as Character
+    Default cMvcSource := ""
+    Default cOper := SEND_OPER
+    Default cModelOper := CVALTOCHAR(MODEL_OPERATION_INSERT)+CVALTOCHAR(MODEL_OPERATION_UPDATE)+CVALTOCHAR(MODEL_OPERATION_DELETE)
+    Default cAdapterCode := ""
+
+	cQuery +=  " SELECT F6F_CODE FROM "+RetSqlName('F6F')
+    cQuery +=  " WHERE F6F_FILIAL = '"+xFilial('F6F') +"' "
+	If !Empty(cOper)
+        cQuery +=  " AND F6F_OPER  = '"+cOper+"' "
+    EndIf
+	If !Empty(cMvcSource)
+        cQuery +=  " AND F6F_ADMVC = '"+cMvcSource+"' "
+    EndIf
+    If !Empty(cAdapterCode)
+        cQuery +=  " AND F6F_CODE = '"+cAdapterCode+"' "
+    EndIf
+    If CVALTOCHAR(MODEL_OPERATION_INSERT) $ cModelOper
+        cQuery +=  " AND (F6F_INSERT = 'T')"
+    ElseIf CVALTOCHAR(MODEL_OPERATION_UPDATE) $ cModelOper
+        cQuery +=  " AND (F6F_UPDATE = 'T')"
+    ElseIf CVALTOCHAR(MODEL_OPERATION_DELETE) $ cModelOper
+        cQuery +=  " AND (F6F_DELETE = 'T')"
+    Else
+        cQuery +=  " AND (F6F_INSERT = 'T' OR F6F_UPDATE = 'T' OR F6F_DELETE = 'T')"
+    EndIf
+	cQuery +=  " AND D_E_L_E_T_= '' "
+    cQuery := ChangeQuery(cQuery)
+	dbUseArea(.T.,"TOPCONN",TcGenQry(,,cQuery),cAlias)
+	While !(cAlias)->(EOF())
+		AAdd(aAdapters,(cAlias)->F6F_CODE)
+		(cAlias)->(DbSkip())
+	EndDo
+	DbCloseArea()
+	FWRestArea(aArea)
+
+Return aAdapters
+
+/*/{Protheus.doc} RU99X20002_EAIReceiveQueue
+    Add received messages in EAI QUEUE in database
+    @type function
+    @author bsobieski
+    @since 13/12/2023
+    @param cAdapter, Character, Adapter name (F6F_CODE value)
+    @param nOperation, Numeric, Type of operation towards Ma-3 database
+    @param cContent, Character, Data to be written into database
+    @param cFormat, Character, Format of data to br written into database
+    @return cJsonRet, Character, Operation Result in JSON text format
+/*/
+Function RU99X20002_EAIReceiveQueue(cAdapter as Character, nOperation as numeric ,cContent as Character, cFormat as Character) as Character
+    
+    Local oJsonRet 	:= JsonObject():New() as Json
+    Local cJsonRet 	:= "" as character
+    Local oStatement as Object
+    Local cQuery	:= "" as Character
+    Local cTMPAlias := GetNextAlias() as Character
+    Local cMessage	:=	"" as character
+    Local aData := {} as array
+    Local oError := JsonObject():New() as Json
+    Local cError := "" as character
+    Local lRet 	 := .T.
+    Local cContentEncoded := ""
+
+    // Assume all messages are in UTF-8
+    cContentEncoded := DecodeUtf8(cContent, _cDataBaseEncoding)
+    If !(ValType(cContentEncoded) == "U")
+        cContent := cContentEncoded
+    EndIf
+
+    cQuery 	:= 'SELECT R_E_C_N_O_ as F6Frec from '+RetSqlname('F6F')
+    cQuery	+=	' WHERE F6F_FILIAL = ? '
+    cQuery	+=	' AND  F6F_CODE = ? '
+    cQuery	+=	' AND  F6F_OPER = ? '
+    cQuery	+=	" AND  D_E_L_E_T_ = '' "
+    cQuery	+=	" AND  (F6F_FORMAT = ? OR F6F_FORMAT = '') "
+    If nOperation == MODEL_OPERATION_DELETE
+        cQuery	+=	" AND  F6F_DELETE = 'T' "
+    ElseIf nOperation == MODEL_OPERATION_UPDATE
+        cQuery	+=	" AND  F6F_UPDATE = 'T' "
+    ElseIf nOperation == MODEL_OPERATION_INSERT
+        cQuery	+=	" AND  F6F_INSERT = 'T' "
+    Endif
+
+    oStatement := FwExecStatement():New(cQuery)
+    oStatement:SetString(1,xFilial('F6F'))
+    oStatement:SetString(2,cAdapter)
+    oStatement:SetString(3,REC_OPER)
+    oStatement:SetString(4,cFormat)
+    cTMPAlias := oStatement:OpenAlias() // Find if stated adapter for current operation type exists
+    If (cTMPAlias)->(EOF())
+        cMessage=i18n(STR0001,; // Receive adapter #1 not found for operation #2 and #3 format
+            {cAdapter,IIf(nOperation==MODEL_OPERATION_DELETE, "DELETE",;
+            IIf(nOperation==MODEL_OPERATION_UPDATE,"UPDATE","INSERT")),cFormat})
+        cError:= np.framework.eairest.RU99W20007_MA3EAIError(cMessage=cMessage)
+        oError:FromJson(cError)
+        cJsonRet := np.framework.eairest.RU99W20006_MA3EAIResponse(lSuccess=.F.,cMessage='Failed',oError=oError) // Failed
+        FreeObj(oError)
+    Else
+        While !(cTMPAlias)->(EOF()) // For every apropriate adapter
+            F6F->(DbGoto((cTMPAlias)->F6FREC))
+            oModelF6Y := FWLoadModel( 'RU99D204' )
+            oModelF6Y:SetOperation( MODEL_OPERATION_INSERT)
+            If oModelF6Y:Activate()
+                oModelF6Y:LoadValue('F6YMASTER' ,'F6Y_FILIAL'  , xFilial("F6Y") )
+                oModelF6Y:LoadValue('F6YMASTER' ,'F6Y_ADAPTE'   , F6F->F6F_CODE)
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_TRIES'   	, 1)
+                Endif
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_FORMAT'   	, F6F->F6F_FORMAT)
+                Endif
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_DATA'    	, cContent)
+                Endif
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_OPER'    	, REC_OPER)
+                Endif
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_TRANS'    	, Alltrim(Str(nOperation)))
+                Endif
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_DTINS'   	, FWTimeStamp(6))
+                Endif
+                If lRet
+                    lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_STATUS'  , STATUS_QUEUED)
+                Endif
+                If lRet
+                    lRet := oModelF6Y:VldData()
+                    If lRet
+                        oModelF6Y:CommitData()
+                    Endif
+                Endif
+                If lRet
+                    aData := {} // TO DO: Learn why there is an array here, can't we do without it?
+                    AAdd(aData,JsonObject():New())
+                    aData[Len(aData)]['header']	:=	JsonObject():New()
+                    aData[Len(aData)]['header']['uuid']	:=	F6Y->F6Y_MSUID
+                    aData[Len(aData)]['header']['operation'] := IIf(Val(F6Y->F6Y_TRANS)==MODEL_OPERATION_DELETE,;
+                        "DELETE",IIf(Val(F6Y->F6Y_TRANS)==MODEL_OPERATION_UPDATE,"UPDATE","INSERT"))
+                    aData[Len(aData)]['content']:=JsonObject():New()
+                    If !Empty(aData[Len(aData)]['content']:FromJson(cContent))
+                        aData[Len(aData)]['content'] :=	cContent
+                    Endif
+                    cJsonRet := np.framework.eairest.RU99W20006_MA3EAIResponse(lSuccess=.T.,;
+                        cMessage=I18N(STR0002,{ F6Y->F6Y_ADAPTE}),aData=aData) // Received record added to queue [Adapter:#1]
+                    RecLock('F6Y',.F.)
+                    F6Y_LASTRE := cJsonRet // Update last response
+                    //F6Y_LASTPR := FWTimeStamp(6)
+                    MsUnLock()
+                    RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0003),; // Received record added to queue
+                        cData=cContent, cUUID=F6Y->F6Y_MSUID, cAdapter=F6Y->F6Y_ADAPTE)
+                    LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0003),,,,cContent) // Received record added to queue
+                Else
+                    aError := oModelF6Y:GetErrorMessage()
+                    cError := ReturnErrorString(aError)
+
+                    RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0004,{ aError[5]}),; // Error saving record to queue [#1]
+                        cAdapter=F6F->F6F_CODE,cData=cContent,cMsg1=cError)
+                    //cMessage=i18n('Adapter #1 not found for operation #2',{cAdapter,IIf(nOperation==MODEL_OPERATION_DELETE, "DELETE",IIf(nOperation==MODEL_OPERATION_UPDATE,"UPDATE","INSERT"))})
+                    cError := np.framework.eairest.RU99W20007_MA3EAIError(cMessage=cError)
+                    oError:FromJson(cError)
+                    cJsonRet := np.framework.eairest.RU99W20006_MA3EAIResponse(lSuccess=.F.,;
+                        cMessage=I18N(STR0005,{ aError[5],aError[6]}),oError=oError) // Error saving record to queue [#1]:#2
+                    FreeObj(oError)
+
+                    //Never OPEN SCREEN HERE! It is inside transaction!
+                    //TODO: Add Event from EVENTVIEWER when failed
+                Endif
+                oModelF6Y:Deactivate()
+            Else 
+                cMessage:=i18n(STR0006,; // Error activating QUEUE Model [Adapter:#1]
+                    {cAdapter,IIf(nOperation==MODEL_OPERATION_DELETE, "DELETE",;
+                    IIf(nOperation==MODEL_OPERATION_UPDATE,"UPDATE","INSERT"))})
+                cError := np.framework.eairest.RU99W20007_MA3EAIError(cMessage=cError)
+                oError:FromJson(cError)
+                cJsonRet:= np.framework.eairest.RU99W20006_MA3EAIResponse(lSuccess=.F.,;
+                    cMessage=I18N(STR0007,{ aError[5],aError[6]}),oError=oError) // Error saving record to queue
+                Freeobj(oError) 
+                RU99X20015_EAILogMsg(MSG_ERROR,I18N(STR0008),cAdapter= F6F->F6F_CODE,cData=cContent) // Error activating QUEUE Model
+            Endif
+            (cTMPAlias)->(DbSkip())
+        Enddo
+    Endif
+    oStatement:Destroy()
+    oStatement := nil 
+    Freeobj(oJsonRet)
+
+Return cJsonRet
+
+/*/{Protheus.doc} EAISendQueue
+    Add messages to be sent in QUEUE, received from MVC integration or custom
+    Either cData or oModel are required.
+    cData is default to be used
+    @type function
+    @version  1
+    @author bsobieski
+    @since 15/12/2023
+    @param aAdapters, array, List of adapters to be used to generate QUEUE
+    @param oModel, object, Model object, when from MVC (optional)
+    @param cData, object, Data in any format when from custom (optional)
+    @param nOperation, numeric, Operation code (mandatory when oModel not sent)
+    @return Logical, 
+/*/
+Function EAISendQueue(aAdapters,oModel,cData,nOperation)
+	
+    Local aArea := FwGetArea()
+	Local cPath := ""
+	Local nX := 1
+	Local cJson := ""
+	Local cXML := ""
+	Local cContent := ""
+	Local aError := {}
+	Local cError := ""
+    Local cFormat := ""
+	//Local oFWMIle  :=  ""
+
+	If oModel <> Nil
+		nOperation := oModel:GetOperation()
+	Endif
+	F6F->(DbSetOrder(1)) // F6F_filial + F6F_code + F6F_oper
+	F6G->(DbSetOrder(1)) // F6G_filial + F6G_adapte + F6G_item
+	For nX:=1 To Len(aAdapters)
+		F6F->(DbSeek(xFilial("F6F")+PADR(aAdapters[nX],TAMSX3('F6F_CODE')[1])))
+        cFormat := AllTrim(F6F->F6F_FORMAT)
+		If  (nOperation == 3 /*MODEL_OPERATION_INSERT*/   .And. F6F->F6F_INSERT) .Or.;
+				(nOperation == 4 /*MODEL_OPERATION_UPDATE */ .And. F6F->F6F_UPDATE) .Or.;
+				(nOperation == 5 /*MODEL_OPERATION_DELETE*/   .And. F6F->F6F_DELETE)
+			lRet := .T.
+			//TODO: Add field to F6F to MACRO execute a condition with Model as parameter
+			//lRet:= !Empty(F6F->ZA2_COND) .And. &F6F->F6F_COND.(oModel)
+			If lRet //Condition on F6F
+				F6G->(DbSeek(xFilial("F6G")+F6F->F6F_CODE)) // 
+				While F6G->F6G_FILIAL+F6G->F6G_ADAPTE == xFilial('F6G')+F6F->F6F_CODE
+                    If lRet 
+						If !Empty(F6G->F6G_PATH)
+							cPath := &(Alltrim(F6G->F6G_PATH))
+						Endif
+						If Empty(cData)
+							If cFormat == FORMAT_JSON
+								If Empty(cJson)
+									cJson := oModel:GetJsonData(.T., nOperation/*nOperation*/, .F./*lVirtual*/, .F./*lDeleted*/, /*lEmpty*/,/* lPK*/.T., .T./*lPKEncoded*/, /*aFilterFields*/,/* lFirstLevel */, /*lInternalID*/)
+								Endif
+								cContent := cJson
+							ElseIf cFormat == FORMAT_XML
+								If Empty(cXML)
+									cXML := oModel:GetXMLData(.T./*lDetail*/, nOperation/*nOperation*/, /*lXSL*/, /*lVirtual*/, /*lDeleted*/, /*lEmpty*/, /*lDefinition*/, /*cXMLFile*/, /*lPK*/.T., .T./*lPKEncoded*/, /*aFilterFields*/,/* lFirstLevel*/,/* lInternalID*/ )
+								Endif
+								cContent := cXML
+							Endif
+						Else
+							cContent := cData
+						Endif
+
+						oModelF6Y := FWLoadModel( 'RU99D204' )
+						oModelF6Y:SetOperation( MODEL_OPERATION_INSERT)
+						If oModelF6Y:Activate()
+							oModelF6Y:LoadValue('F6YMASTER' ,'F6Y_FILIAL'  , xFilial("F6Y") )
+							oModelF6Y:LoadValue('F6YMASTER' ,'F6Y_ADAPTE'   , F6F->F6F_CODE)
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_ENDPOI'  , F6G->F6G_ENDPOI)
+							Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_TRIES'   , F6G->F6G_TRIES)
+							Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_FORMAT'   , cFormat)
+							Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_PATH'    , cPath)
+							Endif
+                            If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_AUTHAD'    , F6G->F6G_AUTHAD)
+							Endif
+							// If lRet
+							// 	lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_DATA'    , cContent)
+							// Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_OPER'    , SEND_OPER)
+							Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_TRANS'    , Alltrim(Str(nOperation)))
+							Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_DTINS'   , FWTimeStamp(6))
+							Endif
+							If lRet
+								lRet := oModelF6Y:SetValue('F6YMASTER' ,'F6Y_STATUS'  , STATUS_QUEUED)
+							Endif
+							If lRet
+								lRet := oModelF6Y:VldData()
+								If lRet
+									oModelF6Y:CommitData()
+									cContent := RU99X20014_FormatContent(cContent=cContent,cFormat=cFormat,nOperation=nOperation)
+									RecLock('F6Y',.F.)
+									F6Y->F6Y_DATA := cContent
+									MsUnLock()
+								Endif
+							Endif
+							If !lRet
+								aError   := oModelF6Y:GetErrorMessage()
+								cError := ReturnErrorString(aError)
+
+                                RU99X20015_EAILogMsg(MSG_ERROR,I18N(STR0004,; // Error saving record to queue [#1]
+                                    { aError[5]}),cAdapter= F6F->F6F_CODE,cData=cContent,cMsg1=cError)
+								//Never OPEN SCREEN HERE! It is inside transaction!
+								//TODO: Add Event from EVENTVIEWER when failed
+                            Else
+                                RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0009),cData=cContent,; // Added record to queue
+                                    cUUID=F6Y->F6Y_MSUID,cAdapter=F6Y->F6Y_ADAPTE)
+                                LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0010),,,,cContent) // Added to queue
+							Endif
+							oModelF6Y:Deactivate()
+						Else
+							RU99X20015_EAILogMsg(MSG_ERROR,I18N(STR0008),cAdapter= F6F->F6F_CODE,cData=cContent) // Error activating QUEUE Model
+						Endif
+						//TODO:
+						//ABORT with FINAL()
+					Endif
+					F6G->(DbSkip())
+				EndDo
+			Endif
+		Endif
+	Next
+	FWRestArea(aArea)
+
+Return lRet
+
+/*/{Protheus.doc} RU99X20004_MileImport(cLayout,cAlias,cContent,cJob)
+    Return MILE Formated string. Record must be positioned
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cLayout, character, MILE LAYOUT
+    @param cAlias, character, Main Alias
+    @param cContent, character, Content to be added
+    @param cJob, character, Job id string to be added to log
+    @return character, MILE formatted string
+/*/
+Function RU99X20004_MileImport(cLayout,cAlias,cContent,cJob)
+
+	Local oFWMILE   := FWMILE():New()
+	Local cFile     := CriaTrab(,.F.)
+	Local nHdl      := 0 as numeric
+	Local nFileSize := 0 as numeric
+	Local aError 	:= {} as Array
+	Local cError as character
+	Local cOrigin as character
+	Local cMSG1 as character
+	Local cMSG2 as character
+	Local nPos
+	DEFAULT cJOB := ""
+
+	//WORKAROUND for possible common errors in Adapters
+	PRIVATE INCLUI 	:= .T.
+	PRIVATE ALTERA	:= .F.
+	PRIVATE DELETA	:= .F.
+	
+	nHdl:=FCreate(cFile)
+	nFileSize := fWrite(nHdl,cContent)
+	fClose(nHdl)
+	If nFileSIze  <> Len(cContent)
+		lRet := .F.
+		RU99X20015_EAILogMsg(MSG_ERROR,cSHORT=STR0011,cAdapter=cLayout ) // Error saving MILE internediate file
+	Else
+		oFWMILE:SetLayout( cLayout )
+		oFWMILE:SetTXTFile( cFile)
+		oFWMILE:SetOperation("1") //IMPORT
+		oFWMILE:SetAlias( cAlias )
+		If oFWMILE:SetLogApplication( { |oObj, xParam| aError := xParam } )
+			If oFWMILE:Activate()
+				oFWMILE:Import()
+				If Valtype(aError) == "A" .And. Len(aError) >= 0 
+					cError := ""
+					lRet := .F.
+					If Len(aError) >= 3
+						cOrigin := ""
+						If (nPos := Ascan(aError,{|x| Alltrim(x[1])== "XXE_ERROR"}))>0
+							cError := aError[nPos][2]
+						Endif
+						If (nPos := Ascan(aError,{|x| Alltrim(x[1])== "XXE_ORIGIN"}))>0
+							cOrigin := Alltrim(aError[nPos][2])
+						Endif
+						If (nPos := Ascan(aError,{|x| Alltrim(x[1])== "XXE_COMPLE"}))>0
+							cMsg1 := STR0093+" "+Chr(10)+aError[nPos][2] // Full error:
+						Endif
+						If (nPos := Ascan(aError,{|x| Alltrim(x[1])== "XXE_XML"}))>0
+							cMsg2 := STR0094+" "+Chr(10)+aError[nPos][2] // XML sent to MILE:
+						Endif
+					Endif
+					If Empty(cError)
+						cError := I18N(STR0012) // MILE IMPORT failed
+					Else
+						cError := I18N(STR0013,{cError,cOrigin}) // MILE IMPORT failed. Error: [#1], origin:[#2]
+					Endif
+				Else
+					cError := I18N(STR0014) // MILE IMPORT successful.
+				EndIf
+				oFWMILE:Deactivate()
+			Else
+				cError 	:=  I18N(STR0015) // MILE model error.
+				cMsg1	:=	oFWMILE:GetError() 
+			EndIf
+		Endif
+	Endif
+	If !lRet
+		RecLock('F6Y',.F.)
+		F6Y->F6Y_STATUS := STATUS_FAILED
+		F6Y->F6Y_LASTRE := ""
+		F6Y->F6Y_LASTPR := FWTimeStamp(6)
+		F6Y->F6Y_LASTER := cError
+		MsUnLock()
+		LogQueue(MSG_INFO,F6Y->F6Y_MSUID,cSHORT=cError,cMsg1=cMsg1,cMsg2=cMsg2,cData=cContent )
+		RU99X20015_EAILogMsg(MSG_ERROR,cUUID=F6Y->F6Y_MSUID, cSHORT=cJob+": "+cError,cAdapter=cLayout,cMsg1=cMsg1,cMsg2=cMsg2,cData=cContent )
+	Endif
+    fErase(cFile)
+
+Return lRet
+
+/*/{Protheus.doc} RU99X20005_GenerateMile
+    Return MILE Formated string. Record must be positioned
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cLayout, character, MILE LAYOUT
+    @param cAlias, character, Main Alias
+    @return character, MILE formatted string
+/*/
+Function RU99X20005_GenerateMile(cLayout,cAlias)
+	Local oFWMILE   := FWMILE():New()
+	Local cFile     := CriaTrab(,.F.)
+	Local cBuffer   := ""
+	Local nHdl      := 0
+	Local nFileSize := 0
+	nHdl:=FCreate(cFile)
+	fClose(nHdl)
+	oFWMILE:SetLayout( cLayout )
+	oFWMILE:SetTXTFile( cFile)
+	oFWMILE:SetOperation("2") //EXPORT
+	oFWMILE:SetAlias( cAlias )
+	If oFWMILE:Activate()
+		oFWMILE:Export()
+		If oFWMILE:Error()
+			//TODO: Get All LOG content
+            RU99X20015_EAILogMsg(MSG_ERROR,I18N(STR0016,; // MILE Conversion failed. Alias #1, Recno #2
+                {cAlias,(cAlias)->(Recno())}),cAdapter= cLayout,cMsg1=oFWMILE:GetError() )
+		Else
+            RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0017,; // MILE Conversion done. Alias #1, Recno #2
+                {cAlias,(cAlias)->(Recno())}),cAdapter= cLayout )
+		EndIf
+		oFWMILE:Deactivate()
+		nHdl:=FOpen(cFile)
+		nFileSize := FSEEK(nHdl,0,2)
+		FSEEK(nHdl,0,0)
+		fRead(nHdl,@cBuffer,nFileSize)
+		fClose(nHdl)
+		fErase(cFile)
+	Else
+        RU99X20015_EAILogMsg(MSG_ERROR,I18N(STR0018,{cAlias,(cAlias)->(Recno())}),; // MILE model error. Alias #1, Recno #2
+            cAdapter=cLayout,cMsg1=oFWMILE:GetError() )
+	EndIf
+
+Return cBuffer
+
+/*/{Protheus.doc} MA3EAISched
+    Multithread Schedule service to process messages in QUEUE
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cLogLevel, character, Loglevel (from INFO="0" to DEBUG="9")
+    @param nJobsPackages, numeric, Divider for Threads to be started based on queue size 
+    (ie: nJobsPackages = 5, Messages in Queue 50 => 50/5=10 =>Will start 10 threads)
+    @param nMaxJobs, numeric, Maximum amount of threads to be started
+/*/
+Main Function MA3EAISched(aParams,cLogLevel,nJobsPackages,nMaxJobs)
+	Local nX        := 1
+	Local cQuery    := ""
+	Local nQueue := 0
+    Local aExpIn := {STATUS_QUEUED,STATUS_READY_TO_BE_PROCESSED,STATUS_RETRY_PENDING,STATUS_INTEGRATED}
+    Local cTMPAlias 
+    Local oStatement
+    Local nTimes	:=	0
+	Local lRet := .T. as Logical
+	DEFAULT nJobsPackages := 10
+	DEFAULT nMaxJobs := 10
+	DEFAULT aParams := {'00','102030'} // Is not needed when started in Schedule // {'00','102030'} // {'99','01'}
+
+    _cLogLevel := IIf(Valtype(cLogLevel)=="U",_cLogLevel,cLogLevel)
+    np.framework.eai.TrySetEnv(aParams[1],aParams[2])
+    nJobsPackages := SuperGetMv("MV_EAIPACK",.F.,10)
+    nMaxJobs := SuperGetMv("MV_EAIMXJB",.F.,10)
+
+	RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0019,{ nMaxJobs,nJobsPackages}) ) // Starting MA3EAI Schedule. MAXJOBS:#1, RECORDS x JOB:#2
+
+	If !LockByName('MA3EAISched')
+        RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0020)) // Last scheduled JOB did not finish yet... Ignoring start request
+	Else
+		nQueue := RU99X20008_GetQueue()
+		If nQueue == 0
+            RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0021) ) // No new items to be processed in queue
+		Else
+			nQueue  := Ceiling(nQueue/nJobsPackages)
+			nQueue  := Min(nQueue,nMaxJobs)
+            RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0022,{nQueue}) ) // Starting #1 threads for processing.
+			For nX:=1 to nQueue
+				StartJob("np.framework.eai.RU99X20007_MA3EAIIpcjobsProcessQUEUE",GetEnvServer(),.F.,cEmpAnt,cFilAnt,nX,_cLogLevel)
+			Next
+
+            cQuery := "SELECT "
+            cQuery += "R_E_C_N_O_ as recF6Y,F6Y_MSUID,F6Y_ADAPTE "
+            cQuery += "FROM "+RetSqlname("F6Y") +" F6Y "
+            cQuery += " WHERE "
+            cQuery += " F6Y.F6Y_FILIAL  = ? AND " 
+            cQuery += " F6Y.F6Y_STATUS IN (?) AND "
+            cQuery += " F6Y.D_E_L_E_T_ = '' " 
+            cQuery += "ORDER BY F6Y_FILIAL,F6Y_DTINS"
+            oStatement := FwExecStatement():New(cQuery)
+            oStatement:SetString(1,xFilial("F6Y"))
+            oStatement:SetIn(2,aExpIn)
+
+            cTMPAlias := oStatement:OpenAlias()
+			nTimes := 0			
+			lRet := .T.
+			While (nJobs := IPCCount(SEMAPHORE)) < nQueue .And. nTimes < MAXTIMESWAIT
+                RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0023,{nJobs,nQueue}) ) // Waiting for jobs to start...[#1/#2]
+				Sleep(2000)
+				nTimes++
+			Enddo
+			If nJobs > 0
+                RU99X20015_EAILogMsg(MSG_WARNING,I18N(STR0024,{nJobs,nQueue`}) ) // Schedule starting with #1 out of #2 requested.
+			ElseIf nTimes == MAXTIMESWAIT
+                RU99X20015_EAILogMsg(MSG_ERROR,I18N(STR0025) ) // Aborting schedule, jobs failed to start
+				lRet := .F.
+			Endif
+			If lRet 
+				nTimes := 0
+				While !(cTMPAlias)->(EOF())
+					If IPCGo( SEMAPHORE , (cTMPAlias)->recF6Y )
+						RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0026),; // Record sent to thread for process.
+                            cAdapter=(cTMPAlias)->F6Y_ADAPTE, cUUID=(cTMPAlias)->F6Y_MSUID )
+						nTimes:=0
+						//Conout('Record sent to thread for process ' + str((cTMPAlias)->recF6Y))
+						(cTMPAlias)->(DbSkip())
+					Else
+						nTimes++
+						If nTimes >= MAXTIMESWAIT
+							RU99X20015_EAILogMsg(MSG_WARNING,I18N(STR0027; // Waiting for free Thread maximum time exceeded. Quiting job. [#1] s. wait
+                                ,{nTimes}),cAdapter=(cTMPAlias)->F6Y_ADAPTE, cUUID=(cTMPAlias)->F6Y_MSUID  )
+							Exit
+						Else
+							RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0028,{nTimes}); // Waiting for free Thread...[#1] s. wait
+                                ,cAdapter=(cTMPAlias)->F6Y_ADAPTE, cUUID=(cTMPAlias)->F6Y_MSUID )
+						Endif
+						Sleep(1000)
+					Endif
+				Enddo
+				DbCloseArea()
+				oStatement:Destroy()
+				oStatement := nil 
+			Endif
+            RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0029) ) // Finishing queue process
+		Endif
+	Endif
+
+    While (nJobs := IPCCount(SEMAPHORE)) > 0
+        IPCGo( SEMAPHORE , 0 )
+        RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0030,{nJobs}) ) // Requesting jobs to finish... #1 Alive jobs
+        Sleep(1000)
+    Enddo
+	nTimes  := 0
+	aFree   :=	{}
+	While lRet .And. Len(aFree) < nQueue .and. nTimes < MAXTIMESWAIT
+		For nX:=1 to nQueue
+			If aScan(aFree,nX) == 0 .And. LockByName(SEMAPHORE+StrZero(nX,4))
+				aAdd(aFree,nX)
+				UnLockByName(SEMAPHORE+StrZero(nX,4))
+			Endif
+		Next
+		nTimes++
+        RU99X20015_EAILogMsg(MSG_INFO,I18N(STR0031,{nQueue-Len(aFree)}) ) // Waiting jobs to finish... #1 Working jobs
+		Sleep(1000)
+    Enddo
+	If nTimes == MAXTIMESWAIT
+        RU99X20015_EAILogMsg(MSG_WARNING,I18N(STR0032,{nQueue-Len(aFree)}) ) // Jobs taking to long to finish. Killing #1 jobs
+	Endif
+	UnLockByname("MA3EAISched")
+
+Return
+
+/*/{Protheus.doc} RU99X20007_MA3EAIIpcjobsProcessQUEUE
+    Thread to process QUEUE records
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cEmp, character, Company
+    @param cFil, character, Branch
+    @param nJob, numeric, Thread number
+    @param cLogLevel, character, Loglevel (from INFO="0" to DEBUG="9")
+/*/
+Function RU99X20007_MA3EAIIpcjobsProcessQUEUE(cEmp,cFil,nJob,cLogLevel)
+
+	Local nPar
+    Local cJob := '[MA3EAIIpcjob '+StrZero(nJob,2)+']'
+    Local aCheckResult := {.F., 0, ""} as Array
+    _cLogLevel := IIf(cLogLevel==Nil,_cLogLevel,cLogLevel)
+
+    np.framework.eai.TrySetEnv(cEmp,cFil)
+	If LockByName(SEMAPHORE+StrZero(nJob,4))
+		RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0033,{nJob}) ) // : Started...
+
+		While !killapp()
+			lRet := IpcWaitEx( SEMAPHORE , 20000, @nPar )
+			If lRet
+				If nPar == 0
+					RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0034,{nJob}) ) // : Finish requested... Finishing...
+					Exit
+				Else
+					//Conout(cJob+'-Processing record '+Str(nPar)+'...')
+					F6Y->(DbGoto(nPar))
+					RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0035),cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID ) // : Processing
+					If F6Y->(SimpleLock())
+						F6E->(DbSetOrder(1)) // F6E_filial + F6E_code
+						F6E->(DbSeek(xFilial("F6E")+F6Y->F6Y_ENDPOI))
+						F6G->(DbSetOrder(1)) // F6G_filial + F6G_adapte + F6G_item
+						F6G->(DbSeek(xFilial("F6G")+F6Y->F6Y_ADAPTE))
+						F6F->(DbSetOrder(1)) // F6F_filial + F6F_code + F6F_oper
+						F6F->(DbSeek(xFilial("F6F")+F6Y->F6Y_ADAPTE))
+						IF F6Y->F6Y_STATUS == STATUS_QUEUED
+							RU99X20009_MA3EAiTrans(cJob)
+						Endif
+						IF F6Y->F6Y_STATUS == STATUS_READY_TO_BE_PROCESSED .Or. F6Y->F6Y_STATUS == STATUS_RETRY_PENDING
+							If F6Y->F6Y_OPER == SEND_OPER
+								RU99X20010_MA3EAISEND(cJob) 
+							ElseIf F6Y->F6Y_OPER == REC_OPER 
+								RU99X20011_MA3EAIRECEIVE(cJob)
+							Endif
+						Endif
+						IF F6Y->F6Y_STATUS == STATUS_INTEGRATED
+                            RecLock('F6Y',.F.)
+                            aCheckResult := RU99X20013_MA3IPCEAICheckSuccess(cJob)
+                            If aCheckResult[1] == .T.
+                                F6Y->F6Y_STATUS := STATUS_SUCCESS
+                                F6Y->F6Y_LASTER := ""
+                                F6Y->F6Y_LASTRE := aCheckResult[3]
+                                RU99X20015_EAILogMsg(cType=MSG_INFO,cShort=I18N(cJob+STR0102),; // : Confirmed.
+                                        cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                            Else
+                                If aCheckResult[2] > 0
+                                    F6Y->F6Y_STATUS := STATUS_RETRY_PENDING // This status will call again MA3EAISEND(cJob) in next try
+                                    F6Y->F6Y_LASTER := aCheckResult[3]
+                                    RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+STR0101+STR0066,{aCheckResult[2]}),; // : Confirmation failed.  // Will be tried #1 more times.
+                                        cMsg1=F6Y->F6Y_LASTER,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                                Else
+                                    F6Y->F6Y_STATUS := STATUS_FAILED
+                                    F6Y->F6Y_LASTER := aCheckResult[3]
+                                    RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+STR0101),; // Confirmation failed.
+                                        cMsg1=F6Y->F6Y_LASTER,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                                EndIf
+                            EndIf
+                            F6Y->F6Y_LASTPR := FWTimeStamp(6)
+                            RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0036),cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID ) //  : Finished processing 
+                            MsUnLock()
+						Endif
+						F6Y->(MsRUnlock(nPar))
+						RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0036),cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID) // : Finished processing 
+					Else
+						RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0037),cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID ) // : Record already being processed.
+					Endif
+				Endif
+			Else
+				RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0038) ) // : No new item in queue. Finishing by timeout...
+				Exit
+			Endif
+			Sleep(500)
+		Enddo
+		UnLockByName(SEMAPHORE+StrZero(nJob,4))
+	Endif
+    RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0039,{nJob}) ) // : Finished.
+
+Return
+
+/*/{Protheus.doc} RU99X20008_GetQueue
+    Get quantity of records in QUEUE waiting to be processed/re-processed
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @return Numeric, Quantity 
+/*/
+Function RU99X20008_GetQueue() as Numeric
+	Local cTMPAlias as Character
+	Local nQueue as Numeric
+    Local cQuery := "" as Character
+    Local aExpIn := {STATUS_QUEUED,STATUS_READY_TO_BE_PROCESSED,STATUS_RETRY_PENDING,STATUS_INTEGRATED} as Array
+    Local oStatement as Object
+    
+    cQuery := "SELECT "
+    cQuery += "Count(*) as quantity " 
+    cQuery += "FROM "+RetSqlname("F6Y") +" F6Y "
+    cQuery += " WHERE "
+    cQuery += " F6Y.F6Y_FILIAL  = ?  AND " 
+    cQuery += " F6Y.F6Y_STATUS IN (?) AND "
+    cQuery += " F6Y.D_E_L_E_T_ = '' " 
+    oStatement := FwExecStatement():New(cQuery)
+    oStatement:SetString(1,xFilial("F6Y"))
+    oStatement:SetIn(2,aExpIn)
+    
+    cTMPAlias := oStatement:OpenAlias()
+	nQueue := (cTMPAlias)->Quantity
+	DbCloseArea()
+    
+    oStatement:Destroy()
+    oStatement := nil 
+
+Return nQueue
+
+/*/{Protheus.doc} RU99X20009_MA3EAiTrans
+    Transforms RAW data defined by ENDPOINT or ADAPTER
+    Will run only one transformation, priority is for ENDPOINT transformation formula
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cJob, character, Job code (used for loggin purposes)
+/*/
+Function RU99X20009_MA3EAiTrans(cJob)
+	Local cTrans2:="" as character
+	Local bError := {||} as codeblock
+	Local cError := "" as character
+	Local cStack := "" as character 
+
+	If Empty(F6G->F6G_TRANS).And.Empty(F6F->F6F_TRANS)
+        //RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+': No transformation defined. Setting ready to be processed. UUID:#2',{nJob,F6Y->F6Y_MSUID}) )
+        LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0040) ) // No transformation defined. Setting ready to be processed
+		//Conout("No transformation defined... Setting ready to be processed")
+		RecLock('F6Y',.F.)
+		F6Y_STATUS := STATUS_READY_TO_BE_PROCESSED
+		F6Y_LASTPR := FWTimeStamp(6)
+		F6Y_LASTER := ''
+		MsUnLock()
+	ElseIf !Empty(F6G->F6G_TRANS)
+		cStack := ""
+		bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+        BEGIN SEQUENCE
+            cTrans2 := &(F6G->F6G_TRANS)
+            RecLock('F6Y',.F.)
+            F6Y_STATUS  := STATUS_READY_TO_BE_PROCESSED
+            F6Y_DATA2   := cTrans2
+            F6Y_LASTPR := FWTimeStamp(6)
+			F6Y_LASTER := ''
+            MsUnLock()
+            LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0041,; // Endpoint transformation executed. Formula #1
+                {Alltrim(F6G->F6G_TRANS)}),cMsg1=STR0042+Chr(10)+cTrans2,cData = F6Y->F6Y_DATA ) // Transformed value:
+        End SEQUENCE
+		ErrorBlock(bError)
+
+		If !Empty(cError)
+            RecLock('F6Y',.F.)
+            F6Y_STATUS  := STATUS_FAILED
+            F6Y_LASTER  := cError
+            F6Y_LASTPR := FWTimeStamp(6)
+            MsUnLock()
+            LogQueue(MSG_ERROR, F6Y->F6Y_MSUID,I18N(STR0056,; // Error on endpoint transformation. Formula #1
+                {Alltrim(F6G->F6G_TRANS)}), cMsg1=cError, cMsg2=cStack)
+            RU99X20015_EAILogMsg(MSG_ERROR,I18N(cJob+": "+STR0056,; // Error on endpoint transformation. Formula #1
+                {Alltrim(F6G->F6G_TRANS)}), cMsg1=STR0090+Chr(10)+cError, ; // Error:
+                cMsg2=STR0091+Chr(10)+cStack, cAdapter=F6Y->F6Y_ADAPTE, cUUID=F6Y->F6Y_MSUID) // Error stack:
+        Endif
+	ElseIf !Empty(F6F->F6F_TRANS)
+		cStack := ""
+		bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+        BEGIN SEQUENCE
+            cTrans2 := &(F6F->F6F_TRANS)
+            RecLock('F6Y',.F.)
+            F6Y_STATUS  := STATUS_READY_TO_BE_PROCESSED
+            F6Y_DATA2   := cTrans2
+			F6Y_LASTPR := FWTimeStamp(6)
+			F6Y_LASTER := ''
+            MsUnLock()
+            LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0057; // Adapter transformation executed. Formula #1
+                ,{Alltrim(F6F->F6F_TRANS)}),cMsg1=STR0095+; // Transformed value:
+                Chr(10)+cTrans2,cData = F6Y->F6Y_DATA )
+		END SEQUENCE
+		ErrorBlock(bError)
+
+		If !Empty(cError)
+            RecLock('F6Y',.F.)
+            F6Y_STATUS  := STATUS_FAILED
+            F6Y_LASTER  := cError
+			F6Y_LASTPR := FWTimeStamp(6)
+            MsUnLock()
+            LogQueue(MSG_ERROR, F6Y->F6Y_MSUID, I18N(STR0058; // Error on adapter transformation. Formula #1
+                ,{Alltrim(F6F->F6F_TRANS)}), cMsg1=cError, cMsg2=cStack)
+            RU99X20015_EAILogMsg(MSG_ERROR,I18N(cJob+": "+STR0058; // Error on adapter transformation. Formula #1
+                ,{Alltrim(F6F->F6F_TRANS)}), cMsg1=STR0090+Chr(10)+cError, ; // Error: 
+                cMsg2=STR0091+Chr(10)+cStack, cAdapter=F6Y->F6Y_ADAPTE, cUUID=F6Y->F6Y_MSUID) // Error stack:
+        Endif
+	Endif
+Return
+
+/*/{Protheus.doc} RU99X20010_MA3EAISend
+    Fucntion responsible for sending record to integration ENDPOINT
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cJob, character, Job code (used for loggin purposes)
+/*/
+Function RU99X20010_MA3EAISend(cJob)
+
+	Local oRestClient AS Object
+	Local aHeader := {} as Array
+	Local lRet := .T.
+	Local cError := ""
+	Local cResult := ""
+    Local oSender
+    Local cMsg1 := "" as Character
+	Local cMsg2 := "" as Character
+    Local cMsg3 := "" as Character
+    Local cData := "" as Character
+    Local cFormat := AllTrim(F6Y->F6Y_FORMAT) as Character
+    Local cToken := "" as Character
+    
+    If F6E->F6E_TYPE == REST
+		If cFormat == FORMAT_JSON
+			AAdd(aHeader, "Content-Type: application/json;  charset=UTF-8")
+		ElseIf cFormat == FORMAT_XML
+			AAdd(aHeader, "Content-Type: application/xml;  charset=UTF-8")
+		Endif
+		AAdd(aHeader, "Accept: */*")
+		If F6E->F6E_AUTH == AUTH_BASIC
+			AAdd(aHeader, "Authorization: Basic " + Encode64(Alltrim(F6E->F6E_R_USER)+":"+Alltrim(F6E->F6E_R_PASS)))
+        ElseIf F6E->F6E_AUTH == AUTH_TOKEN
+            ReturnToken(F6Y->F6Y_AUTHAD,F6E->F6E_R_AUTH,F6E->F6E_R_USER,F6E->F6E_R_PASS,@cError) // see https://tdn.totvs.com/display/tec/Token+de+Acesso
+            If !Empty(cError)
+                cMsg1 := I18n("REST: "+Alltrim(F6Y->F6Y_AUTHAD)+Alltrim(F6E->F6E_R_AUTH))
+                RU99X20015_EAILogMsg(MSG_ERROR,I18N(cJob+": "+STR0079),; // Error generating authorization token
+                    cMsg1=cMsg1,cMsg2=STR0090+" "+cError,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID) // Error:
+            Else
+                cToken := _oTokensData[Alltrim(F6Y->F6Y_AUTHAD)+Alltrim(F6E->F6E_R_USER)]["access_token"]
+            EndIf
+            AAdd(aHeader, "Authorization: Bearer " + cToken) // Get token and add to the header of next calls
+        Endif
+
+        cData := Alltrim(Iif(!Empty(F6Y->F6Y_DATA2),F6Y->F6Y_DATA2,F6Y->F6Y_DATA ))
+		oRestClient := FWRest():New(Alltrim(F6E->F6E_R_URL))
+		oRestClient:SetPath(Alltrim(F6Y->F6Y_PATH))
+		oRestClient:SetPostParams(cData)
+        cMsg1 := I18n("REST: "+Alltrim(F6E->F6E_R_URL)+Alltrim(F6Y->F6Y_PATH))
+		lRet := .T.
+		If Val(F6Y->F6Y_TRANS) == MODEL_OPERATION_DELETE
+			lRet := oRestClient:DELETE(aHeader)
+		ElseIf Val(F6Y->F6Y_TRANS) == MODEL_OPERATION_UPDATE
+			lRet := oRestClient:PUT(aHeader,cData)
+		ElseIf Val(F6Y->F6Y_TRANS) == MODEL_OPERATION_INSERT
+			lRet := oRestClient:Post(aHeader)
+		Endif
+		If lRet
+            cResult := oRestClient:GetResult()
+            If cResult == Nil
+                cResult:= "Ok"
+            Endif
+            cResult := DecodeUtf8(cResult)
+            cMsg2 := STR0092+" "+Chr(10)+cResult // Result:
+		Else
+			cResult := oRestClient:GetResult()
+			cError := oRestClient:GetLastError()
+			If (cResult<>nil)
+                cResult := DecodeUtf8(cResult)
+                cMsg2 := STR0092+" "+Chr(10)+cResult // Result:
+			Endif
+            cError:= DecodeUtf8(cError)
+            cMsg3 := STR0090+" "+Chr(10)+cError // Error:
+		Endif
+    ElseIf F6E->F6E_TYPE == AMQP
+        cResult :=  ""
+        cQueueNAME := AllTrim(IIf(Empty(F6E->F6E_A_QUEU),"ma3@MA3EAISend",F6E->F6E_A_QUEU)) // TO DO: Use F6G->F6G_QUEUE instead of F6E->F6E_A_QUEU. To do so, fix positioning in F6G, maybe add other index? F6G->F6G_QUEUE can hold wrong value now
+        If Valtype(oSender) == "U"
+            oSender := tAmqp():New(Alltrim(F6E->F6E_A_URL),F6E->F6E_A_PORT,Alltrim(F6E->F6E_A_USER),Alltrim(F6E->F6E_A_PASS),fixed_channel_id)        
+            oSender:QueueDeclare(cQueueName, .T.,.F.,.F.,.T. )
+        Endif
+
+        cMsg1 :=  I18n(STR0059,; // AMQP: #1:#2 Queue name: #3
+            {Alltrim(F6E->F6E_A_URL),F6E->F6E_A_PORT,cQueueNAME})
+        cMsg2 :=  cResult
+        If oSender:status() == 0
+            oSender:BasicPublish(""/*cExchange*/,cQueueName/*cRoutingKey*/, .F./*nPERSISTENT*/;
+                , EncodeUtf8(Iif(!Empty(F6Y->F6Y_DATA2),F6Y->F6Y_DATA2,F6Y->F6Y_DATA ))/*cMsg*/;
+                , F6Y->F6Y_MSUID/*correlationID*/)
+            cError  := oSender:error()
+            lRet    := oSender:status() == 0
+            If lRet
+                cMsg3:=""
+                RU99X20015_EAILogMsg(MSG_INFO,I18N(cJob+STR0060),; // : Record sent.
+                    cMsg1=cMsg1,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+            Else
+                cMsg3:=STR0090+" "+Chr(10)+cError // Error:
+                RU99X20015_EAILogMsg(MSG_ERROR,I18N(cJob+STR0061),; // : Error on sending record.
+                    cMsg1=cMsg1,cMsg2=cMsg2,cMsg3=cMsg3,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+            Endif
+        Else
+            lRet := .f.
+            if !Empty(oSender:Error())
+                cError := STR0062+":"+oSender:Error() // Communication error
+                cMsg3:=STR0090+" "+Chr(10)+cError 
+			Else
+				cError := STR0062 // Communication error
+            EndIf
+            RU99X20015_EAILogMsg(MSG_ERROR,I18N(cJob+STR0061),; // : Error on sending record.
+                cMsg1=cMsg1,cMsg2=cMsg2,cMsg3=cMsg3,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+        Endif
+        //cResult := ""
+        Freeobj(oSender)
+    Endif
+    If lRet
+        If Empty(F6G->F6G_VALID)
+            RecLock('F6Y',.F.)
+            F6Y->F6Y_STATUS := STATUS_SUCCESS
+            F6Y->F6Y_LASTRE := cResult
+            F6Y->F6Y_LASTPR := FWTimeStamp(6)
+            F6Y->F6Y_LASTER := ''
+            MsUnLock()
+            LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0063),; // Record integrated.
+                cMsg1=cMsg1,cMsg2=cMsg2,cMsg3=cMsg3,cData=cData)
+        Else
+            RecLock('F6Y',.F.)
+            F6Y->F6Y_STATUS := STATUS_INTEGRATED
+            F6Y->F6Y_LASTRE := cResult
+            F6Y->F6Y_LASTER := ''
+            F6Y->F6Y_LASTPR := FWTimeStamp(6)
+            MsUnLock()
+            LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0064); // Record integrated. Confirmation pending.
+                ,cMsg1=cMsg1,cMsg2=cMsg2,cMsg3=cMsg3,cData=cData)
+        Endif
+    Else
+        RecLock('F6Y',.F.)
+        F6Y->F6Y_TRIES := F6Y->F6Y_TRIES -1
+        If F6Y->F6Y_TRIES > 0
+            F6Y->F6Y_STATUS := STATUS_RETRY_PENDING
+        Else
+            F6Y->F6Y_STATUS := STATUS_FAILED
+        Endif
+        F6Y->F6Y_LASTPR := FWTimeStamp(6)
+        F6Y->F6Y_LASTRE := cResult
+        F6Y->F6Y_LASTER := cError
+        MsUnLock()
+        If F6Y->F6Y_STATUS == STATUS_FAILED
+            LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0065),; // Integration failed.
+                cMsg1=cMsg1,cMsg2=cMsg2,cMsg3=cMsg3,cData=cData)
+        Else
+            LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0065+STR0066,{F6Y->F6Y_TRIES}),; // Integration failed. // Will be tried #1 more times.
+                cMsg1=cMsg1,cMsg2=cMsg2,cMsg3=cMsg3,cData=cData)
+        Endif
+    Endif
+Return
+
+/*/{Protheus.doc} RU99X20011_MA3EAIReceive(cJob as Character)
+    Responsible for integrating into MA3 received records in queue
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cJob, character, Job code (used for loggin purposes)
+/*/
+Function RU99X20011_MA3EAIReceive(cJob as Character)
+
+    Local cData   	:=  Alltrim(Iif(!Empty(F6Y->F6Y_DATA2),F6Y->F6Y_DATA2,F6Y->F6Y_DATA )) as Character
+    Local oDataJson := JsonObject():New() as Json
+    Local oDataXml := TXmlManager():New()
+    Local cControl	:=	"" as character 
+    Local lRet		:=	.T. as Logical
+    Local cMsg1		:=	""
+    Local aKeys
+    Local aArea
+    Local cMainArea	:= "" as character
+    Local oModel
+    Local cQuery 	:= "" as character
+    Local cTMPAlias := GetNextAlias() as character
+    Local cError 	:= "" as character
+    Local cPkFilter := "" as character
+    Local cFilField := "" as character
+    Local cStack := "" as character
+    Local bError := {||} as codeblock
+    Local cFormat := "JSON"
+    Local cXmlOperation := ""
+    Local cXmlMvcModel := ""
+    Local cXmlpk := ""
+    Default cJOB := ""
+    //TO DO: consider using TRY CATCH instead of BEGIN SEQUENCE
+    cFormat := AllTrim(F6Y->F6Y_FORMAT)
+    If F6F->F6F_TYPE == MVC_TYPE
+        If cFormat == FORMAT_JSON
+            cControl := oDataJson:FromJson(cData)
+            If !Empty(cControl)
+                lRet  := .F.
+                cControl:= STR0090+' '+Chr(10)+cControl // Error:
+                RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0067),; // Error converting data to JSON.
+                    cMsg1=cControl,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(cType=MSG_ERROR,cUUid=F6Y->F6Y_MSUID,cShort=I18N(STR0067),; // Error converting data to JSON.
+                    cMsg1=cControl,cData=cData)
+            Endif
+            If ValType(oDataJson["content"])<> "J"
+                lRet  := .F.
+                RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0068),; // Content not in JSON format
+                    cMsg1=cControl,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(cType=MSG_ERROR,cUUid=F6Y->F6Y_MSUID,cShort=I18N(STR0068),cData=cData) // Content not in JSON format
+            Endif
+            If lRet
+                LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0069),cData=cData) // Starting integration in MA3
+                oDataJson["content"]["operation"] := Val(F6Y->F6Y_TRANS)
+                oModel:= FWLoadModel(Alltrim(F6F->F6F_ADMVC))
+                //TODO: Find a way of defining alias and positioning on record as FWRESTMODEL DOES.
+                If !Empty(F6F->F6F_ALIAS)
+                    cMainArea := F6F->F6F_ALIAS
+                Else 
+                    //WorkAround to avoid error, when main table for the model is not open
+                    //Ticket opened on JIRA
+                    aKeys :=oModel:GetPrimaryKey()
+                    If Len(aKeys)>0
+                        If Substr(aKeys[1],3,1) == "_"
+                            cMainArea := "S"+Substr(aKeys[1],1,2)
+                        Else
+                            cMainArea := Substr(aKeys[1],1,3)
+                        Endif
+                        If Select(cMainArea)==0
+                            aArea := FwGetArea()
+                            DbSelectArea(cMainArea)
+                            FWRestArea(aArea)
+                        Endif
+                    Endif
+                Endif
+                //Finished WorkAround
+                cError := ""
+                If oDataJson["content"]["operation"] == MODEL_OPERATION_DELETE .OR.;
+                oDataJson["content"]["operation"] == MODEL_OPERATION_UPDATE
+                    aKeys :=oModel:GetPrimaryKey()
+                    cFilField := PrefixoCpo(cMainArea)+"_FILIAL" 
+                    cPkFilter := FWAToS(aKeys,"||") + " = ? "
+                    If (cMainArea)->(FieldPos(cFilField)) > 0 
+                        cPkFilter := PrefixoCpo(cMainArea)+"_FILIAL||" + cPkFilter
+                    EndIf
+                    cQuery := "SELECT "
+                    cQuery += " R_E_C_N_O_ as REC "
+                    cQuery += " FROM "+RetSqlname(cMainArea) 
+                    cQuery += " WHERE "+cPkFilter
+                    cQuery += " AND D_E_L_E_T_ = '' " 
+                    oStatement := FwExecStatement():New(cQuery)
+                    oStatement:SetString(1,Decode64(oDataJson["content"]["pk"]))
+                    cTMPAlias := oStatement:OpenAlias()
+                    If (cTMPAlias)->(EOF())
+                        cError := i18n(STR0070,; // Record not found [Alias:#1,Index #2, key requested #3]
+                        {cMainArea,FWAToS(oModel:GetPrimaryKey(),","),Decode64(oDataJson["content"]["pk"])})
+                    Else
+                        (cMainArea)->(DbGoto((cTMPAlias)->REC))
+                    Endif
+                    DbSelectArea(cTMPAlias)
+                    DbCloseArea()
+                Endif
+                If Empty(cError)
+                    oModel:SetOperation(Val(F6Y->F6Y_TRANS))
+                    oModel:Activate()
+                    oModel:LoadJsonData(oDataJson["content"]:toJson()) 
+                    cStack := ""
+                    bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+                    BEGIN SEQUENCE
+                        If  !oModel:VldData()
+                            lRet := .F.
+                            aError := oModel:GetErrorMessage()
+                            cError := ReturnErrorString(aError)
+                            RecLock('F6Y',.F.)
+                            F6Y_STATUS  := STATUS_FAILED
+                            F6Y_LASTPR := FWTimeStamp(6)
+                            F6Y_LASTER  := cError
+                            MsUnLock()
+                            LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0071+" [#1]",; // Error integrating record in MA3 on form validation
+                                { aError[5]}),cData=cData)
+                            RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0071+" [#1]",; // Error integrating record in MA3 on form validation
+                                { aError[5]}),cAdapter=F6F->F6F_CODE,cData=cData,cMsg1=cError)
+                        Endif
+                    END SEQUENCE
+                    ErrorBlock(bError)
+                    // Recording data/error text:
+                    If !Empty(cError)
+                        lRet 	:= .F.
+                        RecLock('F6Y',.F.)
+                        F6Y_STATUS  := STATUS_FAILED
+                        F6Y_LASTPR := FWTimeStamp(6)
+                        F6Y_LASTER  := cError
+                        MsUnLock()
+                        LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0071),; // Error integrating record in MA3 on form validation
+                            cMsg1=cError,cMsg2=cStack,cData=cData)
+                        RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0071),; // Error integrating record in MA3 on form validation
+                            cMsg1=STR0090+" "+Chr(10)+cError,cAdapter=F6F->F6F_CODE,cData=cData,; // Error:
+                            cMsg2=STR0091+" "+Chr(10)+cStack) // Error stack:
+                    Endif
+                    If lRet 
+                        cStack := ""
+                        bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+                        Begin SEQUENCE 
+                            oModel:CommitData()
+                        END SEQUENCE
+                        ErrorBlock(bError)
+                        If !Empty(cError) 
+                            lRet 	:= .F.
+                            RecLock('F6Y',.F.)
+                            F6Y_STATUS  := STATUS_FAILED
+                            F6Y_LASTPR := FWTimeStamp(6)
+                            F6Y_LASTER  := cError
+                            MsUnLock()
+                            LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0072),; // Error integrating record in MA3 on form saving
+                                cMsg1=cError, cMsg2=cStack,cData=cData)
+                            RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0072),; // Error integrating record in MA3 on form saving
+                                cAdapter=F6F->F6F_CODE,cData=cData,cMsg1=STR0090+" "+Chr(10)+cError,; // Error: 
+                                cMsg2=STR0091+" "+Chr(10)+cStack) // Error stack:
+                        Endif
+                    Endif
+                    If lRet
+                        RecLock('F6Y',.F.)
+                        F6Y->F6Y_STATUS := STATUS_SUCCESS
+                        F6Y->F6Y_LASTRE := ""
+                        F6Y->F6Y_LASTPR := FWTimeStamp(6)
+                        F6Y->F6Y_LASTER := ''
+                        MsUnLock()
+                        LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0073),cData=cData) // Record integrated in MA3
+                    EndIf
+                    oModel:DeActivate()
+                Else
+                    RecLock('F6Y',.F.)
+                    F6Y_STATUS  := STATUS_FAILED
+                    F6Y_LASTPR 	:= FWTimeStamp(6)
+                    F6Y_LASTER  := cError
+                    MsUnLock()
+                    LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,cError,cData=cData)
+                    RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=cError,cAdapter=F6F->F6F_CODE,cData=cData)
+                Endif
+            Endif
+        ElseIf cFormat == FORMAT_XML // TO DO: Fix error managment. lRet is flag of error? Unify error call in this branch and others.
+            cControl:= '' 
+            lRet := oDataXml:Read(cData,/*cURL*/, _cDataBaseEncoding/*cEncoding*/, /*nOptions*/)
+            If lRet
+                lRet := np.framework.eai.RU99X20018_XPathSetInfo(oDataXml,"/"+oDataXml:cName+"/header/operation",F6Y->F6Y_TRANS,@cError)
+            Else
+                RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0074),; // : Error converting data to XML.
+                cMsg1=cControl,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(cType=MSG_ERROR,cUUid=F6Y->F6Y_MSUID,cShort=I18N(STR0074),; // Error converting data to XML.
+                cMsg1=cControl,cData=cData)
+            Endif
+            If lRet
+                LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0069),cData=cData) // Starting integration in MA3
+                oModel:= FWLoadModel(Alltrim(F6F->F6F_ADMVC))
+                //TODO: Find a way of defining alias and positioning on record as FWRESTMODEL DOES.
+                If !Empty(F6F->F6F_ALIAS)
+                    cMainArea := F6F->F6F_ALIAS
+                Else 
+                    //WorkAround to avoid error, when main table for the model is not open
+                    //Ticket opened on JIRA
+                    aKeys :=oModel:GetPrimaryKey()
+                    If Len(aKeys)>0
+                        If Substr(aKeys[1],3,1) == "_"
+                            cMainArea := "S"+Substr(aKeys[1],1,2)
+                        Else
+                            cMainArea := Substr(aKeys[1],1,3)
+                        Endif
+                        If Select(cMainArea)==0
+                            aArea := FwGetArea()
+                            DbSelectArea(cMainArea)
+                            FWRestArea(aArea)
+                        Endif
+                    Endif
+                Endif
+                //Finish WorkAround
+                cError 	  := ""
+                //oContentXml := np.framework.eai.RU99X20017_XPathGetInfo(oDataXml,"/"+oDataXml:cName+"/content",@cError)
+                cXmlMvcModel := oDataXml:XPathGetChildArray("/"+oDataXml:cName+"/content")[1][1]
+                cXmlOperation := np.framework.eai.RU99X20017_XPathGetInfo(oDataXml,"/"+oDataXml:cName+"/content/"+cXmlMvcModel+"/Operation",@cError)
+                cXmlpk := np.framework.eai.RU99X20017_XPathGetInfo(oDataXml,"/"+oDataXml:cName+"/content/"+cXmlMvcModel+"/pk",@cError)
+                If Empty(cError)
+                    If cXmlOperation == "5" .OR. cXmlOperation == "4" // cXmlOperation == Str(MODEL_OPERATION_DELETE) .OR. cXmlOperation == Str(MODEL_OPERATION_UPDATE)
+                        aKeys := oModel:GetPrimaryKey()
+                        cFilField := PrefixoCpo(cMainArea)+"_FILIAL" 
+                        cPkFilter := FWAToS(aKeys,"||") + " = ? "
+                        If (cMainArea)->(FieldPos(cFilField)) > 0 
+                            cPkFilter := PrefixoCpo(cMainArea)+"_FILIAL||" + cPkFilter
+                        EndIf
+                        cQuery := "SELECT "
+                        cQuery += " R_E_C_N_O_ as REC "
+                        cQuery += " FROM "+RetSqlname(cMainArea) 
+                        cQuery += " WHERE "+cPkFilter
+                        cQuery += " AND D_E_L_E_T_ = '' " 
+                        oStatement := FwExecStatement():New(cQuery)
+                        oStatement:SetString(1,Decode64(cXmlpk))
+                        cTMPAlias := oStatement:OpenAlias()
+                        If (cTMPAlias)->(EOF())
+                            cError := i18n(STR0070,; // Record not found [Alias:#1,Index #2, key requested #3]
+                            {cMainArea,FWAToS(oModel:GetPrimaryKey(),","),;
+                            Decode64(cXmlpk)})
+                        Else
+                            (cMainArea)->(DbGoto((cTMPAlias)->REC))
+                        Endif
+                        DbSelectArea(cTMPAlias)
+                        DbCloseArea()
+                    Endif
+                Endif
+                If Empty(cError)
+                    oDataXml:XPathDelNode("/"+oDataXml:cName+"/header")
+                    oDataXml:DOMChildNode()
+                    oModel:SetOperation(Val(F6Y->F6Y_TRANS))
+                    oModel:Activate()
+                    oModel:LoadXMLData(oDataXml:Save2String()) 
+                    cStack := ""
+                    bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+                    BEGIN SEQUENCE
+                        If  !oModel:VldData()
+                            lRet := .F.
+                            aError := oModel:GetErrorMessage()
+                            cError := ReturnErrorString(aError)
+                            RecLock('F6Y',.F.)
+                            F6Y_STATUS  := STATUS_FAILED
+                            F6Y_LASTPR := FWTimeStamp(6)
+                            F6Y_LASTER  := cError
+                            MsUnLock()
+                            LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0071+" [#1]",; // Error integrating record in MA3 on form validation
+                                { aError[5]}),cData=cData)
+                            RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0071+" [#1]",; // Error integrating record in MA3 on form validation
+                                { aError[5]}),cAdapter=F6F->F6F_CODE,cData=cData,cMsg1=cError)
+                        Endif
+                    END SEQUENCE
+                    ErrorBlock(bError)
+                    // Recording data/error text:
+                    If !Empty(cError)
+                        lRet 	:= .F.
+                        RecLock('F6Y',.F.)
+                        F6Y_STATUS  := STATUS_FAILED
+                        F6Y_LASTPR := FWTimeStamp(6)
+                        F6Y_LASTER  := cError
+                        MsUnLock()
+                        LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0071),; // Error integrating record in MA3 on form validation
+                            cMsg1=cError,cMsg2=cStack,cData=cData)
+                        RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0071),; // Error integrating record in MA3 on form validation
+                            cMsg1=STR0090+" "+Chr(10)+cError,cMsg2=STR0091+" "; // Error: // Error stack:
+                            +Chr(10)+cStack,cAdapter=F6F->F6F_CODE,cData=cData)
+                    Endif
+                    If lRet 
+                        cStack := ""
+                        bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+                        Begin SEQUENCE 
+                            oModel:CommitData()
+                        END SEQUENCE
+                        ErrorBlock(bError)
+                        If !Empty(cError) 
+                            lRet := .F.
+                            RecLock('F6Y',.F.)
+                            F6Y_STATUS := STATUS_FAILED
+                            F6Y_LASTPR := FWTimeStamp(6)
+                            F6Y_LASTER := cError
+                            MsUnLock()
+                            LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0072),; // Error integrating record in MA3 on form saving
+                                cMsg1=cError, cMsg2=cStack,cData=cData)
+                            RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(STR0072),; // Error integrating record in MA3 on form saving
+                                cAdapter=F6F->F6F_CODE, cData=cData, cMsg1=STR0090+" "+Chr(10)+cError,; // Error: 
+                                cMsg2=STR0091+" "+Chr(10)+cStack) // Error stack: 
+                        Endif
+                    Endif
+                    If lRet
+                        RecLock('F6Y',.F.)
+                        F6Y->F6Y_STATUS := STATUS_SUCCESS
+                        F6Y->F6Y_LASTRE := ""
+                        F6Y->F6Y_LASTPR := FWTimeStamp(6)
+                        F6Y->F6Y_LASTER := ''
+                        MsUnLock()
+                        LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0073),cData=cData) // Record integrated in MA3
+                    EndIf
+                    oModel:DeActivate()
+                Else
+                    RecLock('F6Y',.F.)
+                    F6Y_STATUS  := STATUS_FAILED
+                    F6Y_LASTPR 	:= FWTimeStamp(6)
+                    F6Y_LASTER  := cError
+                    MsUnLock()
+                    LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,cError,cData=cData)
+                    RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=cError,cAdapter=F6F->F6F_CODE,cData=cData)
+                Endif
+            Endif
+        Endif
+    ElseIf F6F->F6F_TYPE == MILE_TYPE
+        If cFormat == FORMAT_JSON
+            cControl := oDataJson:FromJson(cData)
+            If !Empty(cControl)
+                lRet  := .F.
+                cControl:= STR0090+' '+Chr(10)+cControl // Error:
+                RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0067),;
+                    cMsg1=cControl,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID) // Error converting data to JSON.
+                LogQueue(cType=MSG_ERROR,cUUid=F6Y->F6Y_MSUID,cShort=I18N(STR0067),;
+                    cMsg1=cControl,cData=cData) // Error converting data to JSON.
+            Endif
+            If lRet
+                cData := oDataJson["content"]
+                lRet := RU99X20004_MileImport(F6F->F6F_ADMILE,F6F->F6F_ALIAS,cData,cJob)
+            Endif
+            If lRet 
+                RecLock('F6Y',.F.)
+                F6Y->F6Y_STATUS := STATUS_SUCCESS
+                F6Y->F6Y_LASTRE := ""
+                F6Y->F6Y_LASTPR := FWTimeStamp(6)
+                F6Y->F6Y_LASTER := ''
+                MsUnLock()
+                RU99X20015_EAILogMsg(cType=MSG_INFO,cShort=I18N(cJob+": "+STR0073),; // Record integrated in MA3
+                    cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0073),cData=cData) // Record integrated in MA3
+            Endif
+        ElseIf cFormat == FORMAT_XML
+            cControl:= ''
+            lRet  := oDataXml:Read(cData,/*cURL*/, /*cEncoding*/, /*nOptions*/)
+            If !lRet
+                RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0074),; // Error converting data to XML.
+                    cMsg1=cControl,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(cType=MSG_ERROR,cUUid=F6Y->F6Y_MSUID,cShort=I18N(STR0074),; // Error converting data to XML.
+                    cMsg1=cControl,cData=cData)
+            Endif
+            If lRet
+                cData := np.framework.eai.RU99X20017_XPathGetInfo(oDataXml,"/"+oDataXml:cName+"/content")
+                If !(ValType(cData) == 'U')
+                    lRet := RU99X20004_MileImport(F6F->F6F_ADMILE,F6F->F6F_ALIAS,cData,cJob)
+                Else
+                    RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0075),; // Content is not defined.
+                        cMsg1=cControl,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                    LogQueue(cType=MSG_ERROR,cUUid=F6Y->F6Y_MSUID,cShort=I18N(STR0075),; // Content is not defined.
+                        cMsg1=cControl,cData=cData)
+                    lRet := .F.
+                EndIf
+            Endif
+            If lRet 
+                RecLock('F6Y',.F.)
+                F6Y->F6Y_STATUS := STATUS_SUCCESS
+                F6Y->F6Y_LASTRE := ""
+                F6Y->F6Y_LASTPR := FWTimeStamp(6)
+                F6Y->F6Y_LASTER := ''
+                MsUnLock()
+                RU99X20015_EAILogMsg(cType=MSG_INFO,cShort=I18N(cJob+": "+STR0073),; // 
+                    cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0073),cData=cData) // 
+            Endif
+        Endif
+    ElseIf F6F->F6F_TYPE == CUSTOM_TYPE
+        If FindFunction(Alltrim(F6F->F6F_CUSTOM))
+            cError 	:= 	""
+            cStack	:=	""
+            bError   := ErrorBlock({ |oError|  cError := oError:description, cStack:=oError:errorstack})
+            Begin SEQUENCE	
+            cError := &(Alltrim(F6F->F6F_CUSTOM)+"('ADAPTER_RUN')")
+            End SEQUENCE
+            ErrorBlock(bError)
+            if !Empty(cError)
+                RecLock('F6Y',.F.)
+                F6Y_STATUS  := STATUS_FAILED
+                F6Y_LASTER  := cError
+                F6Y_LASTPR := FWTimeStamp(6)
+                MsUnLock()
+                LogQueue(MSG_ERROR,F6Y->F6Y_MSUID,I18N(STR0076,; // Error on custom adapter #1
+                    {Alltrim(F6F->F6F_CUSTOM)}),cMsg1=cError, cMsg2=cStack)
+                RU99X20015_EAILogMsg(MSG_ERROR,I18N(cJob+": "+STR0076,; // Error on custom adapter #1
+                    {Alltrim(F6F->F6F_CUSTOM)}),cMsg1=STR0090+chr(10)+cError, cMsg2=STR0091; // Error: // Error stack:
+                    +chr(10)+cStack,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+            Else
+                RecLock('F6Y',.F.)
+                F6Y->F6Y_STATUS := STATUS_SUCCESS
+                F6Y->F6Y_LASTRE := ""
+                F6Y->F6Y_LASTPR := FWTimeStamp(6)
+                F6Y->F6Y_LASTER := ''
+                MsUnLock()
+                RU99X20015_EAILogMsg(cType=MSG_INFO,cShort=I18N(cJob+": "+STR0073); // Record integrated in MA3
+                ,cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+                LogQueue(MSG_INFO,F6Y->F6Y_MSUID,I18N(STR0073); // Record integrated in MA3
+                ,cData=cData)		
+            Endif
+        Else
+            RecLock('F6Y',.F.)
+            F6Y_STATUS  := STATUS_FAILED
+            F6Y_LASTER  := I18N(STR0077,{Alltrim(F6F->F6F_CUSTOM)}) // Custom function [#1] not found.
+            F6Y_LASTPR := FWTimeStamp(6)
+            MsUnLock()
+            RU99X20015_EAILogMsg(cType=MSG_ERROR,cShort=I18N(cJob+": "+STR0077; // Custom function [#1] not found.
+                ,{Alltrim(F6F->F6F_CUSTOM)}),cData=cData,cAdapter=F6Y->F6Y_ADAPTE,cUUID=F6Y->F6Y_MSUID)
+            LogQueue(cType=MSG_ERROR,cShort=I18N(STR0077; // Custom function [#1] not found.
+                ,{Alltrim(F6F->F6F_CUSTOM)}),cData=cData,cUUID=F6Y->F6Y_MSUID)
+        Endif
+    Endif
+
+Return
+
+/*/{Protheus.doc} RU99X20012_TransformReceivedData(nOperation as Integer,cFormat as Character,cBody as Character)
+    Transform data received to compatible format with MA3EAI receiving service
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param nOperation, Numeric, 3=insert,5=update,5=delete
+    @param cFormat, Character, Data format
+    @param cBody, Character, Body received
+    @return aReturn, Array, aReturn[1] = New FORMAT, 
+                            aReturn[2] = New Body
+/*/
+Function RU99X20012_TransformReceivedData(nOperation as Integer,cFormat as Character,cBody as Character) as Array
+
+    Local lExistPE := ExistBlock("MA3EAIReceive") // Do not get confused with function NP.FRAMEWORK.EAI.MA3EAIReceive, MA3EAIReceive here is an entry point
+    Local aReturn := {cFormat,cBody} as Array
+    Local aReturnTransf  as Array
+
+    If lExistPE
+        aReturnTransf := ExecBlock("MA3EAIReceive",{nOperation,cFormat,cBody})
+        If ValType(aReturnTransf) == "A"
+            aReturn[1] := aReturnTransf[1]
+            aReturn[2] := aReturnTransf[2]
+        Endif
+    Endif
+
+Return aReturn
+
+/*
+Function MA3EAIMile()
+Local cMILEFormat := RU99X20005_GenerateMile(F6F->F6F_ADMILE, F6F->F6F_ALIAS)
+If !Empty(cMILEFormat)
+    RecLock('F6Y',.F.)
+    F6Y_DATAMI := cMILEFormat
+    MsUnLock()
+    Conout('Converted to MILE')
+Endif
+Return
+*/
+
+/*
+Main Function MA3EAISchedActive(cLogLevel,nJobsPackages,nMaxJobs)
+	Local nX        := 1
+	Local cQuery    := ""
+	Local nQueue := 0
+    Local aExpIn := {STATUS_QUEUED,STATUS_READY_TO_BE_PROCESSED,STATUS_RETRY_PENDING,STATUS_INTEGRATED}
+    Local cTMPAlias 
+    Local oStatement
+    Local nTimes
+	DEFAULT nJobsPackages := 10
+	DEFAULT nMaxJobs := 10
+    _cLogLevel := IIf(cLogLevel==Nil,_cLogLevel,cLogLevel)
+    If Select('SX2') ==0
+        RPCSetEnv('99','01')
+    EndIf
+	RU99X20015_EAILogMsg(MSG_INFO,I18N('Starting MA3EAI Schedule. MAXJOBS:#1, RECORDS x JOB:#2',{ nMaxJobs,nJobsPackages}) )
+
+	If !LockByName('MA3EAISchedActive')
+        RU99X20015_EAILogMsg(MSG_INFO,I18N('Last scheduled JOB did not finish yet... Ignoring start request') )
+//		Conout('Last scheduled JOB did not finish yet...')
+	Else
+		nQueue := GetActiveQueue()
+		If nQueue == 0
+            RU99X20015_EAILogMsg(MSG_INFO,I18N('No new items to be processed in queue') )
+	//		Conout('No new items to be processed')
+		Else
+			nQueue  := Ceiling(nQueue/nJobsPackages)
+			nQueue  := Min(nQueue,nMaxJobs)
+            RU99X20015_EAILogMsg(MSG_INFO,I18N('Starting #1 threads for processing.',{nQueue}) )
+			For nX:=1 to nQueue
+				StartJob("np.framework.eai.RU99X20007_MA3EAIIpcjobsProcessQUEUE",GetEnvServer(),.F.,cEmpAnt,cFilAnt,nX,_cLogLevel)
+			Next
+
+            cQuery := "SELECT "
+            cQuery += "R_E_C_N_O_ as recF6Y,F6Y_MSUID,F6Y_ADAPTE "
+            cQuery += "FROM "+RetSqlname("F6Y") +" F6Y "
+            cQuery += " WHERE "
+            cQuery += " F6Y.F6Y_FILIAL  = ? AND " 
+            cQuery += " F6Y.F6Y_STATUS IN (?) AND "
+            cQuery += " F6Y.D_E_L_E_T_ = '' " 
+            cQuery += "ORDER BY F6Y_FILIAL,F6Y_DTINS"
+            oStatement := FwExecStatement():New(cQuery)
+            oStatement:SetString(1,xFilial("F6Y"))
+            oStatement:SetIn(2,aExpIn)
+            
+            cTMPAlias := oStatement:OpenAlias()
+            //TODO: Add check for not starting
+			While (nJobs := IPCCount(SEMAPHORE)) == 0
+                RU99X20015_EAILogMsg(MSG_INFO,I18N('Waiting for jobs to start...') )
+				Sleep(2000)
+			Enddo
+
+            //TODO: Add exit control
+            nTimes          := 0
+            MAXTIMESWAIT    := 20
+			While !(cTMPAlias)->(EOF())
+				If IPCGo( SEMAPHORE , (cTMPAlias)->recF6Y )
+                    RU99X20015_EAILogMsg(MSG_INFO,I18N('Record sent to thread for process.'),cAdapter=(cTMPAlias)->F6Y_ADAPTE, cUUID=(cTMPAlias)->F6Y_MSUID )
+                    nTimes:=0
+                    //Conout('Record sent to thread for process ' + str((cTMPAlias)->recF6Y))
+				    (cTMPAlias)->(DbSkip())
+                Else
+                    nTimes++
+                    If nTimes >= MAXTIMESWAIT
+                        RU99X20015_EAILogMsg(MSG_WARNING,I18N('Waiting for free Thread maximum time exceeded. Quiting job. [#1] s. wait',{nTimes}),cAdapter=(cTMPAlias)->F6Y_ADAPTE, cUUID=(cTMPAlias)->F6Y_MSUID  )
+                        Exit
+                    Else
+                        RU99X20015_EAILogMsg(MSG_INFO,I18N('Waiting for free Thread...[#3] s. wait',{nTimes}) ,cAdapter=(cTMPAlias)->F6Y_ADAPTE, cUUID=(cTMPAlias)->F6Y_MSUID )
+                    Endif
+                    Sleep(1000)
+                Endif
+			Enddo
+            DbCloseArea()
+            oStatement:Destroy()
+            oStatement := nil 
+            RU99X20015_EAILogMsg(MSG_INFO,I18N('Finishing queue process') )
+		Endif
+	Endif
+
+    While (nJobs := IPCCount(SEMAPHORE)) > 0
+        IPCGo( SEMAPHORE , 0 )
+        RU99X20015_EAILogMsg(MSG_INFO,I18N('Waiting for jobs to finish... #1 Alive jobs',{nJobs}) )
+        //Conout('Waiting for jobs to finish...' + Str(nJobs))
+        Sleep(1000)
+    Enddo
+
+	UnLockByname("MA3EAISchedActive")
+Return
+
+Function GetActiveQueue()
+	Local cTMPAlias
+	Local aEndPoints := {}
+    Local cQuery := ""
+    Local oStatement
+    cQuery := "SELECT "
+    cQuery += " F6E.R_E_C_N_O_ AS RECF6E, " 
+    cQuery += " F6F.R_E_C_N_O_ AS RECF6F, " 
+    cQuery += " F6G.R_E_C_N_O_ AS RECF6G, " 
+    cQuery += "FROM "+RetSqlname("F6E") +" F6E ,"+RetSqlname("F6F") +" F6F ,"+RetSqlname("F6G") +" F6G "
+    cQuery += " WHERE "
+    cQuery += " F6E.F6E_FILIAL  = ?  AND " 
+    cQuery += " F6F.F6F_FILIAL  = ?  AND " 
+    cQuery += " F6G.F6G_FILIAL  = ?  AND " 
+    cQuery += " F6G.F6G_ADAPTE  = F6F.F6F_CODE  AND " 
+    cQuery += " F6G.F6G_ENDPOI  = F6E.F6E_CODE  AND " 
+	cQuery += " F6F_OPER = ? AND "
+    cQuery += " F6E.D_E_L_E_T_ = '' AND "
+    cQuery += " F6F.D_E_L_E_T_ = '' AND "
+    cQuery += " F6G.D_E_L_E_T_ = '' " 
+	cQuery += " ORDER BY F6F_FILIAL,F6G_ADAPTE " 	
+    oStatement := FwExecStatement():New(cQuery)
+    oStatement:SetString(1,xFilial("F6E"))
+    oStatement:SetString(2,xFilial("F6F"))
+    oStatement:SetString(3,xFilial("F6G"))
+    oStatement:SetString(4,REC_OPER)
+    
+    cTMPAlias := oStatement:OpenAlias()
+	While !(cTMPAlias)->(EOF())
+		aadd(aEndPoints,1)
+		(cTMPAlias)->(DbSkip())
+	Enddo
+	DbCloseArea()
+    
+    oStatement:Destroy()
+    oStatement := nil 
+
+Return nQueue
+*/
+
+/*/{Protheus.doc} RU99X20013_MA3IPCEAICheckSuccess(cJob)
+    Checks if sent message was valid by user requirements
+    @type function
+    @author idashkov
+    @since 05.02.2024
+    @param cJob, Character, Integration data
+    @return aResult, Array, Success flag
+/*/
+Function RU99X20013_MA3IPCEAICheckSuccess(cJob as Character) as Array
+
+    Local aResult := {.F.,0,""}
+    Local cErrorMessage := I18N(STR0096+" ",{F6G->F6G_VALID}) // Error: wrong return type of #1 function,
+    DEFAULT cJOB := ""
+
+    aResult := &(F6G->F6G_VALID)
+
+    If (ValType(aResult) == "A")
+        Do Case
+            Case !(ValType(aResult[1]) == "L")
+                cErrorMessage += STR0097 // first returned value should be logical type.
+                aResult := {.F.,0, cErrorMessage}
+            Case !(ValType(aResult[2]) == "N")
+                cErrorMessage += STR0098 // second returned value should be numeric type.
+                aResult := {.F.,0, cErrorMessage}
+            Case !(ValType(aResult[3]) == "C")
+                cErrorMessage += STR0099 // third returned value should be character type.
+                aResult := {.F.,0, cErrorMessage}
+        EndCase
+    Else
+        cErrorMessage += STR0100 // array should be returned.
+        aResult := {.F.,0,cErrorMessage}
+    EndIf
+
+Return aResult
+
+/*/{Protheus.doc} RU99X20014_FormatContent
+    Formats content to be sent to ENDPOINT. 
+    Adds header with aditional data -> formats it.
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cContent, Character, Integration data of model
+    @param cFormat, Character, Format of output string (JSON/XML)
+    @param nOperation, Numeric, 3=INSERT;4=Update;5=DELETE
+    @param cXmlName, Character, Name of root node in XML message string to be sent
+    @return cRet, Character, Formated response
+/*/
+Function RU99X20014_FormatContent(cContent,cFormat,nOperation,cXmlName) as character
+
+	Local oJson := JsonObject():New()
+	Local oXML := TXmlManager():New()
+	Local cRet as Character
+	Local cXML := ""
+    Local cXmlInstruction := "" // XML instruction string
+    Local cError := ""
+    Local cBuf := ""
+    Local cStack
+    Default cXmlName := "data" // XML main node name
+	
+    cFormat := AllTrim(cFormat)
+
+    If cFormat == FORMAT_JSON
+		oJson['header'] := JsonObject():New()
+		oJson['header']['uuid']     := F6Y->F6Y_MSUID
+		oJson['header']['adapter']  := F6Y->F6Y_ADAPTE
+        oJson['header']['adapterType']  := np.framework.eai.getCboxTranslate(F6F->F6F_TYPE,"F6F_TYPE")
+		oJson['header']['date']     := F6Y->F6Y_DTINS
+		oJson['header']['operation']:= IIf(nOperation==MODEL_OPERATION_DELETE, "DELETE",IIf(nOperation==MODEL_OPERATION_UPDATE,"UPDATE","INSERT"))
+		oJson['header']['product']  := "MA3"
+		//TODO: Create fields for company and BRANCH and replace cEMPAnt and cFilAnt
+		//TODO: Implement saving of COMPANY and BRANCH
+		oJson['header']['company']  := cEmpAnt // F6Y->F6Y_COMPANY
+		oJson['header']['branch']   := cFilAnt // F6Y->F6Y_BRANCH
+
+		oJson['content']:= JsonObject():New()
+		oJson['content']:FromJson(cContent)
+        oJson['content']:= np.framework.eai.RU99X20020_DecodeUTF8Json(oJson['content'],_cDataBaseEncoding)
+		cRet := oJson:ToJson()
+	ElseIf cFormat == FORMAT_XML
+        cXmlInstruction := SubStr(cContent,1,AT("?>", cContent, AT("<?", cContent))+1)
+        cContent := StrTran(cContent,cXmlInstruction,"",1,1)
+        cXML := cXmlInstruction
+        cXML += '<'+cXmlName+'>' // XML document must have one document node
+        cXML += '<header> </header>' // Added non empty syting inside <header> tag, for correct reading in TXmlManager
+        cXML += '<content>' + cContent + '</content>'
+        cXML += '</'+cXmlName+'>' 
+        If oXML:Read(cXML,/*cURL*/, /*cEncoding*/, /*nOptions*/) 
+            //It was decided to use tags in <header>, not attributes, example: <header><uuid>fy78utdy786kjfg6ny</uuid><adapter>Adapter</adapter></header>
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "uuid", F6Y->F6Y_MSUID )  
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "adapter", F6Y->F6Y_ADAPTE)
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "adapterType", np.framework.eai.getCboxTranslate(F6F->F6F_TYPE,"F6F_TYPE"))
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "date", F6Y->F6Y_DTINS)
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "operation", IIf(nOperation==MODEL_OPERATION_DELETE, "DELETE",IIf(nOperation==MODEL_OPERATION_UPDATE,"UPDATE","INSERT")))
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "product", "MA3")
+            //TODO: Create fields for company and BRANCH and replace cEMPAnt and cFilAnt
+            //F6Y_FILIAL and F6Y_LOJA ?
+            //TODO: Implement saving of COMPANY and BRANCH
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "company", cEmpAnt)
+            oXML:XPathAddNode( "/"+cXmlName+"/header", "branch", cFilAnt)
+            cRet := oXML:Save2String()
+            cBuf := DecodeUtf8(cRet,"cp1251") //You can try Local oUni1 := tUnicode():New() instead
+            If !Empty(cBuf)
+                cRet := cBuf
+            EndIf
+        Else
+            cError := oXML:LastError()
+            RU99X20015_EAILogMsg(MSG_ERROR, I18N(STR0078+": #1",{Alltrim(cError)}), cUUID=F6Y->F6Y_MSUID, cAdapter=F6F->F6F_CODE, cData=cXML) // Error formatting message in XML format
+            LogQueue(MSG_ERROR, F6Y->F6Y_MSUID, I18N(STR0078), cMsg1=cError, cMsg2=cStack, cData=cXML) // Error formatting message in XML format
+        EndIf
+	Endif
+
+Return cRet
+
+/*/{Protheus.doc} LogQueue
+    Log operation into QUEUE for an specific record
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cType, character, MSG_FATAL   "9",MSG_ERROR   "8",MSG_DEBUG   "7",MSG_WARNING "5",MSG_INFO    "1"
+    @param cUUID, character, UUID from QUEUE
+    @param cShort, character, Short description
+    @param cMsg1, character, Message 1
+    @param cMsg2, character, Message 2
+    @param cMsg3, character, Message 3
+    @param cData, character, QUEUE records raw data
+/*/
+Static Function LogQueue(cType as Character,cUUID as Character,cShort as Character,cMsg1 as Character,cMsg2 as Character,cMsg3 as Character,cData as Character)
+    
+    DEFAULT cMsg1:= ""
+    DEFAULT cMsg2   := ""
+    DEFAULT cMsg3   := ""
+    DEFAULT cData   := ""
+    
+    RecLock('F6Z',.T.)
+    F6Z_FILIAL  :=  xFilial('F6Z')
+    F6Z_DTINS   :=  FWTimeStamp(6)
+    F6Z_QUUID   :=  cUUID
+    F6Z_TYPE    :=  cType
+    F6Z_TITLE   :=  cShort
+    F6Z_MSG     :=  cMsg1
+    F6Z_MSG2    :=  cMsg2
+    F6Z_MSG3    :=  cMsg3
+    F6Z_DATA    :=  cData
+    MsUnLock()
+
+Return
+
+/*/{Protheus.doc} RU99X20015_EAILogMsg
+    Generic message logging for MA3EAI
+    @type function
+    @author bsobieski
+    @since 15/12/2023
+    @param cType, character, MSG_FATAL   "9",MSG_ERROR   "8",MSG_DEBUG   "7",MSG_WARNING "5",MSG_INFO    "1"
+    @param cShort, character, Short description
+    @param cMsg1, character, Message 1 (all 3 messages will be saved as a unique JSON string)
+    @param cMsg2, character, Message 2 (all 3 messages will be saved as a unique JSON string)
+    @param cMsg3, character, Message 3 (all 3 messages will be saved as a unique JSON string)
+    @param cData, character, QUEUE records raw data
+    @param cAdapter, character, Adapter code
+    @param cUUID, character, UUID from QUEUE
+/*/
+Function RU99X20015_EAILogMsg(cType as Character,cShort as Character,cMsg1 as Character,cMsg2 as Character,cMsg3 as Character,cData as Character,cAdapter as Character,cUUID as Character)
+    Local oLog
+    Local cLogType   := ""
+    Local cMessages  := ""
+    Local aMessages  := {{"Title",cSHORT}}
+    DEFAULT cAdapter := ""
+    DEFAULT cUUID    := ""
+    DEFAULT cType    := MSG_INFO
+    DEFAULT cSHORT   := ""
+    DEFAULT cMsg1    := ""
+    DEFAULT cMsg2    := ""
+    DEFAULT cMsg3    := ""
+    DEFAULT cData    := ""
+    _cLogLevel       := IIf(_cLogLevel==Nil,MSG_INFO,_cLogLevel)
+
+    If !Empty(cAdapter)
+        aadd(aMessages, {"Adapter"       , cAdapter})
+    Endif
+    If !Empty(cMsg1+cMsg2+cMsg3)
+        If !Empty(cMsg1)
+            AAdd(aMessages,{"Message1",cMsg1})
+        Endif
+        If !Empty(cMsg2)
+            AAdd(aMessages,{"Message2",cMsg2})
+        Endif
+        If !Empty(cMsg3)
+            AAdd(aMessages,{"Message3",cMsg3})
+        Endif
+    Endif
+
+    If cType >= _cLogLevel
+        If !Empty(cMsg1+cMsg2+cMsg3)
+            oLog:=JsonObject():New()
+            If !Empty(cMsg1)
+                cMsg1:= StrTran(cMsg1,'"','\"')
+                oLog['msg1']:=Str2arr(cMsg1,Chr(10))
+            Endif
+            If !Empty(cMsg2)
+                cMsg2:= StrTran(cMsg2,'"','\"')
+                oLog['msg2']:=Str2arr(cMsg2,Chr(10))
+            Endif
+            If !Empty(cMsg3)
+                cMsg3:= StrTran(cMsg3,'"','\"')
+                oLog['msg3']:=Str2arr(cMsg3,Chr(10))
+            Endif
+            cMessages := oLog:ToJson()
+        Endif
+        
+        RecLock( 'F5L' ,.T.)
+        F5L_FILIAL := xFilial( 'F5L' )
+        F5L_DTINS  := FWTimeStamp(6)
+        F5L_TYPE   := cType
+        F5L_SHORT  := cSHORT
+        F5L_MSG    := cMessages
+        F5L_QUUID  := cUUID
+        F5L_ADAPTE := cAdapter
+        F5L_DATA   := cData
+        MsUnLock()
+    Endif
+    Do Case
+    Case MSG_FATAL == cType
+        cLogType := "FATAL"
+    Case MSG_ERROR == cType
+        cLogType := "ERROR"
+    Case MSG_DEBUG == cType
+        cLogType := "DEBUG"
+    Case MSG_WARNING== cType
+        cLogType := "WARN"
+    Case MSG_INFO == cType
+        cLogType := "INFO"
+    OtherWise
+        cLogType := "INFO"
+    EndCase
+    //FWLogMsg( < cSeverity >,  [ cTransactionId ] , < cGroup > , [ cCategory ] , [ cStep ] , [ cMsgId ] , [ cMessage ] , [ nMensure ] , [ nElapseTime ] , [ aMessage ] )
+    FWLogMsg(cLogType, Nil, 'BusinessObject', 'MA3EAI', '', ,cShort,/* <nMensure >*/, 0,aMessages)
+
+Return
+
+/*/{Protheus.doc} RU99X20016_GetLegendColors
+    
+    @type function
+    @author bsobieski
+    @since 
+    @param cField, Character, Name of field
+    @return aColors, Array, Formated response
+/*/
+Function RU99X20016_GetLegendColors(cField as character) as Array
+
+    Local aColors := {} as Array
+    Do Case 
+        Case cField == "F6Y_STATUS"
+            aadd(aColors,{STATUS_QUEUED,                "#646464",      STR0043}) // Queued
+            aadd(aColors,{STATUS_READY_TO_BE_PROCESSED, "#eeeeee",      STR0044}) // Ready to be processed
+            aadd(aColors,{STATUS_RETRY_PENDING,         "#ff9628",      STR0045}) // Retry pending
+            aadd(aColors,{STATUS_FAILED     ,           "#f44336",      STR0051}) // Failed
+            aadd(aColors,{STATUS_BLOCKED    ,           "#000000",      STR0046}) // Blocked
+            aadd(aColors,{STATUS_INTEGRATED ,           "#2978f4",      STR0047}) // Integrated
+            aadd(aColors,{STATUS_SUCCESS    ,           "#8bc34a",      STR0048}) // Success
+            //aadd(aColors,{STATUS_PURGED    ,            "#f44336",      STR0049}) // Purged
+        Case cField == "F5L_TYPE" .Or. cField == "F6Z_TYPE"
+            aadd(aColors,{MSG_FATAL 	,   "#f44336",      STR0050}) // Fatal error
+            aadd(aColors,{MSG_ERROR 	,  	"#f44336",      STR0052}) // Error
+            aadd(aColors,{MSG_DEBUG 	,  	"#000000",    STR0053}) // Debug
+            aadd(aColors,{MSG_WARNING	, 	"#ffc107",   STR0054}) // Warning
+            aadd(aColors,{MSG_INFO   	, 	"#2978f4",     STR0055}) // Info
+    EndCase
+
+Return aColors
+
+/*/{Protheus.doc} ReturnToken(cHost,cService,cUser,cPassword,cError)
+    Sends POST to authorization server and returns 
+    token for next messages. Or error text.
+    @type function
+    @author idashkov
+    @since 11/01/2024
+    @param cHost, Character, Host address where we will use REST
+    @param cService, Character, Path to service on host server to issue token
+    @param cUser, Character, User login for authorizarion server to issue token
+    @param cPassword, Character, Password for authorizarion server to issue token
+    @param cError, Character, HTTP error text in short
+    @return cToken, Character, Generated token expires in 1 hour by default
+    @example    cToken := ReturnToken("http://localhost:8089","/rest/api/oauth2/v1/token","user","123","")
+                cToken := ReturnToken("http://localhost:8089/rest","/api/oauth2/v1/token","user","123","")
+/*/
+Static Function ReturnToken(cHost as Character,cService as Character,cUser as Character,cPassword as Character,cError as Character) as Object
+
+    Local aHeader :={}
+    Local cBody := "" //
+    Local oResult := JsonObject():New()
+    Local oCurrentTokenData := JsonObject():New()
+    Local lNeedToRegen := .F.
+    Default cError := ""
+
+    cHost := Alltrim(cHost)
+    cService := Alltrim(cService)
+    cUser := Alltrim(cUser)
+    cPassword := Alltrim(cPassword)
+    If Empty(cHost) .Or. Empty(cService) .Or. Empty(cUser) .Or. Empty(cPassword)
+        cError := i18n(STR0080,{cHost,cService,cUser,cPassword}) // Cannot return a bearer token, at least one of required parameters is empty. Auth. server: #1; auth. service: #2; auth. user: #3; auth. password: #4 
+    Else
+        oCurrentTokenData := _oTokensData[cHost+cUser]
+        If oCurrentTokenData == Nil // There is no tokens generated
+            lNeedToRegen := .T.
+        Else
+            If Empty(oCurrentTokenData["access_token"]) .Or. Empty(oCurrentTokenData["issue_date"]) .Or. Empty(oCurrentTokenData["issue_time"])
+                lNeedToRegen := .T.
+            Else
+                If Date() == oCurrentTokenData["issue_date"]
+                    lNeedToRegen := Hrs2Min(ElapTime(oCurrentTokenData["issue_time"],Time()))*60 >= oCurrentTokenData["expires_in"] - 60 // in seconds
+                Else
+                    lNeedToRegen := .T.
+                EndIf
+            EndIf
+        EndIf
+
+        If lNeedToRegen
+            AAdd(aHeader, "Content-Type: application/json;  charset=UTF-8")
+            AAdd(aHeader, "Accept: */*")
+            AAdd(aHeader, "grant_type: password") // what if it is "grant_type: authorization_code"
+            AAdd(aHeader, "password: "+cPassword)
+            AAdd(aHeader, "username: "+cUser)
+            oRestClient := FWRest():New(cHost) // HTTP adress and port of authorization server (REST)
+            oRestClient:SetPath(cService) // Tells the path where the request will be made
+            cBody := '?grant_type=password&password='+cPassword+'&username='+cUser
+            oRestClient:SetPostParams(cBody)
+
+            If oRestClient:Post(aHeader)
+                oResult:FromJson(oRestClient:GetResult())
+                oResult["issue_date"] := Date()
+                oResult["issue_time"] := Time()
+                _oTokensData[cHost+cUser] := oResult
+            Else
+                ConOut("TOKEN - Result", oRestClient:GetResult())
+                ConOut("TOKEN - Error", oRestClient:GetLastError())
+                cError := oRestClient:GetLastError() + Iif(!(Valtype(oRestClient:cResult) == "U"),oRestClient:cResult,"")
+            Endif
+        EndIf
+    EndIf
+
+Return
+
+/*/{Protheus.doc} ReturnErrorString(aError as Array)
+    Function to return error message from error 
+    array fetched from model
+    @type function
+    @author idashkov
+    @since 05/02/2024
+    @param aError, Array, Error array from model
+    @return cError, Character, Error string
+/*/
+Static Function ReturnErrorString(aError as Array) as Character
+
+    Local cError := ""
+
+    cError += STR0081+" : ["+ AllToChar(aError[1])+"]" +Chr(10) // Origin Form 	ID
+    cError += STR0082+" : ["+ AllToChar(aError[2])+"]" +Chr(10) // Origin Field ID
+    cError += STR0083+" : ["+ AllToChar(aError[3])+"]" +Chr(10) // Error Form ID
+    cError += STR0084+" : ["+ AllToChar(aError[4])+"]" +Chr(10) // Error Field ID
+    cError += STR0085+" : ["+ AllToChar(aError[5])+"]" +Chr(10) // Error ID
+    cError += STR0086+" : ["+ AllToChar(aError[6])+"]" +Chr(10) // Error Message
+    cError += STR0087+" : ["+ AllToChar(aError[7])+"]" +Chr(10) // Solution Message
+    cError += STR0088+" : ["+ AllToChar(aError[8])+"]" +Chr(10) // Value assigned
+    cError += STR0089+" : ["+ AllToChar(aError[9])+"]" +Chr(10) // Previous value
+
+Return cError
+
+/*/{Protheus.doc} RU99X20017_XPathGetInfo(oXml,cPath,cError)
+    Returns value from XML node or attrbute by its full path
+    @type function
+    @author idashkov
+    @since 24/01/24
+    @param oXml, Object, TXmlManager with loaded in it xml file
+    @param cPath, Character, Full path to attribute/node
+    @param cError, Character, Error text in faulty result
+    @return xReturn, value of asked node/attribute (Character)
+                    or Nil (Undefined)
+/*/
+Function RU99X20017_XPathGetInfo(oXml as Object,cPath as Character,cError as Character)
+
+    Local xReturn := Nil
+    Local cAttr := ""
+    Local cAttrPath := ""
+    Default cError := ""
+
+	If oXML:XPathHasNode(cPath)
+        xReturn := oXML:XPathGetNodeValue(cPath)
+    Else
+        cAttrPath := SubStr(cPath, 1, Rat("/",cPath)-1)
+        cAttr := SubStr(cPath, Rat("/",cPath)+1, Len(cPath))
+        If oXML:XPathHasAtt(cAttrPath) 
+            xReturn := oXML:XPathGetAtt(cAttrPath,cAttr)
+        Else
+            cError := oXML:LastError() // Error in XML structure!
+            xReturn := Nil 
+        EndIf
+    EndIf
+
+Return xReturn
+
+/*/{Protheus.doc} RU99X20018_XPathSetInfo(oXml,cPath,cValue,cError)
+    Sets value to XML node or attrbute by its full path
+    @type function
+    @author idashkov
+    @since 24/01/24
+    @param oXml, Object, TXmlManager with loaded in it xml file
+    @param cPath, Character, Full path to attribute/node
+    @param cValue, Character, Value to be set to attribute/node
+    @param cError, Character, Error text in faulty result
+    @return xReturn, value of asked node/attribute (Character)
+                    or Nil (Undefined)
+/*/
+Function RU99X20018_XPathSetInfo(oXml as Object,cPath as Character,cValue as Character,cError as Character) as Logical
+
+    Local cAttr := "" as Character
+    Local cAttrPath := "" as Character
+    Local lRet := .F. as Logical
+    Default cError := ""
+
+	If oXML:XPathHasNode(cPath)
+        lRet := oXML:XPathSetNode(cPath,"",cValue)
+    Else
+        cAttrPath := SubStr(cPath, 1, Rat("/",cPath)-1)
+        cAttr := SubStr(cPath, Rat("/",cPath)+1, Len(cPath))
+        If oXML:XPathHasAtt(cAttrPath) 
+            lRet := oXML:XPathSetAtt(cAttrPath,cAttr,cValue)
+        Else
+            cError := oXML:LastError() // Error in XML structure!
+        EndIf
+    EndIf
+
+Return lRet
+
+/*/{Protheus.doc} RU99X20019_DecodeUTF8(cStrInUtf8,cEncoding)
+    Decodes JSON string where some words are in UTF-8 encoding
+    and some in other known encoding. Decode input "mixed" string into known encoding.
+    @type function
+    @author idashkov
+    @since 27.04.24
+    @param cStrInUtf8, Character, String with JSON with paramters values in mixed encodings
+    @param cEncoding, Character, Known encoding
+    @return Character, String with JSON encoded in input encoding
+/*/
+Function RU99X20019_DecodeUTF8(cStrInUtf8 as Character,cEncoding as Character) as Character
+
+    Local nI := 1
+    Local nJ := 1
+    Local nK := 1
+    Local cStr := ""
+    Local cSymbolInUTF8 := ""
+    Local cSymbol := ""
+    Local cBuf := cStrInUtf8
+    Local cWordInUTF8 := ""
+    Local cWord := ""
+    Local aWordsToFix := {}
+
+    For nI := 1 To Len(cStrInUtf8)
+        cSymbolInUTF8 := SubStr(cStrInUtf8,nI,1)
+        cSymbol := DecodeUtf8(cSymbolInUTF8,cEncoding)
+        If Empty(cSymbol)
+            nJ := At('"',cStrInUtf8,nI)
+            cWordInUTF8 := SubStr(cStrInUtf8,nI-1,nJ-nI+2)
+            cWord := DecodeUtf8(cWordInUTF8,cEncoding)
+            If Empty(cWord) 
+                cBuf := StrTran(cBuf,cWordInUTF8,'"#'+cValToChar(nK)+'"')
+                nK += 1
+                Aadd(aWordsToFix,SubStr(cWordInUTF8,2,Len(cWordInUTF8)-2))
+            EndIf
+            nI := nJ
+        EndIf
+    Next nI
+    cStr := DecodeUtf8(cBuf,cEncoding)
+    cStr := I18n(cStr,aWordsToFix)
+
+Return cStr
+
+/*/{Protheus.doc} TrySetEnv
+    Function to establish connection with 
+    database in case if it has not been done yet
+    @type function
+    @author idashkov
+    @since 29.05.24
+    @param cEmp, Character
+    @param cFil, Character
+    @return Logical, Flag of connecting (.T.) or skip (.F.)
+/*/
+Function TrySetEnv(cEmp as Character, cFil as Character) as Logical
+
+    Local lUsed := .F.  as Logical
+    Default cEmp := '00' // {'00','102030'} // {'99','01'}
+    Default cFil := '102030' 
+
+    lUsed := ( Select("SX3") == 0 )
+    
+    If lUsed == .T.
+        RpcSetType(3)
+        RPCSetEnv(cEmp,cFil)
+    EndIf
+
+Return lUsed
+
+Function RU99X20020_DecodeUTF8Json(oJson,cEncoding as Character)
+
+    Local nI, nJ
+    Local aPropNames
+    Local nLenJson
+    Local xItem
+    
+    nLenJson := Len(oJson)
+    
+    If nLenJson > 0
+        For nI := 1 to nLenJson
+            oJson[nI] := RU99X20020_DecodeUTF8Json(oJson[nI],cEncoding)
+        Next
+    Else
+        aPropNames := oJson:GetNames()
+        For nI := 1 to Len(aPropNames)
+            xItem := oJson[aPropNames[nI]]
+            If ValType(xItem) == "C"
+                xItem := DecodeUtf8(xItem,cEncoding)//RU99X20019_DecodeUTF8(xItem,cEncoding)
+                If !Empty(xItem)
+                    oJson[aPropNames[nI]] := xItem
+                EndIf
+            ElseIf ValType(xItem) == "A"
+                For nJ := 1 to Len(xItem)
+                    If ValType(xItem[nJ]) == "J"
+                        oJson[aPropNames[nI]][nJ] := RU99X20020_DecodeUTF8Json(xItem[nJ],cEncoding)
+                    EndIf
+                Next nJ
+            EndIf
+        Next nI
+    EndIf
+
+Return oJson
+
+/*/{Protheus.doc} getCboxTranslate()
+    Returns SX3 cBox "tranasaltion" of value to it's label
+    @type  Function
+    @author idashkov
+    @since 19.02.2024
+    @version 1.0.0
+    @param cVal, Character, Value of field to be converted into label
+    @param cField, Character, Name of field which label should be returned
+    @return Character, Label from SX3
+    @example getCboxTranslate("5","F6Y_STATUS") == "BLOCKED"
+/*/
+Function getCboxTranslate(cVal as Character,cField as Character) as Character
+
+    Local cResult := ""
+    Local aOptions := GFIN.API.TABLES.getOptionsX3CBox(cField)
+    Local nPos := aScan(aOptions,{|x| x["value"] == cVal})
+    
+    If nPos > 0 
+        cResult := aOptions[aScan(aOptions,{|x| x["value"] == cVal})]["label"]
+    Else
+        cResult := cVal
+    EndIf
+
+Return cResult

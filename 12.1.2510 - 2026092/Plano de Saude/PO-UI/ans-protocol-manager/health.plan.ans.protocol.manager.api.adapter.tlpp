@@ -1,0 +1,350 @@
+#include "tlpp-core.th"
+
+#define PROT_STATUS_OPEN "1" // Aberto
+#define PROT_STATUS_CLOSED "2" // Fechado
+#define PROT_STATUS_IN_ANALYSIS "3" // Em Análise
+#define PROT_STATUS_PENDING_INFO "4" // Pendente de Informação
+#define PROT_STATUS_CANCELED "5" // Cancelado
+
+#define SLA_STATUS_ON_TIME "1" // No Prazo
+#define SLA_STATUS_DUE_TODAY "2" // A Vencer Hoje
+#define SLA_STATUS_OVERDUE "3" // Vencido / Atrasado
+#define SLA_STATUS_PAUSED "4" // Pausado
+#define SLA_STATUS_COMPLETED "5" // Concluido
+
+namespace totvs.protheus.health.plan.ans.protocol.manager
+
+using namespace totvs.protheus.health.plans.api.util
+
+/*/{Protheus.doc} AnsProtocolManagerAdapter
+Adapter responsável por realizar a comunicação entre o serviço e o banco de dados para a API de protocolos ANS.
+@type class
+@version 12.1.2610
+@since 25/06/2026
+@author vinicius.queiros
+/*/
+class AnsProtocolManagerAdapter from BaseAdapter
+
+    private data jResult as json
+
+    public method new() constructor
+    public method getAnsProtocols() as logical
+    public method getAnsSummaryProtocols() as logical
+    public method getJsonResult() as json
+
+    protected method ansProtocolFieldsMap()
+    protected method getAnsProtocolQuery() as character
+    protected method getAnsProtocolWhere() as character
+    protected method getAnsProtocolOrder() as character
+
+endclass
+
+/*/{Protheus.doc} new
+Construtor da classe AnsProtocolManagerAdapter.
+@type method
+@version 12.1.2610
+@since 25/06/2026
+@author vinicius.queiros
+@return object, instância da classe AnsProtocolManagerAdapter
+/*/
+method new() class AnsProtocolManagerAdapter
+
+    _Super:new()
+
+return self
+
+/*/{Protheus.doc} getAnsProtocols
+Processa a requisição para retornar os protocolos ANS.
+@type method
+@version 12.1.2610
+@since 25/06/2026
+@author vinicius.queiros
+@return logical, true se a operação foi bem sucedida, false caso contrário
+/*/
+method getAnsProtocols() as logical class AnsProtocolManagerAdapter
+
+    local lSuccess := .F. as logical
+	local cQuery := self:getAnsProtocolQuery() as character
+	local cWhere := self:getAnsProtocolWhere() as character
+	local cOrder := self:getAnsProtocolOrder() as character
+
+	self:ansProtocolFieldsMap()
+
+	lSuccess := self:executeQueryAdapter(cQuery, cWhere, cOrder)
+
+return lSuccess
+
+/*/{Protheus.doc} getAnsSummaryProtocols
+Processa a requisição para retornar o resumo consolidado dos protocolos ANS, agrupando totais por status do SLA.
+@type method
+@version 12.1.2610
+@since 23/07/2026
+@author vinicius.queiros
+@return logical, true se a operação foi bem sucedida, false caso contrário
+/*/
+method getAnsSummaryProtocols() as logical class AnsProtocolManagerAdapter
+
+    local lSuccess := .F. as logical
+    local cQuery := self:getAnsProtocolQuery() as character
+    local cWhere := self:getAnsProtocolWhere() as character
+    local cFields as character
+    local oExecStmt as object
+    local cAlias as character
+
+    // Mantém o resumo em uma única consulta para reduzir round-trips no banco.
+    // As colunas seguem exatamente os cartões exibidos no front (totais por status SLA).
+    cFields := " COUNT(B00_STATUS) TOTAL_ACTIVE, "
+    cFields += " COUNT(CASE WHEN " + getSlaStatusSql() + "  = '" + SLA_STATUS_ON_TIME + "' THEN 1 END) ON_TIME, "
+    cFields += " COUNT(CASE WHEN " + getSlaStatusSql() + " = '" + SLA_STATUS_DUE_TODAY + "' THEN 1 END) DUE_TODAY, "
+    cFields += " COUNT(CASE WHEN " + getSlaStatusSql() + " = '" + SLA_STATUS_OVERDUE + "' THEN 1 END) OVERDUE, "
+    cFields += " COUNT(CASE WHEN " + getSlaStatusSql() + " = '" + SLA_STATUS_PAUSED + "' THEN 1 END) PAUSED, "
+    cFields += " COUNT(CASE WHEN " + getSlaStatusSql() + " = '" + SLA_STATUS_COMPLETED + "' THEN 1 END) COMPLETED "
+
+    cQuery := strTran(cQuery, "#QueryWhere#", cWhere)
+	cQuery := strTran(cQuery, "#QueryFields#", cFields)
+
+    oExecStmt := FwExecStatement():new(cQuery)
+
+    cAlias := oExecStmt:openAlias()
+
+    if !(cAlias)->(eof())
+        self:jResult := JsonObject():new()
+        self:jResult["totalActive"] := (cAlias)->TOTAL_ACTIVE
+        self:jResult["onTime"] := (cAlias)->ON_TIME
+        self:jResult["dueToday"] := (cAlias)->DUE_TODAY
+        self:jResult["overdue"] := (cAlias)->OVERDUE
+        self:jResult["paused"] := (cAlias)->PAUSED
+        self:jResult["completed"] := (cAlias)->COMPLETED
+
+        lSuccess := .T.
+    endif
+
+    (cAlias)->(dbCloseArea())
+
+	oExecStmt:destroy()
+	freeObj(oExecStmt)
+
+return lSuccess
+
+/*/{Protheus.doc} getJsonResult
+Retorna o resultado da última operação em formato JSON. Sobrescreve o método da classe pai (polimorfismo) 
+para suportar o retorno do resumo de protocolos ANS quando lSummary for verdadeiro.
+@type method
+@version 12.1.2610
+@since 23/07/2026
+@author vinicius.queiros
+@param lSummary, logical, Indica se deve retornar o JSON de resumo (.T.) ou a lista padrão (.F.). Padrão: .F.
+@return json, objeto JSON com o resultado da operação
+/*/
+method getJsonResult(lSummary as logical) as json class AnsProtocolManagerAdapter
+
+    local jResult as json
+
+    default lSummary := .F.
+
+    // Quando solicitado resumo, retorna o payload agregado já montado em getAnsSummaryProtocols.
+    if lSummary
+        jResult := self:jResult
+    else
+       jResult := _Super:getJsonResult() 
+    endif
+
+return jResult
+
+/*/{Protheus.doc} ansProtocolFieldsMap
+Mapeia os campos da tabela de protocolos ANS para os campos do JSON de resposta.
+@type method
+@version 12.1.2610
+@since 25/06/2026
+@author vinicius.queiros
+/*/
+method ansProtocolFieldsMap() class AnsProtocolManagerAdapter
+
+    // Manter este mapeamento alinhado com setProtocolDetails() no service.
+    self:addMapFields("protocolId", "B00_COD")
+    self:addMapFields("subscriberId", "B00_MATRIC")
+    self:addMapFields("beneficiaryName", "B00_CONTAT")
+    self:addMapFields("creationDate", "B00_DTPROT")
+    self:addMapFields("creationTime", "B00_HRPROT")
+    self:addMapFields("limitDate", "B00_DATLIM")
+    self:addMapFields("deadlineDays", "B00_PRZDIA")
+    self:addMapFields("deadlineCode", "B00_CODPRZ")
+    self:addMapFields("deadlineDescription", "B6Y_DESCRI")
+    self:addMapFields("closingDate", "B00_DTENCE")
+    self:addMapFields("closingTime", "B00_HRENCE")
+    self:addMapFields("status", "B00_STATUS")
+    self:addMapFields("slaStatus", "B00_STATUS", getSlaStatusSql())
+    self:addMapFields("origin", "B00_ORIPRO")
+
+return
+
+/*/{Protheus.doc} getAnsProtocolQuery
+Constrói a query SQL para buscar os protocolos ANS no banco de dados.
+@type method
+@version 12.1.2610
+@since 25/06/2026
+@author vinicius.queiros
+@return character, query SQL para buscar os protocolos ANS
+/*/
+method getAnsProtocolQuery() as character class AnsProtocolManagerAdapter
+
+    local cQuery as character
+    local aBindValues := {} as array
+
+	cQuery := " SELECT #QueryFields# "
+	cQuery += " FROM ? B00 "
+    cQuery += " INNER JOIN ? B6Y ON"
+    cQuery += "	    B6Y.B6Y_FILIAL = ? AND "
+    cQuery += "		B6Y.B6Y_CODPRZ = B00.B00_CODPRZ AND "
+    cQuery += "		B6Y.D_E_L_E_T_ = ? "
+	cQuery += " WHERE #QueryWhere# "
+
+    // Apenas nomes de tabela são bindados como unsafe (retSqlName controla o identificador físico).
+    aAdd(aBindValues, {"set": "unsafe", "value": retSqlName("B00")})
+    aAdd(aBindValues, {"set": "unsafe", "value": retSqlName("B6Y")})
+    aAdd(aBindValues, {"set": "string", "value": xFilial("B6Y")})
+    aAdd(aBindValues, {"set": "string", "value": space(1)})
+
+	cQuery := self:bindValuesToQuery(cQuery, aBindValues)
+
+	fwFreeArray(aBindValues)
+
+return cQuery
+
+/*/{Protheus.doc} getAnsProtocolWhere
+Constrói a cláusula WHERE da query SQL para buscar os protocolos ANS no banco de dados
+@type method
+@version 12.1.2610
+@since 26/06/2026
+@author vinicius.queiros
+@return character, cláusula WHERE da query SQL para buscar os protocolos ANS
+/*/
+method getAnsProtocolWhere() as character class AnsProtocolManagerAdapter
+
+    local cQueryWhere as character
+    local aBindValues := {} as array
+
+    // A cláusula é montada incrementalmente; a ordem dos binds deve acompanhar
+    // exatamente a ordem dos placeholders adicionados no SQL.
+    cQueryWhere := " B00.B00_FILIAL = ? AND "
+    cQueryWhere += " B00.B00_RN623 = ? AND "
+
+    aAdd(aBindValues, {"set": "string", "value": xFilial("B00")})
+    aAdd(aBindValues, {"set": "string", "value": "1"})
+
+    if self:hasValidParam("protocolId")
+        cQueryWhere += " B00.B00_COD = ? AND "
+        aAdd(aBindValues, {"set": "string", "value": self:jParams["protocolId"]})
+    endif
+
+    if self:hasValidParam("subscriberId")
+        cQueryWhere += " B00.B00_MATRIC = ? AND "
+        aAdd(aBindValues, {"set": "string", "value": self:jParams["subscriberId"]})
+    endif
+
+    if self:hasValidParam("beneficiaryName")
+        // Prefix search para manter aderência ao comportamento atual da busca por nome.
+        cQueryWhere += " UPPER(B00.B00_CONTAT) LIKE '?%' AND "
+        aAdd(aBindValues, {"set": "unsafe", "value": upper(self:jParams["beneficiaryName"])})
+    endif
+
+    if self:hasValidParam("status")
+		cQueryWhere += " B00.B00_STATUS IN (?) AND "
+		aAdd(aBindValues, {"set": "in", "value": strToKarr(self:jParams["status"], ",")})
+	endif
+
+    if self:hasValidParam("slaStatus")
+        cQueryWhere += getSlaStatusSql() + " IN (?) AND "
+        aAdd(aBindValues, {"set": "in", "value": strToKarr(self:jParams["slaStatus"], ",")})
+    endif
+
+    if self:hasValidParam("origin")
+        cQueryWhere += " B00.B00_ORIPRO = ? AND "
+        aAdd(aBindValues, {"set": "string", "value": self:jParams["origin"]})
+    endif
+
+    if self:hasValidParam("deadlineCode")
+        cQueryWhere += " B00.B00_CODPRZ IN (?) AND "
+        aAdd(aBindValues, {"set": "in", "value": strToKarr(self:jParams["deadlineCode"], ",")})
+    endif
+
+    if self:hasValidParam("startLimitDate")
+        cQueryWhere += " B00.B00_DATLIM >= ? AND "
+        aAdd(aBindValues, {"set": "date", "value": stod(self:convertDateFormat(self:jParams["startLimitDate"], "S"))})
+    endif
+
+    if self:hasValidParam("endLimitDate")
+        cQueryWhere += " B00.B00_DATLIM <= ? AND "
+        aAdd(aBindValues, {"set": "date", "value": stod(self:convertDateFormat(self:jParams["endLimitDate"], "S"))})
+    endif
+
+    if self:hasValidParam("startCreationDate")
+        cQueryWhere += " B00.B00_DTPROT >= ? AND "
+        aAdd(aBindValues, {"set": "date", "value": stod(self:convertDateFormat(self:jParams["startCreationDate"], "S"))})
+    endif
+
+    if self:hasValidParam("endCreationDate")
+        cQueryWhere += " B00.B00_DTPROT <= ? AND "
+        aAdd(aBindValues, {"set": "date", "value": stod(self:convertDateFormat(self:jParams["endCreationDate"], "S"))})
+    endif
+
+    if self:hasValidParam("search")
+        // Busca rápida: tenta código do protocolo, nome do beneficiário e matrícula.
+        cQueryWhere += " (B00.B00_COD = ? OR UPPER(B00.B00_CONTAT) LIKE '?%' OR B00.B00_MATRIC = ?) AND "
+        aAdd(aBindValues, {"set": "string", "value": self:jParams["search"]})
+        aAdd(aBindValues, {"set": "unsafe", "value": upper(self:jParams["search"])})
+        aAdd(aBindValues, {"set": "string", "value": self:jParams["search"]})
+    endif
+
+    cQueryWhere += " B00.D_E_L_E_T_ = ? "
+
+	aAdd(aBindValues, {"set": "string", "value": space(1)})
+
+	cQueryWhere := self:bindValuesToQuery(cQueryWhere, aBindValues)
+
+	fwFreeArray(aBindValues)
+
+return cQueryWhere
+
+/*/{Protheus.doc} getAnsProtocolOrder
+Constrói a cláusula ORDER BY da query SQL para buscar os protocolos ANS no banco de dados.
+@type method
+@version 12.1.2610
+@since 26/06/2026
+@author vinicius.queiros
+@return character, cláusula ORDER BY da query SQL para buscar os protocolos ANS
+/*/
+method getAnsProtocolOrder() as character class AnsProtocolManagerAdapter
+
+    local cQueryOrder as character
+
+    cQueryOrder := " B00.B00_DTPROT DESC, B00.B00_HRPROT DESC, B00.B00_COD DESC "
+
+return cQueryOrder
+
+/*/{Protheus.doc} getSlaStatusSql
+Obtém a cláusula SQL para calcular o status do SLA com base nos campos da tabela de protocolos ANS.
+@type function
+@version 12.1.2610
+@since 26/06/2026
+@author vinicius.queiros
+@return character, cláusula SQL para calcular o status do SLA
+/*/
+static function getSlaStatusSql() as character
+
+    local cStatus as character
+    local cCurrentDate := dtos(dDataBase) as character
+    local cCurrentTime := substr(time(), 1, 2) + substr(time(), 4, 2) as character
+
+    // Ordem das condições é relevante: fechado/cancelado e pendente de informação
+    // prevalecem sobre regras de vencimento.
+    cStatus := " CASE "
+    cStatus += "    WHEN B00_STATUS IN ('" + PROT_STATUS_CLOSED + "', '" + PROT_STATUS_CANCELED + "') THEN '" + SLA_STATUS_COMPLETED + "' "
+    cStatus += "    WHEN B00_STATUS = '" + PROT_STATUS_PENDING_INFO + "' THEN '" + SLA_STATUS_PAUSED + "' "
+    cStatus += "    WHEN B00_DATLIM < '" + cCurrentDate + "' THEN '" + SLA_STATUS_OVERDUE + "' "
+    cStatus += "    WHEN B00_DATLIM = '" + cCurrentDate + "' AND B00_HRPROT < '" + cCurrentTime + "' THEN '" + SLA_STATUS_OVERDUE + "' "
+    cStatus += "    WHEN B00_DATLIM = '" + cCurrentDate + "' THEN '" + SLA_STATUS_DUE_TODAY + "' "
+    cStatus += "    ELSE '" + SLA_STATUS_ON_TIME + "' "
+    cStatus += " END "
+
+return cStatus

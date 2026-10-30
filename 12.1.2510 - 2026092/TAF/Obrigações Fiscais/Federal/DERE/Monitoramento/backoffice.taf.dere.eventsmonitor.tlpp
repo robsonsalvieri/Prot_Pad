@@ -1,0 +1,744 @@
+#include "tlpp-core.th"
+#include "tlpp-object.th"
+#include "totvs.ch"
+#include "backoffice.taf.dere.eventsmonitor.ch"
+
+namespace backoffice.taf.dere.monitoring
+
+#DEFINE DERE_ROUTINE            "TAFA646"
+#DEFINE DERE_MODULE_TAF         84
+
+#DEFINE DERE_RECORD_ACTIVE      "1"
+#DEFINE DERE_RECORD_INACTIVE    "2"
+
+#DEFINE DERE_OPERATION_DELETE   "E"
+
+//Status gravados nas tabelas espelho do TAF
+#DEFINE DERE_STATUS_WAITING     "1"
+#DEFINE DERE_STATUS_REJECTED    "3"
+#DEFINE DERE_STATUS_VALIDATED   "4"
+#DEFINE DERE_STATUS_RESET       ""
+
+//Status devolvidos pelo TSS na consulta do lote
+#DEFINE TSS_STATUS_REJECTED            "5"
+#DEFINE TSS_STATUS_AUTHORIZED          "6"
+#DEFINE TSS_STATUS_REJECTED_CREDENTIAL "9"
+
+//Codigos dos eventos da DeRE tratados por este monitoramento
+#DEFINE DERE_EVENT_1001         "D-1001"
+#DEFINE DERE_EVENT_1011         "D-1011"
+
+//Posicoes do array de atualizacao montado por TafDereMonitorsSentEvents
+#DEFINE DERE_UPD_ALIAS          1
+#DEFINE DERE_UPD_ID             2
+#DEFINE DERE_UPD_STATUS         3
+#DEFINE DERE_UPD_PROTOCOL       4
+#DEFINE DERE_UPD_RECEIPT        5
+#DEFINE DERE_UPD_MESSAGE        6
+
+//Posicoes do array recebido de AgrupaInfoEvt (backoffice.taf.dere.transmission)
+#DEFINE DERE_SEND_EVENT         1
+#DEFINE DERE_SEND_ID            2
+#DEFINE DERE_SEND_XMLID         3
+#DEFINE DERE_SEND_STATUS        4
+
+//Decomposicao da chave devolvida pelo TSS: <tipo><codigo><id><versao>
+#DEFINE DERE_ID_TYPE_INI        1
+#DEFINE DERE_ID_TYPE_LEN        1
+#DEFINE DERE_ID_CODE_INI        2
+#DEFINE DERE_ID_CODE_LEN        4
+#DEFINE DERE_ID_KEY_INI         6
+#DEFINE DERE_ID_VERSION_LEN     14
+#DEFINE DERE_ID_FIXED_LEN       19
+
+//Posicoes do array devolvido por TafDereSplitEventKey
+#DEFINE DERE_KEY_ID             1
+#DEFINE DERE_KEY_VERSION        2
+
+//Posicao do tamanho do campo no array devolvido por TamSX3
+#DEFINE SX3_FIELD_SIZE          1
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TAFDereEventsMonitor
+Classe responsável por monitorar o eventos da Dere.
+
+@type class
+@author Rafael de Paula Leme
+@since 20/08/2026
+@version 1.0
+-------------------------------------------------------------------------------*/
+Class TAFDereEventsMonitor
+    public  method New() 					      as object
+	public  method TafDereSchdEventsMonitor()     as logical
+    public  method TafDereMonitorsSentEvents()    as object
+	public  method TafDereUpdateShipment()        as object
+	public  method TafDereGetGovErrorMessage()    as character
+	public  method TafDereCancelSchdMonitor()     as logical
+	public  method TafDereGetEventAlias()         as character
+	public  method TafDereSplitEventKey()         as array
+	private method TafDereProcessesEventReturns() as object
+    private method GetPendingEvents()             as character
+	private method GetXmlReturnDescription()      as character
+EndClass
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} New()
+Método para instânciar a classe
+
+@type method
+@author Rafael de Paula Leme
+@since 20/08/2026
+@version 1.0
+@return object, instância da classe TAFDereEventsMonitor
+-------------------------------------------------------------------------------*/
+method New() as object class TAFDereEventsMonitor
+return Self
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereSchdEventsMonitor()
+Metodo responsável por agendar o monitoramento dos eventos da Dere transmitidos
+
+@type method
+@author Rafael de Paula Leme
+@since 20/08/2026
+@version 1.0
+@return logical, .T. quando o agendamento já existe ou foi criado com sucesso
+-------------------------------------------------------------------------------*/
+method TafDereSchdEventsMonitor() as logical class TAFDereEventsMonitor
+
+    Local oSchedule  := Nil    as object
+	Local lSchdOk    := .F.    as logical
+    Local cAmbiente  := ""     as character
+    Local cHoraIni   := ""     as character
+    Local dDataIni   := Date() as date
+    Local nHoraIni   := 0      as numeric
+    Local nMinutoIni := 0      as numeric
+
+    // Evita duplicar o agendamento a cada chamada
+    If Len(totvs.framework.schedule.utils.getSchedsByRotine(DERE_ROUTINE)) > 0
+        TAFConout("TAFA646: agendamento ja existente, criacao ignorada.")
+		lSchdOk := .T.
+        Return lSchdOk
+    EndIf
+
+	//Busco o schedule ativo
+	cAmbiente := TafSchdRun()
+
+    // Primeira execucao: agora + 1 minuto. Na virada de meia-noite o IncTime devolve
+    // "00:MM:SS", que e menor que a hora atual, logo a data precisa avancar um dia
+    cHoraIni := IncTime(Time(), 0, 1, 0)
+
+    nHoraIni   := Val(SubStr(cHoraIni, 1, 2))
+    nMinutoIni := Val(SubStr(cHoraIni, 4, 2))
+
+    oSchedule := totvs.framework.schedule.automatic():new()
+
+    oSchedule:setRoutine(DERE_ROUTINE)
+    oSchedule:setFirstExecution(dDataIni, cHoraIni)      // primeira execucao: +1 minuto
+    oSchedule:setPeriod("D", , nHoraIni, nMinutoIni)     // periodicidade diaria
+    oSchedule:setFrequency("M", 1, , 23, 59)             // a cada 1 minuto, ate 23:59
+    oSchedule:setRecurrence(.T.)                         // recorrente: nao encerra sozinho
+    oSchedule:setManageable(.T.)                         // visivel/gerenciavel no SmartSchedule
+    oSchedule:setDiscard(.F.)
+    oSchedule:setEnvironment(cAmbiente, {{cEmpAnt, {cFilAnt}}})
+    oSchedule:setModule(DERE_MODULE_TAF)                 // SIGATAF
+    oSchedule:setUser(__cUserID)
+    oSchedule:setDescription(STR0001) //"Monitoramento de retorno de eventos da DeRE"
+
+    If oSchedule:createSchedule()
+        TAFConout("TAFA646: agendamento criado. Primeira execucao em " + ;
+                  DToC(dDataIni) + " " + cHoraIni + ", repetindo a cada 1 minuto.")
+		lSchdOk := .T.
+    Else
+        TAFConout("TAFA646: falha ao criar o agendamento - " + oSchedule:getErrorMessage())
+		lSchdOk := .F.
+    EndIf
+
+    FWFreeObj(oSchedule)
+
+return lSchdOk
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereCancelSchdMonitor()
+Cancela (exclui) o agendamento da TAFA646, encerrando as execuções periódicas.
+
+@type method
+@author Rafael de Paula Leme
+@since 28/08/2026
+@version 1.0
+@return logical, .T. se todos os agendamentos foram excluídos
+-------------------------------------------------------------------------------*/
+method TafDereCancelSchdMonitor() as logical class TAFDereEventsMonitor
+
+    Local oSchedule := Nil as object
+    Local aScheds   := {}  as array
+    Local nX        := 0   as numeric
+    Local lRet      := .T. as logical
+
+    aScheds := totvs.framework.schedule.utils.getSchedsByRotine(DERE_ROUTINE)
+
+    If Len(aScheds) > 0
+    	oSchedule := totvs.framework.schedule.automatic():new()
+
+		For nX := 1 To Len(aScheds)
+			oSchedule:setSchedule(aScheds[nX])
+
+			//deleteSchedule() e sempre avaliado: fica a esquerda do .And.
+			lRet := oSchedule:deleteSchedule() .And. lRet
+		Next nX
+
+    	FWFreeObj(oSchedule)
+	EndIf
+
+return lRet
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereGetEventAlias()
+Devolve o alias da tabela espelho correspondente ao código do evento da DeRE.
+
+@type method
+@author Rafael de Paula Leme
+@since 08/09/2026
+@version 1.0
+@param cEvento, character, código do evento (ex.: "D-1001")
+@return character, alias da tabela espelho ou "" quando o evento não é tratado
+-------------------------------------------------------------------------------*/
+method TafDereGetEventAlias(cEvento as character) as character class TAFDereEventsMonitor
+
+	Local cAlias := "" as character
+
+	Default cEvento := ""
+
+	Do Case
+		Case AllTrim(cEvento) == DERE_EVENT_1001
+			cAlias := "T7T"
+
+		Case AllTrim(cEvento) == DERE_EVENT_1011
+			cAlias := "T7Z"
+	EndCase
+
+return cAlias
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereSplitEventKey()
+Decompõe a chave devolvida pelo TSS, no formato <tipo><codigo><id><versao>,
+nas partes ID e versão usadas na chave de índice das tabelas espelho.
+
+@type method
+@author Rafael de Paula Leme
+@since 08/09/2026
+@version 1.0
+@param cKeyTss, character, chave de identificação do registro no TSS
+@return array, {[1] ID do registro, [2] versão do layout}
+-------------------------------------------------------------------------------*/
+method TafDereSplitEventKey(cKeyTss as character) as array class TAFDereEventsMonitor
+
+	Local aKey   := {} as array
+	Local cKey   := "" as character
+	Local nTamId := 0  as numeric
+
+	Default cKeyTss := ""
+
+	cKey   := AllTrim(cKeyTss)
+	nTamId := Len(cKey) - DERE_ID_FIXED_LEN
+
+	aKey := {SubStr(cKey, DERE_ID_KEY_INI, nTamId), Right(cKey, DERE_ID_VERSION_LEN)}
+
+return aKey
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereMonitorsSentEvents()
+Metodo responsável por monitorar os eventos enviados ao TSS.
+
+Monta o lote de eventos ainda pendentes de retorno, consulta o TSS e traduz cada
+status devolvido para o status equivalente das tabelas espelho do TAF. Eventos que
+seguem em curso no TSS não são gravados e permanecem pendentes para o próximo ciclo.
+O agendamento só é encerrado quando não há mais nenhum evento pendente.
+
+@type method
+@author Rafael de Paula Leme
+@since 20/08/2026
+@version 1.0
+@return object, instância da própria classe
+-------------------------------------------------------------------------------*/
+method TafDereMonitorsSentEvents() as object class TAFDereEventsMonitor
+
+	Local oTssDere    := Nil as object
+	Local aIdEvento   := {}  as array
+	Local aRetTss     := {}  as array
+	Local aAtuEvento  := {}  as array
+	Local nX          := 0   as numeric
+	Local cAlias      := ""  as character
+	Local cAliasEvt   := ""  as character
+	Local cIdTss      := ""  as character
+	Local cStatus     := ""  as character
+	Local cStatusTaf  := ""  as character
+	Local cMsgErroXml := ""  as character
+	Local cEntTSS     := SuperGetMV("MV_TAFVLRE",.F.,"") as character
+
+	If !TAFAlsInDic("T7T") .or. !TAFAlsInDic("T7Z")
+		TAFConout("TAFA646: dicionario de dados desatualizado. Verifique.")
+		Return Self
+	EndIf
+
+	//Busco nas tabelas espelhos os IDs dos registros pendentes de retorno pelo TSS
+	cAlias := ::GetPendingEvents()
+
+	While !(cAlias)->(EoF())
+		Aadd(aIdEvento, AllTrim(StrTran((cAlias)->EVENTO, "-", "")) + AllTrim((cAlias)->ID) + AllTrim((cAlias)->VERSAO))
+		(cAlias)->(DbSkip())
+	EndDo
+
+	(cAlias)->(DbCloseArea())
+
+	//Sem pendencia nas tabelas espelho nao ha mais o que monitorar
+	If Len(aIdEvento) == 0
+		::TafDereCancelSchdMonitor()
+		TAFConout("TAFA646: nenhum evento pendente de retorno. Agendamento encerrado.")
+		Return Self
+	EndIf
+
+	oTssDere := WsProcDere():New()
+	If AllTrim(cEntTSS) == '9_99_99'
+    	oTssDere:setEntidade('000001')
+    EndIf
+	oTssDere:setEventosConsulta(aIdEvento)
+	oTssDere:consultarLote()
+
+	//Em caso de falha o getResultado devolve a mensagem de erro, e nao os objetos do
+	//TSS, portanto o retorno so pode ser percorrido quando a consulta teve sucesso
+	If oTssDere:getLSucesso()
+		aRetTss := oTssDere:getResultado()
+
+		For nX := 1 to Len(aRetTss)
+
+			cAliasEvt   := ""
+			cStatusTaf  := ""
+			cMsgErroXml := ""
+			cIdTss      := AllTrim(aRetTss[nX]['CID'])
+			cStatus     := AllTrim(aRetTss[nX]['CSTATUS'])
+
+			//DePara Codigos TSS x Codigos TAF
+			Do Case
+				//Evento nao localizado no TSS: limpa o vinculo para permitir novo envio
+				Case Empty(cStatus)
+					cAliasEvt  := ::TafDereGetEventAlias(Upper(SubStr(cIdTss, DERE_ID_TYPE_INI, DERE_ID_TYPE_LEN)) + '-' + ;
+					                                     SubStr(cIdTss, DERE_ID_CODE_INI, DERE_ID_CODE_LEN))
+					cStatusTaf := DERE_STATUS_RESET
+
+				//Rejeitado: as ocorrencias precisam ser extraidas do XML de retorno
+				Case cStatus == TSS_STATUS_REJECTED .or. cStatus == TSS_STATUS_REJECTED_CREDENTIAL
+					cAliasEvt   := ::TafDereGetEventAlias(Upper(AllTrim(aRetTss[nX]['CTIPOEVENTO'])))
+					cStatusTaf  := DERE_STATUS_REJECTED
+					cMsgErroXml := STR0003
+					If cStatus == TSS_STATUS_REJECTED
+						cMsgErroXml := ::GetXmlReturnDescription(Decode64(aRetTss[nX]['CXMLRET']))
+					EndIf
+
+				//Autorizado
+				Case cStatus == TSS_STATUS_AUTHORIZED
+					cAliasEvt   := ::TafDereGetEventAlias(Upper(AllTrim(aRetTss[nX]['CTIPOEVENTO'])))
+					cStatusTaf  := DERE_STATUS_VALIDATED
+					cMsgErroXml := AllTrim(aRetTss[nX]['CDESCRICAOGOV'])
+			EndCase
+
+			//Alias vazio: evento ainda em curso no TSS ou codigo de evento nao tratado.
+			//Nada e gravado e o registro segue pendente para o proximo ciclo
+			If !Empty(cAliasEvt)
+				Aadd(aAtuEvento, {cAliasEvt, cIdTss, cStatusTaf,;
+					AllTrim(aRetTss[nX]['CPROTOCOLO']), AllTrim(aRetTss[nX]['CRECIBO']), cMsgErroXml})
+			EndIf
+		Next nX
+
+		If Len(aAtuEvento) > 0
+			::TafDereProcessesEventReturns(aAtuEvento)
+		EndIf
+	EndIf
+
+	FWFreeObj(oTssDere)
+
+return Self
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} GetPendingEvents()
+Metodo para trazer os registros pendentes de retorno do governo.
+
+@type method
+@author Rafael de Paula Leme
+@since 20/08/2026
+@version 1.0
+@return character, alias temporário com os eventos pendentes (EVENTO, ID, VERSAO)
+-------------------------------------------------------------------------------*/
+method GetPendingEvents() as character class TAFDereEventsMonitor
+
+    Local oPrepare := Nil as object
+	Local aBind    := {}  as array
+	Local nX       := 0   as numeric
+	Local cQuery   := ""  as character
+	Local cAlias   := ""  as character
+
+	cQuery := "SELECT '" + DERE_EVENT_1001 + "' EVENTO, T7T.T7T_ID ID, T7T.T7T_VERSAO VERSAO "
+	cQuery += "FROM " + RetSqlName('T7T') + " T7T "
+	cQuery += "WHERE T7T.T7T_FILIAL = ? "
+	cQuery += "AND T7T.T7T_ATIVO    = ? "
+	cQuery += "AND T7T.T7T_STATUS   = ? "
+	cQuery += "AND T7T.D_E_L_E_T_   = ? "
+
+	Aadd(aBind, xFilial("T7T"))
+	Aadd(aBind, DERE_RECORD_ACTIVE)
+	Aadd(aBind, DERE_STATUS_WAITING)
+	Aadd(aBind, Space(1))
+
+	cQuery += " UNION ALL "
+
+	cQuery += "SELECT '" + DERE_EVENT_1011 + "' EVENTO, T7Z.T7Z_ID ID, T7Z.T7Z_VERSAO VERSAO "
+	cQuery += "FROM " + RetSqlName('T7Z') + " T7Z "
+	cQuery += "WHERE T7Z.T7Z_FILIAL = ? "
+	cQuery += "AND T7Z.T7Z_ATIVO    = ? "
+	cQuery += "AND T7Z.T7Z_STATUS   = ? "
+	cQuery += "AND T7Z.D_E_L_E_T_   = ? "
+
+	Aadd(aBind, xFilial("T7Z"))
+	Aadd(aBind, DERE_RECORD_ACTIVE)
+	Aadd(aBind, DERE_STATUS_WAITING)
+	Aadd(aBind, Space(1))
+
+	cQuery := ChangeQuery(cQuery)
+	oPrepare := FwExecStatement():New(cQuery)
+
+	For nX := 1 to Len(aBind)
+		oPrepare:setString(nX, aBind[nX])
+	Next nX
+
+	cAlias := GetNextAlias()
+	oPrepare:OpenAlias(cAlias)
+
+	oPrepare:Destroy()
+
+return cAlias
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereUpdateShipment()
+Metodo responsável por atualizar o status dos eventos enviados ao TSS
+
+@type method
+@author Rafael de Paula Leme
+@since 21/08/2026
+@version 1.0
+@param aRetTss, array, matriz com uma linha por evento e quatro colunas:
+                [n][1] character - código do evento (ex.: "D-1001")
+                [n][2] character - chave de identificação do registro no TSS
+                [n][3] character - ID do XML transmitido
+                [n][4] character - status a ser gravado
+@return object, instância da própria classe
+-------------------------------------------------------------------------------*/
+method TafDereUpdateShipment(aRetTss as array) as object class TAFDereEventsMonitor
+
+    Local nX         := 0  as numeric
+    Local nTamId     := 0  as numeric
+    Local nTamVersao := 0  as numeric
+	Local aChave     := {} as array
+    Local cChave     := "" as character
+	Local cAlias     := "" as character
+	Local cAliasAnt  := "" as character
+
+	Default aRetTss := {}
+
+	For nX := 1 to Len(aRetTss)
+
+		cAlias := ::TafDereGetEventAlias(aRetTss[nX][DERE_SEND_EVENT])
+
+		If !Empty(cAlias)
+
+			If cAliasAnt != cAlias
+				nTamId     := TamSX3(cAlias + "_ID")[SX3_FIELD_SIZE]
+				nTamVersao := TamSX3(cAlias + "_VERSAO")[SX3_FIELD_SIZE]
+
+				DbSelectArea(cAlias)
+				(cAlias)->(DbSetOrder(1)) //T7T_FILIAL+T7T_ID+T7T_VERSAO
+				cAliasAnt := cAlias
+			EndIf
+
+			aChave := ::TafDereSplitEventKey(aRetTss[nX][DERE_SEND_ID])
+
+			cChave := xFilial(cAlias) +;
+						PadR(aChave[DERE_KEY_ID], nTamId) +;
+						PadR(aChave[DERE_KEY_VERSION], nTamVersao)
+
+			If (cAlias)->(DbSeek(cChave))
+				If RecLock(cAlias, .F.)
+					(cAlias)->(FieldPut(FieldPos(cAlias + "_STATUS"), aRetTss[nX][DERE_SEND_STATUS]))
+					(cAlias)->(FieldPut(FieldPos(cAlias + "_XMLID"), aRetTss[nX][DERE_SEND_XMLID]))
+					(cAlias)->(MsUnlock())
+				EndIf
+			EndIf
+		EndIf
+	Next nX
+
+Return Self
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereGetGovErrorMessage()
+Consulta o erro na transmissão do evento da Dere.
+
+@type method
+@author Rafael de Paula Leme
+@since 26/08/2026
+@version 1.0
+@param cEvento, character, código do evento (ex.: "D-1001")
+@param cId, character, ID do registro na tabela espelho
+@param cVersao, character, versão do layout do evento
+@return character, mensagem de retorno do governo ou "" quando não houver
+-------------------------------------------------------------------------------*/
+method TafDereGetGovErrorMessage(cEvento as character, cId as character, cVersao as character) as character class TAFDereEventsMonitor
+
+	Local nTamId     := 0  as numeric
+	Local nTamVersao := 0  as numeric
+	Local cMsgErro   := "" as character
+	Local cAlias     := "" as character
+
+	Default cEvento := ""
+	Default cId     := ""
+	Default cVersao := ""
+
+	cAlias := ::TafDereGetEventAlias(cEvento)
+
+	If Empty(cAlias)
+		Return cMsgErro
+	EndIf
+
+	nTamId     := TamSX3(cAlias + "_ID")[SX3_FIELD_SIZE]
+	nTamVersao := TamSX3(cAlias + "_VERSAO")[SX3_FIELD_SIZE]
+
+	cMsgErro := Posicione(cAlias, 1, xFilial(cAlias) + PadR(cId, nTamId) + PadR(cVersao, nTamVersao), cAlias + "_MSGRET")
+
+return cMsgErro
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} TafDereProcessesEventReturns()
+Metodo responsável por processar o retorno do TSS e atualizar as tabelas espelhos
+
+O status já chega traduzido para o padrão do TAF, montado por
+TafDereMonitorsSentEvents, e o alias da tabela espelho já vem resolvido no array.
+
+@type method
+@author Rafael de Paula Leme
+@since 21/08/2026
+@version 1.0
+@param aAtuEvento, array, matriz com uma linha por evento e seis colunas:
+                   [n][1] character - alias da tabela espelho
+                   [n][2] character - chave de identificação do registro no TSS
+                   [n][3] character - status no padrão do TAF
+                   [n][4] character - protocolo
+                   [n][5] character - recibo
+                   [n][6] character - mensagem de retorno do governo
+@return object, instância da própria classe
+-------------------------------------------------------------------------------*/
+method TafDereProcessesEventReturns(aAtuEvento as array) as object class TAFDereEventsMonitor
+
+    Local nX         := 0  as numeric
+    Local nTamId     := 0  as numeric
+    Local nTamVersao := 0  as numeric
+	Local aChave     := {} as array
+    Local cChave     := "" as character
+	Local cAlias     := "" as character
+	Local cAliasAnt  := "" as character
+	Local cStatus    := "" as character
+
+	Default aAtuEvento := {}
+
+	For nX := 1 to Len(aAtuEvento)
+		cAlias  := aAtuEvento[nX][DERE_UPD_ALIAS]
+		cStatus := aAtuEvento[nX][DERE_UPD_STATUS]
+
+		If cAliasAnt != cAlias
+			nTamId     := TamSX3(cAlias + "_ID")[SX3_FIELD_SIZE]
+			nTamVersao := TamSX3(cAlias + "_VERSAO")[SX3_FIELD_SIZE]
+
+			DbSelectArea(cAlias)
+			(cAlias)->(DbSetOrder(1)) //T7T_FILIAL+T7T_ID+T7T_VERSAO
+			cAliasAnt := cAlias
+		EndIf
+
+		aChave := ::TafDereSplitEventKey(aAtuEvento[nX][DERE_UPD_ID])
+
+		cChave := xFilial(cAlias) +;
+					PadR(aChave[DERE_KEY_ID], nTamId) +;
+					PadR(aChave[DERE_KEY_VERSION], nTamVersao)
+
+		If (cAlias)->(DbSeek(cChave))
+			If RecLock(cAlias, .F.)
+				(cAlias)->(FieldPut(FieldPos(cAlias + "_STATUS"), cStatus))
+				(cAlias)->(FieldPut(FieldPos(cAlias + "_RECIBO"), aAtuEvento[nX][DERE_UPD_RECEIPT]))
+				(cAlias)->(FieldPut(FieldPos(cAlias + "_PROTUL"), aAtuEvento[nX][DERE_UPD_PROTOCOL]))
+				(cAlias)->(FieldPut(FieldPos(cAlias + "_MSGRET"), aAtuEvento[nX][DERE_UPD_MESSAGE]))
+
+				If (cAlias)->(FieldGet(FieldPos(cAlias + "_EVENTO"))) == DERE_OPERATION_DELETE .And. cStatus == DERE_STATUS_VALIDATED
+					//Inativo os registros das tabelas filhas.
+					InativaFilhos(aChave[DERE_KEY_ID], aChave[DERE_KEY_VERSION], cAlias, DERE_RECORD_INACTIVE)
+					//Após inativar as tabelas filhas, inativo a tabela pai.		
+					(cAlias)->(FieldPut(FieldPos(cAlias + "_ATIVO"), DERE_RECORD_INACTIVE))
+				EndIf
+
+				//Evento nao localizado no TSS: o vinculo com o XML tambem e desfeito
+				If Empty(cStatus)
+					(cAlias)->(FieldPut(FieldPos(cAlias + "_XMLID"), ""))
+				EndIf
+
+				(cAlias)->(MsUnlock())
+			EndIf
+		EndIf
+	Next nX
+
+Return Self
+
+/*-------------------------------------------------------------------------------
+{Protheus.doc} GetXmlReturnDescription()
+Extrai a mensagem de erro do XML de retorno do governo (evento D-9001).
+
+Quando a tag <cdRetorno> do grupo <ideStatus> for igual a '0' (Erro), retorna o
+conteudo das tags <descricao> do grupo <ocorrencias> (ate 10 ocorrencias,
+concatenadas). Quando <cdRetorno> for '1' (Sucesso) retorna string vazia.
+
+Layout conforme o schema 06-XSD-D-9001, namespace default
+http://www.dere.gov.br/schemas/evtRetornoTabela/v1_0_1
+
+@type method
+@author Rafael de Paula Leme
+@since 04/09/2026
+@version 1.0
+@param cXMLRet, character, XML de retorno do governo
+@return character, mensagem de erro do governo ou "" quando nao houver erro
+-------------------------------------------------------------------------------*/
+method GetXmlReturnDescription(cXMLRet as character) as character class TAFDereEventsMonitor
+
+	Local oXml       := Nil as object
+	Local cDescricao := ""  as character
+	Local cPathStat  := ""  as character
+	Local cPathOcor  := ""  as character
+	Local cOcorr     := ""  as character
+	Local nOcorr     := 0   as numeric
+	//Namespace default do schema 06-XSD-D-9001 (v1.0.1). Uma troca de versao do layout
+	//exige revisao do mapeamento das tags, portanto a constante muda junto com o codigo
+	Local cVerSchema := "v" + SuperGetMv("MV_TAFVLDE", .F., "1_0_1")       as character
+	Local cNameSpace := "http://www.dere.gov.br/schemas/evtRetornoTabela/" as character
+	
+	Default cXMLRet := ""
+
+	cDescricao := STR0002 //"Não foi possível realizar a leitura do xml retornado pelo Governo."
+	cNameSpace := cNameSpace + cVerSchema
+
+	If !Empty(cXMLRet)
+		oXml := TXmlManager():New()
+
+		//O XML do governo trafega em UTF-8. A propriedade bDecodeUtf8 (default .T.) ja
+		//converte o conteudo lido para CP-1252, portanto o parse recebe a string original
+		If oXml:Parse(cXMLRet)
+			//Os elementos do retorno estao sob o namespace default declarado na tag <DeRE>. Em
+			//XPath nao existe namespace default: todo elemento exige um prefixo registrado
+			oXml:XPathRegisterNS("dere", cNameSpace)
+
+			//Caminho relativo, cobre o retorno com ou sem a tag externa <evento> sobre o <DeRE>
+			cPathStat := "//dere:ideStatus"
+
+			//<descricao> e obrigatoria dentro de <ocorrencias> (minOccurs=1 no XSD), portanto
+			//iterar pela descricao equivale a iterar pelas ocorrencias
+			nOcorr    := 1
+			cPathOcor := cPathStat + "/dere:ocorrencias[" + cValToChar(nOcorr) + "]/dere:descricao"
+
+			While oXml:XPathHasNode(cPathOcor)
+
+				cOcorr := AllTrim(oXml:XPathGetNodeValue(cPathOcor))
+
+				If !Empty(cDescricao)
+					cDescricao += "; "
+				EndIf
+
+				cDescricao += cOcorr
+
+				nOcorr++
+				cPathOcor := cPathStat + "/dere:ocorrencias[" + cValToChar(nOcorr) + "]/dere:descricao"
+			EndDo
+		EndIf
+
+		FWFreeObj(oXml)
+	EndIf
+
+Return cDescricao
+
+/*/{Protheus.doc} InativaFilhos
+Função que inativa as tabelas filhas do alias enviado por parâmetro.
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     14/09/2026
+@version   1.0
+@param     cID  , cVersao, cAlias e  cStatus
+@return    Nil
+/*/
+Static Function InativaFilhos(cID as character, cVersao as character, cAlias as character, cStatus as character)
+	Local nX           := 0  as numeric
+	Local aAliasFilhos := {} as array
+
+	If !Empty(cID) .and. !Empty(cVersao) .and. !Empty(cAlias)
+		aAliasFilhos := RetornaFilhos(cAlias)
+
+		//Inativa os netos, caso existam.
+		If Len(aAliasFilhos) > 0
+			For nX := 1 to Len(aAliasFilhos)
+				ExecUpdate(cID, cVersao, aAliasFilhos[nX], cStatus)
+			Next nX
+		EndIf
+	EndIf
+
+Return Nil
+
+/*/{Protheus.doc} RetornaFilhos
+Função que retorna as tabelas filhas do alias pai enviado por parâmetro
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     14/09/2026
+@version   1.0
+@param     cAlias
+@return    aAliasFilhos
+/*/
+Static Function RetornaFilhos(cAlias as character)
+	Local aAliasFilhos := {} as array
+	
+	If !Empty(cAlias)
+		If cAlias == 'T7T' //Alias pai
+			Aadd(aAliasFilhos, 'T7U') //Alias filho
+			Aadd(aAliasFilhos, 'T7V') //Alias filho
+		ElseIf cAlias == 'T7Z' //Alias pai
+			Aadd(aAliasFilhos, 'T8A') //Alias filho
+		EndIf
+	EndIf
+
+Return aAliasFilhos
+
+/*/{Protheus.doc} ExecUpdate
+Executa update no alias alterando o status passado por parâmetro
+
+@type      static function
+@author    Rafael de Paula Leme
+@since     14/09/2026
+@version   1.0
+@param     cId  , cVersao, cAlias e cStatus
+@return    Nil
+/*/
+Static Function ExecUpdate(cId as character, cVersao as character, cAlias as character, cStatus as character)
+	Local cUpdate := "" as character    
+
+	cUpdate += " UPDATE " + RetSqlName(cAlias) 
+	cUpdate += " SET "
+	cUpdate += cAlias + "_ATIVO = '" + cStatus + "' "
+	cUpdate += " WHERE "
+	cUpdate += cAlias + "_FILIAL = '" + xFilial(cAlias) + "' AND "
+	cUpdate += cAlias + "_ID = '" + AllTrim(cID) + "' AND "
+	cUpdate += cAlias + "_VERSAO = '" + AllTrim(cVersao) + "' AND "
+	cUpdate += " D_E_L_E_T_ = '" + Space(1) + "' "
+
+	TCSqlExec(cUpdate)
+
+Return Nil

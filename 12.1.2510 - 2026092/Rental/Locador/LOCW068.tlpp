@@ -1,0 +1,505 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+Namespace sigaloc.api.ordemservico
+
+//-------------------------------------------------------------------
+// GET /api/v1/ordemservico
+// Descricao: Retorna, de forma paginada, as Ordens de Servico (STJ)
+// liberadas e nao encerradas do ERP, dentro do periodo informado
+// (TJ_DTORIGI), com a colecao de checklists/etapas (STQ) elegiveis
+// vinculados a cada Ordem de Servico. Filtros fixos: TJ_SITUACA = 'L'
+// e TJ_TERMINO = 'N'; os checklists com TQ_NOMSITU = 'EXEC' nao sao
+// retornados. Aceita filtros opcionais de projeto, obra, bem, cliente
+// e loja (cliente/loja resolvidos via FP0, a partir do projeto da
+// Ordem de Servico).
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LOCW068List
+API que retorna, de forma paginada, as Ordens de Servico (tabela STJ)
+liberadas (TJ_SITUACA = 'L') e nao encerradas (TJ_TERMINO = 'N') do
+ERP, dentro do periodo informado (dataInicio/dataFim, aplicado sobre
+TJ_DTORIGI, inclusive nas duas pontas), com a colecao de checklists e
+etapas (tabela STQ) vinculados a cada Ordem de Servico - excluidos os
+checklists em execucao (TQ_NOMSITU = 'EXEC'). Aceita filtros opcionais
+de projeto (TJ_PROJETO), obra (TJ_OBRA), bem (TJ_CODBEM), cliente e
+loja - estes dois ultimos resolvidos via FP0 (FP0_CLI/FP0_LOJA), a
+partir do projeto vinculado a Ordem de Servico (TJ_PROJETO =
+FP0_PROJET). Cada Ordem de Servico e retornada uma unica vez. A
+consulta e restrita a filial do contexto autenticado da requisicao
+(FWxFilial). TJ_NOMBEM e resolvido via join com ST9 (nao e coluna fisica
+da STJ). Escopo de tabelas desta API: STJ, ST9 e STQ - sem join com
+ST4/servico. TJ_NOMSERV/TJ_NOMTIPO/TJ_NOMAREA foram removidos ate
+confirmacao da tabela/campo de origem.
+@type function
+@author ITUP
+@since 10/09/2026
+@return lRet, logical, Sempre .T. - resposta HTTP tratada via oRest
+/*/
+@Get("/api/v1/ordemservico")
+User Function LOCW068List() as Logical
+Local jQuery      := oRest:getQueryRequest() as Json
+Local jResp       := JsonObject():New() as Json
+Local jData       := JsonObject():New() as Json
+Local jItems      := {} as Array
+Local cDataIni    := "" as Character
+Local cDataFim    := "" as Character
+Local cProjeto    := "" as Character
+Local cObra       := "" as Character
+Local cBem        := "" as Character
+Local cCliente    := "" as Character
+Local cLoja       := "" as Character
+Local nPage       := 1 as Numeric
+Local nPageSize   := 20 as Numeric
+Local cWhere      := "" as Character
+Local cQueryBase  := "" as Character
+Local cQuery      := "" as Character
+Local aBindParam  := {} as Array
+Local aBindPag    := {} as Array
+Local nTotal      := 0 as Numeric
+Local nIniPag     := 0 as Numeric
+Local nFimPag     := 0 as Numeric
+Local nTotalPag   := 0 as Numeric
+Local cFonte      := "LOCW068.TLPP" as Character
+Local aInfo       := {} as Array
+Local cErrDbg     := "" as Character // DSERLOCA-XXXXX - diagnostico temporario, remover antes da entrega
+Local cMemoObs    := "" as Character // DSERLOCA-XXXXX
+
+	oRest:setKeyHeaderResponse("Content-Type", "application/json")
+
+	aInfo := GetApoInfo(cFonte)
+
+	// GetApoInfo retorna {nome, linguagem, modo de compilacao, data, hora} -
+	// aInfo[4] e a data (Date) e aInfo[5] a hora (character), conforme uso
+	// real confirmado em LOCW002.PRW:404, Locador/LOCW043.PRW:243,
+	// Locador/LOCW051.PRW:200 etc. (aInfo[1] e o NOME do fonte, nao a data -
+	// BoasPraticas.md descreve esses indices de forma equivocada). Tambem
+	// pode retornar Nil se o fonte nao for encontrado no RPO com o nome
+	// informado.
+	//If aInfo == Nil .Or. Len(aInfo) < 5
+	//	aInfo := {"", "", "", CTOD(""), ""}
+	//EndIf
+
+	If jQuery <> Nil
+		If jQuery["dataInicio"] <> Nil
+			cDataIni := AllTrim(cValToChar(jQuery["dataInicio"]))
+		EndIf
+		If jQuery["dataFim"] <> Nil
+			cDataFim := AllTrim(cValToChar(jQuery["dataFim"]))
+		EndIf
+		If jQuery["projeto"] <> Nil 
+			cProjeto := AllTrim(cValToChar(jQuery["projeto"]))
+		EndIf
+		If jQuery["obra"] <> Nil
+			cObra := AllTrim(cValToChar(jQuery["obra"]))
+		EndIf
+		If jQuery["bem"] <> Nil
+			cBem := AllTrim(cValToChar(jQuery["bem"]))
+		EndIf
+		If jQuery["cliente"] <> Nil
+			cCliente := AllTrim(cValToChar(jQuery["cliente"]))
+		EndIf
+		If jQuery["loja"] <> Nil
+			cLoja := AllTrim(cValToChar(jQuery["loja"]))
+		EndIf
+		If jQuery["page"] <> Nil
+			nPage := Val(cValToChar(jQuery["page"]))
+		EndIf
+		If jQuery["pageSize"] <> Nil
+			nPageSize := Val(cValToChar(jQuery["pageSize"]))
+		EndIf
+	EndIf
+
+	If Empty(cDataIni) .Or. Empty(cDataFim)
+		Return oRest:setStatusResponse(400, LOCW068Err(400, "VALIDATION_ERROR", "Os parametros dataInicio e dataFim sao obrigatorios", aInfo))
+	EndIf
+
+	If !LOCW068VlDt(cDataIni) .Or. !LOCW068VlDt(cDataFim)
+		Return oRest:setStatusResponse(400, LOCW068Err(400, "VALIDATION_ERROR", "dataInicio e dataFim devem estar no formato AAAAMMDD e representar uma data valida", aInfo))
+	EndIf
+
+	If cDataIni > cDataFim
+		Return oRest:setStatusResponse(400, LOCW068Err(400, "VALIDATION_ERROR", "dataInicio deve ser menor ou igual a dataFim", aInfo))
+	EndIf
+
+	nPage     := Max(nPage, 1)
+	nPageSize := Max(Min(nPageSize, LOCW068Limite()), 1)
+	nIniPag   := ((nPage - 1) * nPageSize) + 1
+	nFimPag   := nPage * nPageSize
+
+	Try
+		cWhere := "WHERE STJ.D_E_L_E_T_ = ' ' "
+		cWhere += "AND STJ.TJ_FILIAL = '" + FWxFilial("STJ") + "' "
+		cWhere += "AND STJ.TJ_SITUACA = 'L' "
+		cWhere += "AND STJ.TJ_TERMINO = 'N' "
+		cWhere += "AND STJ.TJ_DTORIGI >= ? "
+		cWhere += "AND STJ.TJ_DTORIGI <= ? "
+		aAdd(aBindParam, cDataIni)
+		aAdd(aBindParam, cDataFim)
+ 
+		If !Empty(cProjeto)
+			cWhere += "AND STJ.TJ_PROJETO = ? "
+			aAdd(aBindParam, PadR(cProjeto, TamSX3("TJ_PROJETO")[1])) // DSERLOCA-XXXXX
+		EndIf
+
+		If !Empty(cObra)
+			cWhere += "AND STJ.TJ_OBRA = ? "
+			aAdd(aBindParam, PadR(cObra, TamSX3("TJ_OBRA")[1])) // DSERLOCA-XXXXX
+		EndIf
+
+		If !Empty(cBem)
+			cWhere += "AND STJ.TJ_CODBEM = ? "
+			aAdd(aBindParam, PadR(cBem, TamSX3("TJ_CODBEM")[1])) // DSERLOCA-XXXXX
+		EndIf
+
+		If !Empty(cCliente) .Or. !Empty(cLoja)
+			cWhere += "AND EXISTS (SELECT FP0X.FP0_PROJET FROM " + RetSqlName("FP0") + " FP0X WHERE FP0X.D_E_L_E_T_ = ' ' "
+			cWhere += "AND FP0X.FP0_FILIAL = '" + FWxFilial("FP0") + "' "
+			cWhere += "AND FP0X.FP0_PROJET = STJ.TJ_PROJETO "
+			If !Empty(cCliente)
+				cWhere += "AND FP0X.FP0_CLI = ? "
+				aAdd(aBindParam, PadR(cCliente, TamSX3("FP0_CLI")[1])) // DSERLOCA-XXXXX
+			EndIf
+			If !Empty(cLoja)
+				cWhere += "AND FP0X.FP0_LOJA = ? "
+				aAdd(aBindParam, PadR(cLoja, TamSX3("FP0_LOJA")[1])) // DSERLOCA-XXXXX
+			EndIf
+			cWhere += ") "
+		EndIf
+
+		// Listagem do cabecalho da Ordem de Servico. TJ_NOMBEM nao e coluna
+		// fisica da STJ - vem via join com ST9 (T9_NOME), mesmo padrao usado
+		// em LOCM011.prw/loca059.prw. Apenas STJ, ST9 e STQ fazem parte do
+		// escopo desta API (conforme especificacao) - sem join com
+		// ST4/servico. TJ_NOMTIPO/TJ_NOMAREA removidos ate confirmacao da
+		// tabela/campo de origem - nao ha evidencia no restante do codebase
+		// de onde vem essas duas descricoes.
+		//
+		// Paginacao feita no banco via ROW_NUMBER()/COUNT(*) OVER() (portavel
+		// entre SQL Server e Oracle, mesmo padrao ja usado em
+		// Locador/LOCW068.tlpp), em vez de uma consulta de COUNT separada +
+		// DbSkip manual sobre o cursor da listagem - essa segunda abordagem e
+		// a que estava causando o EOF prematuro reportado (o cursor da
+		// listagem, aberto com LEFT JOIN, nao respondia de forma confiavel ao
+		// DbGoTop()/DbSkip() do TOPCONN). O total vem na mesma passada
+		// (COUNT(*) OVER(), sem PARTITION BY, ao lado do ROW_NUMBER()); so se
+		// recorre a uma segunda consulta (so COUNT) quando a pagina pedida
+		// nao retorna nenhuma linha (ex.: "page" alem do fim), caso em que a
+		// janela nao aparece em nenhuma linha do resultado.
+		// TJ_OBSERVA e campo memo: o DBAccess nao mapeia colunas memo/TEXT no
+		// alias da consulta - a coluna existe no banco e o SELECT roda, mas o
+		// acesso por TRB068L->TJ_OBSERVA gera "invalid field name in Alias".
+		// Converter para coluna character no proprio SELECT resolve, ao custo
+		// de truncar o conteudo em 4000 caracteres.
+		If TcGetDB() == "ORACLE" .Or. file("\SYSTEM\LOCW068.TXT") // DSERLOCA-XXXXX
+			cMemoObs := "DBMS_LOB.SUBSTR(STJ.TJ_OBSERVA, 4000, 1)" // DSERLOCA-XXXXX
+		Else // DSERLOCA-XXXXX
+			cMemoObs := "CAST(STJ.TJ_OBSERVA AS VARCHAR(4000))" // DSERLOCA-XXXXX
+		EndIf // DSERLOCA-XXXXX
+
+		cQueryBase := "SELECT STJ.TJ_ORDEM, STJ.TJ_PLANO, STJ.TJ_DTORIGI, STJ.TJ_TIPOOS, STJ.TJ_CODBEM, COALESCE(ST9.T9_NOME, '') TJ_NOMBEM, "
+		cQueryBase += "STJ.TJ_SERVICO, STJ.TJ_SEQRELA, STJ.TJ_TIPO, STJ.TJ_CODAREA, "
+		cQueryBase += "STJ.TJ_CCUSTO, STJ.TJ_TERMINO, STJ.TJ_SITUACA, " + cMemoObs + " TJ_OBSERVA, STJ.TJ_AS, " // DSERLOCA-XXXXX
+		cQueryBase += "STJ.TJ_PROJETO, STJ.TJ_OBRA, STJ.TJ_CENTRAB, STJ.TJ_POSCONT, STJ.TJ_HORACO1, STJ.TJ_POSCON2, STJ.TJ_HORACO2 "
+		cQueryBase += "FROM " + RetSqlName("STJ") + " STJ "
+		cQueryBase += "LEFT JOIN " + RetSqlName("ST9") + " ST9 ON ST9.T9_FILIAL = '" + FWxFilial("ST9") + "' AND ST9.T9_CODBEM = STJ.TJ_CODBEM AND ST9.D_E_L_E_T_ = ' ' "
+		cQueryBase += cWhere
+
+		// A faixa de paginacao (RN) nao entra mais como parametro de bind:
+		// TCGenQry2/MPSysOpenQuery exige que todo bind ("?") seja Character, e
+		// comparar a coluna inteira gerada por ROW_NUMBER() com um bind
+		// Character depende de conversao implicita do SGBD - comportamento
+		// divergente entre SQL Server e Oracle e causa silenciosa de zero
+		// linhas. nIniPag/nFimPag sao inteiros de uso interno (sem entrada
+		// do usuario, portanto sem risco de injecao), concatenados direto na
+		// query. aBindPag segue apenas com os filtros do cQueryBase.
+		aBindPag := AClone(aBindParam)
+
+		cQuery := "SELECT * FROM ( "
+		cQuery += "   SELECT TOTVSPAG.*, "
+		cQuery += "      ROW_NUMBER() OVER (ORDER BY TOTVSPAG.TJ_ORDEM) RN, "
+		cQuery += "      COUNT(*) OVER () QTDTOTAL "
+		cQuery += "   FROM ( " + cQueryBase + " ) TOTVSPAG "
+		cQuery += ") TOTVSRN "
+		cQuery += "WHERE TOTVSRN.RN BETWEEN " + AllTrim(Str(nIniPag, 10, 0)) + " AND " + AllTrim(Str(nFimPag, 10, 0)) + " " // DSERLOCA-XXXXX
+		cQuery := ChangeQuery(cQuery)
+		MPSysOpenQuery(cQuery, "TRB068L", , , aBindPag)
+
+		While !TRB068L->(Eof())
+			nTotal := TRB068L->QTDTOTAL
+			aAdd(jItems, LOCW068Item())
+			TRB068L->(DbSkip())
+		EndDo
+
+		TRB068L->(DbCloseArea())
+
+		// Pagina sem linhas nao carrega o COUNT(*) OVER() acima (a janela so
+		// aparece nas linhas retornadas); nesse caso roda a contagem isolada
+		// para reportar o total correto - inclusive na pagina 1, o que
+		// permite distinguir "o filtro nao encontrou nada" (total 0) de
+		// "a faixa de paginacao nao trouxe linhas" (total > 0, items vazio).
+		If Len(jItems) == 0 // DSERLOCA-XXXXX
+			cQuery := "SELECT COUNT(STJ.TJ_ORDEM) AS TOT FROM " + RetSqlName("STJ") + " STJ " + cWhere
+			cQuery := ChangeQuery(cQuery)
+			MPSysOpenQuery(cQuery, "TRB068H", , , aBindParam)
+			nTotal := TRB068H->TOT
+			TRB068H->(DbCloseArea())
+		EndIf
+
+		If nTotal > 0
+			nTotalPag := Int((nTotal + nPageSize - 1) / nPageSize)
+		Else
+			nTotalPag := 0
+		EndIf
+
+		jData["page"]         := nPage
+		jData["pageSize"]     := nPageSize
+		jData["totalPages"]   := nTotalPag
+		jData["totalRecords"] := nTotal
+		jData["items"]        := jItems
+
+		jResp["status"]    := 200
+		jResp["message"]   := "Recurso encontrado"
+		jResp["data"]      := jData
+		jResp["fonteData"] := DtoS(aInfo[4])
+		jResp["fonteHora"] := aInfo[5]
+	Catch oError
+		// DSERLOCA-XXXXX - BLOCO DE DIAGNOSTICO TEMPORARIO: expoe a descricao e a
+		// pilha do erro na resposta HTTP para identificar a quebra. Restaurar a
+		// mensagem generica antes da entrega - detalhe interno nao deve vazar em
+		// resposta de API.
+		cErrDbg := oError:Description // DSERLOCA-XXXXX
+		If ValType(oError:ErrorStack) == "C" .And. !Empty(oError:ErrorStack) // DSERLOCA-XXXXX
+			cErrDbg += " | STACK: " + oError:ErrorStack // DSERLOCA-XXXXX
+		EndIf // DSERLOCA-XXXXX
+		FWLogMsg("ERROR", , "REST", "LOCW068List", , "01", cErrDbg, 0, 0, {}) // DSERLOCA-XXXXX
+		Return oRest:setStatusResponse(500, LOCW068Err(500, "INTERNAL_ERROR", cErrDbg, aInfo)) // DSERLOCA-XXXXX
+	EndTry
+
+Return oRest:setStatusResponse(200, jResp:toJson())
+
+//-------------------------------------------------------------------
+// Funcoes auxiliares (Static) - uso exclusivo deste fonte
+//-------------------------------------------------------------------
+
+/*/{Protheus.doc} LOCW068Item
+Monta o objeto Json de uma Ordem de Servico (cabecalho "order" +
+colecao "checklists") a partir do registro corrente do alias de
+consulta TRB068L (LOCW068List). Os nomes de chave do "order" e dos
+"fields" de cada checklist reproduzem literalmente os nomes dos campos
+do ERP (prefixos TJ_ e TQ_), conforme o contrato definido para esta API.
+@type function
+@author ITUP
+@since 10/09/2026
+@return jItem, json, Objeto Json com a Ordem de Servico e seus checklists/etapas
+/*/
+Static Function LOCW068Item() as Json
+Local jItem   := JsonObject():New() as Json
+Local jOrdem  := JsonObject():New() as Json
+Local cOrdem  := AllTrim(TRB068L->TJ_ORDEM) as Character
+Local cPlano  := AllTrim(TRB068L->TJ_PLANO) as Character
+
+	jOrdem["TJ_ORDEM"]   := cOrdem
+	jOrdem["TJ_PLANO"]   := cPlano
+	// TJ_DTORIGI vem do cursor como Character (AAAAMMDD): o DBAccess tipa
+	// as colunas do alias de query pelo banco (CHAR(8)), nao pelo SX3, e
+	// DtoS() sobre Character derruba a rotina. Trata os dois tipos para
+	// nao depender do tipo devolvido pelo driver.
+	jOrdem["TJ_DTORIGI"] := IIf(ValType(TRB068L->TJ_DTORIGI) == "D", DtoS(TRB068L->TJ_DTORIGI), AllTrim(TRB068L->TJ_DTORIGI)) // DSERLOCA-XXXXX
+	jOrdem["TJ_TIPOOS"]  := AllTrim(TRB068L->TJ_TIPOOS)
+	jOrdem["TJ_CODBEM"]  := AllTrim(TRB068L->TJ_CODBEM)
+	jOrdem["TJ_NOMBEM"]  := AllTrim(TRB068L->TJ_NOMBEM)
+	jOrdem["TJ_SERVICO"] := AllTrim(TRB068L->TJ_SERVICO)
+	jOrdem["TJ_SEQRELA"] := AllTrim(TRB068L->TJ_SEQRELA)
+	jOrdem["TJ_TIPO"]    := AllTrim(TRB068L->TJ_TIPO)
+	jOrdem["TJ_CODAREA"] := AllTrim(TRB068L->TJ_CODAREA)
+	jOrdem["TJ_CCUSTO"]  := AllTrim(TRB068L->TJ_CCUSTO)
+	jOrdem["TJ_TERMINO"] := AllTrim(TRB068L->TJ_TERMINO)
+	jOrdem["TJ_SITUACA"] := AllTrim(TRB068L->TJ_SITUACA)
+	jOrdem["TJ_OBSERVA"] := AllTrim(TRB068L->TJ_OBSERVA)
+	jOrdem["TJ_AS"]      := AllTrim(TRB068L->TJ_AS)
+	jOrdem["TJ_PROJETO"] := AllTrim(TRB068L->TJ_PROJETO)
+	jOrdem["TJ_OBRA"]    := AllTrim(TRB068L->TJ_OBRA)
+	jOrdem["TJ_CENTRAB"] := AllTrim(TRB068L->TJ_CENTRAB)
+	jOrdem["TJ_POSCONT"] := TRB068L->TJ_POSCONT
+	jOrdem["TJ_HORACO1"] := TRB068L->TJ_HORACO1
+	jOrdem["TJ_POSCON2"] := TRB068L->TJ_POSCON2
+	jOrdem["TJ_HORACO2"] := TRB068L->TJ_HORACO2
+
+	jItem["order"]      := jOrdem
+	jItem["checklists"] := LOCW068Chk(cOrdem, cPlano)
+
+Return jItem
+
+/*/{Protheus.doc} LOCW068Chk
+Busca, na tabela de checklists/etapas da Ordem de Servico (STQ), os
+registros vinculados a Ordem de Servico e ao plano de manutencao
+informados (TQ_ORDEM/TQ_PLANO), excluindo os checklists cuja situacao
+seja de execucao (TQ_NOMSITU = 'EXEC'), e retorna o array de objetos
+Json (cada um contendo a propriedade fields, com os campos do checklist)
+desses checklists.
+@type function
+@author ITUP
+@since 10/09/2026
+@param cOrdem, character, Numero da Ordem de Servico (TJ_ORDEM)
+@param cPlano, character, Codigo do plano de manutencao (TJ_PLANO)
+@return aChecks, array, Array de objetos Json com os checklists/etapas elegiveis
+/*/
+Static Function LOCW068Chk(cOrdem as Character, cPlano as Character) as Array
+Local aChecks     := {} as Array
+Local cWhere      := "" as Character
+Local cQuery      := "" as Character
+Local aBindParam  := {} as Array
+Local cMemoObs    := "" as Character // DSERLOCA-XXXXX
+
+	cWhere := "WHERE STQ.D_E_L_E_T_ = ' ' "
+	cWhere += "AND STQ.TQ_FILIAL = '" + FWxFilial("STQ") + "' "
+	cWhere += "AND STQ.TQ_ORDEM = ? "
+	cWhere += "AND STQ.TQ_PLANO = ? "
+	// TQ_NOMSITU e TQ_NOMETAP existem no SX3 mas sao campos VIRTUAIS
+	// (X3_CONTEXT = "V"): nao ha coluna fisica na STQ, por isso o SQL Server
+	// recusa a consulta com "Nome de coluna invalido". O filtro abaixo fica
+	// suspenso ate que a origem do campo (X3_RELACAO) seja confirmada, para
+	// ser reescrito sobre a coluna real - mesmo tratamento dado a TJ_NOMBEM,
+	// resolvido via join com ST9.
+	cWhere += "AND STQ.TQ_OK = ' ' " // DSERLOCA-XXXXX - PENDENTE
+	aAdd(aBindParam, PadR(cOrdem, TamSX3("TQ_ORDEM")[1])) // DSERLOCA-XXXXX
+	aAdd(aBindParam, PadR(cPlano, TamSX3("TQ_PLANO")[1])) // DSERLOCA-XXXXX
+
+	// TQ_OBSERVA e memo (X3_TIPO = "M") e nao e mapeado pelo DBAccess no
+	// alias da consulta - convertido para coluna character no SELECT, mesmo
+	// tratamento aplicado a TJ_OBSERVA na listagem.
+	If TcGetDB() == "ORACLE" .Or. file("\SYSTEM\LOCW068A.TXT")// DSERLOCA-XXXXX
+		cMemoObs := "DBMS_LOB.SUBSTR(STQ.TQ_OBSERVA, 4000, 1)" // DSERLOCA-XXXXX
+	Else // DSERLOCA-XXXXX
+		cMemoObs := "CAST(STQ.TQ_OBSERVA AS VARCHAR(4000))" // DSERLOCA-XXXXX
+	EndIf // DSERLOCA-XXXXX
+
+	cQuery := "SELECT STQ.TQ_ORDEM, STQ.TQ_PLANO, STQ.TQ_ETAPA, " // DSERLOCA-XXXXX
+	cQuery += "STQ.TQ_CODFUNC, STQ.TQ_SEQETA, " + cMemoObs + " TQ_OBSERVA " // DSERLOCA-XXXXX
+	cQuery += "FROM " + RetSqlName("STQ") + " STQ " + cWhere
+	cQuery += "ORDER BY STQ.TQ_SEQETA "
+	cQuery := ChangeQuery(cQuery)
+	MPSysOpenQuery(cQuery, "TRB068Q", , , aBindParam)
+
+	While !TRB068Q->(Eof())
+		aAdd(aChecks, LOCW068ChkJson())
+		TRB068Q->(DbSkip())
+	EndDo
+
+	TRB068Q->(DbCloseArea())
+
+Return aChecks
+
+/*/{Protheus.doc} LOCW068ChkJson
+Monta o objeto Json de um checklist/etapa da Ordem de Servico, com os
+campos aninhados na propriedade fields, a partir do registro corrente
+do alias de consulta TRB068Q (LOCW068Chk).
+@type function
+@author ITUP
+@since 10/09/2026
+@return jChk, json, Objeto Json com os campos do checklist/etapa
+/*/
+Static Function LOCW068ChkJson() as Json
+Local jChk    := JsonObject():New() as Json
+Local jFields := JsonObject():New() as Json
+
+	jFields["TQ_ORDEM"]   := AllTrim(TRB068Q->TQ_ORDEM)
+	jFields["TQ_PLANO"]   := AllTrim(TRB068Q->TQ_PLANO)
+	jFields["TQ_ETAPA"]   := AllTrim(TRB068Q->TQ_ETAPA)
+	// Campos virtuais: sem coluna fisica na STQ, devolvidos vazios ate que a
+	// origem (X3_RELACAO) seja confirmada e resolvida por join na consulta.
+	jFields["TQ_NOMSITU"] := "" // DSERLOCA-XXXXX - PENDENTE
+	jFields["TQ_NOMETAP"] := "" // DSERLOCA-XXXXX - PENDENTE
+	jFields["TQ_CODFUNC"] := AllTrim(TRB068Q->TQ_CODFUNC)
+	jFields["TQ_SEQETA"]  := AllTrim(TRB068Q->TQ_SEQETA)
+	jFields["TQ_OBSERVA"] := AllTrim(TRB068Q->TQ_OBSERVA)
+
+	jChk["fields"] := jFields
+
+Return jChk
+
+/*/{Protheus.doc} LOCW068Limite
+Retorna o limite maximo permitido para o parametro pageSize desta API.
+Centraliza a constante para evitar numero magico espalhado pelo fonte.
+@type function
+@author ITUP
+@since 10/09/2026
+@return nLimite, numeric, Quantidade maxima de registros por pagina
+/*/
+Static Function LOCW068Limite() as Numeric
+Local nLimite := 100 as Numeric
+Return nLimite
+
+/*/{Protheus.doc} LOCW068SoNum
+Confirma se todos os caracteres do valor informado sao digitos
+numericos (0-9).
+@type function
+@author ITUP
+@since 10/09/2026
+@param cValor, character, Valor a ser validado
+@return lRet, logical, .T. se todos os caracteres forem digitos
+/*/
+Static Function LOCW068SoNum(cValor as Character) as Logical
+Local lRet := .T. as Logical
+Local nI   := 0 as Numeric
+
+	For nI := 1 To Len(cValor)
+		If !(SubStr(cValor, nI, 1) >= "0" .And. SubStr(cValor, nI, 1) <= "9")
+			lRet := .F.
+		EndIf
+	Next nI
+
+Return lRet
+
+/*/{Protheus.doc} LOCW068VlDt
+Valida se o valor informado esta no formato AAAAMMDD (8 digitos) e
+representa uma data valida (mes entre 01-12, dia entre 01-31,
+convertida com sucesso via STOD).
+@type function
+@author ITUP
+@since 10/09/2026
+@param cData, character, Data no formato AAAAMMDD
+@return lRet, logical, .T. quando o formato e a data sao validos
+/*/
+Static Function LOCW068VlDt(cData as Character) as Logical
+Local lRet := .F. as Logical
+Local nMes := 0 as Numeric
+Local nDia := 0 as Numeric
+
+	If Len(cData) == 8 .And. LOCW068SoNum(cData)
+		nMes := Val(SubStr(cData, 5, 2))
+		nDia := Val(SubStr(cData, 7, 2))
+
+		If nMes >= 1 .And. nMes <= 12 .And. nDia >= 1 .And. nDia <= 31
+			lRet := !Empty(STOD(cData))
+		EndIf
+	EndIf
+
+Return lRet
+
+/*/{Protheus.doc} LOCW068Err
+Monta a resposta Json padrao de erro da API, conforme o modelo de
+tratativas de API do BoasPraticas.md (status, message, code), incluindo
+fonteData/fonteHora quando disponiveis.
+@type function
+@author ITUP
+@since 10/09/2026
+@param nStatus, numeric, Codigo HTTP do erro
+@param cCode, character, Codigo semantico do erro
+@param cMessage, character, Mensagem descritiva do erro
+@param aInfo, array, Retorno de GetApoInfo(cFonte) - data/hora de compilacao
+@return cJson, character, Resposta Json serializada
+/*/
+Static Function LOCW068Err(nStatus as Numeric, cCode as Character, cMessage as Character, aInfo as Array) as Character
+Local jErr := JsonObject():New() as Json
+
+	jErr["status"]  := nStatus
+	jErr["message"] := cMessage
+	jErr["code"]    := cCode
+
+	If Len(aInfo) >= 5
+		jErr["fonteData"] := DtoS(aInfo[4])
+		jErr["fonteHora"] := aInfo[5]
+	EndIf
+
+Return jErr:toJson()

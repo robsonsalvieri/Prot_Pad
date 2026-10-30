@@ -1,0 +1,5471 @@
+#INCLUDE "protheus.ch"
+#INCLUDE "apwebsrv.ch"
+
+/* ===============================================================================
+WSDL Location    http://localhost:8090/ws/RHCURRICULUM.apw?WSDL
+Gerado em        03/30/20 15:12:29
+Observa��es      C�digo-Fonte gerado por ADVPL WSDL Client 1.120703
+                 Altera��es neste arquivo podem causar funcionamento incorreto
+                 e ser�o perdidas caso o c�digo-fonte seja gerado novamente.
+=============================================================================== */
+
+User Function _URVGPHB ; Return  // "dummy" function - Internal Use 
+
+/* -------------------------------------------------------------------------------
+WSDL Service WSRHCURRICULUM
+------------------------------------------------------------------------------- */
+
+WSCLIENT WSRHCURRICULUM
+
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD RESET
+	WSMETHOD CLONE
+	WSMETHOD BRWCITY
+	WSMETHOD BRWCOURSE
+	WSMETHOD BRWENTITY
+	WSMETHOD DELANEXO
+	WSMETHOD GETACTIVITY
+	WSMETHOD GETASSESSMENT
+	WSMETHOD GETCONFIGFIELD
+	WSMETHOD GETCURRICULUM
+	WSMETHOD GETEMAIL
+	WSMETHOD GETEMAIL2
+	WSMETHOD GETINFOANEXO
+	WSMETHOD GETSCHEDULE
+	WSMETHOD SETANEXO
+	WSMETHOD SETASSESSMENT
+	WSMETHOD SETCURRICULUM
+	WSMETHOD VALIDFIELDPOS
+	WSMETHOD X3FIELDS
+
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSDATA   cSEARCH                   AS string
+	WSDATA   oWSBRWCITYRESULT          AS RHCURRICULUM_ARRAYOFCITY
+	WSDATA   nTYPE                     AS integer
+	WSDATA   nPAGE                     AS integer
+	WSDATA   oWSBRWCOURSERESULT        AS RHCURRICULUM_ARRAYOFCOURSESCURRICULUM
+	WSDATA   oWSBRWENTITYRESULT        AS RHCURRICULUM_ARRAYOFENTITY
+	WSDATA   cBRANCH                   AS string
+	WSDATA   cCODOBJ                   AS string
+	WSDATA   cFILENT                   AS string
+	WSDATA   cCODENT                   AS string
+	WSDATA   cDELANEXORESULT           AS string
+	WSDATA   cCURRICCODE               AS string
+	WSDATA   cVACANCYCODE              AS string
+	WSDATA   oWSGETACTIVITYRESULT      AS RHCURRICULUM_TSCHEDULEDATA
+	WSDATA   cCODAVAL                  AS string
+	WSDATA   oWSGETASSESSMENTRESULT    AS RHCURRICULUM_ARRAYOFTESTTYPES
+	WSDATA   cTABLE                    AS string
+	WSDATA   oWSGETCONFIGFIELDRESULT   AS RHCURRICULUM_TOBJECTCONFIGFIELD
+	WSDATA   cUSERCODE                 AS string
+	WSDATA   cCURRICCPF                AS string
+	WSDATA   cCURRICPASS               AS string
+	WSDATA   nNTIPO                    AS integer
+	WSDATA   cNEWPASS                  AS string
+	WSDATA   oWSGETCURRICULUMRESULT    AS RHCURRICULUM_CURRICULUM
+	WSDATA   oWSGETEMAILRESULT         AS RHCURRICULUM_PERS
+	WSDATA   oWSGETEMAIL2RESULT        AS RHCURRICULUM_PERS
+	WSDATA   nCURRENTPAGE              AS integer
+	WSDATA   cFILTERFIELD              AS string
+	WSDATA   cFILTERVALUE              AS string
+	WSDATA   oWSGETINFOANEXORESULT     AS RHCURRICULUM_TOBJECTBROWSE
+	WSDATA   oWSGETSCHEDULERESULT      AS RHCURRICULUM_TSCHEDULEDATA
+	WSDATA   cPATCHOBJECT              AS string
+	WSDATA   cDESCOBJECT               AS string
+	WSDATA   cSETANEXORESULT           AS string
+	WSDATA   oWSEVALUATIONDATA         AS RHCURRICULUM_TEVALUATIONSDATA
+	WSDATA   nSETASSESSMENTRESULT      AS integer
+	WSDATA   oWSCURRIC1                AS RHCURRICULUM_CURRICULUM1
+	WSDATA   cSETCURRICULUMRESULT      AS string
+	WSDATA   cNMALIAS                  AS string
+	WSDATA   cNMFIELD                  AS string
+	WSDATA   lVALIDFIELDPOSRESULT      AS boolean
+	WSDATA   cALIAS                    AS string
+	WSDATA   cFIELD                    AS string
+	WSDATA   oWSX3FIELDSRESULT         AS RHCURRICULUM_USERFIELD
+
+	// Estruturas mantidas por compatibilidade - N�O USAR
+	WSDATA   oWSTEVALUATIONSDATA       AS RHCURRICULUM_TEVALUATIONSDATA
+	WSDATA   oWSCURRICULUM1            AS RHCURRICULUM_CURRICULUM1
+
+ENDWSCLIENT
+
+WSMETHOD NEW WSCLIENT WSRHCURRICULUM
+::Init()
+If !FindFunction("XMLCHILDEX")
+	UserException("O C�digo-Fonte Client atual requer os execut�veis do Protheus Build [7.00.191205P-20200220] ou superior. Atualize o Protheus ou gere o C�digo-Fonte novamente utilizando o Build atual.")
+EndIf
+Return Self
+
+WSMETHOD INIT WSCLIENT WSRHCURRICULUM
+	::oWSBRWCITYRESULT   := RHCURRICULUM_ARRAYOFCITY():New()
+	::oWSBRWCOURSERESULT := RHCURRICULUM_ARRAYOFCOURSESCURRICULUM():New()
+	::oWSBRWENTITYRESULT := RHCURRICULUM_ARRAYOFENTITY():New()
+	::oWSGETACTIVITYRESULT := RHCURRICULUM_TSCHEDULEDATA():New()
+	::oWSGETASSESSMENTRESULT := RHCURRICULUM_ARRAYOFTESTTYPES():New()
+	::oWSGETCONFIGFIELDRESULT := RHCURRICULUM_TOBJECTCONFIGFIELD():New()
+	::oWSGETCURRICULUMRESULT := RHCURRICULUM_CURRICULUM():New()
+	::oWSGETEMAILRESULT  := RHCURRICULUM_PERS():New()
+	::oWSGETEMAIL2RESULT := RHCURRICULUM_PERS():New()
+	::oWSGETINFOANEXORESULT := RHCURRICULUM_TOBJECTBROWSE():New()
+	::oWSGETSCHEDULERESULT := RHCURRICULUM_TSCHEDULEDATA():New()
+	::oWSEVALUATIONDATA  := RHCURRICULUM_TEVALUATIONSDATA():New()
+	::oWSCURRIC1         := RHCURRICULUM_CURRICULUM1():New()
+	::oWSX3FIELDSRESULT  := RHCURRICULUM_USERFIELD():New()
+
+	// Estruturas mantidas por compatibilidade - N�O USAR
+	::oWSTEVALUATIONSDATA := ::oWSEVALUATIONDATA
+	::oWSCURRICULUM1     := ::oWSCURRIC1
+Return
+
+WSMETHOD RESET WSCLIENT WSRHCURRICULUM
+	::cSEARCH            := NIL 
+	::oWSBRWCITYRESULT   := NIL 
+	::nTYPE              := NIL 
+	::nPAGE              := NIL 
+	::oWSBRWCOURSERESULT := NIL 
+	::oWSBRWENTITYRESULT := NIL 
+	::cBRANCH            := NIL 
+	::cCODOBJ            := NIL 
+	::cFILENT            := NIL 
+	::cCODENT            := NIL 
+	::cDELANEXORESULT    := NIL 
+	::cCURRICCODE        := NIL 
+	::cVACANCYCODE       := NIL 
+	::oWSGETACTIVITYRESULT := NIL 
+	::cCODAVAL           := NIL 
+	::oWSGETASSESSMENTRESULT := NIL 
+	::cTABLE             := NIL 
+	::oWSGETCONFIGFIELDRESULT := NIL 
+	::cUSERCODE          := NIL 
+	::cCURRICCPF         := NIL 
+	::cCURRICPASS        := NIL 
+	::nNTIPO             := NIL 
+	::cNEWPASS           := NIL 
+	::oWSGETCURRICULUMRESULT := NIL 
+	::oWSGETEMAILRESULT  := NIL 
+	::oWSGETEMAIL2RESULT := NIL 
+	::nCURRENTPAGE       := NIL 
+	::cFILTERFIELD       := NIL 
+	::cFILTERVALUE       := NIL 
+	::oWSGETINFOANEXORESULT := NIL 
+	::oWSGETSCHEDULERESULT := NIL 
+	::cPATCHOBJECT       := NIL 
+	::cDESCOBJECT        := NIL 
+	::cSETANEXORESULT    := NIL 
+	::oWSEVALUATIONDATA  := NIL 
+	::nSETASSESSMENTRESULT := NIL 
+	::oWSCURRIC1         := NIL 
+	::cSETCURRICULUMRESULT := NIL 
+	::cNMALIAS           := NIL 
+	::cNMFIELD           := NIL 
+	::lVALIDFIELDPOSRESULT := NIL 
+	::cALIAS             := NIL 
+	::cFIELD             := NIL 
+	::oWSX3FIELDSRESULT  := NIL 
+
+	// Estruturas mantidas por compatibilidade - N�O USAR
+	::oWSTEVALUATIONSDATA := NIL
+	::oWSCURRICULUM1     := NIL
+	::Init()
+Return
+
+WSMETHOD CLONE WSCLIENT WSRHCURRICULUM
+Local oClone := WSRHCURRICULUM():New()
+	oClone:_URL          := ::_URL 
+	oClone:cSEARCH       := ::cSEARCH
+	oClone:oWSBRWCITYRESULT :=  IIF(::oWSBRWCITYRESULT = NIL , NIL ,::oWSBRWCITYRESULT:Clone() )
+	oClone:nTYPE         := ::nTYPE
+	oClone:nPAGE         := ::nPAGE
+	oClone:oWSBRWCOURSERESULT :=  IIF(::oWSBRWCOURSERESULT = NIL , NIL ,::oWSBRWCOURSERESULT:Clone() )
+	oClone:oWSBRWENTITYRESULT :=  IIF(::oWSBRWENTITYRESULT = NIL , NIL ,::oWSBRWENTITYRESULT:Clone() )
+	oClone:cBRANCH       := ::cBRANCH
+	oClone:cCODOBJ       := ::cCODOBJ
+	oClone:cFILENT       := ::cFILENT
+	oClone:cCODENT       := ::cCODENT
+	oClone:cDELANEXORESULT := ::cDELANEXORESULT
+	oClone:cCURRICCODE   := ::cCURRICCODE
+	oClone:cVACANCYCODE  := ::cVACANCYCODE
+	oClone:oWSGETACTIVITYRESULT :=  IIF(::oWSGETACTIVITYRESULT = NIL , NIL ,::oWSGETACTIVITYRESULT:Clone() )
+	oClone:cCODAVAL      := ::cCODAVAL
+	oClone:oWSGETASSESSMENTRESULT :=  IIF(::oWSGETASSESSMENTRESULT = NIL , NIL ,::oWSGETASSESSMENTRESULT:Clone() )
+	oClone:cTABLE        := ::cTABLE
+	oClone:oWSGETCONFIGFIELDRESULT :=  IIF(::oWSGETCONFIGFIELDRESULT = NIL , NIL ,::oWSGETCONFIGFIELDRESULT:Clone() )
+	oClone:cUSERCODE     := ::cUSERCODE
+	oClone:cCURRICCPF    := ::cCURRICCPF
+	oClone:cCURRICPASS   := ::cCURRICPASS
+	oClone:nNTIPO        := ::nNTIPO
+	oClone:cNEWPASS      := ::cNEWPASS
+	oClone:oWSGETCURRICULUMRESULT :=  IIF(::oWSGETCURRICULUMRESULT = NIL , NIL ,::oWSGETCURRICULUMRESULT:Clone() )
+	oClone:oWSGETEMAILRESULT :=  IIF(::oWSGETEMAILRESULT = NIL , NIL ,::oWSGETEMAILRESULT:Clone() )
+	oClone:oWSGETEMAIL2RESULT :=  IIF(::oWSGETEMAIL2RESULT = NIL , NIL ,::oWSGETEMAIL2RESULT:Clone() )
+	oClone:nCURRENTPAGE  := ::nCURRENTPAGE
+	oClone:cFILTERFIELD  := ::cFILTERFIELD
+	oClone:cFILTERVALUE  := ::cFILTERVALUE
+	oClone:oWSGETINFOANEXORESULT :=  IIF(::oWSGETINFOANEXORESULT = NIL , NIL ,::oWSGETINFOANEXORESULT:Clone() )
+	oClone:oWSGETSCHEDULERESULT :=  IIF(::oWSGETSCHEDULERESULT = NIL , NIL ,::oWSGETSCHEDULERESULT:Clone() )
+	oClone:cPATCHOBJECT  := ::cPATCHOBJECT
+	oClone:cDESCOBJECT   := ::cDESCOBJECT
+	oClone:cSETANEXORESULT := ::cSETANEXORESULT
+	oClone:oWSEVALUATIONDATA :=  IIF(::oWSEVALUATIONDATA = NIL , NIL ,::oWSEVALUATIONDATA:Clone() )
+	oClone:nSETASSESSMENTRESULT := ::nSETASSESSMENTRESULT
+	oClone:oWSCURRIC1    :=  IIF(::oWSCURRIC1 = NIL , NIL ,::oWSCURRIC1:Clone() )
+	oClone:cSETCURRICULUMRESULT := ::cSETCURRICULUMRESULT
+	oClone:cNMALIAS      := ::cNMALIAS
+	oClone:cNMFIELD      := ::cNMFIELD
+	oClone:lVALIDFIELDPOSRESULT := ::lVALIDFIELDPOSRESULT
+	oClone:cALIAS        := ::cALIAS
+	oClone:cFIELD        := ::cFIELD
+	oClone:oWSX3FIELDSRESULT :=  IIF(::oWSX3FIELDSRESULT = NIL , NIL ,::oWSX3FIELDSRESULT:Clone() )
+
+	// Estruturas mantidas por compatibilidade - N�O USAR
+	oClone:oWSTEVALUATIONSDATA := oClone:oWSEVALUATIONDATA
+	oClone:oWSCURRICULUM1 := oClone:oWSCURRIC1
+Return oClone
+
+// WSDL Method BRWCITY of Service WSRHCURRICULUM
+
+WSMETHOD BRWCITY WSSEND cSEARCH WSRECEIVE oWSBRWCITYRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<BRWCITY xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("SEARCH", ::cSEARCH, cSEARCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</BRWCITY>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/BRWCITY",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSBRWCITYRESULT:SoapRecv( WSAdvValue( oXmlRet,"_BRWCITYRESPONSE:_BRWCITYRESULT","ARRAYOFCITY",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method BRWCOURSE of Service WSRHCURRICULUM
+
+WSMETHOD BRWCOURSE WSSEND nTYPE,nPAGE,cSEARCH WSRECEIVE oWSBRWCOURSERESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<BRWCOURSE xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("TYPE", ::nTYPE, nTYPE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PAGE", ::nPAGE, nPAGE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("SEARCH", ::cSEARCH, cSEARCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</BRWCOURSE>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/BRWCOURSE",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSBRWCOURSERESULT:SoapRecv( WSAdvValue( oXmlRet,"_BRWCOURSERESPONSE:_BRWCOURSERESULT","ARRAYOFCOURSESCURRICULUM",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method BRWENTITY of Service WSRHCURRICULUM
+
+WSMETHOD BRWENTITY WSSEND nTYPE,nPAGE,cSEARCH WSRECEIVE oWSBRWENTITYRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<BRWENTITY xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("TYPE", ::nTYPE, nTYPE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PAGE", ::nPAGE, nPAGE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("SEARCH", ::cSEARCH, cSEARCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</BRWENTITY>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/BRWENTITY",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSBRWENTITYRESULT:SoapRecv( WSAdvValue( oXmlRet,"_BRWENTITYRESPONSE:_BRWENTITYRESULT","ARRAYOFENTITY",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method DELANEXO of Service WSRHCURRICULUM
+
+WSMETHOD DELANEXO WSSEND cBRANCH,cCODOBJ,cFILENT,cCODENT WSRECEIVE cDELANEXORESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<DELANEXO xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("BRANCH", ::cBRANCH, cBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CODOBJ", ::cCODOBJ, cCODOBJ , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILENT", ::cFILENT, cFILENT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CODENT", ::cCODENT, cCODENT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</DELANEXO>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/DELANEXO",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::cDELANEXORESULT    :=  WSAdvValue( oXmlRet,"_DELANEXORESPONSE:_DELANEXORESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETACTIVITY of Service WSRHCURRICULUM
+
+WSMETHOD GETACTIVITY WSSEND cCURRICCODE,cVACANCYCODE WSRECEIVE oWSGETACTIVITYRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETACTIVITY xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("CURRICCODE", ::cCURRICCODE, cCURRICCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("VACANCYCODE", ::cVACANCYCODE, cVACANCYCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETACTIVITY>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETACTIVITY",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETACTIVITYRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETACTIVITYRESPONSE:_GETACTIVITYRESULT","TSCHEDULEDATA",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETASSESSMENT of Service WSRHCURRICULUM
+
+WSMETHOD GETASSESSMENT WSSEND cCODAVAL WSRECEIVE oWSGETASSESSMENTRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETASSESSMENT xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("CODAVAL", ::cCODAVAL, cCODAVAL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETASSESSMENT>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETASSESSMENT",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETASSESSMENTRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETASSESSMENTRESPONSE:_GETASSESSMENTRESULT","ARRAYOFTESTTYPES",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETCONFIGFIELD of Service WSRHCURRICULUM
+
+WSMETHOD GETCONFIGFIELD WSSEND cTABLE WSRECEIVE oWSGETCONFIGFIELDRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETCONFIGFIELD xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("TABLE", ::cTABLE, cTABLE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETCONFIGFIELD>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETCONFIGFIELD",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETCONFIGFIELDRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETCONFIGFIELDRESPONSE:_GETCONFIGFIELDRESULT","TOBJECTCONFIGFIELD",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETCURRICULUM of Service WSRHCURRICULUM
+
+WSMETHOD GETCURRICULUM WSSEND cUSERCODE,cCURRICCPF,cCURRICPASS,nNTIPO,cNEWPASS WSRECEIVE oWSGETCURRICULUMRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETCURRICULUM xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("USERCODE", ::cUSERCODE, cUSERCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRICCPF", ::cCURRICCPF, cCURRICCPF , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRICPASS", ::cCURRICPASS, cCURRICPASS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NTIPO", ::nNTIPO, nNTIPO , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NEWPASS", ::cNEWPASS, cNEWPASS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETCURRICULUM>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETCURRICULUM",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETCURRICULUMRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETCURRICULUMRESPONSE:_GETCURRICULUMRESULT","CURRICULUM",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETEMAIL of Service WSRHCURRICULUM
+
+WSMETHOD GETEMAIL WSSEND cUSERCODE,cCURRICCPF WSRECEIVE oWSGETEMAILRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETEMAIL xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("USERCODE", ::cUSERCODE, cUSERCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRICCPF", ::cCURRICCPF, cCURRICCPF , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETEMAIL>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETEMAIL",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETEMAILRESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETEMAILRESPONSE:_GETEMAILRESULT","PERS",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETEMAIL2 of Service WSRHCURRICULUM
+
+WSMETHOD GETEMAIL2 WSSEND cUSERCODE WSRECEIVE oWSGETEMAIL2RESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETEMAIL2 xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("USERCODE", ::cUSERCODE, cUSERCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETEMAIL2>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETEMAIL2",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETEMAIL2RESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETEMAIL2RESPONSE:_GETEMAIL2RESULT","PERS",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETINFOANEXO of Service WSRHCURRICULUM
+
+WSMETHOD GETINFOANEXO WSSEND cBRANCH,cCURRICCODE,nCURRENTPAGE,cFILTERFIELD,cFILTERVALUE WSRECEIVE oWSGETINFOANEXORESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETINFOANEXO xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("BRANCH", ::cBRANCH, cBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRICCODE", ::cCURRICCODE, cCURRICCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRENTPAGE", ::nCURRENTPAGE, nCURRENTPAGE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILTERFIELD", ::cFILTERFIELD, cFILTERFIELD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILTERVALUE", ::cFILTERVALUE, cFILTERVALUE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETINFOANEXO>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETINFOANEXO",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETINFOANEXORESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETINFOANEXORESPONSE:_GETINFOANEXORESULT","TOBJECTBROWSE",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method GETSCHEDULE of Service WSRHCURRICULUM
+
+WSMETHOD GETSCHEDULE WSSEND cCURRICCODE,nCURRENTPAGE,cFILTERFIELD,cFILTERVALUE WSRECEIVE oWSGETSCHEDULERESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<GETSCHEDULE xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("CURRICCODE", ::cCURRICCODE, cCURRICCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRENTPAGE", ::nCURRENTPAGE, nCURRENTPAGE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILTERFIELD", ::cFILTERFIELD, cFILTERFIELD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FILTERVALUE", ::cFILTERVALUE, cFILTERVALUE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</GETSCHEDULE>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/GETSCHEDULE",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSGETSCHEDULERESULT:SoapRecv( WSAdvValue( oXmlRet,"_GETSCHEDULERESPONSE:_GETSCHEDULERESULT","TSCHEDULEDATA",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method SETANEXO of Service WSRHCURRICULUM
+
+WSMETHOD SETANEXO WSSEND cCURRICCODE,cPATCHOBJECT,cDESCOBJECT WSRECEIVE cSETANEXORESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<SETANEXO xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("CURRICCODE", ::cCURRICCODE, cCURRICCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("PATCHOBJECT", ::cPATCHOBJECT, cPATCHOBJECT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("DESCOBJECT", ::cDESCOBJECT, cDESCOBJECT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</SETANEXO>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/SETANEXO",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::cSETANEXORESULT    :=  WSAdvValue( oXmlRet,"_SETANEXORESPONSE:_SETANEXORESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method SETASSESSMENT of Service WSRHCURRICULUM
+
+WSMETHOD SETASSESSMENT WSSEND oWSEVALUATIONDATA WSRECEIVE nSETASSESSMENTRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<SETASSESSMENT xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("EVALUATIONDATA", ::oWSEVALUATIONDATA, oWSEVALUATIONDATA , "TEVALUATIONSDATA", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</SETASSESSMENT>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/SETASSESSMENT",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::nSETASSESSMENTRESULT :=  WSAdvValue( oXmlRet,"_SETASSESSMENTRESPONSE:_SETASSESSMENTRESULT:TEXT","integer",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method SETCURRICULUM of Service WSRHCURRICULUM
+
+WSMETHOD SETCURRICULUM WSSEND cUSERCODE,oWSCURRIC1 WSRECEIVE cSETCURRICULUMRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<SETCURRICULUM xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("USERCODE", ::cUSERCODE, cUSERCODE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("CURRIC1", ::oWSCURRIC1, oWSCURRIC1 , "CURRICULUM1", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</SETCURRICULUM>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/SETCURRICULUM",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::cSETCURRICULUMRESULT :=  WSAdvValue( oXmlRet,"_SETCURRICULUMRESPONSE:_SETCURRICULUMRESULT:TEXT","string",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method VALIDFIELDPOS of Service WSRHCURRICULUM
+
+WSMETHOD VALIDFIELDPOS WSSEND cNMALIAS,cNMFIELD WSRECEIVE lVALIDFIELDPOSRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<VALIDFIELDPOS xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("NMALIAS", ::cNMALIAS, cNMALIAS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("NMFIELD", ::cNMFIELD, cNMFIELD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</VALIDFIELDPOS>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/VALIDFIELDPOS",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::lVALIDFIELDPOSRESULT :=  WSAdvValue( oXmlRet,"_VALIDFIELDPOSRESPONSE:_VALIDFIELDPOSRESULT:TEXT","boolean",NIL,NIL,NIL,NIL,NIL,NIL) 
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+// WSDL Method X3FIELDS of Service WSRHCURRICULUM
+
+WSMETHOD X3FIELDS WSSEND cALIAS,cFIELD WSRECEIVE oWSX3FIELDSRESULT WSCLIENT WSRHCURRICULUM
+Local cSoap := "" , oXmlRet
+
+BEGIN WSMETHOD
+
+cSoap += '<X3FIELDS xmlns="http://localhost:8090/">'
+cSoap += WSSoapValue("ALIAS", ::cALIAS, cALIAS , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += WSSoapValue("FIELD", ::cFIELD, cFIELD , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+cSoap += "</X3FIELDS>"
+
+oXmlRet := SvcSoapCall(Self,cSoap,; 
+	"http://localhost:8090/X3FIELDS",; 
+	"DOCUMENT","http://localhost:8090/",,"1.031217",; 
+	"http://localhost:8090/ws/RHCURRICULUM.apw")
+
+::Init()
+::oWSX3FIELDSRESULT:SoapRecv( WSAdvValue( oXmlRet,"_X3FIELDSRESPONSE:_X3FIELDSRESULT","USERFIELD",NIL,NIL,NIL,NIL,NIL,NIL) )
+
+END WSMETHOD
+
+oXmlRet := NIL
+Return .T.
+
+
+// WSDL Data Structure ARRAYOFCITY
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCITY
+	WSDATA   oWSCITY                   AS RHCURRICULUM_CITY OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCITY
+	::oWSCITY              := {} // Array Of  RHCURRICULUM_CITY():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCITY
+	Local oClone := RHCURRICULUM_ARRAYOFCITY():NEW()
+	oClone:oWSCITY := NIL
+	If ::oWSCITY <> NIL 
+		oClone:oWSCITY := {}
+		aEval( ::oWSCITY , { |x| aadd( oClone:oWSCITY , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCITY
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_CITY","CITY",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCITY , RHCURRICULUM_CITY():New() )
+			::oWSCITY[len(::oWSCITY)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCOURSESCURRICULUM
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCOURSESCURRICULUM
+	WSDATA   oWSCOURSESCURRICULUM      AS RHCURRICULUM_COURSESCURRICULUM OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCOURSESCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCOURSESCURRICULUM
+	::oWSCOURSESCURRICULUM := {} // Array Of  RHCURRICULUM_COURSESCURRICULUM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCOURSESCURRICULUM
+	Local oClone := RHCURRICULUM_ARRAYOFCOURSESCURRICULUM():NEW()
+	oClone:oWSCOURSESCURRICULUM := NIL
+	If ::oWSCOURSESCURRICULUM <> NIL 
+		oClone:oWSCOURSESCURRICULUM := {}
+		aEval( ::oWSCOURSESCURRICULUM , { |x| aadd( oClone:oWSCOURSESCURRICULUM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCOURSESCURRICULUM
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_COURSESCURRICULUM","COURSESCURRICULUM",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCOURSESCURRICULUM , RHCURRICULUM_COURSESCURRICULUM():New() )
+			::oWSCOURSESCURRICULUM[len(::oWSCOURSESCURRICULUM)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFENTITY
+
+WSSTRUCT RHCURRICULUM_ARRAYOFENTITY
+	WSDATA   oWSENTITY                 AS RHCURRICULUM_ENTITY OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFENTITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFENTITY
+	::oWSENTITY            := {} // Array Of  RHCURRICULUM_ENTITY():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFENTITY
+	Local oClone := RHCURRICULUM_ARRAYOFENTITY():NEW()
+	oClone:oWSENTITY := NIL
+	If ::oWSENTITY <> NIL 
+		oClone:oWSENTITY := {}
+		aEval( ::oWSENTITY , { |x| aadd( oClone:oWSENTITY , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFENTITY
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_ENTITY","ENTITY",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSENTITY , RHCURRICULUM_ENTITY():New() )
+			::oWSENTITY[len(::oWSENTITY)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TSCHEDULEDATA
+
+WSSTRUCT RHCURRICULUM_TSCHEDULEDATA
+	WSDATA   oWSLISTOFREQUEST          AS RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST OPTIONAL
+	WSDATA   nPAGESTOTAL               AS integer OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TSCHEDULEDATA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TSCHEDULEDATA
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TSCHEDULEDATA
+	Local oClone := RHCURRICULUM_TSCHEDULEDATA():NEW()
+	oClone:oWSLISTOFREQUEST     := IIF(::oWSLISTOFREQUEST = NIL , NIL , ::oWSLISTOFREQUEST:Clone() )
+	oClone:nPAGESTOTAL          := ::nPAGESTOTAL
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TSCHEDULEDATA
+	Local oNode1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_LISTOFREQUEST","ARRAYOFTSCHEDULEREQUEST",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSLISTOFREQUEST := RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST():New()
+		::oWSLISTOFREQUEST:SoapRecv(oNode1)
+	EndIf
+	::nPAGESTOTAL        :=  WSAdvValue( oResponse,"_PAGESTOTAL","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFTESTTYPES
+
+WSSTRUCT RHCURRICULUM_ARRAYOFTESTTYPES
+	WSDATA   oWSTESTTYPES              AS RHCURRICULUM_TESTTYPES OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFTESTTYPES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFTESTTYPES
+	::oWSTESTTYPES         := {} // Array Of  RHCURRICULUM_TESTTYPES():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFTESTTYPES
+	Local oClone := RHCURRICULUM_ARRAYOFTESTTYPES():NEW()
+	oClone:oWSTESTTYPES := NIL
+	If ::oWSTESTTYPES <> NIL 
+		oClone:oWSTESTTYPES := {}
+		aEval( ::oWSTESTTYPES , { |x| aadd( oClone:oWSTESTTYPES , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFTESTTYPES
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_TESTTYPES","TESTTYPES",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSTESTTYPES , RHCURRICULUM_TESTTYPES():New() )
+			::oWSTESTTYPES[len(::oWSTESTTYPES)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TOBJECTCONFIGFIELD
+
+WSSTRUCT RHCURRICULUM_TOBJECTCONFIGFIELD
+	WSDATA   cCONFIGADDRESS            AS string OPTIONAL
+	WSDATA   cCONFIGADDRESSCOMPLEMENT  AS string OPTIONAL
+	WSDATA   cCONFIGCODCITYORI         AS string OPTIONAL
+	WSDATA   cCONFIGCPF                AS string OPTIONAL
+	WSDATA   cCONFIGDATEOFBIRTH        AS string OPTIONAL
+	WSDATA   cCONFIGDISTRICT           AS string OPTIONAL
+	WSDATA   cCONFIGEMAIL              AS string OPTIONAL
+	WSDATA   cCONFIGEMPLOYBOOKNR       AS string OPTIONAL
+	WSDATA   cCONFIGEMPLOYBOOKSR       AS string OPTIONAL
+	WSDATA   cCONFIGFIRSTNAME          AS string OPTIONAL
+	WSDATA   cCONFIGFIRSTSURNAME       AS string OPTIONAL
+	WSDATA   cCONFIGGENDER             AS string OPTIONAL
+	WSDATA   cCONFIGHANDCAPPED         AS string OPTIONAL
+	WSDATA   cCONFIGID                 AS string OPTIONAL
+	WSDATA   cCONFIGLASTSALARY         AS string OPTIONAL
+	WSDATA   cCONFIGMARITALSTATUS      AS string OPTIONAL
+	WSDATA   cCONFIGMOBILEPHONE        AS string OPTIONAL
+	WSDATA   cCONFIGNAME               AS string OPTIONAL
+	WSDATA   cCONFIGNATIONALITY        AS string OPTIONAL
+	WSDATA   cCONFIGNUMBEROFCHILDREN   AS string OPTIONAL
+	WSDATA   cCONFIGORIGIN             AS string OPTIONAL
+	WSDATA   cCONFIGPASSWORD           AS string OPTIONAL
+	WSDATA   cCONFIGPHONE              AS string OPTIONAL
+	WSDATA   cCONFIGPLACECODE          AS string OPTIONAL
+	WSDATA   cCONFIGSECONDNAME         AS string OPTIONAL
+	WSDATA   cCONFIGSECONDSURNAME      AS string OPTIONAL
+	WSDATA   cCONFIGSTATE              AS string OPTIONAL
+	WSDATA   cCONFIGTYPECURRICULUM     AS string OPTIONAL
+	WSDATA   cCONFIGZIPCODE            AS string OPTIONAL
+	WSDATA   cCONFIGZONE               AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TOBJECTCONFIGFIELD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TOBJECTCONFIGFIELD
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TOBJECTCONFIGFIELD
+	Local oClone := RHCURRICULUM_TOBJECTCONFIGFIELD():NEW()
+	oClone:cCONFIGADDRESS       := ::cCONFIGADDRESS
+	oClone:cCONFIGADDRESSCOMPLEMENT := ::cCONFIGADDRESSCOMPLEMENT
+	oClone:cCONFIGCODCITYORI    := ::cCONFIGCODCITYORI
+	oClone:cCONFIGCPF           := ::cCONFIGCPF
+	oClone:cCONFIGDATEOFBIRTH   := ::cCONFIGDATEOFBIRTH
+	oClone:cCONFIGDISTRICT      := ::cCONFIGDISTRICT
+	oClone:cCONFIGEMAIL         := ::cCONFIGEMAIL
+	oClone:cCONFIGEMPLOYBOOKNR  := ::cCONFIGEMPLOYBOOKNR
+	oClone:cCONFIGEMPLOYBOOKSR  := ::cCONFIGEMPLOYBOOKSR
+	oClone:cCONFIGFIRSTNAME     := ::cCONFIGFIRSTNAME
+	oClone:cCONFIGFIRSTSURNAME  := ::cCONFIGFIRSTSURNAME
+	oClone:cCONFIGGENDER        := ::cCONFIGGENDER
+	oClone:cCONFIGHANDCAPPED    := ::cCONFIGHANDCAPPED
+	oClone:cCONFIGID            := ::cCONFIGID
+	oClone:cCONFIGLASTSALARY    := ::cCONFIGLASTSALARY
+	oClone:cCONFIGMARITALSTATUS := ::cCONFIGMARITALSTATUS
+	oClone:cCONFIGMOBILEPHONE   := ::cCONFIGMOBILEPHONE
+	oClone:cCONFIGNAME          := ::cCONFIGNAME
+	oClone:cCONFIGNATIONALITY   := ::cCONFIGNATIONALITY
+	oClone:cCONFIGNUMBEROFCHILDREN := ::cCONFIGNUMBEROFCHILDREN
+	oClone:cCONFIGORIGIN        := ::cCONFIGORIGIN
+	oClone:cCONFIGPASSWORD      := ::cCONFIGPASSWORD
+	oClone:cCONFIGPHONE         := ::cCONFIGPHONE
+	oClone:cCONFIGPLACECODE     := ::cCONFIGPLACECODE
+	oClone:cCONFIGSECONDNAME    := ::cCONFIGSECONDNAME
+	oClone:cCONFIGSECONDSURNAME := ::cCONFIGSECONDSURNAME
+	oClone:cCONFIGSTATE         := ::cCONFIGSTATE
+	oClone:cCONFIGTYPECURRICULUM := ::cCONFIGTYPECURRICULUM
+	oClone:cCONFIGZIPCODE       := ::cCONFIGZIPCODE
+	oClone:cCONFIGZONE          := ::cCONFIGZONE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TOBJECTCONFIGFIELD
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCONFIGADDRESS     :=  WSAdvValue( oResponse,"_CONFIGADDRESS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGADDRESSCOMPLEMENT :=  WSAdvValue( oResponse,"_CONFIGADDRESSCOMPLEMENT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGCODCITYORI  :=  WSAdvValue( oResponse,"_CONFIGCODCITYORI","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGCPF         :=  WSAdvValue( oResponse,"_CONFIGCPF","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGDATEOFBIRTH :=  WSAdvValue( oResponse,"_CONFIGDATEOFBIRTH","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGDISTRICT    :=  WSAdvValue( oResponse,"_CONFIGDISTRICT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGEMAIL       :=  WSAdvValue( oResponse,"_CONFIGEMAIL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGEMPLOYBOOKNR :=  WSAdvValue( oResponse,"_CONFIGEMPLOYBOOKNR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGEMPLOYBOOKSR :=  WSAdvValue( oResponse,"_CONFIGEMPLOYBOOKSR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGFIRSTNAME   :=  WSAdvValue( oResponse,"_CONFIGFIRSTNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGFIRSTSURNAME :=  WSAdvValue( oResponse,"_CONFIGFIRSTSURNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGGENDER      :=  WSAdvValue( oResponse,"_CONFIGGENDER","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGHANDCAPPED  :=  WSAdvValue( oResponse,"_CONFIGHANDCAPPED","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGID          :=  WSAdvValue( oResponse,"_CONFIGID","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGLASTSALARY  :=  WSAdvValue( oResponse,"_CONFIGLASTSALARY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGMARITALSTATUS :=  WSAdvValue( oResponse,"_CONFIGMARITALSTATUS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGMOBILEPHONE :=  WSAdvValue( oResponse,"_CONFIGMOBILEPHONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGNAME        :=  WSAdvValue( oResponse,"_CONFIGNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGNATIONALITY :=  WSAdvValue( oResponse,"_CONFIGNATIONALITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGNUMBEROFCHILDREN :=  WSAdvValue( oResponse,"_CONFIGNUMBEROFCHILDREN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGORIGIN      :=  WSAdvValue( oResponse,"_CONFIGORIGIN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGPASSWORD    :=  WSAdvValue( oResponse,"_CONFIGPASSWORD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGPHONE       :=  WSAdvValue( oResponse,"_CONFIGPHONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGPLACECODE   :=  WSAdvValue( oResponse,"_CONFIGPLACECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGSECONDNAME  :=  WSAdvValue( oResponse,"_CONFIGSECONDNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGSECONDSURNAME :=  WSAdvValue( oResponse,"_CONFIGSECONDSURNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGSTATE       :=  WSAdvValue( oResponse,"_CONFIGSTATE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGTYPECURRICULUM :=  WSAdvValue( oResponse,"_CONFIGTYPECURRICULUM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGZIPCODE     :=  WSAdvValue( oResponse,"_CONFIGZIPCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONFIGZONE        :=  WSAdvValue( oResponse,"_CONFIGZONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CURRICULUM
+
+WSSTRUCT RHCURRICULUM_CURRICULUM
+	WSDATA   oWSCURRIC1                AS RHCURRICULUM_CURRICULUM1 OPTIONAL
+	WSDATA   oWSCURRIC2                AS RHCURRICULUM_CURRICULUM2 OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CURRICULUM
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CURRICULUM
+	Local oClone := RHCURRICULUM_CURRICULUM():NEW()
+	oClone:oWSCURRIC1           := IIF(::oWSCURRIC1 = NIL , NIL , ::oWSCURRIC1:Clone() )
+	oClone:oWSCURRIC2           := IIF(::oWSCURRIC2 = NIL , NIL , ::oWSCURRIC2:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CURRICULUM
+	Local oNode1
+	Local oNode2
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_CURRIC1","CURRICULUM1",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSCURRIC1 := RHCURRICULUM_CURRICULUM1():New()
+		::oWSCURRIC1:SoapRecv(oNode1)
+	EndIf
+	oNode2 :=  WSAdvValue( oResponse,"_CURRIC2","CURRICULUM2",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSCURRIC2 := RHCURRICULUM_CURRICULUM2():New()
+		::oWSCURRIC2:SoapRecv(oNode2)
+	EndIf
+Return
+
+// WSDL Data Structure PERS
+
+WSSTRUCT RHCURRICULUM_PERS
+	WSDATA   cEMAIL                    AS string
+	WSDATA   cEMAILACCOUNT             AS string
+	WSDATA   cEMAILPASS                AS string
+	WSDATA   cEMAILSERV                AS string
+	WSDATA   cPASS                     AS string
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_PERS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_PERS
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_PERS
+	Local oClone := RHCURRICULUM_PERS():NEW()
+	oClone:cEMAIL               := ::cEMAIL
+	oClone:cEMAILACCOUNT        := ::cEMAILACCOUNT
+	oClone:cEMAILPASS           := ::cEMAILPASS
+	oClone:cEMAILSERV           := ::cEMAILSERV
+	oClone:cPASS                := ::cPASS
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_PERS
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cEMAIL             :=  WSAdvValue( oResponse,"_EMAIL","string",NIL,"Property cEMAIL as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cEMAILACCOUNT      :=  WSAdvValue( oResponse,"_EMAILACCOUNT","string",NIL,"Property cEMAILACCOUNT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cEMAILPASS         :=  WSAdvValue( oResponse,"_EMAILPASS","string",NIL,"Property cEMAILPASS as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cEMAILSERV         :=  WSAdvValue( oResponse,"_EMAILSERV","string",NIL,"Property cEMAILSERV as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cPASS              :=  WSAdvValue( oResponse,"_PASS","string",NIL,"Property cPASS as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure TOBJECTBROWSE
+
+WSSTRUCT RHCURRICULUM_TOBJECTBROWSE
+	WSDATA   cEXTPER                   AS string OPTIONAL
+	WSDATA   oWSITENS                  AS RHCURRICULUM_ARRAYOFTOBJECTLIST OPTIONAL
+	WSDATA   nPAGESTOTAL               AS integer OPTIONAL
+	WSDATA   cPATHANEXO                AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TOBJECTBROWSE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TOBJECTBROWSE
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TOBJECTBROWSE
+	Local oClone := RHCURRICULUM_TOBJECTBROWSE():NEW()
+	oClone:cEXTPER              := ::cEXTPER
+	oClone:oWSITENS             := IIF(::oWSITENS = NIL , NIL , ::oWSITENS:Clone() )
+	oClone:nPAGESTOTAL          := ::nPAGESTOTAL
+	oClone:cPATHANEXO           := ::cPATHANEXO
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TOBJECTBROWSE
+	Local oNode2
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cEXTPER            :=  WSAdvValue( oResponse,"_EXTPER","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode2 :=  WSAdvValue( oResponse,"_ITENS","ARRAYOFTOBJECTLIST",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSITENS := RHCURRICULUM_ARRAYOFTOBJECTLIST():New()
+		::oWSITENS:SoapRecv(oNode2)
+	EndIf
+	::nPAGESTOTAL        :=  WSAdvValue( oResponse,"_PAGESTOTAL","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cPATHANEXO         :=  WSAdvValue( oResponse,"_PATHANEXO","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure TEVALUATIONSDATA
+
+WSSTRUCT RHCURRICULUM_TEVALUATIONSDATA
+	WSDATA   oWSLISTOFEVALUATION       AS RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TEVALUATIONSDATA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TEVALUATIONSDATA
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TEVALUATIONSDATA
+	Local oClone := RHCURRICULUM_TEVALUATIONSDATA():NEW()
+	oClone:oWSLISTOFEVALUATION  := IIF(::oWSLISTOFEVALUATION = NIL , NIL , ::oWSLISTOFEVALUATION:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_TEVALUATIONSDATA
+	Local cSoap := ""
+	cSoap += WSSoapValue("LISTOFEVALUATION", ::oWSLISTOFEVALUATION, ::oWSLISTOFEVALUATION , "ARRAYOFEVALUATIONQUESTIONS", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure CURRICULUM1
+
+WSSTRUCT RHCURRICULUM_CURRICULUM1
+	WSDATA   cACEITE                   AS string OPTIONAL
+	WSDATA   cACEITERESP               AS string OPTIONAL
+	WSDATA   cADDRESS                  AS string
+	WSDATA   cADDRESSCOMPLEMENT        AS string OPTIONAL
+	WSDATA   oWSAGENDACANDIDATE        AS RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE OPTIONAL
+	WSDATA   cANALISYS                 AS string OPTIONAL
+	WSDATA   cAPPLICANTGROUP           AS string OPTIONAL
+	WSDATA   cAREACODE                 AS string OPTIONAL
+	WSDATA   cARRIVALYEAR              AS string OPTIONAL
+	WSDATA   cBRANCH                   AS string OPTIONAL
+	WSDATA   cBUSINESSPHONE            AS string OPTIONAL
+	WSDATA   cCARGOCOD                 AS string OPTIONAL
+	WSDATA   cCARGODESC                AS string OPTIONAL
+	WSDATA   cCODCITYORI               AS string OPTIONAL
+	WSDATA   cCOSTCENTERCODE           AS string OPTIONAL
+	WSDATA   cCPF                      AS string OPTIONAL
+	WSDATA   cCURRICULUM               AS string
+	WSDATA   cCURRICULUMSTATUS         AS string OPTIONAL
+	WSDATA   dDATEOFBIRTH              AS date OPTIONAL
+	WSDATA   cDESIGNATION              AS string OPTIONAL
+	WSDATA   cDISTRICT                 AS string OPTIONAL
+	WSDATA   cDRIVINGLICENSE           AS string OPTIONAL
+	WSDATA   cELECTORALDISTRICT        AS string OPTIONAL
+	WSDATA   cEMAIL                    AS string OPTIONAL
+	WSDATA   cEMPLOYBOOKNR             AS string OPTIONAL
+	WSDATA   cEMPLOYBOOKSR             AS string OPTIONAL
+	WSDATA   cEMPLOYBOOKSTATE          AS string OPTIONAL
+	WSDATA   cEMPLOYEEBRANCH           AS string OPTIONAL
+	WSDATA   cEMPLOYEEREGISTRATION     AS string OPTIONAL
+	WSDATA   nEXPECTEDSALARY           AS float OPTIONAL
+	WSDATA   cEXPERIENCE               AS string OPTIONAL
+	WSDATA   nEXPERIENCETIME           AS float OPTIONAL
+	WSDATA   cFATHERSNAME              AS string OPTIONAL
+	WSDATA   cFIRSTNAME                AS string OPTIONAL
+	WSDATA   cFIRSTSURNAME             AS string OPTIONAL
+	WSDATA   cFONT                     AS string OPTIONAL
+	WSDATA   cGENDER                   AS string OPTIONAL
+	WSDATA   cHANDCAPPED               AS string OPTIONAL
+	WSDATA   cHANDCAPPEDDESC           AS string OPTIONAL
+	WSDATA   cHIERARCHICAL             AS string OPTIONAL
+	WSDATA   cID                       AS string OPTIONAL
+	WSDATA   cJOBABROAD                AS string OPTIONAL
+	WSDATA   nLASTSALARY               AS float OPTIONAL
+	WSDATA   oWSLISTOFCERTIFICATION    AS RHCURRICULUM_ARRAYOFCERTIFICATION OPTIONAL
+	WSDATA   oWSLISTOFCHARACTERS       AS RHCURRICULUM_ARRAYOFCHARACTERS OPTIONAL
+	WSDATA   oWSLISTOFCOURSES          AS RHCURRICULUM_ARRAYOFCOURSES OPTIONAL
+	WSDATA   oWSLISTOFEVALUATION       AS RHCURRICULUM_ARRAYOFEVALUATION OPTIONAL
+	WSDATA   oWSLISTOFGRADUATION       AS RHCURRICULUM_ARRAYOFGRADUATION OPTIONAL
+	WSDATA   oWSLISTOFHISTORY          AS RHCURRICULUM_ARRAYOFHISTORY OPTIONAL
+	WSDATA   oWSLISTOFLANGUAGES        AS RHCURRICULUM_ARRAYOFLANGUAGES OPTIONAL
+	WSDATA   oWSLISTOFQUALIFICATION    AS RHCURRICULUM_ARRAYOFQUALIFICATION OPTIONAL
+	WSDATA   cMARITALSTATUS            AS string OPTIONAL
+	WSDATA   cMEANSSENT                AS string OPTIONAL
+	WSDATA   cMOBILEPHONE              AS string OPTIONAL
+	WSDATA   cMOTHERSNAME              AS string OPTIONAL
+	WSDATA   cNAME                     AS string
+	WSDATA   cNATIONALITY              AS string OPTIONAL
+	WSDATA   nNUMBERCHARS              AS integer OPTIONAL
+	WSDATA   nNUMBEROFCHILDREN         AS integer OPTIONAL
+	WSDATA   cORIGIN                   AS string OPTIONAL
+	WSDATA   cPARTNER                  AS string OPTIONAL
+	WSDATA   cPASSWORD                 AS string OPTIONAL
+	WSDATA   cPHONE                    AS string OPTIONAL
+	WSDATA   cPIS                      AS string OPTIONAL
+	WSDATA   cPOSITONAIMED             AS string OPTIONAL
+	WSDATA   dREGISTERDATE             AS date OPTIONAL
+	WSDATA   cRESERVISTCARD            AS string OPTIONAL
+	WSDATA   cSECONDNAME               AS string OPTIONAL
+	WSDATA   cSECONDSURNAME            AS string OPTIONAL
+	WSDATA   cSTATE                    AS string OPTIONAL
+	WSDATA   dTESTDATE                 AS date OPTIONAL
+	WSDATA   nTESTGRADE                AS float OPTIONAL
+	WSDATA   cTYPECURRICULUM           AS string OPTIONAL
+	WSDATA   oWSUSERFIELDCERT          AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   oWSUSERFIELDCOUR          AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   oWSUSERFIELDGRAD          AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   oWSUSERFIELDHIST          AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   oWSUSERFIELDLANG          AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   oWSUSERFIELDPERS          AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   cVOTINGCARD               AS string OPTIONAL
+	WSDATA   nWORKEDTIME               AS float OPTIONAL
+	WSDATA   cZIPCODE                  AS string OPTIONAL
+	WSDATA   cZONE                     AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CURRICULUM1
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CURRICULUM1
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CURRICULUM1
+	Local oClone := RHCURRICULUM_CURRICULUM1():NEW()
+	oClone:cACEITE              := ::cACEITE
+	oClone:cACEITERESP          := ::cACEITERESP
+	oClone:cADDRESS             := ::cADDRESS
+	oClone:cADDRESSCOMPLEMENT   := ::cADDRESSCOMPLEMENT
+	oClone:oWSAGENDACANDIDATE   := IIF(::oWSAGENDACANDIDATE = NIL , NIL , ::oWSAGENDACANDIDATE:Clone() )
+	oClone:cANALISYS            := ::cANALISYS
+	oClone:cAPPLICANTGROUP      := ::cAPPLICANTGROUP
+	oClone:cAREACODE            := ::cAREACODE
+	oClone:cARRIVALYEAR         := ::cARRIVALYEAR
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cBUSINESSPHONE       := ::cBUSINESSPHONE
+	oClone:cCARGOCOD            := ::cCARGOCOD
+	oClone:cCARGODESC           := ::cCARGODESC
+	oClone:cCODCITYORI          := ::cCODCITYORI
+	oClone:cCOSTCENTERCODE      := ::cCOSTCENTERCODE
+	oClone:cCPF                 := ::cCPF
+	oClone:cCURRICULUM          := ::cCURRICULUM
+	oClone:cCURRICULUMSTATUS    := ::cCURRICULUMSTATUS
+	oClone:dDATEOFBIRTH         := ::dDATEOFBIRTH
+	oClone:cDESIGNATION         := ::cDESIGNATION
+	oClone:cDISTRICT            := ::cDISTRICT
+	oClone:cDRIVINGLICENSE      := ::cDRIVINGLICENSE
+	oClone:cELECTORALDISTRICT   := ::cELECTORALDISTRICT
+	oClone:cEMAIL               := ::cEMAIL
+	oClone:cEMPLOYBOOKNR        := ::cEMPLOYBOOKNR
+	oClone:cEMPLOYBOOKSR        := ::cEMPLOYBOOKSR
+	oClone:cEMPLOYBOOKSTATE     := ::cEMPLOYBOOKSTATE
+	oClone:cEMPLOYEEBRANCH      := ::cEMPLOYEEBRANCH
+	oClone:cEMPLOYEEREGISTRATION := ::cEMPLOYEEREGISTRATION
+	oClone:nEXPECTEDSALARY      := ::nEXPECTEDSALARY
+	oClone:cEXPERIENCE          := ::cEXPERIENCE
+	oClone:nEXPERIENCETIME      := ::nEXPERIENCETIME
+	oClone:cFATHERSNAME         := ::cFATHERSNAME
+	oClone:cFIRSTNAME           := ::cFIRSTNAME
+	oClone:cFIRSTSURNAME        := ::cFIRSTSURNAME
+	oClone:cFONT                := ::cFONT
+	oClone:cGENDER              := ::cGENDER
+	oClone:cHANDCAPPED          := ::cHANDCAPPED
+	oClone:cHANDCAPPEDDESC      := ::cHANDCAPPEDDESC
+	oClone:cHIERARCHICAL        := ::cHIERARCHICAL
+	oClone:cID                  := ::cID
+	oClone:cJOBABROAD           := ::cJOBABROAD
+	oClone:nLASTSALARY          := ::nLASTSALARY
+	oClone:oWSLISTOFCERTIFICATION := IIF(::oWSLISTOFCERTIFICATION = NIL , NIL , ::oWSLISTOFCERTIFICATION:Clone() )
+	oClone:oWSLISTOFCHARACTERS  := IIF(::oWSLISTOFCHARACTERS = NIL , NIL , ::oWSLISTOFCHARACTERS:Clone() )
+	oClone:oWSLISTOFCOURSES     := IIF(::oWSLISTOFCOURSES = NIL , NIL , ::oWSLISTOFCOURSES:Clone() )
+	oClone:oWSLISTOFEVALUATION  := IIF(::oWSLISTOFEVALUATION = NIL , NIL , ::oWSLISTOFEVALUATION:Clone() )
+	oClone:oWSLISTOFGRADUATION  := IIF(::oWSLISTOFGRADUATION = NIL , NIL , ::oWSLISTOFGRADUATION:Clone() )
+	oClone:oWSLISTOFHISTORY     := IIF(::oWSLISTOFHISTORY = NIL , NIL , ::oWSLISTOFHISTORY:Clone() )
+	oClone:oWSLISTOFLANGUAGES   := IIF(::oWSLISTOFLANGUAGES = NIL , NIL , ::oWSLISTOFLANGUAGES:Clone() )
+	oClone:oWSLISTOFQUALIFICATION := IIF(::oWSLISTOFQUALIFICATION = NIL , NIL , ::oWSLISTOFQUALIFICATION:Clone() )
+	oClone:cMARITALSTATUS       := ::cMARITALSTATUS
+	oClone:cMEANSSENT           := ::cMEANSSENT
+	oClone:cMOBILEPHONE         := ::cMOBILEPHONE
+	oClone:cMOTHERSNAME         := ::cMOTHERSNAME
+	oClone:cNAME                := ::cNAME
+	oClone:cNATIONALITY         := ::cNATIONALITY
+	oClone:nNUMBERCHARS         := ::nNUMBERCHARS
+	oClone:nNUMBEROFCHILDREN    := ::nNUMBEROFCHILDREN
+	oClone:cORIGIN              := ::cORIGIN
+	oClone:cPARTNER             := ::cPARTNER
+	oClone:cPASSWORD            := ::cPASSWORD
+	oClone:cPHONE               := ::cPHONE
+	oClone:cPIS                 := ::cPIS
+	oClone:cPOSITONAIMED        := ::cPOSITONAIMED
+	oClone:dREGISTERDATE        := ::dREGISTERDATE
+	oClone:cRESERVISTCARD       := ::cRESERVISTCARD
+	oClone:cSECONDNAME          := ::cSECONDNAME
+	oClone:cSECONDSURNAME       := ::cSECONDSURNAME
+	oClone:cSTATE               := ::cSTATE
+	oClone:dTESTDATE            := ::dTESTDATE
+	oClone:nTESTGRADE           := ::nTESTGRADE
+	oClone:cTYPECURRICULUM      := ::cTYPECURRICULUM
+	oClone:oWSUSERFIELDCERT     := IIF(::oWSUSERFIELDCERT = NIL , NIL , ::oWSUSERFIELDCERT:Clone() )
+	oClone:oWSUSERFIELDCOUR     := IIF(::oWSUSERFIELDCOUR = NIL , NIL , ::oWSUSERFIELDCOUR:Clone() )
+	oClone:oWSUSERFIELDGRAD     := IIF(::oWSUSERFIELDGRAD = NIL , NIL , ::oWSUSERFIELDGRAD:Clone() )
+	oClone:oWSUSERFIELDHIST     := IIF(::oWSUSERFIELDHIST = NIL , NIL , ::oWSUSERFIELDHIST:Clone() )
+	oClone:oWSUSERFIELDLANG     := IIF(::oWSUSERFIELDLANG = NIL , NIL , ::oWSUSERFIELDLANG:Clone() )
+	oClone:oWSUSERFIELDPERS     := IIF(::oWSUSERFIELDPERS = NIL , NIL , ::oWSUSERFIELDPERS:Clone() )
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+	oClone:cVOTINGCARD          := ::cVOTINGCARD
+	oClone:nWORKEDTIME          := ::nWORKEDTIME
+	oClone:cZIPCODE             := ::cZIPCODE
+	oClone:cZONE                := ::cZONE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_CURRICULUM1
+	Local cSoap := ""
+	cSoap += WSSoapValue("ACEITE", ::cACEITE, ::cACEITE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ACEITERESP", ::cACEITERESP, ::cACEITERESP , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ADDRESS", ::cADDRESS, ::cADDRESS , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ADDRESSCOMPLEMENT", ::cADDRESSCOMPLEMENT, ::cADDRESSCOMPLEMENT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("AGENDACANDIDATE", ::oWSAGENDACANDIDATE, ::oWSAGENDACANDIDATE , "ARRAYOFSTEPSAGENDACANDIDATE", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ANALISYS", ::cANALISYS, ::cANALISYS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("APPLICANTGROUP", ::cAPPLICANTGROUP, ::cAPPLICANTGROUP , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("AREACODE", ::cAREACODE, ::cAREACODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ARRIVALYEAR", ::cARRIVALYEAR, ::cARRIVALYEAR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("BRANCH", ::cBRANCH, ::cBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("BUSINESSPHONE", ::cBUSINESSPHONE, ::cBUSINESSPHONE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CARGOCOD", ::cCARGOCOD, ::cCARGOCOD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CARGODESC", ::cCARGODESC, ::cCARGODESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CODCITYORI", ::cCODCITYORI, ::cCODCITYORI , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("COSTCENTERCODE", ::cCOSTCENTERCODE, ::cCOSTCENTERCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CPF", ::cCPF, ::cCPF , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CURRICULUM", ::cCURRICULUM, ::cCURRICULUM , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CURRICULUMSTATUS", ::cCURRICULUMSTATUS, ::cCURRICULUMSTATUS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DATEOFBIRTH", ::dDATEOFBIRTH, ::dDATEOFBIRTH , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESIGNATION", ::cDESIGNATION, ::cDESIGNATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DISTRICT", ::cDISTRICT, ::cDISTRICT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DRIVINGLICENSE", ::cDRIVINGLICENSE, ::cDRIVINGLICENSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ELECTORALDISTRICT", ::cELECTORALDISTRICT, ::cELECTORALDISTRICT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMAIL", ::cEMAIL, ::cEMAIL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYBOOKNR", ::cEMPLOYBOOKNR, ::cEMPLOYBOOKNR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYBOOKSR", ::cEMPLOYBOOKSR, ::cEMPLOYBOOKSR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYBOOKSTATE", ::cEMPLOYBOOKSTATE, ::cEMPLOYBOOKSTATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYEEBRANCH", ::cEMPLOYEEBRANCH, ::cEMPLOYEEBRANCH , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYEEREGISTRATION", ::cEMPLOYEEREGISTRATION, ::cEMPLOYEEREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EXPECTEDSALARY", ::nEXPECTEDSALARY, ::nEXPECTEDSALARY , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EXPERIENCE", ::cEXPERIENCE, ::cEXPERIENCE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EXPERIENCETIME", ::nEXPERIENCETIME, ::nEXPERIENCETIME , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FATHERSNAME", ::cFATHERSNAME, ::cFATHERSNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FIRSTNAME", ::cFIRSTNAME, ::cFIRSTNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FIRSTSURNAME", ::cFIRSTSURNAME, ::cFIRSTSURNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FONT", ::cFONT, ::cFONT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GENDER", ::cGENDER, ::cGENDER , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("HANDCAPPED", ::cHANDCAPPED, ::cHANDCAPPED , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("HANDCAPPEDDESC", ::cHANDCAPPEDDESC, ::cHANDCAPPEDDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("HIERARCHICAL", ::cHIERARCHICAL, ::cHIERARCHICAL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ID", ::cID, ::cID , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("JOBABROAD", ::cJOBABROAD, ::cJOBABROAD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LASTSALARY", ::nLASTSALARY, ::nLASTSALARY , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFCERTIFICATION", ::oWSLISTOFCERTIFICATION, ::oWSLISTOFCERTIFICATION , "ARRAYOFCERTIFICATION", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFCHARACTERS", ::oWSLISTOFCHARACTERS, ::oWSLISTOFCHARACTERS , "ARRAYOFCHARACTERS", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFCOURSES", ::oWSLISTOFCOURSES, ::oWSLISTOFCOURSES , "ARRAYOFCOURSES", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFEVALUATION", ::oWSLISTOFEVALUATION, ::oWSLISTOFEVALUATION , "ARRAYOFEVALUATION", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFGRADUATION", ::oWSLISTOFGRADUATION, ::oWSLISTOFGRADUATION , "ARRAYOFGRADUATION", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFHISTORY", ::oWSLISTOFHISTORY, ::oWSLISTOFHISTORY , "ARRAYOFHISTORY", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFLANGUAGES", ::oWSLISTOFLANGUAGES, ::oWSLISTOFLANGUAGES , "ARRAYOFLANGUAGES", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFQUALIFICATION", ::oWSLISTOFQUALIFICATION, ::oWSLISTOFQUALIFICATION , "ARRAYOFQUALIFICATION", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("MARITALSTATUS", ::cMARITALSTATUS, ::cMARITALSTATUS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("MEANSSENT", ::cMEANSSENT, ::cMEANSSENT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("MOBILEPHONE", ::cMOBILEPHONE, ::cMOBILEPHONE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("MOTHERSNAME", ::cMOTHERSNAME, ::cMOTHERSNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NAME", ::cNAME, ::cNAME , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NATIONALITY", ::cNATIONALITY, ::cNATIONALITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NUMBERCHARS", ::nNUMBERCHARS, ::nNUMBERCHARS , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NUMBEROFCHILDREN", ::nNUMBEROFCHILDREN, ::nNUMBEROFCHILDREN , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ORIGIN", ::cORIGIN, ::cORIGIN , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PARTNER", ::cPARTNER, ::cPARTNER , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PASSWORD", ::cPASSWORD, ::cPASSWORD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PHONE", ::cPHONE, ::cPHONE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("PIS", ::cPIS, ::cPIS , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("POSITONAIMED", ::cPOSITONAIMED, ::cPOSITONAIMED , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REGISTERDATE", ::dREGISTERDATE, ::dREGISTERDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("RESERVISTCARD", ::cRESERVISTCARD, ::cRESERVISTCARD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SECONDNAME", ::cSECONDNAME, ::cSECONDNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SECONDSURNAME", ::cSECONDSURNAME, ::cSECONDSURNAME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STATE", ::cSTATE, ::cSTATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TESTDATE", ::dTESTDATE, ::dTESTDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TESTGRADE", ::nTESTGRADE, ::nTESTGRADE , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPECURRICULUM", ::cTYPECURRICULUM, ::cTYPECURRICULUM , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDCERT", ::oWSUSERFIELDCERT, ::oWSUSERFIELDCERT , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDCOUR", ::oWSUSERFIELDCOUR, ::oWSUSERFIELDCOUR , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDGRAD", ::oWSUSERFIELDGRAD, ::oWSUSERFIELDGRAD , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDHIST", ::oWSUSERFIELDHIST, ::oWSUSERFIELDHIST , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDLANG", ::oWSUSERFIELDLANG, ::oWSUSERFIELDLANG , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDPERS", ::oWSUSERFIELDPERS, ::oWSUSERFIELDPERS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VOTINGCARD", ::cVOTINGCARD, ::cVOTINGCARD , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("WORKEDTIME", ::nWORKEDTIME, ::nWORKEDTIME , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ZIPCODE", ::cZIPCODE, ::cZIPCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ZONE", ::cZONE, ::cZONE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CURRICULUM1
+	Local oNode5
+	Local oNode44
+	Local oNode45
+	Local oNode46
+	Local oNode47
+	Local oNode48
+	Local oNode49
+	Local oNode50
+	Local oNode51
+	Local oNode74
+	Local oNode75
+	Local oNode76
+	Local oNode77
+	Local oNode78
+	Local oNode79
+	Local oNode80
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cACEITE            :=  WSAdvValue( oResponse,"_ACEITE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cACEITERESP        :=  WSAdvValue( oResponse,"_ACEITERESP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cADDRESS           :=  WSAdvValue( oResponse,"_ADDRESS","string",NIL,"Property cADDRESS as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cADDRESSCOMPLEMENT :=  WSAdvValue( oResponse,"_ADDRESSCOMPLEMENT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode5 :=  WSAdvValue( oResponse,"_AGENDACANDIDATE","ARRAYOFSTEPSAGENDACANDIDATE",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode5 != NIL
+		::oWSAGENDACANDIDATE := RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE():New()
+		::oWSAGENDACANDIDATE:SoapRecv(oNode5)
+	EndIf
+	::cANALISYS          :=  WSAdvValue( oResponse,"_ANALISYS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cAPPLICANTGROUP    :=  WSAdvValue( oResponse,"_APPLICANTGROUP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cAREACODE          :=  WSAdvValue( oResponse,"_AREACODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cARRIVALYEAR       :=  WSAdvValue( oResponse,"_ARRIVALYEAR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cBRANCH            :=  WSAdvValue( oResponse,"_BRANCH","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cBUSINESSPHONE     :=  WSAdvValue( oResponse,"_BUSINESSPHONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCARGOCOD          :=  WSAdvValue( oResponse,"_CARGOCOD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCARGODESC         :=  WSAdvValue( oResponse,"_CARGODESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODCITYORI        :=  WSAdvValue( oResponse,"_CODCITYORI","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOSTCENTERCODE    :=  WSAdvValue( oResponse,"_COSTCENTERCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCPF               :=  WSAdvValue( oResponse,"_CPF","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCURRICULUM        :=  WSAdvValue( oResponse,"_CURRICULUM","string",NIL,"Property cCURRICULUM as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cCURRICULUMSTATUS  :=  WSAdvValue( oResponse,"_CURRICULUMSTATUS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dDATEOFBIRTH       :=  WSAdvValue( oResponse,"_DATEOFBIRTH","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cDESIGNATION       :=  WSAdvValue( oResponse,"_DESIGNATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDISTRICT          :=  WSAdvValue( oResponse,"_DISTRICT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDRIVINGLICENSE    :=  WSAdvValue( oResponse,"_DRIVINGLICENSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cELECTORALDISTRICT :=  WSAdvValue( oResponse,"_ELECTORALDISTRICT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMAIL             :=  WSAdvValue( oResponse,"_EMAIL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYBOOKNR      :=  WSAdvValue( oResponse,"_EMPLOYBOOKNR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYBOOKSR      :=  WSAdvValue( oResponse,"_EMPLOYBOOKSR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYBOOKSTATE   :=  WSAdvValue( oResponse,"_EMPLOYBOOKSTATE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYEEBRANCH    :=  WSAdvValue( oResponse,"_EMPLOYEEBRANCH","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYEEREGISTRATION :=  WSAdvValue( oResponse,"_EMPLOYEEREGISTRATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nEXPECTEDSALARY    :=  WSAdvValue( oResponse,"_EXPECTEDSALARY","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cEXPERIENCE        :=  WSAdvValue( oResponse,"_EXPERIENCE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nEXPERIENCETIME    :=  WSAdvValue( oResponse,"_EXPERIENCETIME","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cFATHERSNAME       :=  WSAdvValue( oResponse,"_FATHERSNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFIRSTNAME         :=  WSAdvValue( oResponse,"_FIRSTNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFIRSTSURNAME      :=  WSAdvValue( oResponse,"_FIRSTSURNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFONT              :=  WSAdvValue( oResponse,"_FONT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGENDER            :=  WSAdvValue( oResponse,"_GENDER","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHANDCAPPED        :=  WSAdvValue( oResponse,"_HANDCAPPED","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHANDCAPPEDDESC    :=  WSAdvValue( oResponse,"_HANDCAPPEDDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cHIERARCHICAL      :=  WSAdvValue( oResponse,"_HIERARCHICAL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cID                :=  WSAdvValue( oResponse,"_ID","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cJOBABROAD         :=  WSAdvValue( oResponse,"_JOBABROAD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nLASTSALARY        :=  WSAdvValue( oResponse,"_LASTSALARY","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	oNode44 :=  WSAdvValue( oResponse,"_LISTOFCERTIFICATION","ARRAYOFCERTIFICATION",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode44 != NIL
+		::oWSLISTOFCERTIFICATION := RHCURRICULUM_ARRAYOFCERTIFICATION():New()
+		::oWSLISTOFCERTIFICATION:SoapRecv(oNode44)
+	EndIf
+	oNode45 :=  WSAdvValue( oResponse,"_LISTOFCHARACTERS","ARRAYOFCHARACTERS",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode45 != NIL
+		::oWSLISTOFCHARACTERS := RHCURRICULUM_ARRAYOFCHARACTERS():New()
+		::oWSLISTOFCHARACTERS:SoapRecv(oNode45)
+	EndIf
+	oNode46 :=  WSAdvValue( oResponse,"_LISTOFCOURSES","ARRAYOFCOURSES",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode46 != NIL
+		::oWSLISTOFCOURSES := RHCURRICULUM_ARRAYOFCOURSES():New()
+		::oWSLISTOFCOURSES:SoapRecv(oNode46)
+	EndIf
+	oNode47 :=  WSAdvValue( oResponse,"_LISTOFEVALUATION","ARRAYOFEVALUATION",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode47 != NIL
+		::oWSLISTOFEVALUATION := RHCURRICULUM_ARRAYOFEVALUATION():New()
+		::oWSLISTOFEVALUATION:SoapRecv(oNode47)
+	EndIf
+	oNode48 :=  WSAdvValue( oResponse,"_LISTOFGRADUATION","ARRAYOFGRADUATION",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode48 != NIL
+		::oWSLISTOFGRADUATION := RHCURRICULUM_ARRAYOFGRADUATION():New()
+		::oWSLISTOFGRADUATION:SoapRecv(oNode48)
+	EndIf
+	oNode49 :=  WSAdvValue( oResponse,"_LISTOFHISTORY","ARRAYOFHISTORY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode49 != NIL
+		::oWSLISTOFHISTORY := RHCURRICULUM_ARRAYOFHISTORY():New()
+		::oWSLISTOFHISTORY:SoapRecv(oNode49)
+	EndIf
+	oNode50 :=  WSAdvValue( oResponse,"_LISTOFLANGUAGES","ARRAYOFLANGUAGES",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode50 != NIL
+		::oWSLISTOFLANGUAGES := RHCURRICULUM_ARRAYOFLANGUAGES():New()
+		::oWSLISTOFLANGUAGES:SoapRecv(oNode50)
+	EndIf
+	oNode51 :=  WSAdvValue( oResponse,"_LISTOFQUALIFICATION","ARRAYOFQUALIFICATION",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode51 != NIL
+		::oWSLISTOFQUALIFICATION := RHCURRICULUM_ARRAYOFQUALIFICATION():New()
+		::oWSLISTOFQUALIFICATION:SoapRecv(oNode51)
+	EndIf
+	::cMARITALSTATUS     :=  WSAdvValue( oResponse,"_MARITALSTATUS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMEANSSENT         :=  WSAdvValue( oResponse,"_MEANSSENT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMOBILEPHONE       :=  WSAdvValue( oResponse,"_MOBILEPHONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMOTHERSNAME       :=  WSAdvValue( oResponse,"_MOTHERSNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cNAME              :=  WSAdvValue( oResponse,"_NAME","string",NIL,"Property cNAME as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cNATIONALITY       :=  WSAdvValue( oResponse,"_NATIONALITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nNUMBERCHARS       :=  WSAdvValue( oResponse,"_NUMBERCHARS","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::nNUMBEROFCHILDREN  :=  WSAdvValue( oResponse,"_NUMBEROFCHILDREN","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cORIGIN            :=  WSAdvValue( oResponse,"_ORIGIN","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cPARTNER           :=  WSAdvValue( oResponse,"_PARTNER","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cPASSWORD          :=  WSAdvValue( oResponse,"_PASSWORD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cPHONE             :=  WSAdvValue( oResponse,"_PHONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cPIS               :=  WSAdvValue( oResponse,"_PIS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cPOSITONAIMED      :=  WSAdvValue( oResponse,"_POSITONAIMED","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dREGISTERDATE      :=  WSAdvValue( oResponse,"_REGISTERDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cRESERVISTCARD     :=  WSAdvValue( oResponse,"_RESERVISTCARD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSECONDNAME        :=  WSAdvValue( oResponse,"_SECONDNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSECONDSURNAME     :=  WSAdvValue( oResponse,"_SECONDSURNAME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTATE             :=  WSAdvValue( oResponse,"_STATE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dTESTDATE          :=  WSAdvValue( oResponse,"_TESTDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::nTESTGRADE         :=  WSAdvValue( oResponse,"_TESTGRADE","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cTYPECURRICULUM    :=  WSAdvValue( oResponse,"_TYPECURRICULUM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode74 :=  WSAdvValue( oResponse,"_USERFIELDCERT","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode74 != NIL
+		::oWSUSERFIELDCERT := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDCERT:SoapRecv(oNode74)
+	EndIf
+	oNode75 :=  WSAdvValue( oResponse,"_USERFIELDCOUR","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode75 != NIL
+		::oWSUSERFIELDCOUR := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDCOUR:SoapRecv(oNode75)
+	EndIf
+	oNode76 :=  WSAdvValue( oResponse,"_USERFIELDGRAD","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode76 != NIL
+		::oWSUSERFIELDGRAD := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDGRAD:SoapRecv(oNode76)
+	EndIf
+	oNode77 :=  WSAdvValue( oResponse,"_USERFIELDHIST","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode77 != NIL
+		::oWSUSERFIELDHIST := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDHIST:SoapRecv(oNode77)
+	EndIf
+	oNode78 :=  WSAdvValue( oResponse,"_USERFIELDLANG","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode78 != NIL
+		::oWSUSERFIELDLANG := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDLANG:SoapRecv(oNode78)
+	EndIf
+	oNode79 :=  WSAdvValue( oResponse,"_USERFIELDPERS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode79 != NIL
+		::oWSUSERFIELDPERS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDPERS:SoapRecv(oNode79)
+	EndIf
+	oNode80 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode80 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode80)
+	EndIf
+	::cVOTINGCARD        :=  WSAdvValue( oResponse,"_VOTINGCARD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nWORKEDTIME        :=  WSAdvValue( oResponse,"_WORKEDTIME","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cZIPCODE           :=  WSAdvValue( oResponse,"_ZIPCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cZONE              :=  WSAdvValue( oResponse,"_ZONE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CITY
+
+WSSTRUCT RHCURRICULUM_CITY
+	WSDATA   cCITYORI                  AS string OPTIONAL
+	WSDATA   cCODCITYORI               AS string OPTIONAL
+	WSDATA   cUFORI                    AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CITY
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CITY
+	Local oClone := RHCURRICULUM_CITY():NEW()
+	oClone:cCITYORI             := ::cCITYORI
+	oClone:cCODCITYORI          := ::cCODCITYORI
+	oClone:cUFORI               := ::cUFORI
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CITY
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCITYORI           :=  WSAdvValue( oResponse,"_CITYORI","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODCITYORI        :=  WSAdvValue( oResponse,"_CODCITYORI","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUFORI             :=  WSAdvValue( oResponse,"_UFORI","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure COURSESCURRICULUM
+
+WSSTRUCT RHCURRICULUM_COURSESCURRICULUM
+	WSDATA   cCOURSECURRICULUMCODE     AS string OPTIONAL
+	WSDATA   cCOURSECURRICULUMDESCRIPTION AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_COURSESCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_COURSESCURRICULUM
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_COURSESCURRICULUM
+	Local oClone := RHCURRICULUM_COURSESCURRICULUM():NEW()
+	oClone:cCOURSECURRICULUMCODE := ::cCOURSECURRICULUMCODE
+	oClone:cCOURSECURRICULUMDESCRIPTION := ::cCOURSECURRICULUMDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_COURSESCURRICULUM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOURSECURRICULUMCODE :=  WSAdvValue( oResponse,"_COURSECURRICULUMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOURSECURRICULUMDESCRIPTION :=  WSAdvValue( oResponse,"_COURSECURRICULUMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ENTITY
+
+WSSTRUCT RHCURRICULUM_ENTITY
+	WSDATA   cENTITYCODE               AS string OPTIONAL
+	WSDATA   cENTITYDESCRIPTION        AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ENTITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ENTITY
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ENTITY
+	Local oClone := RHCURRICULUM_ENTITY():NEW()
+	oClone:cENTITYCODE          := ::cENTITYCODE
+	oClone:cENTITYDESCRIPTION   := ::cENTITYDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ENTITY
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cENTITYCODE        :=  WSAdvValue( oResponse,"_ENTITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYDESCRIPTION :=  WSAdvValue( oResponse,"_ENTITYDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFTSCHEDULEREQUEST
+
+WSSTRUCT RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST
+	WSDATA   oWSTSCHEDULEREQUEST       AS RHCURRICULUM_TSCHEDULEREQUEST OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST
+	::oWSTSCHEDULEREQUEST  := {} // Array Of  RHCURRICULUM_TSCHEDULEREQUEST():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST
+	Local oClone := RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST():NEW()
+	oClone:oWSTSCHEDULEREQUEST := NIL
+	If ::oWSTSCHEDULEREQUEST <> NIL 
+		oClone:oWSTSCHEDULEREQUEST := {}
+		aEval( ::oWSTSCHEDULEREQUEST , { |x| aadd( oClone:oWSTSCHEDULEREQUEST , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFTSCHEDULEREQUEST
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_TSCHEDULEREQUEST","TSCHEDULEREQUEST",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSTSCHEDULEREQUEST , RHCURRICULUM_TSCHEDULEREQUEST():New() )
+			::oWSTSCHEDULEREQUEST[len(::oWSTSCHEDULEREQUEST)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TESTTYPES
+
+WSSTRUCT RHCURRICULUM_TESTTYPES
+	WSDATA   cAREACODE                 AS string OPTIONAL
+	WSDATA   cCONTSERV                 AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   cDURATION                 AS string OPTIONAL
+	WSDATA   cEVALTYPE                 AS string OPTIONAL
+	WSDATA   cEVALUATION               AS string OPTIONAL
+	WSDATA   cITEM                     AS string OPTIONAL
+	WSDATA   oWSLISTOFQUESTIONS        AS RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES OPTIONAL
+	WSDATA   cQUESTION                 AS string OPTIONAL
+	WSDATA   cSUBJECT                  AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TESTTYPES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TESTTYPES
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TESTTYPES
+	Local oClone := RHCURRICULUM_TESTTYPES():NEW()
+	oClone:cAREACODE            := ::cAREACODE
+	oClone:cCONTSERV            := ::cCONTSERV
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cDURATION            := ::cDURATION
+	oClone:cEVALTYPE            := ::cEVALTYPE
+	oClone:cEVALUATION          := ::cEVALUATION
+	oClone:cITEM                := ::cITEM
+	oClone:oWSLISTOFQUESTIONS   := IIF(::oWSLISTOFQUESTIONS = NIL , NIL , ::oWSLISTOFQUESTIONS:Clone() )
+	oClone:cQUESTION            := ::cQUESTION
+	oClone:cSUBJECT             := ::cSUBJECT
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TESTTYPES
+	Local oNode8
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAREACODE          :=  WSAdvValue( oResponse,"_AREACODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCONTSERV          :=  WSAdvValue( oResponse,"_CONTSERV","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDURATION          :=  WSAdvValue( oResponse,"_DURATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEVALTYPE          :=  WSAdvValue( oResponse,"_EVALTYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEVALUATION        :=  WSAdvValue( oResponse,"_EVALUATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cITEM              :=  WSAdvValue( oResponse,"_ITEM","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode8 :=  WSAdvValue( oResponse,"_LISTOFQUESTIONS","ARRAYOFQUESTIONSTESTTYPES",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode8 != NIL
+		::oWSLISTOFQUESTIONS := RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES():New()
+		::oWSLISTOFQUESTIONS:SoapRecv(oNode8)
+	EndIf
+	::cQUESTION          :=  WSAdvValue( oResponse,"_QUESTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBJECT           :=  WSAdvValue( oResponse,"_SUBJECT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CURRICULUM2
+
+WSSTRUCT RHCURRICULUM_CURRICULUM2
+	WSDATA   oWSLISTOFAREA             AS RHCURRICULUM_ARRAYOFAREA OPTIONAL
+	WSDATA   oWSLISTOFCERTIFICATIONCURRICULUM AS RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM OPTIONAL
+	WSDATA   oWSLISTOFCITY             AS RHCURRICULUM_ARRAYOFCITY OPTIONAL
+	WSDATA   oWSLISTOFCOURSESCURRICULUM AS RHCURRICULUM_ARRAYOFCOURSESCURRICULUM OPTIONAL
+	WSDATA   oWSLISTOFCOURSESEMPLOYEE  AS RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE OPTIONAL
+	WSDATA   oWSLISTOFENTITITY         AS RHCURRICULUM_ARRAYOFENTITITY OPTIONAL
+	WSDATA   oWSLISTOFENTITYCERTIFICATION AS RHCURRICULUM_ARRAYOFENTITY OPTIONAL
+	WSDATA   oWSLISTOFENTITYCOURSES    AS RHCURRICULUM_ARRAYOFENTITY OPTIONAL
+	WSDATA   oWSLISTOFENTITYGRADUATION AS RHCURRICULUM_ARRAYOFENTITY OPTIONAL
+	WSDATA   oWSLISTOFENTITYLANGUAGES  AS RHCURRICULUM_ARRAYOFENTITY OPTIONAL
+	WSDATA   oWSLISTOFFACTOR           AS RHCURRICULUM_ARRAYOFFACTOR OPTIONAL
+	WSDATA   oWSLISTOFFEDERALUNIT      AS RHCURRICULUM_ARRAYOFFEDERALUNIT OPTIONAL
+	WSDATA   oWSLISTOFFONT             AS RHCURRICULUM_ARRAYOFFONT OPTIONAL
+	WSDATA   oWSLISTOFGENDER           AS RHCURRICULUM_ARRAYOFGENDER OPTIONAL
+	WSDATA   oWSLISTOFGRADUATIONCURRICULUM AS RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM OPTIONAL
+	WSDATA   oWSLISTOFGRDGRADUATE      AS RHCURRICULUM_ARRAYOFGRDGRADUATE OPTIONAL
+	WSDATA   oWSLISTOFGRDLANGUAGE      AS RHCURRICULUM_ARRAYOFGRDLANGUAGE OPTIONAL
+	WSDATA   oWSLISTOFGROUP            AS RHCURRICULUM_ARRAYOFGROUP OPTIONAL
+	WSDATA   oWSLISTOFHANDCAPPED       AS RHCURRICULUM_ARRAYOFHANDCAPPED OPTIONAL
+	WSDATA   oWSLISTOFHIERARCHICAL     AS RHCURRICULUM_ARRAYOFHIERARCHICAL OPTIONAL
+	WSDATA   oWSLISTOFJOBABROAD        AS RHCURRICULUM_ARRAYOFJOBABROAD OPTIONAL
+	WSDATA   oWSLISTOFLANGUAGESCURRICULUM AS RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM OPTIONAL
+	WSDATA   oWSLISTOFMARITALSTATUS    AS RHCURRICULUM_ARRAYOFMARITALSTATUS OPTIONAL
+	WSDATA   oWSLISTOFNATIONALITY      AS RHCURRICULUM_ARRAYOFNATIONALITY OPTIONAL
+	WSDATA   oWSLISTOFPARTNER          AS RHCURRICULUM_ARRAYOFPARTNER OPTIONAL
+	WSDATA   oWSLISTOFTYPECURRICULUM   AS RHCURRICULUM_ARRAYOFTYPECURRICULUM OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CURRICULUM2
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CURRICULUM2
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CURRICULUM2
+	Local oClone := RHCURRICULUM_CURRICULUM2():NEW()
+	oClone:oWSLISTOFAREA        := IIF(::oWSLISTOFAREA = NIL , NIL , ::oWSLISTOFAREA:Clone() )
+	oClone:oWSLISTOFCERTIFICATIONCURRICULUM := IIF(::oWSLISTOFCERTIFICATIONCURRICULUM = NIL , NIL , ::oWSLISTOFCERTIFICATIONCURRICULUM:Clone() )
+	oClone:oWSLISTOFCITY        := IIF(::oWSLISTOFCITY = NIL , NIL , ::oWSLISTOFCITY:Clone() )
+	oClone:oWSLISTOFCOURSESCURRICULUM := IIF(::oWSLISTOFCOURSESCURRICULUM = NIL , NIL , ::oWSLISTOFCOURSESCURRICULUM:Clone() )
+	oClone:oWSLISTOFCOURSESEMPLOYEE := IIF(::oWSLISTOFCOURSESEMPLOYEE = NIL , NIL , ::oWSLISTOFCOURSESEMPLOYEE:Clone() )
+	oClone:oWSLISTOFENTITITY    := IIF(::oWSLISTOFENTITITY = NIL , NIL , ::oWSLISTOFENTITITY:Clone() )
+	oClone:oWSLISTOFENTITYCERTIFICATION := IIF(::oWSLISTOFENTITYCERTIFICATION = NIL , NIL , ::oWSLISTOFENTITYCERTIFICATION:Clone() )
+	oClone:oWSLISTOFENTITYCOURSES := IIF(::oWSLISTOFENTITYCOURSES = NIL , NIL , ::oWSLISTOFENTITYCOURSES:Clone() )
+	oClone:oWSLISTOFENTITYGRADUATION := IIF(::oWSLISTOFENTITYGRADUATION = NIL , NIL , ::oWSLISTOFENTITYGRADUATION:Clone() )
+	oClone:oWSLISTOFENTITYLANGUAGES := IIF(::oWSLISTOFENTITYLANGUAGES = NIL , NIL , ::oWSLISTOFENTITYLANGUAGES:Clone() )
+	oClone:oWSLISTOFFACTOR      := IIF(::oWSLISTOFFACTOR = NIL , NIL , ::oWSLISTOFFACTOR:Clone() )
+	oClone:oWSLISTOFFEDERALUNIT := IIF(::oWSLISTOFFEDERALUNIT = NIL , NIL , ::oWSLISTOFFEDERALUNIT:Clone() )
+	oClone:oWSLISTOFFONT        := IIF(::oWSLISTOFFONT = NIL , NIL , ::oWSLISTOFFONT:Clone() )
+	oClone:oWSLISTOFGENDER      := IIF(::oWSLISTOFGENDER = NIL , NIL , ::oWSLISTOFGENDER:Clone() )
+	oClone:oWSLISTOFGRADUATIONCURRICULUM := IIF(::oWSLISTOFGRADUATIONCURRICULUM = NIL , NIL , ::oWSLISTOFGRADUATIONCURRICULUM:Clone() )
+	oClone:oWSLISTOFGRDGRADUATE := IIF(::oWSLISTOFGRDGRADUATE = NIL , NIL , ::oWSLISTOFGRDGRADUATE:Clone() )
+	oClone:oWSLISTOFGRDLANGUAGE := IIF(::oWSLISTOFGRDLANGUAGE = NIL , NIL , ::oWSLISTOFGRDLANGUAGE:Clone() )
+	oClone:oWSLISTOFGROUP       := IIF(::oWSLISTOFGROUP = NIL , NIL , ::oWSLISTOFGROUP:Clone() )
+	oClone:oWSLISTOFHANDCAPPED  := IIF(::oWSLISTOFHANDCAPPED = NIL , NIL , ::oWSLISTOFHANDCAPPED:Clone() )
+	oClone:oWSLISTOFHIERARCHICAL := IIF(::oWSLISTOFHIERARCHICAL = NIL , NIL , ::oWSLISTOFHIERARCHICAL:Clone() )
+	oClone:oWSLISTOFJOBABROAD   := IIF(::oWSLISTOFJOBABROAD = NIL , NIL , ::oWSLISTOFJOBABROAD:Clone() )
+	oClone:oWSLISTOFLANGUAGESCURRICULUM := IIF(::oWSLISTOFLANGUAGESCURRICULUM = NIL , NIL , ::oWSLISTOFLANGUAGESCURRICULUM:Clone() )
+	oClone:oWSLISTOFMARITALSTATUS := IIF(::oWSLISTOFMARITALSTATUS = NIL , NIL , ::oWSLISTOFMARITALSTATUS:Clone() )
+	oClone:oWSLISTOFNATIONALITY := IIF(::oWSLISTOFNATIONALITY = NIL , NIL , ::oWSLISTOFNATIONALITY:Clone() )
+	oClone:oWSLISTOFPARTNER     := IIF(::oWSLISTOFPARTNER = NIL , NIL , ::oWSLISTOFPARTNER:Clone() )
+	oClone:oWSLISTOFTYPECURRICULUM := IIF(::oWSLISTOFTYPECURRICULUM = NIL , NIL , ::oWSLISTOFTYPECURRICULUM:Clone() )
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CURRICULUM2
+	Local oNode1
+	Local oNode2
+	Local oNode3
+	Local oNode4
+	Local oNode5
+	Local oNode6
+	Local oNode7
+	Local oNode8
+	Local oNode9
+	Local oNode10
+	Local oNode11
+	Local oNode12
+	Local oNode13
+	Local oNode14
+	Local oNode15
+	Local oNode16
+	Local oNode17
+	Local oNode18
+	Local oNode19
+	Local oNode20
+	Local oNode21
+	Local oNode22
+	Local oNode23
+	Local oNode24
+	Local oNode25
+	Local oNode26
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNode1 :=  WSAdvValue( oResponse,"_LISTOFAREA","ARRAYOFAREA",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode1 != NIL
+		::oWSLISTOFAREA := RHCURRICULUM_ARRAYOFAREA():New()
+		::oWSLISTOFAREA:SoapRecv(oNode1)
+	EndIf
+	oNode2 :=  WSAdvValue( oResponse,"_LISTOFCERTIFICATIONCURRICULUM","ARRAYOFCERTIFICATIONCURRICULUM",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode2 != NIL
+		::oWSLISTOFCERTIFICATIONCURRICULUM := RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM():New()
+		::oWSLISTOFCERTIFICATIONCURRICULUM:SoapRecv(oNode2)
+	EndIf
+	oNode3 :=  WSAdvValue( oResponse,"_LISTOFCITY","ARRAYOFCITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode3 != NIL
+		::oWSLISTOFCITY := RHCURRICULUM_ARRAYOFCITY():New()
+		::oWSLISTOFCITY:SoapRecv(oNode3)
+	EndIf
+	oNode4 :=  WSAdvValue( oResponse,"_LISTOFCOURSESCURRICULUM","ARRAYOFCOURSESCURRICULUM",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode4 != NIL
+		::oWSLISTOFCOURSESCURRICULUM := RHCURRICULUM_ARRAYOFCOURSESCURRICULUM():New()
+		::oWSLISTOFCOURSESCURRICULUM:SoapRecv(oNode4)
+	EndIf
+	oNode5 :=  WSAdvValue( oResponse,"_LISTOFCOURSESEMPLOYEE","ARRAYOFCOURSESEMPLOYEE",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode5 != NIL
+		::oWSLISTOFCOURSESEMPLOYEE := RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE():New()
+		::oWSLISTOFCOURSESEMPLOYEE:SoapRecv(oNode5)
+	EndIf
+	oNode6 :=  WSAdvValue( oResponse,"_LISTOFENTITITY","ARRAYOFENTITITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode6 != NIL
+		::oWSLISTOFENTITITY := RHCURRICULUM_ARRAYOFENTITITY():New()
+		::oWSLISTOFENTITITY:SoapRecv(oNode6)
+	EndIf
+	oNode7 :=  WSAdvValue( oResponse,"_LISTOFENTITYCERTIFICATION","ARRAYOFENTITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode7 != NIL
+		::oWSLISTOFENTITYCERTIFICATION := RHCURRICULUM_ARRAYOFENTITY():New()
+		::oWSLISTOFENTITYCERTIFICATION:SoapRecv(oNode7)
+	EndIf
+	oNode8 :=  WSAdvValue( oResponse,"_LISTOFENTITYCOURSES","ARRAYOFENTITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode8 != NIL
+		::oWSLISTOFENTITYCOURSES := RHCURRICULUM_ARRAYOFENTITY():New()
+		::oWSLISTOFENTITYCOURSES:SoapRecv(oNode8)
+	EndIf
+	oNode9 :=  WSAdvValue( oResponse,"_LISTOFENTITYGRADUATION","ARRAYOFENTITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode9 != NIL
+		::oWSLISTOFENTITYGRADUATION := RHCURRICULUM_ARRAYOFENTITY():New()
+		::oWSLISTOFENTITYGRADUATION:SoapRecv(oNode9)
+	EndIf
+	oNode10 :=  WSAdvValue( oResponse,"_LISTOFENTITYLANGUAGES","ARRAYOFENTITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode10 != NIL
+		::oWSLISTOFENTITYLANGUAGES := RHCURRICULUM_ARRAYOFENTITY():New()
+		::oWSLISTOFENTITYLANGUAGES:SoapRecv(oNode10)
+	EndIf
+	oNode11 :=  WSAdvValue( oResponse,"_LISTOFFACTOR","ARRAYOFFACTOR",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode11 != NIL
+		::oWSLISTOFFACTOR := RHCURRICULUM_ARRAYOFFACTOR():New()
+		::oWSLISTOFFACTOR:SoapRecv(oNode11)
+	EndIf
+	oNode12 :=  WSAdvValue( oResponse,"_LISTOFFEDERALUNIT","ARRAYOFFEDERALUNIT",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode12 != NIL
+		::oWSLISTOFFEDERALUNIT := RHCURRICULUM_ARRAYOFFEDERALUNIT():New()
+		::oWSLISTOFFEDERALUNIT:SoapRecv(oNode12)
+	EndIf
+	oNode13 :=  WSAdvValue( oResponse,"_LISTOFFONT","ARRAYOFFONT",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode13 != NIL
+		::oWSLISTOFFONT := RHCURRICULUM_ARRAYOFFONT():New()
+		::oWSLISTOFFONT:SoapRecv(oNode13)
+	EndIf
+	oNode14 :=  WSAdvValue( oResponse,"_LISTOFGENDER","ARRAYOFGENDER",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode14 != NIL
+		::oWSLISTOFGENDER := RHCURRICULUM_ARRAYOFGENDER():New()
+		::oWSLISTOFGENDER:SoapRecv(oNode14)
+	EndIf
+	oNode15 :=  WSAdvValue( oResponse,"_LISTOFGRADUATIONCURRICULUM","ARRAYOFGRADUATIONCURRICULUM",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode15 != NIL
+		::oWSLISTOFGRADUATIONCURRICULUM := RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM():New()
+		::oWSLISTOFGRADUATIONCURRICULUM:SoapRecv(oNode15)
+	EndIf
+	oNode16 :=  WSAdvValue( oResponse,"_LISTOFGRDGRADUATE","ARRAYOFGRDGRADUATE",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode16 != NIL
+		::oWSLISTOFGRDGRADUATE := RHCURRICULUM_ARRAYOFGRDGRADUATE():New()
+		::oWSLISTOFGRDGRADUATE:SoapRecv(oNode16)
+	EndIf
+	oNode17 :=  WSAdvValue( oResponse,"_LISTOFGRDLANGUAGE","ARRAYOFGRDLANGUAGE",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode17 != NIL
+		::oWSLISTOFGRDLANGUAGE := RHCURRICULUM_ARRAYOFGRDLANGUAGE():New()
+		::oWSLISTOFGRDLANGUAGE:SoapRecv(oNode17)
+	EndIf
+	oNode18 :=  WSAdvValue( oResponse,"_LISTOFGROUP","ARRAYOFGROUP",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode18 != NIL
+		::oWSLISTOFGROUP := RHCURRICULUM_ARRAYOFGROUP():New()
+		::oWSLISTOFGROUP:SoapRecv(oNode18)
+	EndIf
+	oNode19 :=  WSAdvValue( oResponse,"_LISTOFHANDCAPPED","ARRAYOFHANDCAPPED",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode19 != NIL
+		::oWSLISTOFHANDCAPPED := RHCURRICULUM_ARRAYOFHANDCAPPED():New()
+		::oWSLISTOFHANDCAPPED:SoapRecv(oNode19)
+	EndIf
+	oNode20 :=  WSAdvValue( oResponse,"_LISTOFHIERARCHICAL","ARRAYOFHIERARCHICAL",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode20 != NIL
+		::oWSLISTOFHIERARCHICAL := RHCURRICULUM_ARRAYOFHIERARCHICAL():New()
+		::oWSLISTOFHIERARCHICAL:SoapRecv(oNode20)
+	EndIf
+	oNode21 :=  WSAdvValue( oResponse,"_LISTOFJOBABROAD","ARRAYOFJOBABROAD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode21 != NIL
+		::oWSLISTOFJOBABROAD := RHCURRICULUM_ARRAYOFJOBABROAD():New()
+		::oWSLISTOFJOBABROAD:SoapRecv(oNode21)
+	EndIf
+	oNode22 :=  WSAdvValue( oResponse,"_LISTOFLANGUAGESCURRICULUM","ARRAYOFLANGUAGESCURRICULUM",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode22 != NIL
+		::oWSLISTOFLANGUAGESCURRICULUM := RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM():New()
+		::oWSLISTOFLANGUAGESCURRICULUM:SoapRecv(oNode22)
+	EndIf
+	oNode23 :=  WSAdvValue( oResponse,"_LISTOFMARITALSTATUS","ARRAYOFMARITALSTATUS",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode23 != NIL
+		::oWSLISTOFMARITALSTATUS := RHCURRICULUM_ARRAYOFMARITALSTATUS():New()
+		::oWSLISTOFMARITALSTATUS:SoapRecv(oNode23)
+	EndIf
+	oNode24 :=  WSAdvValue( oResponse,"_LISTOFNATIONALITY","ARRAYOFNATIONALITY",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode24 != NIL
+		::oWSLISTOFNATIONALITY := RHCURRICULUM_ARRAYOFNATIONALITY():New()
+		::oWSLISTOFNATIONALITY:SoapRecv(oNode24)
+	EndIf
+	oNode25 :=  WSAdvValue( oResponse,"_LISTOFPARTNER","ARRAYOFPARTNER",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode25 != NIL
+		::oWSLISTOFPARTNER := RHCURRICULUM_ARRAYOFPARTNER():New()
+		::oWSLISTOFPARTNER:SoapRecv(oNode25)
+	EndIf
+	oNode26 :=  WSAdvValue( oResponse,"_LISTOFTYPECURRICULUM","ARRAYOFTYPECURRICULUM",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode26 != NIL
+		::oWSLISTOFTYPECURRICULUM := RHCURRICULUM_ARRAYOFTYPECURRICULUM():New()
+		::oWSLISTOFTYPECURRICULUM:SoapRecv(oNode26)
+	EndIf
+Return
+
+// WSDL Data Structure ARRAYOFTOBJECTLIST
+
+WSSTRUCT RHCURRICULUM_ARRAYOFTOBJECTLIST
+	WSDATA   oWSTOBJECTLIST            AS RHCURRICULUM_TOBJECTLIST OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFTOBJECTLIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFTOBJECTLIST
+	::oWSTOBJECTLIST       := {} // Array Of  RHCURRICULUM_TOBJECTLIST():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFTOBJECTLIST
+	Local oClone := RHCURRICULUM_ARRAYOFTOBJECTLIST():NEW()
+	oClone:oWSTOBJECTLIST := NIL
+	If ::oWSTOBJECTLIST <> NIL 
+		oClone:oWSTOBJECTLIST := {}
+		aEval( ::oWSTOBJECTLIST , { |x| aadd( oClone:oWSTOBJECTLIST , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFTOBJECTLIST
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_TOBJECTLIST","TOBJECTLIST",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSTOBJECTLIST , RHCURRICULUM_TOBJECTLIST():New() )
+			::oWSTOBJECTLIST[len(::oWSTOBJECTLIST)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFEVALUATIONQUESTIONS
+
+WSSTRUCT RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS
+	WSDATA   oWSEVALUATIONQUESTIONS    AS RHCURRICULUM_EVALUATIONQUESTIONS OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS
+	::oWSEVALUATIONQUESTIONS := {} // Array Of  RHCURRICULUM_EVALUATIONQUESTIONS():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS
+	Local oClone := RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS():NEW()
+	oClone:oWSEVALUATIONQUESTIONS := NIL
+	If ::oWSEVALUATIONQUESTIONS <> NIL 
+		oClone:oWSEVALUATIONQUESTIONS := {}
+		aEval( ::oWSEVALUATIONQUESTIONS , { |x| aadd( oClone:oWSEVALUATIONQUESTIONS , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFEVALUATIONQUESTIONS
+	Local cSoap := ""
+	aEval( ::oWSEVALUATIONQUESTIONS , {|x| cSoap := cSoap  +  WSSoapValue("EVALUATIONQUESTIONS", x , x , "EVALUATIONQUESTIONS", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+// WSDL Data Structure ARRAYOFSTEPSAGENDACANDIDATE
+
+WSSTRUCT RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE
+	WSDATA   oWSSTEPSAGENDACANDIDATE   AS RHCURRICULUM_STEPSAGENDACANDIDATE OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE
+	::oWSSTEPSAGENDACANDIDATE := {} // Array Of  RHCURRICULUM_STEPSAGENDACANDIDATE():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE
+	Local oClone := RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE():NEW()
+	oClone:oWSSTEPSAGENDACANDIDATE := NIL
+	If ::oWSSTEPSAGENDACANDIDATE <> NIL 
+		oClone:oWSSTEPSAGENDACANDIDATE := {}
+		aEval( ::oWSSTEPSAGENDACANDIDATE , { |x| aadd( oClone:oWSSTEPSAGENDACANDIDATE , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE
+	Local cSoap := ""
+	aEval( ::oWSSTEPSAGENDACANDIDATE , {|x| cSoap := cSoap  +  WSSoapValue("STEPSAGENDACANDIDATE", x , x , "STEPSAGENDACANDIDATE", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFSTEPSAGENDACANDIDATE
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_STEPSAGENDACANDIDATE","STEPSAGENDACANDIDATE",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSSTEPSAGENDACANDIDATE , RHCURRICULUM_STEPSAGENDACANDIDATE():New() )
+			::oWSSTEPSAGENDACANDIDATE[len(::oWSSTEPSAGENDACANDIDATE)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCERTIFICATION
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCERTIFICATION
+	WSDATA   oWSCERTIFICATION          AS RHCURRICULUM_CERTIFICATION OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATION
+	::oWSCERTIFICATION     := {} // Array Of  RHCURRICULUM_CERTIFICATION():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATION
+	Local oClone := RHCURRICULUM_ARRAYOFCERTIFICATION():NEW()
+	oClone:oWSCERTIFICATION := NIL
+	If ::oWSCERTIFICATION <> NIL 
+		oClone:oWSCERTIFICATION := {}
+		aEval( ::oWSCERTIFICATION , { |x| aadd( oClone:oWSCERTIFICATION , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATION
+	Local cSoap := ""
+	aEval( ::oWSCERTIFICATION , {|x| cSoap := cSoap  +  WSSoapValue("CERTIFICATION", x , x , "CERTIFICATION", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATION
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_CERTIFICATION","CERTIFICATION",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCERTIFICATION , RHCURRICULUM_CERTIFICATION():New() )
+			::oWSCERTIFICATION[len(::oWSCERTIFICATION)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCHARACTERS
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCHARACTERS
+	WSDATA   oWSCHARACTERS             AS RHCURRICULUM_CHARACTERS OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCHARACTERS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCHARACTERS
+	::oWSCHARACTERS        := {} // Array Of  RHCURRICULUM_CHARACTERS():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCHARACTERS
+	Local oClone := RHCURRICULUM_ARRAYOFCHARACTERS():NEW()
+	oClone:oWSCHARACTERS := NIL
+	If ::oWSCHARACTERS <> NIL 
+		oClone:oWSCHARACTERS := {}
+		aEval( ::oWSCHARACTERS , { |x| aadd( oClone:oWSCHARACTERS , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFCHARACTERS
+	Local cSoap := ""
+	aEval( ::oWSCHARACTERS , {|x| cSoap := cSoap  +  WSSoapValue("CHARACTERS", x , x , "CHARACTERS", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCHARACTERS
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_CHARACTERS","CHARACTERS",{},NIL,.T.,"SC",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCHARACTERS , RHCURRICULUM_CHARACTERS():New() )
+			::oWSCHARACTERS[len(::oWSCHARACTERS)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCOURSES
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCOURSES
+	WSDATA   oWSCOURSES                AS RHCURRICULUM_COURSES OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCOURSES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCOURSES
+	::oWSCOURSES           := {} // Array Of  RHCURRICULUM_COURSES():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCOURSES
+	Local oClone := RHCURRICULUM_ARRAYOFCOURSES():NEW()
+	oClone:oWSCOURSES := NIL
+	If ::oWSCOURSES <> NIL 
+		oClone:oWSCOURSES := {}
+		aEval( ::oWSCOURSES , { |x| aadd( oClone:oWSCOURSES , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFCOURSES
+	Local cSoap := ""
+	aEval( ::oWSCOURSES , {|x| cSoap := cSoap  +  WSSoapValue("COURSES", x , x , "COURSES", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCOURSES
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_COURSES","COURSES",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCOURSES , RHCURRICULUM_COURSES():New() )
+			::oWSCOURSES[len(::oWSCOURSES)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFEVALUATION
+
+WSSTRUCT RHCURRICULUM_ARRAYOFEVALUATION
+	WSDATA   oWSEVALUATION             AS RHCURRICULUM_EVALUATION OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFEVALUATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFEVALUATION
+	::oWSEVALUATION        := {} // Array Of  RHCURRICULUM_EVALUATION():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFEVALUATION
+	Local oClone := RHCURRICULUM_ARRAYOFEVALUATION():NEW()
+	oClone:oWSEVALUATION := NIL
+	If ::oWSEVALUATION <> NIL 
+		oClone:oWSEVALUATION := {}
+		aEval( ::oWSEVALUATION , { |x| aadd( oClone:oWSEVALUATION , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFEVALUATION
+	Local cSoap := ""
+	aEval( ::oWSEVALUATION , {|x| cSoap := cSoap  +  WSSoapValue("EVALUATION", x , x , "EVALUATION", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFEVALUATION
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_EVALUATION","EVALUATION",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSEVALUATION , RHCURRICULUM_EVALUATION():New() )
+			::oWSEVALUATION[len(::oWSEVALUATION)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGRADUATION
+
+WSSTRUCT RHCURRICULUM_ARRAYOFGRADUATION
+	WSDATA   oWSGRADUATION             AS RHCURRICULUM_GRADUATION OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFGRADUATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFGRADUATION
+	::oWSGRADUATION        := {} // Array Of  RHCURRICULUM_GRADUATION():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFGRADUATION
+	Local oClone := RHCURRICULUM_ARRAYOFGRADUATION():NEW()
+	oClone:oWSGRADUATION := NIL
+	If ::oWSGRADUATION <> NIL 
+		oClone:oWSGRADUATION := {}
+		aEval( ::oWSGRADUATION , { |x| aadd( oClone:oWSGRADUATION , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFGRADUATION
+	Local cSoap := ""
+	aEval( ::oWSGRADUATION , {|x| cSoap := cSoap  +  WSSoapValue("GRADUATION", x , x , "GRADUATION", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFGRADUATION
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GRADUATION","GRADUATION",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGRADUATION , RHCURRICULUM_GRADUATION():New() )
+			::oWSGRADUATION[len(::oWSGRADUATION)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFHISTORY
+
+WSSTRUCT RHCURRICULUM_ARRAYOFHISTORY
+	WSDATA   oWSHISTORY                AS RHCURRICULUM_HISTORY OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFHISTORY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFHISTORY
+	::oWSHISTORY           := {} // Array Of  RHCURRICULUM_HISTORY():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFHISTORY
+	Local oClone := RHCURRICULUM_ARRAYOFHISTORY():NEW()
+	oClone:oWSHISTORY := NIL
+	If ::oWSHISTORY <> NIL 
+		oClone:oWSHISTORY := {}
+		aEval( ::oWSHISTORY , { |x| aadd( oClone:oWSHISTORY , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFHISTORY
+	Local cSoap := ""
+	aEval( ::oWSHISTORY , {|x| cSoap := cSoap  +  WSSoapValue("HISTORY", x , x , "HISTORY", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFHISTORY
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_HISTORY","HISTORY",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSHISTORY , RHCURRICULUM_HISTORY():New() )
+			::oWSHISTORY[len(::oWSHISTORY)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFLANGUAGES
+
+WSSTRUCT RHCURRICULUM_ARRAYOFLANGUAGES
+	WSDATA   oWSLANGUAGES              AS RHCURRICULUM_LANGUAGES OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGES
+	::oWSLANGUAGES         := {} // Array Of  RHCURRICULUM_LANGUAGES():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGES
+	Local oClone := RHCURRICULUM_ARRAYOFLANGUAGES():NEW()
+	oClone:oWSLANGUAGES := NIL
+	If ::oWSLANGUAGES <> NIL 
+		oClone:oWSLANGUAGES := {}
+		aEval( ::oWSLANGUAGES , { |x| aadd( oClone:oWSLANGUAGES , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGES
+	Local cSoap := ""
+	aEval( ::oWSLANGUAGES , {|x| cSoap := cSoap  +  WSSoapValue("LANGUAGES", x , x , "LANGUAGES", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGES
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_LANGUAGES","LANGUAGES",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSLANGUAGES , RHCURRICULUM_LANGUAGES():New() )
+			::oWSLANGUAGES[len(::oWSLANGUAGES)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFQUALIFICATION
+
+WSSTRUCT RHCURRICULUM_ARRAYOFQUALIFICATION
+	WSDATA   oWSQUALIFICATION          AS RHCURRICULUM_QUALIFICATION OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFQUALIFICATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFQUALIFICATION
+	::oWSQUALIFICATION     := {} // Array Of  RHCURRICULUM_QUALIFICATION():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFQUALIFICATION
+	Local oClone := RHCURRICULUM_ARRAYOFQUALIFICATION():NEW()
+	oClone:oWSQUALIFICATION := NIL
+	If ::oWSQUALIFICATION <> NIL 
+		oClone:oWSQUALIFICATION := {}
+		aEval( ::oWSQUALIFICATION , { |x| aadd( oClone:oWSQUALIFICATION , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFQUALIFICATION
+	Local cSoap := ""
+	aEval( ::oWSQUALIFICATION , {|x| cSoap := cSoap  +  WSSoapValue("QUALIFICATION", x , x , "QUALIFICATION", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFQUALIFICATION
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_QUALIFICATION","QUALIFICATION",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSQUALIFICATION , RHCURRICULUM_QUALIFICATION():New() )
+			::oWSQUALIFICATION[len(::oWSQUALIFICATION)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFUSERFIELD
+
+WSSTRUCT RHCURRICULUM_ARRAYOFUSERFIELD
+	WSDATA   oWSUSERFIELD              AS RHCURRICULUM_USERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFUSERFIELD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFUSERFIELD
+	::oWSUSERFIELD         := {} // Array Of  RHCURRICULUM_USERFIELD():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFUSERFIELD
+	Local oClone := RHCURRICULUM_ARRAYOFUSERFIELD():NEW()
+	oClone:oWSUSERFIELD := NIL
+	If ::oWSUSERFIELD <> NIL 
+		oClone:oWSUSERFIELD := {}
+		aEval( ::oWSUSERFIELD , { |x| aadd( oClone:oWSUSERFIELD , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFUSERFIELD
+	Local cSoap := ""
+	aEval( ::oWSUSERFIELD , {|x| cSoap := cSoap  +  WSSoapValue("USERFIELD", x , x , "USERFIELD", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFUSERFIELD
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_USERFIELD","USERFIELD",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSUSERFIELD , RHCURRICULUM_USERFIELD():New() )
+			::oWSUSERFIELD[len(::oWSUSERFIELD)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TSCHEDULEREQUEST
+
+WSSTRUCT RHCURRICULUM_TSCHEDULEREQUEST
+	WSDATA   cDATESCHEDULED            AS string OPTIONAL
+	WSDATA   cDESCPROCESS              AS string OPTIONAL
+	WSDATA   cDESCVACANCY              AS string OPTIONAL
+	WSDATA   cOBSCAND                  AS string OPTIONAL
+	WSDATA   cSITETAPA                 AS string OPTIONAL
+	WSDATA   cTIMESCHEDULED            AS string OPTIONAL
+	WSDATA   cVACANCYCODE              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TSCHEDULEREQUEST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TSCHEDULEREQUEST
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TSCHEDULEREQUEST
+	Local oClone := RHCURRICULUM_TSCHEDULEREQUEST():NEW()
+	oClone:cDATESCHEDULED       := ::cDATESCHEDULED
+	oClone:cDESCPROCESS         := ::cDESCPROCESS
+	oClone:cDESCVACANCY         := ::cDESCVACANCY
+	oClone:cOBSCAND             := ::cOBSCAND
+	oClone:cSITETAPA            := ::cSITETAPA
+	oClone:cTIMESCHEDULED       := ::cTIMESCHEDULED
+	oClone:cVACANCYCODE         := ::cVACANCYCODE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TSCHEDULEREQUEST
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cDATESCHEDULED     :=  WSAdvValue( oResponse,"_DATESCHEDULED","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCPROCESS       :=  WSAdvValue( oResponse,"_DESCPROCESS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCVACANCY       :=  WSAdvValue( oResponse,"_DESCVACANCY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cOBSCAND           :=  WSAdvValue( oResponse,"_OBSCAND","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSITETAPA          :=  WSAdvValue( oResponse,"_SITETAPA","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cTIMESCHEDULED     :=  WSAdvValue( oResponse,"_TIMESCHEDULED","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVACANCYCODE       :=  WSAdvValue( oResponse,"_VACANCYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFQUESTIONSTESTTYPES
+
+WSSTRUCT RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES
+	WSDATA   oWSQUESTIONSTESTTYPES     AS RHCURRICULUM_QUESTIONSTESTTYPES OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES
+	::oWSQUESTIONSTESTTYPES := {} // Array Of  RHCURRICULUM_QUESTIONSTESTTYPES():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES
+	Local oClone := RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES():NEW()
+	oClone:oWSQUESTIONSTESTTYPES := NIL
+	If ::oWSQUESTIONSTESTTYPES <> NIL 
+		oClone:oWSQUESTIONSTESTTYPES := {}
+		aEval( ::oWSQUESTIONSTESTTYPES , { |x| aadd( oClone:oWSQUESTIONSTESTTYPES , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFQUESTIONSTESTTYPES
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_QUESTIONSTESTTYPES","QUESTIONSTESTTYPES",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSQUESTIONSTESTTYPES , RHCURRICULUM_QUESTIONSTESTTYPES():New() )
+			::oWSQUESTIONSTESTTYPES[len(::oWSQUESTIONSTESTTYPES)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFAREA
+
+WSSTRUCT RHCURRICULUM_ARRAYOFAREA
+	WSDATA   oWSAREA                   AS RHCURRICULUM_AREA OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFAREA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFAREA
+	::oWSAREA              := {} // Array Of  RHCURRICULUM_AREA():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFAREA
+	Local oClone := RHCURRICULUM_ARRAYOFAREA():NEW()
+	oClone:oWSAREA := NIL
+	If ::oWSAREA <> NIL 
+		oClone:oWSAREA := {}
+		aEval( ::oWSAREA , { |x| aadd( oClone:oWSAREA , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFAREA
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_AREA","AREA",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSAREA , RHCURRICULUM_AREA():New() )
+			::oWSAREA[len(::oWSAREA)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCERTIFICATIONCURRICULUM
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM
+	WSDATA   oWSCERTIFICATIONCURRICULUM AS RHCURRICULUM_CERTIFICATIONCURRICULUM OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM
+	::oWSCERTIFICATIONCURRICULUM := {} // Array Of  RHCURRICULUM_CERTIFICATIONCURRICULUM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM
+	Local oClone := RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM():NEW()
+	oClone:oWSCERTIFICATIONCURRICULUM := NIL
+	If ::oWSCERTIFICATIONCURRICULUM <> NIL 
+		oClone:oWSCERTIFICATIONCURRICULUM := {}
+		aEval( ::oWSCERTIFICATIONCURRICULUM , { |x| aadd( oClone:oWSCERTIFICATIONCURRICULUM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCERTIFICATIONCURRICULUM
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_CERTIFICATIONCURRICULUM","CERTIFICATIONCURRICULUM",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCERTIFICATIONCURRICULUM , RHCURRICULUM_CERTIFICATIONCURRICULUM():New() )
+			::oWSCERTIFICATIONCURRICULUM[len(::oWSCERTIFICATIONCURRICULUM)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFCOURSESEMPLOYEE
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE
+	WSDATA   oWSCOURSESEMPLOYEE        AS RHCURRICULUM_COURSESEMPLOYEE OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE
+	::oWSCOURSESEMPLOYEE   := {} // Array Of  RHCURRICULUM_COURSESEMPLOYEE():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE
+	Local oClone := RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE():NEW()
+	oClone:oWSCOURSESEMPLOYEE := NIL
+	If ::oWSCOURSESEMPLOYEE <> NIL 
+		oClone:oWSCOURSESEMPLOYEE := {}
+		aEval( ::oWSCOURSESEMPLOYEE , { |x| aadd( oClone:oWSCOURSESEMPLOYEE , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCOURSESEMPLOYEE
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_COURSESEMPLOYEE","COURSESEMPLOYEE",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCOURSESEMPLOYEE , RHCURRICULUM_COURSESEMPLOYEE():New() )
+			::oWSCOURSESEMPLOYEE[len(::oWSCOURSESEMPLOYEE)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFENTITITY
+
+WSSTRUCT RHCURRICULUM_ARRAYOFENTITITY
+	WSDATA   oWSENTITITY               AS RHCURRICULUM_ENTITITY OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFENTITITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFENTITITY
+	::oWSENTITITY          := {} // Array Of  RHCURRICULUM_ENTITITY():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFENTITITY
+	Local oClone := RHCURRICULUM_ARRAYOFENTITITY():NEW()
+	oClone:oWSENTITITY := NIL
+	If ::oWSENTITITY <> NIL 
+		oClone:oWSENTITITY := {}
+		aEval( ::oWSENTITITY , { |x| aadd( oClone:oWSENTITITY , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFENTITITY
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_ENTITITY","ENTITITY",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSENTITITY , RHCURRICULUM_ENTITITY():New() )
+			::oWSENTITITY[len(::oWSENTITITY)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFFACTOR
+
+WSSTRUCT RHCURRICULUM_ARRAYOFFACTOR
+	WSDATA   oWSFACTOR                 AS RHCURRICULUM_FACTOR OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFFACTOR
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFFACTOR
+	::oWSFACTOR            := {} // Array Of  RHCURRICULUM_FACTOR():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFFACTOR
+	Local oClone := RHCURRICULUM_ARRAYOFFACTOR():NEW()
+	oClone:oWSFACTOR := NIL
+	If ::oWSFACTOR <> NIL 
+		oClone:oWSFACTOR := {}
+		aEval( ::oWSFACTOR , { |x| aadd( oClone:oWSFACTOR , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFFACTOR
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_FACTOR","FACTOR",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSFACTOR , RHCURRICULUM_FACTOR():New() )
+			::oWSFACTOR[len(::oWSFACTOR)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFFEDERALUNIT
+
+WSSTRUCT RHCURRICULUM_ARRAYOFFEDERALUNIT
+	WSDATA   oWSFEDERALUNIT            AS RHCURRICULUM_FEDERALUNIT OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFFEDERALUNIT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFFEDERALUNIT
+	::oWSFEDERALUNIT       := {} // Array Of  RHCURRICULUM_FEDERALUNIT():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFFEDERALUNIT
+	Local oClone := RHCURRICULUM_ARRAYOFFEDERALUNIT():NEW()
+	oClone:oWSFEDERALUNIT := NIL
+	If ::oWSFEDERALUNIT <> NIL 
+		oClone:oWSFEDERALUNIT := {}
+		aEval( ::oWSFEDERALUNIT , { |x| aadd( oClone:oWSFEDERALUNIT , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFFEDERALUNIT
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_FEDERALUNIT","FEDERALUNIT",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSFEDERALUNIT , RHCURRICULUM_FEDERALUNIT():New() )
+			::oWSFEDERALUNIT[len(::oWSFEDERALUNIT)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFFONT
+
+WSSTRUCT RHCURRICULUM_ARRAYOFFONT
+	WSDATA   oWSFONT                   AS RHCURRICULUM_FONT OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFFONT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFFONT
+	::oWSFONT              := {} // Array Of  RHCURRICULUM_FONT():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFFONT
+	Local oClone := RHCURRICULUM_ARRAYOFFONT():NEW()
+	oClone:oWSFONT := NIL
+	If ::oWSFONT <> NIL 
+		oClone:oWSFONT := {}
+		aEval( ::oWSFONT , { |x| aadd( oClone:oWSFONT , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFFONT
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_FONT","FONT",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSFONT , RHCURRICULUM_FONT():New() )
+			::oWSFONT[len(::oWSFONT)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGENDER
+
+WSSTRUCT RHCURRICULUM_ARRAYOFGENDER
+	WSDATA   oWSGENDER                 AS RHCURRICULUM_GENDER OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFGENDER
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFGENDER
+	::oWSGENDER            := {} // Array Of  RHCURRICULUM_GENDER():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFGENDER
+	Local oClone := RHCURRICULUM_ARRAYOFGENDER():NEW()
+	oClone:oWSGENDER := NIL
+	If ::oWSGENDER <> NIL 
+		oClone:oWSGENDER := {}
+		aEval( ::oWSGENDER , { |x| aadd( oClone:oWSGENDER , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFGENDER
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GENDER","GENDER",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGENDER , RHCURRICULUM_GENDER():New() )
+			::oWSGENDER[len(::oWSGENDER)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGRADUATIONCURRICULUM
+
+WSSTRUCT RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM
+	WSDATA   oWSGRADUATIONCURRICULUM   AS RHCURRICULUM_GRADUATIONCURRICULUM OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM
+	::oWSGRADUATIONCURRICULUM := {} // Array Of  RHCURRICULUM_GRADUATIONCURRICULUM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM
+	Local oClone := RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM():NEW()
+	oClone:oWSGRADUATIONCURRICULUM := NIL
+	If ::oWSGRADUATIONCURRICULUM <> NIL 
+		oClone:oWSGRADUATIONCURRICULUM := {}
+		aEval( ::oWSGRADUATIONCURRICULUM , { |x| aadd( oClone:oWSGRADUATIONCURRICULUM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFGRADUATIONCURRICULUM
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GRADUATIONCURRICULUM","GRADUATIONCURRICULUM",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGRADUATIONCURRICULUM , RHCURRICULUM_GRADUATIONCURRICULUM():New() )
+			::oWSGRADUATIONCURRICULUM[len(::oWSGRADUATIONCURRICULUM)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGRDGRADUATE
+
+WSSTRUCT RHCURRICULUM_ARRAYOFGRDGRADUATE
+	WSDATA   oWSGRDGRADUATE            AS RHCURRICULUM_GRDGRADUATE OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFGRDGRADUATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFGRDGRADUATE
+	::oWSGRDGRADUATE       := {} // Array Of  RHCURRICULUM_GRDGRADUATE():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFGRDGRADUATE
+	Local oClone := RHCURRICULUM_ARRAYOFGRDGRADUATE():NEW()
+	oClone:oWSGRDGRADUATE := NIL
+	If ::oWSGRDGRADUATE <> NIL 
+		oClone:oWSGRDGRADUATE := {}
+		aEval( ::oWSGRDGRADUATE , { |x| aadd( oClone:oWSGRDGRADUATE , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFGRDGRADUATE
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GRDGRADUATE","GRDGRADUATE",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGRDGRADUATE , RHCURRICULUM_GRDGRADUATE():New() )
+			::oWSGRDGRADUATE[len(::oWSGRDGRADUATE)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGRDLANGUAGE
+
+WSSTRUCT RHCURRICULUM_ARRAYOFGRDLANGUAGE
+	WSDATA   oWSGRDLANGUAGE            AS RHCURRICULUM_GRDLANGUAGE OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFGRDLANGUAGE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFGRDLANGUAGE
+	::oWSGRDLANGUAGE       := {} // Array Of  RHCURRICULUM_GRDLANGUAGE():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFGRDLANGUAGE
+	Local oClone := RHCURRICULUM_ARRAYOFGRDLANGUAGE():NEW()
+	oClone:oWSGRDLANGUAGE := NIL
+	If ::oWSGRDLANGUAGE <> NIL 
+		oClone:oWSGRDLANGUAGE := {}
+		aEval( ::oWSGRDLANGUAGE , { |x| aadd( oClone:oWSGRDLANGUAGE , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFGRDLANGUAGE
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GRDLANGUAGE","GRDLANGUAGE",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGRDLANGUAGE , RHCURRICULUM_GRDLANGUAGE():New() )
+			::oWSGRDLANGUAGE[len(::oWSGRDLANGUAGE)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFGROUP
+
+WSSTRUCT RHCURRICULUM_ARRAYOFGROUP
+	WSDATA   oWSGROUP                  AS RHCURRICULUM_GROUP OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFGROUP
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFGROUP
+	::oWSGROUP             := {} // Array Of  RHCURRICULUM_GROUP():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFGROUP
+	Local oClone := RHCURRICULUM_ARRAYOFGROUP():NEW()
+	oClone:oWSGROUP := NIL
+	If ::oWSGROUP <> NIL 
+		oClone:oWSGROUP := {}
+		aEval( ::oWSGROUP , { |x| aadd( oClone:oWSGROUP , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFGROUP
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_GROUP","GROUP",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSGROUP , RHCURRICULUM_GROUP():New() )
+			::oWSGROUP[len(::oWSGROUP)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFHANDCAPPED
+
+WSSTRUCT RHCURRICULUM_ARRAYOFHANDCAPPED
+	WSDATA   oWSHANDCAPPED             AS RHCURRICULUM_HANDCAPPED OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFHANDCAPPED
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFHANDCAPPED
+	::oWSHANDCAPPED        := {} // Array Of  RHCURRICULUM_HANDCAPPED():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFHANDCAPPED
+	Local oClone := RHCURRICULUM_ARRAYOFHANDCAPPED():NEW()
+	oClone:oWSHANDCAPPED := NIL
+	If ::oWSHANDCAPPED <> NIL 
+		oClone:oWSHANDCAPPED := {}
+		aEval( ::oWSHANDCAPPED , { |x| aadd( oClone:oWSHANDCAPPED , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFHANDCAPPED
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_HANDCAPPED","HANDCAPPED",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSHANDCAPPED , RHCURRICULUM_HANDCAPPED():New() )
+			::oWSHANDCAPPED[len(::oWSHANDCAPPED)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFHIERARCHICAL
+
+WSSTRUCT RHCURRICULUM_ARRAYOFHIERARCHICAL
+	WSDATA   oWSHIERARCHICAL           AS RHCURRICULUM_HIERARCHICAL OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFHIERARCHICAL
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFHIERARCHICAL
+	::oWSHIERARCHICAL      := {} // Array Of  RHCURRICULUM_HIERARCHICAL():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFHIERARCHICAL
+	Local oClone := RHCURRICULUM_ARRAYOFHIERARCHICAL():NEW()
+	oClone:oWSHIERARCHICAL := NIL
+	If ::oWSHIERARCHICAL <> NIL 
+		oClone:oWSHIERARCHICAL := {}
+		aEval( ::oWSHIERARCHICAL , { |x| aadd( oClone:oWSHIERARCHICAL , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFHIERARCHICAL
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_HIERARCHICAL","HIERARCHICAL",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSHIERARCHICAL , RHCURRICULUM_HIERARCHICAL():New() )
+			::oWSHIERARCHICAL[len(::oWSHIERARCHICAL)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFJOBABROAD
+
+WSSTRUCT RHCURRICULUM_ARRAYOFJOBABROAD
+	WSDATA   oWSJOBABROAD              AS RHCURRICULUM_JOBABROAD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFJOBABROAD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFJOBABROAD
+	::oWSJOBABROAD         := {} // Array Of  RHCURRICULUM_JOBABROAD():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFJOBABROAD
+	Local oClone := RHCURRICULUM_ARRAYOFJOBABROAD():NEW()
+	oClone:oWSJOBABROAD := NIL
+	If ::oWSJOBABROAD <> NIL 
+		oClone:oWSJOBABROAD := {}
+		aEval( ::oWSJOBABROAD , { |x| aadd( oClone:oWSJOBABROAD , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFJOBABROAD
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_JOBABROAD","JOBABROAD",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSJOBABROAD , RHCURRICULUM_JOBABROAD():New() )
+			::oWSJOBABROAD[len(::oWSJOBABROAD)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFLANGUAGESCURRICULUM
+
+WSSTRUCT RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM
+	WSDATA   oWSLANGUAGESCURRICULUM    AS RHCURRICULUM_LANGUAGESCURRICULUM OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM
+	::oWSLANGUAGESCURRICULUM := {} // Array Of  RHCURRICULUM_LANGUAGESCURRICULUM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM
+	Local oClone := RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM():NEW()
+	oClone:oWSLANGUAGESCURRICULUM := NIL
+	If ::oWSLANGUAGESCURRICULUM <> NIL 
+		oClone:oWSLANGUAGESCURRICULUM := {}
+		aEval( ::oWSLANGUAGESCURRICULUM , { |x| aadd( oClone:oWSLANGUAGESCURRICULUM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFLANGUAGESCURRICULUM
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_LANGUAGESCURRICULUM","LANGUAGESCURRICULUM",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSLANGUAGESCURRICULUM , RHCURRICULUM_LANGUAGESCURRICULUM():New() )
+			::oWSLANGUAGESCURRICULUM[len(::oWSLANGUAGESCURRICULUM)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFMARITALSTATUS
+
+WSSTRUCT RHCURRICULUM_ARRAYOFMARITALSTATUS
+	WSDATA   oWSMARITALSTATUS          AS RHCURRICULUM_MARITALSTATUS OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFMARITALSTATUS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFMARITALSTATUS
+	::oWSMARITALSTATUS     := {} // Array Of  RHCURRICULUM_MARITALSTATUS():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFMARITALSTATUS
+	Local oClone := RHCURRICULUM_ARRAYOFMARITALSTATUS():NEW()
+	oClone:oWSMARITALSTATUS := NIL
+	If ::oWSMARITALSTATUS <> NIL 
+		oClone:oWSMARITALSTATUS := {}
+		aEval( ::oWSMARITALSTATUS , { |x| aadd( oClone:oWSMARITALSTATUS , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFMARITALSTATUS
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_MARITALSTATUS","MARITALSTATUS",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSMARITALSTATUS , RHCURRICULUM_MARITALSTATUS():New() )
+			::oWSMARITALSTATUS[len(::oWSMARITALSTATUS)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFNATIONALITY
+
+WSSTRUCT RHCURRICULUM_ARRAYOFNATIONALITY
+	WSDATA   oWSNATIONALITY            AS RHCURRICULUM_NATIONALITY OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFNATIONALITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFNATIONALITY
+	::oWSNATIONALITY       := {} // Array Of  RHCURRICULUM_NATIONALITY():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFNATIONALITY
+	Local oClone := RHCURRICULUM_ARRAYOFNATIONALITY():NEW()
+	oClone:oWSNATIONALITY := NIL
+	If ::oWSNATIONALITY <> NIL 
+		oClone:oWSNATIONALITY := {}
+		aEval( ::oWSNATIONALITY , { |x| aadd( oClone:oWSNATIONALITY , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFNATIONALITY
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_NATIONALITY","NATIONALITY",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSNATIONALITY , RHCURRICULUM_NATIONALITY():New() )
+			::oWSNATIONALITY[len(::oWSNATIONALITY)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFPARTNER
+
+WSSTRUCT RHCURRICULUM_ARRAYOFPARTNER
+	WSDATA   oWSPARTNER                AS RHCURRICULUM_PARTNER OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFPARTNER
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFPARTNER
+	::oWSPARTNER           := {} // Array Of  RHCURRICULUM_PARTNER():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFPARTNER
+	Local oClone := RHCURRICULUM_ARRAYOFPARTNER():NEW()
+	oClone:oWSPARTNER := NIL
+	If ::oWSPARTNER <> NIL 
+		oClone:oWSPARTNER := {}
+		aEval( ::oWSPARTNER , { |x| aadd( oClone:oWSPARTNER , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFPARTNER
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_PARTNER","PARTNER",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSPARTNER , RHCURRICULUM_PARTNER():New() )
+			::oWSPARTNER[len(::oWSPARTNER)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFTYPECURRICULUM
+
+WSSTRUCT RHCURRICULUM_ARRAYOFTYPECURRICULUM
+	WSDATA   oWSTYPECURRICULUM         AS RHCURRICULUM_TYPECURRICULUM OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFTYPECURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFTYPECURRICULUM
+	::oWSTYPECURRICULUM    := {} // Array Of  RHCURRICULUM_TYPECURRICULUM():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFTYPECURRICULUM
+	Local oClone := RHCURRICULUM_ARRAYOFTYPECURRICULUM():NEW()
+	oClone:oWSTYPECURRICULUM := NIL
+	If ::oWSTYPECURRICULUM <> NIL 
+		oClone:oWSTYPECURRICULUM := {}
+		aEval( ::oWSTYPECURRICULUM , { |x| aadd( oClone:oWSTYPECURRICULUM , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFTYPECURRICULUM
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_TYPECURRICULUM","TYPECURRICULUM",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSTYPECURRICULUM , RHCURRICULUM_TYPECURRICULUM():New() )
+			::oWSTYPECURRICULUM[len(::oWSTYPECURRICULUM)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure TOBJECTLIST
+
+WSSTRUCT RHCURRICULUM_TOBJECTLIST
+	WSDATA   cBRANCH                   AS string
+	WSDATA   cCODENT                   AS string
+	WSDATA   cCODOBJ                   AS string
+	WSDATA   cDESCRIPTION              AS string
+	WSDATA   cFILENT                   AS string
+	WSDATA   cOBJECT                   AS string
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TOBJECTLIST
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TOBJECTLIST
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TOBJECTLIST
+	Local oClone := RHCURRICULUM_TOBJECTLIST():NEW()
+	oClone:cBRANCH              := ::cBRANCH
+	oClone:cCODENT              := ::cCODENT
+	oClone:cCODOBJ              := ::cCODOBJ
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cFILENT              := ::cFILENT
+	oClone:cOBJECT              := ::cOBJECT
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TOBJECTLIST
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cBRANCH            :=  WSAdvValue( oResponse,"_BRANCH","string",NIL,"Property cBRANCH as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cCODENT            :=  WSAdvValue( oResponse,"_CODENT","string",NIL,"Property cCODENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cCODOBJ            :=  WSAdvValue( oResponse,"_CODOBJ","string",NIL,"Property cCODOBJ as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,"Property cDESCRIPTION as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cFILENT            :=  WSAdvValue( oResponse,"_FILENT","string",NIL,"Property cFILENT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::cOBJECT            :=  WSAdvValue( oResponse,"_OBJECT","string",NIL,"Property cOBJECT as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure EVALUATIONQUESTIONS
+
+WSSTRUCT RHCURRICULUM_EVALUATIONQUESTIONS
+	WSDATA   nADJUSTMENT               AS float OPTIONAL
+	WSDATA   cALTERNATIVE              AS string OPTIONAL
+	WSDATA   cCURRICULUM               AS string OPTIONAL
+	WSDATA   cDESCANSWER               AS string OPTIONAL
+	WSDATA   cDURATION                 AS string OPTIONAL
+	WSDATA   cEVALUATION               AS string OPTIONAL
+	WSDATA   cQUESTION                 AS string OPTIONAL
+	WSDATA   cSUBJECT                  AS string OPTIONAL
+	WSDATA   cVACANCYCODE              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_EVALUATIONQUESTIONS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_EVALUATIONQUESTIONS
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_EVALUATIONQUESTIONS
+	Local oClone := RHCURRICULUM_EVALUATIONQUESTIONS():NEW()
+	oClone:nADJUSTMENT          := ::nADJUSTMENT
+	oClone:cALTERNATIVE         := ::cALTERNATIVE
+	oClone:cCURRICULUM          := ::cCURRICULUM
+	oClone:cDESCANSWER          := ::cDESCANSWER
+	oClone:cDURATION            := ::cDURATION
+	oClone:cEVALUATION          := ::cEVALUATION
+	oClone:cQUESTION            := ::cQUESTION
+	oClone:cSUBJECT             := ::cSUBJECT
+	oClone:cVACANCYCODE         := ::cVACANCYCODE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_EVALUATIONQUESTIONS
+	Local cSoap := ""
+	cSoap += WSSoapValue("ADJUSTMENT", ::nADJUSTMENT, ::nADJUSTMENT , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ALTERNATIVE", ::cALTERNATIVE, ::cALTERNATIVE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CURRICULUM", ::cCURRICULUM, ::cCURRICULUM , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCANSWER", ::cDESCANSWER, ::cDESCANSWER , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DURATION", ::cDURATION, ::cDURATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EVALUATION", ::cEVALUATION, ::cEVALUATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("QUESTION", ::cQUESTION, ::cQUESTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SUBJECT", ::cSUBJECT, ::cSUBJECT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("VACANCYCODE", ::cVACANCYCODE, ::cVACANCYCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+// WSDL Data Structure STEPSAGENDACANDIDATE
+
+WSSTRUCT RHCURRICULUM_STEPSAGENDACANDIDATE
+	WSDATA   cCODEEVALUATIONFINAL      AS string OPTIONAL
+	WSDATA   cCODESTEP                 AS string OPTIONAL
+	WSDATA   cCODETEST                 AS string OPTIONAL
+	WSDATA   cDATE                     AS string OPTIONAL
+	WSDATA   cDESCCODETEST             AS string OPTIONAL
+	WSDATA   cDESCEVALUATIONFINAL      AS string OPTIONAL
+	WSDATA   cDESCSTEP                 AS string OPTIONAL
+	WSDATA   cEMPLOYEEREGISTRATION     AS string OPTIONAL
+	WSDATA   cEVALUATIONFINAL          AS string OPTIONAL
+	WSDATA   cEVALUATIONOK             AS string OPTIONAL
+	WSDATA   cNAMEEMPLOYEEREGISTRATION AS string OPTIONAL
+	WSDATA   cOBSERVATIONCANDIDATE     AS string OPTIONAL
+	WSDATA   cOBSERVATIONEVALUATOR     AS string OPTIONAL
+	WSDATA   cSTEPSITUATION            AS string OPTIONAL
+	WSDATA   cTIME                     AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_STEPSAGENDACANDIDATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_STEPSAGENDACANDIDATE
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_STEPSAGENDACANDIDATE
+	Local oClone := RHCURRICULUM_STEPSAGENDACANDIDATE():NEW()
+	oClone:cCODEEVALUATIONFINAL := ::cCODEEVALUATIONFINAL
+	oClone:cCODESTEP            := ::cCODESTEP
+	oClone:cCODETEST            := ::cCODETEST
+	oClone:cDATE                := ::cDATE
+	oClone:cDESCCODETEST        := ::cDESCCODETEST
+	oClone:cDESCEVALUATIONFINAL := ::cDESCEVALUATIONFINAL
+	oClone:cDESCSTEP            := ::cDESCSTEP
+	oClone:cEMPLOYEEREGISTRATION := ::cEMPLOYEEREGISTRATION
+	oClone:cEVALUATIONFINAL     := ::cEVALUATIONFINAL
+	oClone:cEVALUATIONOK        := ::cEVALUATIONOK
+	oClone:cNAMEEMPLOYEEREGISTRATION := ::cNAMEEMPLOYEEREGISTRATION
+	oClone:cOBSERVATIONCANDIDATE := ::cOBSERVATIONCANDIDATE
+	oClone:cOBSERVATIONEVALUATOR := ::cOBSERVATIONEVALUATOR
+	oClone:cSTEPSITUATION       := ::cSTEPSITUATION
+	oClone:cTIME                := ::cTIME
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_STEPSAGENDACANDIDATE
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODEEVALUATIONFINAL", ::cCODEEVALUATIONFINAL, ::cCODEEVALUATIONFINAL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CODESTEP", ::cCODESTEP, ::cCODESTEP , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CODETEST", ::cCODETEST, ::cCODETEST , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DATE", ::cDATE, ::cDATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCCODETEST", ::cDESCCODETEST, ::cDESCCODETEST , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCEVALUATIONFINAL", ::cDESCEVALUATIONFINAL, ::cDESCEVALUATIONFINAL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCSTEP", ::cDESCSTEP, ::cDESCSTEP , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYEEREGISTRATION", ::cEMPLOYEEREGISTRATION, ::cEMPLOYEEREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EVALUATIONFINAL", ::cEVALUATIONFINAL, ::cEVALUATIONFINAL , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EVALUATIONOK", ::cEVALUATIONOK, ::cEVALUATIONOK , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("NAMEEMPLOYEEREGISTRATION", ::cNAMEEMPLOYEEREGISTRATION, ::cNAMEEMPLOYEEREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("OBSERVATIONCANDIDATE", ::cOBSERVATIONCANDIDATE, ::cOBSERVATIONCANDIDATE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("OBSERVATIONEVALUATOR", ::cOBSERVATIONEVALUATOR, ::cOBSERVATIONEVALUATOR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("STEPSITUATION", ::cSTEPSITUATION, ::cSTEPSITUATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TIME", ::cTIME, ::cTIME , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_STEPSAGENDACANDIDATE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODEEVALUATIONFINAL :=  WSAdvValue( oResponse,"_CODEEVALUATIONFINAL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODESTEP          :=  WSAdvValue( oResponse,"_CODESTEP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODETEST          :=  WSAdvValue( oResponse,"_CODETEST","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDATE              :=  WSAdvValue( oResponse,"_DATE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCCODETEST      :=  WSAdvValue( oResponse,"_DESCCODETEST","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCEVALUATIONFINAL :=  WSAdvValue( oResponse,"_DESCEVALUATIONFINAL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCSTEP          :=  WSAdvValue( oResponse,"_DESCSTEP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYEEREGISTRATION :=  WSAdvValue( oResponse,"_EMPLOYEEREGISTRATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEVALUATIONFINAL   :=  WSAdvValue( oResponse,"_EVALUATIONFINAL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEVALUATIONOK      :=  WSAdvValue( oResponse,"_EVALUATIONOK","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cNAMEEMPLOYEEREGISTRATION :=  WSAdvValue( oResponse,"_NAMEEMPLOYEEREGISTRATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cOBSERVATIONCANDIDATE :=  WSAdvValue( oResponse,"_OBSERVATIONCANDIDATE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cOBSERVATIONEVALUATOR :=  WSAdvValue( oResponse,"_OBSERVATIONEVALUATOR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSTEPSITUATION     :=  WSAdvValue( oResponse,"_STEPSITUATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cTIME              :=  WSAdvValue( oResponse,"_TIME","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CERTIFICATION
+
+WSSTRUCT RHCURRICULUM_CERTIFICATION
+	WSDATA   cCOURSECODE               AS string OPTIONAL
+	WSDATA   cCOURSEDESC               AS string OPTIONAL
+	WSDATA   cEDUCATION                AS string OPTIONAL
+	WSDATA   cEMPLOYCOURSE             AS string OPTIONAL
+	WSDATA   cEMPLOYDESCCOURSE         AS string OPTIONAL
+	WSDATA   cEMPLOYDESCENTITY         AS string OPTIONAL
+	WSDATA   cEMPLOYENTITY             AS string OPTIONAL
+	WSDATA   cENTITYCODE               AS string OPTIONAL
+	WSDATA   cENTITYDESC               AS string OPTIONAL
+	WSDATA   dGRADUATIONDATE           AS date OPTIONAL
+	WSDATA   cTYPE                     AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CERTIFICATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CERTIFICATION
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CERTIFICATION
+	Local oClone := RHCURRICULUM_CERTIFICATION():NEW()
+	oClone:cCOURSECODE          := ::cCOURSECODE
+	oClone:cCOURSEDESC          := ::cCOURSEDESC
+	oClone:cEDUCATION           := ::cEDUCATION
+	oClone:cEMPLOYCOURSE        := ::cEMPLOYCOURSE
+	oClone:cEMPLOYDESCCOURSE    := ::cEMPLOYDESCCOURSE
+	oClone:cEMPLOYDESCENTITY    := ::cEMPLOYDESCENTITY
+	oClone:cEMPLOYENTITY        := ::cEMPLOYENTITY
+	oClone:cENTITYCODE          := ::cENTITYCODE
+	oClone:cENTITYDESC          := ::cENTITYDESC
+	oClone:dGRADUATIONDATE      := ::dGRADUATIONDATE
+	oClone:cTYPE                := ::cTYPE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_CERTIFICATION
+	Local cSoap := ""
+	cSoap += WSSoapValue("COURSECODE", ::cCOURSECODE, ::cCOURSECODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("COURSEDESC", ::cCOURSEDESC, ::cCOURSEDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EDUCATION", ::cEDUCATION, ::cEDUCATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYCOURSE", ::cEMPLOYCOURSE, ::cEMPLOYCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCCOURSE", ::cEMPLOYDESCCOURSE, ::cEMPLOYDESCCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCENTITY", ::cEMPLOYDESCENTITY, ::cEMPLOYDESCENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYENTITY", ::cEMPLOYENTITY, ::cEMPLOYENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYCODE", ::cENTITYCODE, ::cENTITYCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYDESC", ::cENTITYDESC, ::cENTITYDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GRADUATIONDATE", ::dGRADUATIONDATE, ::dGRADUATIONDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPE", ::cTYPE, ::cTYPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CERTIFICATION
+	Local oNode12
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOURSECODE        :=  WSAdvValue( oResponse,"_COURSECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOURSEDESC        :=  WSAdvValue( oResponse,"_COURSEDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEDUCATION         :=  WSAdvValue( oResponse,"_EDUCATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYCOURSE      :=  WSAdvValue( oResponse,"_EMPLOYCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCCOURSE  :=  WSAdvValue( oResponse,"_EMPLOYDESCCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCENTITY  :=  WSAdvValue( oResponse,"_EMPLOYDESCENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYENTITY      :=  WSAdvValue( oResponse,"_EMPLOYENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYCODE        :=  WSAdvValue( oResponse,"_ENTITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYDESC        :=  WSAdvValue( oResponse,"_ENTITYDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dGRADUATIONDATE    :=  WSAdvValue( oResponse,"_GRADUATIONDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cTYPE              :=  WSAdvValue( oResponse,"_TYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode12 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode12 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode12)
+	EndIf
+Return
+
+// WSDL Data Structure CHARACTERS
+
+WSSTRUCT RHCURRICULUM_CHARACTERS
+	WSDATA   cANSWER                   AS string OPTIONAL
+	WSDATA   cCHOICE                   AS string OPTIONAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   oWSLISTOFCHAROPTIONS      AS RHCURRICULUM_ARRAYOFCHAROPTIONS OPTIONAL
+	WSDATA   cQUESTION                 AS string OPTIONAL
+	WSDATA   cTYPE                     AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CHARACTERS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CHARACTERS
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CHARACTERS
+	Local oClone := RHCURRICULUM_CHARACTERS():NEW()
+	oClone:cANSWER              := ::cANSWER
+	oClone:cCHOICE              := ::cCHOICE
+	oClone:cCODE                := ::cCODE
+	oClone:oWSLISTOFCHAROPTIONS := IIF(::oWSLISTOFCHAROPTIONS = NIL , NIL , ::oWSLISTOFCHAROPTIONS:Clone() )
+	oClone:cQUESTION            := ::cQUESTION
+	oClone:cTYPE                := ::cTYPE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_CHARACTERS
+	Local cSoap := ""
+	cSoap += WSSoapValue("ANSWER", ::cANSWER, ::cANSWER , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CHOICE", ::cCHOICE, ::cCHOICE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("LISTOFCHAROPTIONS", ::oWSLISTOFCHAROPTIONS, ::oWSLISTOFCHAROPTIONS , "ARRAYOFCHAROPTIONS", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("QUESTION", ::cQUESTION, ::cQUESTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPE", ::cTYPE, ::cTYPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CHARACTERS
+	Local oNode4
+	Local oNode7
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cANSWER            :=  WSAdvValue( oResponse,"_ANSWER","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCHOICE            :=  WSAdvValue( oResponse,"_CHOICE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode4 :=  WSAdvValue( oResponse,"_LISTOFCHAROPTIONS","ARRAYOFCHAROPTIONS",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode4 != NIL
+		::oWSLISTOFCHAROPTIONS := RHCURRICULUM_ARRAYOFCHAROPTIONS():New()
+		::oWSLISTOFCHAROPTIONS:SoapRecv(oNode4)
+	EndIf
+	::cQUESTION          :=  WSAdvValue( oResponse,"_QUESTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cTYPE              :=  WSAdvValue( oResponse,"_TYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode7 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode7 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode7)
+	EndIf
+Return
+
+// WSDL Data Structure COURSES
+
+WSSTRUCT RHCURRICULUM_COURSES
+	WSDATA   cCOURSECODE               AS string OPTIONAL
+	WSDATA   cCOURSEDESC               AS string OPTIONAL
+	WSDATA   cEDUCATION                AS string OPTIONAL
+	WSDATA   cEMPLOYCOURSE             AS string OPTIONAL
+	WSDATA   cEMPLOYDESCCOURSE         AS string OPTIONAL
+	WSDATA   cEMPLOYDESCENTITY         AS string OPTIONAL
+	WSDATA   cEMPLOYENTITY             AS string OPTIONAL
+	WSDATA   cENTITYCODE               AS string OPTIONAL
+	WSDATA   cENTITYDESC               AS string OPTIONAL
+	WSDATA   dGRADUATIONDATE           AS date OPTIONAL
+	WSDATA   cTYPE                     AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_COURSES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_COURSES
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_COURSES
+	Local oClone := RHCURRICULUM_COURSES():NEW()
+	oClone:cCOURSECODE          := ::cCOURSECODE
+	oClone:cCOURSEDESC          := ::cCOURSEDESC
+	oClone:cEDUCATION           := ::cEDUCATION
+	oClone:cEMPLOYCOURSE        := ::cEMPLOYCOURSE
+	oClone:cEMPLOYDESCCOURSE    := ::cEMPLOYDESCCOURSE
+	oClone:cEMPLOYDESCENTITY    := ::cEMPLOYDESCENTITY
+	oClone:cEMPLOYENTITY        := ::cEMPLOYENTITY
+	oClone:cENTITYCODE          := ::cENTITYCODE
+	oClone:cENTITYDESC          := ::cENTITYDESC
+	oClone:dGRADUATIONDATE      := ::dGRADUATIONDATE
+	oClone:cTYPE                := ::cTYPE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_COURSES
+	Local cSoap := ""
+	cSoap += WSSoapValue("COURSECODE", ::cCOURSECODE, ::cCOURSECODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("COURSEDESC", ::cCOURSEDESC, ::cCOURSEDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EDUCATION", ::cEDUCATION, ::cEDUCATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYCOURSE", ::cEMPLOYCOURSE, ::cEMPLOYCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCCOURSE", ::cEMPLOYDESCCOURSE, ::cEMPLOYDESCCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCENTITY", ::cEMPLOYDESCENTITY, ::cEMPLOYDESCENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYENTITY", ::cEMPLOYENTITY, ::cEMPLOYENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYCODE", ::cENTITYCODE, ::cENTITYCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYDESC", ::cENTITYDESC, ::cENTITYDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GRADUATIONDATE", ::dGRADUATIONDATE, ::dGRADUATIONDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPE", ::cTYPE, ::cTYPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_COURSES
+	Local oNode12
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOURSECODE        :=  WSAdvValue( oResponse,"_COURSECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOURSEDESC        :=  WSAdvValue( oResponse,"_COURSEDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEDUCATION         :=  WSAdvValue( oResponse,"_EDUCATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYCOURSE      :=  WSAdvValue( oResponse,"_EMPLOYCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCCOURSE  :=  WSAdvValue( oResponse,"_EMPLOYDESCCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCENTITY  :=  WSAdvValue( oResponse,"_EMPLOYDESCENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYENTITY      :=  WSAdvValue( oResponse,"_EMPLOYENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYCODE        :=  WSAdvValue( oResponse,"_ENTITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYDESC        :=  WSAdvValue( oResponse,"_ENTITYDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dGRADUATIONDATE    :=  WSAdvValue( oResponse,"_GRADUATIONDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cTYPE              :=  WSAdvValue( oResponse,"_TYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode12 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode12 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode12)
+	EndIf
+Return
+
+// WSDL Data Structure EVALUATION
+
+WSSTRUCT RHCURRICULUM_EVALUATION
+	WSDATA   nADJUSTMENT               AS float OPTIONAL
+	WSDATA   cALTERNATIVE              AS string OPTIONAL
+	WSDATA   cDESCALTERNATIVE          AS string OPTIONAL
+	WSDATA   cDESCANSWER               AS string OPTIONAL
+	WSDATA   cDESCEVALUATION           AS string OPTIONAL
+	WSDATA   cDESCQUESTION             AS string OPTIONAL
+	WSDATA   cDESCSUBJECT              AS string OPTIONAL
+	WSDATA   cDURATION                 AS string OPTIONAL
+	WSDATA   cEVALUATION               AS string OPTIONAL
+	WSDATA   cQUESTION                 AS string OPTIONAL
+	WSDATA   cREGISTRATION             AS string OPTIONAL
+	WSDATA   cSUBJECT                  AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_EVALUATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_EVALUATION
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_EVALUATION
+	Local oClone := RHCURRICULUM_EVALUATION():NEW()
+	oClone:nADJUSTMENT          := ::nADJUSTMENT
+	oClone:cALTERNATIVE         := ::cALTERNATIVE
+	oClone:cDESCALTERNATIVE     := ::cDESCALTERNATIVE
+	oClone:cDESCANSWER          := ::cDESCANSWER
+	oClone:cDESCEVALUATION      := ::cDESCEVALUATION
+	oClone:cDESCQUESTION        := ::cDESCQUESTION
+	oClone:cDESCSUBJECT         := ::cDESCSUBJECT
+	oClone:cDURATION            := ::cDURATION
+	oClone:cEVALUATION          := ::cEVALUATION
+	oClone:cQUESTION            := ::cQUESTION
+	oClone:cREGISTRATION        := ::cREGISTRATION
+	oClone:cSUBJECT             := ::cSUBJECT
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_EVALUATION
+	Local cSoap := ""
+	cSoap += WSSoapValue("ADJUSTMENT", ::nADJUSTMENT, ::nADJUSTMENT , "float", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ALTERNATIVE", ::cALTERNATIVE, ::cALTERNATIVE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCALTERNATIVE", ::cDESCALTERNATIVE, ::cDESCALTERNATIVE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCANSWER", ::cDESCANSWER, ::cDESCANSWER , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCEVALUATION", ::cDESCEVALUATION, ::cDESCEVALUATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCQUESTION", ::cDESCQUESTION, ::cDESCQUESTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESCSUBJECT", ::cDESCSUBJECT, ::cDESCSUBJECT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DURATION", ::cDURATION, ::cDURATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EVALUATION", ::cEVALUATION, ::cEVALUATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("QUESTION", ::cQUESTION, ::cQUESTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("REGISTRATION", ::cREGISTRATION, ::cREGISTRATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("SUBJECT", ::cSUBJECT, ::cSUBJECT , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_EVALUATION
+	Local oNode13
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::nADJUSTMENT        :=  WSAdvValue( oResponse,"_ADJUSTMENT","float",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cALTERNATIVE       :=  WSAdvValue( oResponse,"_ALTERNATIVE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCALTERNATIVE   :=  WSAdvValue( oResponse,"_DESCALTERNATIVE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCANSWER        :=  WSAdvValue( oResponse,"_DESCANSWER","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCEVALUATION    :=  WSAdvValue( oResponse,"_DESCEVALUATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCQUESTION      :=  WSAdvValue( oResponse,"_DESCQUESTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCSUBJECT       :=  WSAdvValue( oResponse,"_DESCSUBJECT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDURATION          :=  WSAdvValue( oResponse,"_DURATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEVALUATION        :=  WSAdvValue( oResponse,"_EVALUATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cQUESTION          :=  WSAdvValue( oResponse,"_QUESTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cREGISTRATION      :=  WSAdvValue( oResponse,"_REGISTRATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBJECT           :=  WSAdvValue( oResponse,"_SUBJECT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode13 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode13 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode13)
+	EndIf
+Return
+
+// WSDL Data Structure GRADUATION
+
+WSSTRUCT RHCURRICULUM_GRADUATION
+	WSDATA   cCOURSECODE               AS string OPTIONAL
+	WSDATA   cCOURSEDESC               AS string OPTIONAL
+	WSDATA   cEDUCATION                AS string OPTIONAL
+	WSDATA   cEMPLOYCOURSE             AS string OPTIONAL
+	WSDATA   cEMPLOYDESCCOURSE         AS string OPTIONAL
+	WSDATA   cEMPLOYDESCENTITY         AS string OPTIONAL
+	WSDATA   cEMPLOYENTITY             AS string OPTIONAL
+	WSDATA   cENTITYCODE               AS string OPTIONAL
+	WSDATA   cENTITYDESC               AS string OPTIONAL
+	WSDATA   cGRADE                    AS string OPTIONAL
+	WSDATA   dGRADUATIONDATE           AS date OPTIONAL
+	WSDATA   cTYPE                     AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_GRADUATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_GRADUATION
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_GRADUATION
+	Local oClone := RHCURRICULUM_GRADUATION():NEW()
+	oClone:cCOURSECODE          := ::cCOURSECODE
+	oClone:cCOURSEDESC          := ::cCOURSEDESC
+	oClone:cEDUCATION           := ::cEDUCATION
+	oClone:cEMPLOYCOURSE        := ::cEMPLOYCOURSE
+	oClone:cEMPLOYDESCCOURSE    := ::cEMPLOYDESCCOURSE
+	oClone:cEMPLOYDESCENTITY    := ::cEMPLOYDESCENTITY
+	oClone:cEMPLOYENTITY        := ::cEMPLOYENTITY
+	oClone:cENTITYCODE          := ::cENTITYCODE
+	oClone:cENTITYDESC          := ::cENTITYDESC
+	oClone:cGRADE               := ::cGRADE
+	oClone:dGRADUATIONDATE      := ::dGRADUATIONDATE
+	oClone:cTYPE                := ::cTYPE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_GRADUATION
+	Local cSoap := ""
+	cSoap += WSSoapValue("COURSECODE", ::cCOURSECODE, ::cCOURSECODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("COURSEDESC", ::cCOURSEDESC, ::cCOURSEDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EDUCATION", ::cEDUCATION, ::cEDUCATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYCOURSE", ::cEMPLOYCOURSE, ::cEMPLOYCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCCOURSE", ::cEMPLOYDESCCOURSE, ::cEMPLOYDESCCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCENTITY", ::cEMPLOYDESCENTITY, ::cEMPLOYDESCENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYENTITY", ::cEMPLOYENTITY, ::cEMPLOYENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYCODE", ::cENTITYCODE, ::cENTITYCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYDESC", ::cENTITYDESC, ::cENTITYDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GRADE", ::cGRADE, ::cGRADE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GRADUATIONDATE", ::dGRADUATIONDATE, ::dGRADUATIONDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPE", ::cTYPE, ::cTYPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_GRADUATION
+	Local oNode13
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOURSECODE        :=  WSAdvValue( oResponse,"_COURSECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOURSEDESC        :=  WSAdvValue( oResponse,"_COURSEDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEDUCATION         :=  WSAdvValue( oResponse,"_EDUCATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYCOURSE      :=  WSAdvValue( oResponse,"_EMPLOYCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCCOURSE  :=  WSAdvValue( oResponse,"_EMPLOYDESCCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCENTITY  :=  WSAdvValue( oResponse,"_EMPLOYDESCENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYENTITY      :=  WSAdvValue( oResponse,"_EMPLOYENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYCODE        :=  WSAdvValue( oResponse,"_ENTITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYDESC        :=  WSAdvValue( oResponse,"_ENTITYDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGRADE             :=  WSAdvValue( oResponse,"_GRADE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dGRADUATIONDATE    :=  WSAdvValue( oResponse,"_GRADUATIONDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cTYPE              :=  WSAdvValue( oResponse,"_TYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode13 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode13 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode13)
+	EndIf
+Return
+
+// WSDL Data Structure HISTORY
+
+WSSTRUCT RHCURRICULUM_HISTORY
+	WSDATA   cACTIVITY                 AS string OPTIONAL
+	WSDATA   dADMISSIONDATE            AS date OPTIONAL
+	WSDATA   cAREACODE                 AS string OPTIONAL
+	WSDATA   cAREADESCRIPTION          AS string OPTIONAL
+	WSDATA   cCOMPANY                  AS string OPTIONAL
+	WSDATA   dDISMISSALDATE            AS date OPTIONAL
+	WSDATA   cFUNCTIONCODE             AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_HISTORY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_HISTORY
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_HISTORY
+	Local oClone := RHCURRICULUM_HISTORY():NEW()
+	oClone:cACTIVITY            := ::cACTIVITY
+	oClone:dADMISSIONDATE       := ::dADMISSIONDATE
+	oClone:cAREACODE            := ::cAREACODE
+	oClone:cAREADESCRIPTION     := ::cAREADESCRIPTION
+	oClone:cCOMPANY             := ::cCOMPANY
+	oClone:dDISMISSALDATE       := ::dDISMISSALDATE
+	oClone:cFUNCTIONCODE        := ::cFUNCTIONCODE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_HISTORY
+	Local cSoap := ""
+	cSoap += WSSoapValue("ACTIVITY", ::cACTIVITY, ::cACTIVITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ADMISSIONDATE", ::dADMISSIONDATE, ::dADMISSIONDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("AREACODE", ::cAREACODE, ::cAREACODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("AREADESCRIPTION", ::cAREADESCRIPTION, ::cAREADESCRIPTION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("COMPANY", ::cCOMPANY, ::cCOMPANY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DISMISSALDATE", ::dDISMISSALDATE, ::dDISMISSALDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FUNCTIONCODE", ::cFUNCTIONCODE, ::cFUNCTIONCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_HISTORY
+	Local oNode8
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cACTIVITY          :=  WSAdvValue( oResponse,"_ACTIVITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dADMISSIONDATE     :=  WSAdvValue( oResponse,"_ADMISSIONDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cAREACODE          :=  WSAdvValue( oResponse,"_AREACODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cAREADESCRIPTION   :=  WSAdvValue( oResponse,"_AREADESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOMPANY           :=  WSAdvValue( oResponse,"_COMPANY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dDISMISSALDATE     :=  WSAdvValue( oResponse,"_DISMISSALDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cFUNCTIONCODE      :=  WSAdvValue( oResponse,"_FUNCTIONCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode8 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode8 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode8)
+	EndIf
+Return
+
+// WSDL Data Structure LANGUAGES
+
+WSSTRUCT RHCURRICULUM_LANGUAGES
+	WSDATA   cCOURSECODE               AS string OPTIONAL
+	WSDATA   cCOURSEDESC               AS string OPTIONAL
+	WSDATA   cEDUCATION                AS string OPTIONAL
+	WSDATA   cEMPLOYCOURSE             AS string OPTIONAL
+	WSDATA   cEMPLOYDESCCOURSE         AS string OPTIONAL
+	WSDATA   cEMPLOYDESCENTITY         AS string OPTIONAL
+	WSDATA   cEMPLOYENTITY             AS string OPTIONAL
+	WSDATA   cENTITYCODE               AS string OPTIONAL
+	WSDATA   cENTITYDESC               AS string OPTIONAL
+	WSDATA   cGRADE                    AS string OPTIONAL
+	WSDATA   dGRADUATIONDATE           AS date OPTIONAL
+	WSDATA   cTYPE                     AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_LANGUAGES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_LANGUAGES
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_LANGUAGES
+	Local oClone := RHCURRICULUM_LANGUAGES():NEW()
+	oClone:cCOURSECODE          := ::cCOURSECODE
+	oClone:cCOURSEDESC          := ::cCOURSEDESC
+	oClone:cEDUCATION           := ::cEDUCATION
+	oClone:cEMPLOYCOURSE        := ::cEMPLOYCOURSE
+	oClone:cEMPLOYDESCCOURSE    := ::cEMPLOYDESCCOURSE
+	oClone:cEMPLOYDESCENTITY    := ::cEMPLOYDESCENTITY
+	oClone:cEMPLOYENTITY        := ::cEMPLOYENTITY
+	oClone:cENTITYCODE          := ::cENTITYCODE
+	oClone:cENTITYDESC          := ::cENTITYDESC
+	oClone:cGRADE               := ::cGRADE
+	oClone:dGRADUATIONDATE      := ::dGRADUATIONDATE
+	oClone:cTYPE                := ::cTYPE
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_LANGUAGES
+	Local cSoap := ""
+	cSoap += WSSoapValue("COURSECODE", ::cCOURSECODE, ::cCOURSECODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("COURSEDESC", ::cCOURSEDESC, ::cCOURSEDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EDUCATION", ::cEDUCATION, ::cEDUCATION , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYCOURSE", ::cEMPLOYCOURSE, ::cEMPLOYCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCCOURSE", ::cEMPLOYDESCCOURSE, ::cEMPLOYDESCCOURSE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYDESCENTITY", ::cEMPLOYDESCENTITY, ::cEMPLOYDESCENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("EMPLOYENTITY", ::cEMPLOYENTITY, ::cEMPLOYENTITY , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYCODE", ::cENTITYCODE, ::cENTITYCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("ENTITYDESC", ::cENTITYDESC, ::cENTITYDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GRADE", ::cGRADE, ::cGRADE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GRADUATIONDATE", ::dGRADUATIONDATE, ::dGRADUATIONDATE , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("TYPE", ::cTYPE, ::cTYPE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_LANGUAGES
+	Local oNode13
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOURSECODE        :=  WSAdvValue( oResponse,"_COURSECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOURSEDESC        :=  WSAdvValue( oResponse,"_COURSEDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEDUCATION         :=  WSAdvValue( oResponse,"_EDUCATION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYCOURSE      :=  WSAdvValue( oResponse,"_EMPLOYCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCCOURSE  :=  WSAdvValue( oResponse,"_EMPLOYDESCCOURSE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYDESCENTITY  :=  WSAdvValue( oResponse,"_EMPLOYDESCENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cEMPLOYENTITY      :=  WSAdvValue( oResponse,"_EMPLOYENTITY","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYCODE        :=  WSAdvValue( oResponse,"_ENTITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITYDESC        :=  WSAdvValue( oResponse,"_ENTITYDESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGRADE             :=  WSAdvValue( oResponse,"_GRADE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::dGRADUATIONDATE    :=  WSAdvValue( oResponse,"_GRADUATIONDATE","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cTYPE              :=  WSAdvValue( oResponse,"_TYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode13 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode13 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode13)
+	EndIf
+Return
+
+// WSDL Data Structure QUALIFICATION
+
+WSSTRUCT RHCURRICULUM_QUALIFICATION
+	WSDATA   dDATEFACTOR               AS date OPTIONAL
+	WSDATA   cDEGREE                   AS string OPTIONAL
+	WSDATA   cDEGREEDESCR              AS string OPTIONAL
+	WSDATA   cFACTOR                   AS string OPTIONAL
+	WSDATA   cFATORDESCR               AS string OPTIONAL
+	WSDATA   cGROUP                    AS string OPTIONAL
+	WSDATA   cGROUPDESCR               AS string OPTIONAL
+	WSDATA   oWSUSERFIELDS             AS RHCURRICULUM_ARRAYOFUSERFIELD OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_QUALIFICATION
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_QUALIFICATION
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_QUALIFICATION
+	Local oClone := RHCURRICULUM_QUALIFICATION():NEW()
+	oClone:dDATEFACTOR          := ::dDATEFACTOR
+	oClone:cDEGREE              := ::cDEGREE
+	oClone:cDEGREEDESCR         := ::cDEGREEDESCR
+	oClone:cFACTOR              := ::cFACTOR
+	oClone:cFATORDESCR          := ::cFATORDESCR
+	oClone:cGROUP               := ::cGROUP
+	oClone:cGROUPDESCR          := ::cGROUPDESCR
+	oClone:oWSUSERFIELDS        := IIF(::oWSUSERFIELDS = NIL , NIL , ::oWSUSERFIELDS:Clone() )
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_QUALIFICATION
+	Local cSoap := ""
+	cSoap += WSSoapValue("DATEFACTOR", ::dDATEFACTOR, ::dDATEFACTOR , "date", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DEGREE", ::cDEGREE, ::cDEGREE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DEGREEDESCR", ::cDEGREEDESCR, ::cDEGREEDESCR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FACTOR", ::cFACTOR, ::cFACTOR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("FATORDESCR", ::cFATORDESCR, ::cFATORDESCR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GROUP", ::cGROUP, ::cGROUP , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("GROUPDESCR", ::cGROUPDESCR, ::cGROUPDESCR , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERFIELDS", ::oWSUSERFIELDS, ::oWSUSERFIELDS , "ARRAYOFUSERFIELD", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_QUALIFICATION
+	Local oNode8
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::dDATEFACTOR        :=  WSAdvValue( oResponse,"_DATEFACTOR","date",NIL,NIL,NIL,"D",NIL,NIL) 
+	::cDEGREE            :=  WSAdvValue( oResponse,"_DEGREE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDEGREEDESCR       :=  WSAdvValue( oResponse,"_DEGREEDESCR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFACTOR            :=  WSAdvValue( oResponse,"_FACTOR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFATORDESCR        :=  WSAdvValue( oResponse,"_FATORDESCR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGROUP             :=  WSAdvValue( oResponse,"_GROUP","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGROUPDESCR        :=  WSAdvValue( oResponse,"_GROUPDESCR","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode8 :=  WSAdvValue( oResponse,"_USERFIELDS","ARRAYOFUSERFIELD",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode8 != NIL
+		::oWSUSERFIELDS := RHCURRICULUM_ARRAYOFUSERFIELD():New()
+		::oWSUSERFIELDS:SoapRecv(oNode8)
+	EndIf
+Return
+
+// WSDL Data Structure USERFIELD
+
+WSSTRUCT RHCURRICULUM_USERFIELD
+	WSDATA   cUSERCOMBOBOX             AS string OPTIONAL
+	WSDATA   nUSERDEC                  AS integer OPTIONAL
+	WSDATA   cUSERF3                   AS string OPTIONAL
+	WSDATA   cUSERNAME                 AS string
+	WSDATA   lUSEROBLIG                AS boolean OPTIONAL
+	WSDATA   cUSERPICTURE              AS string OPTIONAL
+	WSDATA   nUSERSIZE                 AS integer OPTIONAL
+	WSDATA   cUSERTAG                  AS string OPTIONAL
+	WSDATA   cUSERTITLE                AS string OPTIONAL
+	WSDATA   cUSERTYPE                 AS string
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_USERFIELD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_USERFIELD
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_USERFIELD
+	Local oClone := RHCURRICULUM_USERFIELD():NEW()
+	oClone:cUSERCOMBOBOX        := ::cUSERCOMBOBOX
+	oClone:nUSERDEC             := ::nUSERDEC
+	oClone:cUSERF3              := ::cUSERF3
+	oClone:cUSERNAME            := ::cUSERNAME
+	oClone:lUSEROBLIG           := ::lUSEROBLIG
+	oClone:cUSERPICTURE         := ::cUSERPICTURE
+	oClone:nUSERSIZE            := ::nUSERSIZE
+	oClone:cUSERTAG             := ::cUSERTAG
+	oClone:cUSERTITLE           := ::cUSERTITLE
+	oClone:cUSERTYPE            := ::cUSERTYPE
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_USERFIELD
+	Local cSoap := ""
+	cSoap += WSSoapValue("USERCOMBOBOX", ::cUSERCOMBOBOX, ::cUSERCOMBOBOX , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERDEC", ::nUSERDEC, ::nUSERDEC , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERF3", ::cUSERF3, ::cUSERF3 , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERNAME", ::cUSERNAME, ::cUSERNAME , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USEROBLIG", ::lUSEROBLIG, ::lUSEROBLIG , "boolean", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERPICTURE", ::cUSERPICTURE, ::cUSERPICTURE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERSIZE", ::nUSERSIZE, ::nUSERSIZE , "integer", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTAG", ::cUSERTAG, ::cUSERTAG , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTITLE", ::cUSERTITLE, ::cUSERTITLE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("USERTYPE", ::cUSERTYPE, ::cUSERTYPE , "string", .T. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_USERFIELD
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cUSERCOMBOBOX      :=  WSAdvValue( oResponse,"_USERCOMBOBOX","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nUSERDEC           :=  WSAdvValue( oResponse,"_USERDEC","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cUSERF3            :=  WSAdvValue( oResponse,"_USERF3","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUSERNAME          :=  WSAdvValue( oResponse,"_USERNAME","string",NIL,"Property cUSERNAME as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+	::lUSEROBLIG         :=  WSAdvValue( oResponse,"_USEROBLIG","boolean",NIL,NIL,NIL,"L",NIL,NIL) 
+	::cUSERPICTURE       :=  WSAdvValue( oResponse,"_USERPICTURE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::nUSERSIZE          :=  WSAdvValue( oResponse,"_USERSIZE","integer",NIL,NIL,NIL,"N",NIL,NIL) 
+	::cUSERTAG           :=  WSAdvValue( oResponse,"_USERTAG","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUSERTITLE         :=  WSAdvValue( oResponse,"_USERTITLE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cUSERTYPE          :=  WSAdvValue( oResponse,"_USERTYPE","string",NIL,"Property cUSERTYPE as s:string on SOAP Response not found.",NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure QUESTIONSTESTTYPES
+
+WSSTRUCT RHCURRICULUM_QUESTIONSTESTTYPES
+	WSDATA   cACTIVE                   AS string OPTIONAL
+	WSDATA   cALTERNATIVE              AS string OPTIONAL
+	WSDATA   cANSWERTYPE               AS string OPTIONAL
+	WSDATA   cAREACODE                 AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   cDETDESCCD                AS string OPTIONAL
+	WSDATA   cLEVEL                    AS string OPTIONAL
+	WSDATA   oWSLISTOFALTERNATIVE      AS RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS OPTIONAL
+	WSDATA   cPOINTS                   AS string OPTIONAL
+	WSDATA   cQUESTION                 AS string OPTIONAL
+	WSDATA   cQUESTIONDT               AS string OPTIONAL
+	WSDATA   cSUBJECT                  AS string OPTIONAL
+	WSDATA   cTYPE                     AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_QUESTIONSTESTTYPES
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_QUESTIONSTESTTYPES
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_QUESTIONSTESTTYPES
+	Local oClone := RHCURRICULUM_QUESTIONSTESTTYPES():NEW()
+	oClone:cACTIVE              := ::cACTIVE
+	oClone:cALTERNATIVE         := ::cALTERNATIVE
+	oClone:cANSWERTYPE          := ::cANSWERTYPE
+	oClone:cAREACODE            := ::cAREACODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cDETDESCCD           := ::cDETDESCCD
+	oClone:cLEVEL               := ::cLEVEL
+	oClone:oWSLISTOFALTERNATIVE := IIF(::oWSLISTOFALTERNATIVE = NIL , NIL , ::oWSLISTOFALTERNATIVE:Clone() )
+	oClone:cPOINTS              := ::cPOINTS
+	oClone:cQUESTION            := ::cQUESTION
+	oClone:cQUESTIONDT          := ::cQUESTIONDT
+	oClone:cSUBJECT             := ::cSUBJECT
+	oClone:cTYPE                := ::cTYPE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_QUESTIONSTESTTYPES
+	Local oNode8
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cACTIVE            :=  WSAdvValue( oResponse,"_ACTIVE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cALTERNATIVE       :=  WSAdvValue( oResponse,"_ALTERNATIVE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cANSWERTYPE        :=  WSAdvValue( oResponse,"_ANSWERTYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cAREACODE          :=  WSAdvValue( oResponse,"_AREACODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDETDESCCD         :=  WSAdvValue( oResponse,"_DETDESCCD","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cLEVEL             :=  WSAdvValue( oResponse,"_LEVEL","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	oNode8 :=  WSAdvValue( oResponse,"_LISTOFALTERNATIVE","ARRAYOFALTERNATIVEQUESTIONS",NIL,NIL,NIL,"O",NIL,NIL) 
+	If oNode8 != NIL
+		::oWSLISTOFALTERNATIVE := RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS():New()
+		::oWSLISTOFALTERNATIVE:SoapRecv(oNode8)
+	EndIf
+	::cPOINTS            :=  WSAdvValue( oResponse,"_POINTS","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cQUESTION          :=  WSAdvValue( oResponse,"_QUESTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cQUESTIONDT        :=  WSAdvValue( oResponse,"_QUESTIONDT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBJECT           :=  WSAdvValue( oResponse,"_SUBJECT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cTYPE              :=  WSAdvValue( oResponse,"_TYPE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure AREA
+
+WSSTRUCT RHCURRICULUM_AREA
+	WSDATA   cAREACODE                 AS string OPTIONAL
+	WSDATA   cAREADESCRIPTION          AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_AREA
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_AREA
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_AREA
+	Local oClone := RHCURRICULUM_AREA():NEW()
+	oClone:cAREACODE            := ::cAREACODE
+	oClone:cAREADESCRIPTION     := ::cAREADESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_AREA
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cAREACODE          :=  WSAdvValue( oResponse,"_AREACODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cAREADESCRIPTION   :=  WSAdvValue( oResponse,"_AREADESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure CERTIFICATIONCURRICULUM
+
+WSSTRUCT RHCURRICULUM_CERTIFICATIONCURRICULUM
+	WSDATA   cCERTIFICATIONCURRICULUMCODE AS string OPTIONAL
+	WSDATA   cCERTIFICATIONCURRICULUMDESCRIPTION AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CERTIFICATIONCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CERTIFICATIONCURRICULUM
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CERTIFICATIONCURRICULUM
+	Local oClone := RHCURRICULUM_CERTIFICATIONCURRICULUM():NEW()
+	oClone:cCERTIFICATIONCURRICULUMCODE := ::cCERTIFICATIONCURRICULUMCODE
+	oClone:cCERTIFICATIONCURRICULUMDESCRIPTION := ::cCERTIFICATIONCURRICULUMDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CERTIFICATIONCURRICULUM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCERTIFICATIONCURRICULUMCODE :=  WSAdvValue( oResponse,"_CERTIFICATIONCURRICULUMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCERTIFICATIONCURRICULUMDESCRIPTION :=  WSAdvValue( oResponse,"_CERTIFICATIONCURRICULUMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure COURSESEMPLOYEE
+
+WSSTRUCT RHCURRICULUM_COURSESEMPLOYEE
+	WSDATA   cCOURSEEMPLOYEECODE       AS string OPTIONAL
+	WSDATA   cCOURSEEMPLOYEEDESCRIPTION AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_COURSESEMPLOYEE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_COURSESEMPLOYEE
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_COURSESEMPLOYEE
+	Local oClone := RHCURRICULUM_COURSESEMPLOYEE():NEW()
+	oClone:cCOURSEEMPLOYEECODE  := ::cCOURSEEMPLOYEECODE
+	oClone:cCOURSEEMPLOYEEDESCRIPTION := ::cCOURSEEMPLOYEEDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_COURSESEMPLOYEE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCOURSEEMPLOYEECODE :=  WSAdvValue( oResponse,"_COURSEEMPLOYEECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCOURSEEMPLOYEEDESCRIPTION :=  WSAdvValue( oResponse,"_COURSEEMPLOYEEDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ENTITITY
+
+WSSTRUCT RHCURRICULUM_ENTITITY
+	WSDATA   cENTITITYCODE             AS string OPTIONAL
+	WSDATA   cENTITITYDESCRIPTION      AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ENTITITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ENTITITY
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ENTITITY
+	Local oClone := RHCURRICULUM_ENTITITY():NEW()
+	oClone:cENTITITYCODE        := ::cENTITITYCODE
+	oClone:cENTITITYDESCRIPTION := ::cENTITITYDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ENTITITY
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cENTITITYCODE      :=  WSAdvValue( oResponse,"_ENTITITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cENTITITYDESCRIPTION :=  WSAdvValue( oResponse,"_ENTITITYDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure FACTOR
+
+WSSTRUCT RHCURRICULUM_FACTOR
+	WSDATA   cDEGREECODE               AS string OPTIONAL
+	WSDATA   cDEGREEDESCRIPTION        AS string OPTIONAL
+	WSDATA   cFACTORCODE               AS string OPTIONAL
+	WSDATA   cFACTORDESCRIPTION        AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_FACTOR
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_FACTOR
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_FACTOR
+	Local oClone := RHCURRICULUM_FACTOR():NEW()
+	oClone:cDEGREECODE          := ::cDEGREECODE
+	oClone:cDEGREEDESCRIPTION   := ::cDEGREEDESCRIPTION
+	oClone:cFACTORCODE          := ::cFACTORCODE
+	oClone:cFACTORDESCRIPTION   := ::cFACTORDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_FACTOR
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cDEGREECODE        :=  WSAdvValue( oResponse,"_DEGREECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDEGREEDESCRIPTION :=  WSAdvValue( oResponse,"_DEGREEDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFACTORCODE        :=  WSAdvValue( oResponse,"_FACTORCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFACTORDESCRIPTION :=  WSAdvValue( oResponse,"_FACTORDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure FEDERALUNIT
+
+WSSTRUCT RHCURRICULUM_FEDERALUNIT
+	WSDATA   cFEDERALUNITCODE          AS string OPTIONAL
+	WSDATA   cFEDERALUNITDESCRIPTION   AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_FEDERALUNIT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_FEDERALUNIT
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_FEDERALUNIT
+	Local oClone := RHCURRICULUM_FEDERALUNIT():NEW()
+	oClone:cFEDERALUNITCODE     := ::cFEDERALUNITCODE
+	oClone:cFEDERALUNITDESCRIPTION := ::cFEDERALUNITDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_FEDERALUNIT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cFEDERALUNITCODE   :=  WSAdvValue( oResponse,"_FEDERALUNITCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cFEDERALUNITDESCRIPTION :=  WSAdvValue( oResponse,"_FEDERALUNITDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure FONT
+
+WSSTRUCT RHCURRICULUM_FONT
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_FONT
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_FONT
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_FONT
+	Local oClone := RHCURRICULUM_FONT():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_FONT
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure GENDER
+
+WSSTRUCT RHCURRICULUM_GENDER
+	WSDATA   cGENDERCODE               AS string OPTIONAL
+	WSDATA   cGENDERDESCRIPTION        AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_GENDER
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_GENDER
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_GENDER
+	Local oClone := RHCURRICULUM_GENDER():NEW()
+	oClone:cGENDERCODE          := ::cGENDERCODE
+	oClone:cGENDERDESCRIPTION   := ::cGENDERDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_GENDER
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cGENDERCODE        :=  WSAdvValue( oResponse,"_GENDERCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGENDERDESCRIPTION :=  WSAdvValue( oResponse,"_GENDERDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure GRADUATIONCURRICULUM
+
+WSSTRUCT RHCURRICULUM_GRADUATIONCURRICULUM
+	WSDATA   cGRADUATIONCURRICULUMCODE AS string OPTIONAL
+	WSDATA   cGRADUATIONCURRICULUMDESCRIPTION AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_GRADUATIONCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_GRADUATIONCURRICULUM
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_GRADUATIONCURRICULUM
+	Local oClone := RHCURRICULUM_GRADUATIONCURRICULUM():NEW()
+	oClone:cGRADUATIONCURRICULUMCODE := ::cGRADUATIONCURRICULUMCODE
+	oClone:cGRADUATIONCURRICULUMDESCRIPTION := ::cGRADUATIONCURRICULUMDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_GRADUATIONCURRICULUM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cGRADUATIONCURRICULUMCODE :=  WSAdvValue( oResponse,"_GRADUATIONCURRICULUMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGRADUATIONCURRICULUMDESCRIPTION :=  WSAdvValue( oResponse,"_GRADUATIONCURRICULUMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure GRDGRADUATE
+
+WSSTRUCT RHCURRICULUM_GRDGRADUATE
+	WSDATA   cGRADECODE                AS string OPTIONAL
+	WSDATA   cGRADEDESCRIPTION         AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_GRDGRADUATE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_GRDGRADUATE
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_GRDGRADUATE
+	Local oClone := RHCURRICULUM_GRDGRADUATE():NEW()
+	oClone:cGRADECODE           := ::cGRADECODE
+	oClone:cGRADEDESCRIPTION    := ::cGRADEDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_GRDGRADUATE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cGRADECODE         :=  WSAdvValue( oResponse,"_GRADECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGRADEDESCRIPTION  :=  WSAdvValue( oResponse,"_GRADEDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure GRDLANGUAGE
+
+WSSTRUCT RHCURRICULUM_GRDLANGUAGE
+	WSDATA   cGRADECODE                AS string OPTIONAL
+	WSDATA   cGRADEDESCRIPTION         AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_GRDLANGUAGE
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_GRDLANGUAGE
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_GRDLANGUAGE
+	Local oClone := RHCURRICULUM_GRDLANGUAGE():NEW()
+	oClone:cGRADECODE           := ::cGRADECODE
+	oClone:cGRADEDESCRIPTION    := ::cGRADEDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_GRDLANGUAGE
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cGRADECODE         :=  WSAdvValue( oResponse,"_GRADECODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGRADEDESCRIPTION  :=  WSAdvValue( oResponse,"_GRADEDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure GROUP
+
+WSSTRUCT RHCURRICULUM_GROUP
+	WSDATA   cGROUPCODE                AS string OPTIONAL
+	WSDATA   cGROUPDESCRIPTION         AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_GROUP
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_GROUP
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_GROUP
+	Local oClone := RHCURRICULUM_GROUP():NEW()
+	oClone:cGROUPCODE           := ::cGROUPCODE
+	oClone:cGROUPDESCRIPTION    := ::cGROUPDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_GROUP
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cGROUPCODE         :=  WSAdvValue( oResponse,"_GROUPCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cGROUPDESCRIPTION  :=  WSAdvValue( oResponse,"_GROUPDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure HANDCAPPED
+
+WSSTRUCT RHCURRICULUM_HANDCAPPED
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_HANDCAPPED
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_HANDCAPPED
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_HANDCAPPED
+	Local oClone := RHCURRICULUM_HANDCAPPED():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_HANDCAPPED
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure HIERARCHICAL
+
+WSSTRUCT RHCURRICULUM_HIERARCHICAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_HIERARCHICAL
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_HIERARCHICAL
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_HIERARCHICAL
+	Local oClone := RHCURRICULUM_HIERARCHICAL():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_HIERARCHICAL
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure JOBABROAD
+
+WSSTRUCT RHCURRICULUM_JOBABROAD
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_JOBABROAD
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_JOBABROAD
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_JOBABROAD
+	Local oClone := RHCURRICULUM_JOBABROAD():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_JOBABROAD
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure LANGUAGESCURRICULUM
+
+WSSTRUCT RHCURRICULUM_LANGUAGESCURRICULUM
+	WSDATA   cLANGUAGESCURRICULUMCODE  AS string OPTIONAL
+	WSDATA   cLANGUAGESCURRICULUMDESCRIPTION AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_LANGUAGESCURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_LANGUAGESCURRICULUM
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_LANGUAGESCURRICULUM
+	Local oClone := RHCURRICULUM_LANGUAGESCURRICULUM():NEW()
+	oClone:cLANGUAGESCURRICULUMCODE := ::cLANGUAGESCURRICULUMCODE
+	oClone:cLANGUAGESCURRICULUMDESCRIPTION := ::cLANGUAGESCURRICULUMDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_LANGUAGESCURRICULUM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cLANGUAGESCURRICULUMCODE :=  WSAdvValue( oResponse,"_LANGUAGESCURRICULUMCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cLANGUAGESCURRICULUMDESCRIPTION :=  WSAdvValue( oResponse,"_LANGUAGESCURRICULUMDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure MARITALSTATUS
+
+WSSTRUCT RHCURRICULUM_MARITALSTATUS
+	WSDATA   cMARITALSTATUSCODE        AS string OPTIONAL
+	WSDATA   cMARITALSTATUSDESCRIPTION AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_MARITALSTATUS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_MARITALSTATUS
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_MARITALSTATUS
+	Local oClone := RHCURRICULUM_MARITALSTATUS():NEW()
+	oClone:cMARITALSTATUSCODE   := ::cMARITALSTATUSCODE
+	oClone:cMARITALSTATUSDESCRIPTION := ::cMARITALSTATUSDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_MARITALSTATUS
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cMARITALSTATUSCODE :=  WSAdvValue( oResponse,"_MARITALSTATUSCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cMARITALSTATUSDESCRIPTION :=  WSAdvValue( oResponse,"_MARITALSTATUSDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure NATIONALITY
+
+WSSTRUCT RHCURRICULUM_NATIONALITY
+	WSDATA   cNATIONALITYCODE          AS string OPTIONAL
+	WSDATA   cNATIONALITYDESCRIPTION   AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_NATIONALITY
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_NATIONALITY
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_NATIONALITY
+	Local oClone := RHCURRICULUM_NATIONALITY():NEW()
+	oClone:cNATIONALITYCODE     := ::cNATIONALITYCODE
+	oClone:cNATIONALITYDESCRIPTION := ::cNATIONALITYDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_NATIONALITY
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cNATIONALITYCODE   :=  WSAdvValue( oResponse,"_NATIONALITYCODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cNATIONALITYDESCRIPTION :=  WSAdvValue( oResponse,"_NATIONALITYDESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure PARTNER
+
+WSSTRUCT RHCURRICULUM_PARTNER
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_PARTNER
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_PARTNER
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_PARTNER
+	Local oClone := RHCURRICULUM_PARTNER():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_PARTNER
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure TYPECURRICULUM
+
+WSSTRUCT RHCURRICULUM_TYPECURRICULUM
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_TYPECURRICULUM
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_TYPECURRICULUM
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_TYPECURRICULUM
+	Local oClone := RHCURRICULUM_TYPECURRICULUM():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_TYPECURRICULUM
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ARRAYOFCHAROPTIONS
+
+WSSTRUCT RHCURRICULUM_ARRAYOFCHAROPTIONS
+	WSDATA   oWSCHAROPTIONS            AS RHCURRICULUM_CHAROPTIONS OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFCHAROPTIONS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFCHAROPTIONS
+	::oWSCHAROPTIONS       := {} // Array Of  RHCURRICULUM_CHAROPTIONS():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFCHAROPTIONS
+	Local oClone := RHCURRICULUM_ARRAYOFCHAROPTIONS():NEW()
+	oClone:oWSCHAROPTIONS := NIL
+	If ::oWSCHAROPTIONS <> NIL 
+		oClone:oWSCHAROPTIONS := {}
+		aEval( ::oWSCHAROPTIONS , { |x| aadd( oClone:oWSCHAROPTIONS , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_ARRAYOFCHAROPTIONS
+	Local cSoap := ""
+	aEval( ::oWSCHAROPTIONS , {|x| cSoap := cSoap  +  WSSoapValue("CHAROPTIONS", x , x , "CHAROPTIONS", .F. , .F., 0 , NIL, .F.,.F.)  } ) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFCHAROPTIONS
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_CHAROPTIONS","CHAROPTIONS",{},NIL,.T.,"SC",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSCHAROPTIONS , RHCURRICULUM_CHAROPTIONS():New() )
+			::oWSCHAROPTIONS[len(::oWSCHAROPTIONS)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure ARRAYOFALTERNATIVEQUESTIONS
+
+WSSTRUCT RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS
+	WSDATA   oWSALTERNATIVEQUESTIONS   AS RHCURRICULUM_ALTERNATIVEQUESTIONS OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS
+	::oWSALTERNATIVEQUESTIONS := {} // Array Of  RHCURRICULUM_ALTERNATIVEQUESTIONS():New()
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS
+	Local oClone := RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS():NEW()
+	oClone:oWSALTERNATIVEQUESTIONS := NIL
+	If ::oWSALTERNATIVEQUESTIONS <> NIL 
+		oClone:oWSALTERNATIVEQUESTIONS := {}
+		aEval( ::oWSALTERNATIVEQUESTIONS , { |x| aadd( oClone:oWSALTERNATIVEQUESTIONS , x:Clone() ) } )
+	Endif 
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ARRAYOFALTERNATIVEQUESTIONS
+	Local nRElem1, oNodes1, nTElem1
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	oNodes1 :=  WSAdvValue( oResponse,"_ALTERNATIVEQUESTIONS","ALTERNATIVEQUESTIONS",{},NIL,.T.,"O",NIL,NIL) 
+	nTElem1 := len(oNodes1)
+	For nRElem1 := 1 to nTElem1 
+		If !WSIsNilNode( oNodes1[nRElem1] )
+			aadd(::oWSALTERNATIVEQUESTIONS , RHCURRICULUM_ALTERNATIVEQUESTIONS():New() )
+			::oWSALTERNATIVEQUESTIONS[len(::oWSALTERNATIVEQUESTIONS)]:SoapRecv(oNodes1[nRElem1])
+		Endif
+	Next
+Return
+
+// WSDL Data Structure CHAROPTIONS
+
+WSSTRUCT RHCURRICULUM_CHAROPTIONS
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESC                     AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPSEND
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_CHAROPTIONS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_CHAROPTIONS
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_CHAROPTIONS
+	Local oClone := RHCURRICULUM_CHAROPTIONS():NEW()
+	oClone:cCODE                := ::cCODE
+	oClone:cDESC                := ::cDESC
+Return oClone
+
+WSMETHOD SOAPSEND WSCLIENT RHCURRICULUM_CHAROPTIONS
+	Local cSoap := ""
+	cSoap += WSSoapValue("CODE", ::cCODE, ::cCODE , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+	cSoap += WSSoapValue("DESC", ::cDESC, ::cDESC , "string", .F. , .F., 0 , NIL, .F.,.F.) 
+Return cSoap
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_CHAROPTIONS
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESC              :=  WSAdvValue( oResponse,"_DESC","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+// WSDL Data Structure ALTERNATIVEQUESTIONS
+
+WSSTRUCT RHCURRICULUM_ALTERNATIVEQUESTIONS
+	WSDATA   cALTERNATIVE              AS string OPTIONAL
+	WSDATA   cAREACODE                 AS string OPTIONAL
+	WSDATA   cCODE                     AS string OPTIONAL
+	WSDATA   cDESCRIPTION              AS string OPTIONAL
+	WSDATA   cQUESTION                 AS string OPTIONAL
+	WSDATA   cRESPOSTA                 AS string OPTIONAL
+	WSDATA   cSUBJECT                  AS string OPTIONAL
+	WSDATA   cVALUE                    AS string OPTIONAL
+	WSDATA   _URL                      AS String
+	WSDATA   _HEADOUT                  AS Array of String
+	WSDATA   _COOKIES                  AS Array of String	
+	WSMETHOD NEW
+	WSMETHOD INIT
+	WSMETHOD CLONE
+	WSMETHOD SOAPRECV
+ENDWSSTRUCT
+
+WSMETHOD NEW WSCLIENT RHCURRICULUM_ALTERNATIVEQUESTIONS
+	::Init()
+Return Self
+
+WSMETHOD INIT WSCLIENT RHCURRICULUM_ALTERNATIVEQUESTIONS
+Return
+
+WSMETHOD CLONE WSCLIENT RHCURRICULUM_ALTERNATIVEQUESTIONS
+	Local oClone := RHCURRICULUM_ALTERNATIVEQUESTIONS():NEW()
+	oClone:cALTERNATIVE         := ::cALTERNATIVE
+	oClone:cAREACODE            := ::cAREACODE
+	oClone:cCODE                := ::cCODE
+	oClone:cDESCRIPTION         := ::cDESCRIPTION
+	oClone:cQUESTION            := ::cQUESTION
+	oClone:cRESPOSTA            := ::cRESPOSTA
+	oClone:cSUBJECT             := ::cSUBJECT
+	oClone:cVALUE               := ::cVALUE
+Return oClone
+
+WSMETHOD SOAPRECV WSSEND oResponse WSCLIENT RHCURRICULUM_ALTERNATIVEQUESTIONS
+	::Init()
+	If oResponse = NIL ; Return ; Endif 
+	::cALTERNATIVE       :=  WSAdvValue( oResponse,"_ALTERNATIVE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cAREACODE          :=  WSAdvValue( oResponse,"_AREACODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cCODE              :=  WSAdvValue( oResponse,"_CODE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cDESCRIPTION       :=  WSAdvValue( oResponse,"_DESCRIPTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cQUESTION          :=  WSAdvValue( oResponse,"_QUESTION","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cRESPOSTA          :=  WSAdvValue( oResponse,"_RESPOSTA","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cSUBJECT           :=  WSAdvValue( oResponse,"_SUBJECT","string",NIL,NIL,NIL,"S",NIL,NIL) 
+	::cVALUE             :=  WSAdvValue( oResponse,"_VALUE","string",NIL,NIL,NIL,"S",NIL,NIL) 
+Return
+
+

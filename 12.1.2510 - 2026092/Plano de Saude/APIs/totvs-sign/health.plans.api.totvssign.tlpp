@@ -1,0 +1,140 @@
+#Include "PROTHEUS.CH"
+#Include "TOTVS.CH"
+#Include 'tlpp-core.th'
+#Include 'tlpp-rest.th'
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PlsTaeWebhookReceiver
+Endpoint REST para receber callbacks (webhooks) do TOTVS Assinatura 
+Eletrônica. Quando o status de uma publicação muda (documento 
+assinado, rejeitado, etc.), o TAE envia um POST para este endpoint.
+
+Este endpoint deve estar acessível externamente (internet) para que
+o TAE consiga enviar as notificações.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@see     PLSTotvsSign
+/*/
+//-------------------------------------------------------------------
+@Post("/totvshealthplans/v1/totvssign/webhook")
+Function PlsTaeWebhookReceiver()
+    Local jBody      as json
+    Local jResponse  as json
+    Local jEvent     as json
+    Local cRawBody   := "" as character
+    Local cNumGui    := "" as character
+    Local cHoraIni   := "" as character
+    Local cHoraFim   := "" as character
+    Local cEvent     := "" as character
+    Local nStatus    := 200 as numeric
+
+    cHoraIni  := Time()
+    jResponse := JsonObject():new()
+    jEvent    := oRest:getQueryRequest()
+    cRawBody  := oRest:getBodyRequest()
+
+    oRest:appendKeyHeaderResponse("Content-Type", "application/json")
+
+    If ValType(jEvent) == "J" .and. ValType(jEvent["event"]) == "C"
+        cEvent := Lower(jEvent["event"])
+    EndIf
+
+    If (cEvent == "sign" .or. cEvent == "reject") .and. !Empty(cRawBody)
+        
+        jBody := JsonObject():new()
+        jBody:fromJson(cRawBody)
+
+        nStatus := UpdBQ6Webhook(cEvent, jBody, @cNumGui, jResponse)
+        
+        FreeObj(jBody)
+        jBody := Nil
+    Else
+        nStatus := 400
+        jResponse["success"] := .F.
+        jResponse["message"] := If(Empty(cRawBody), "Corpo da requisição vazio.", "Evento não suportado ou ausente.")
+    EndIf
+
+    oRest:setStatusCode(nStatus)
+    oRest:setResponse(jResponse:toJson())
+    cHoraFim := Time()
+
+    logExtAPI("REST", "TAE", iif(!empty(cEvent), iif(cEvent == 'sign', "Retorno Assinatura Webhook", "Retorno Rejeição Webhook"), "Retorno Webhook"), "POST", oRest:urn, cRawBody, cValToChar(nStatus), jResponse:toJson(), ElapTime(cHoraIni, cHoraFim), cNumGui)
+
+    FreeObj(jResponse)
+    jResponse := Nil
+    delClassIntf()
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} UpdBQ6Webhook
+Função auxiliar para processar o webhook do TAE e atualizar o status do documento na tabela BQ6.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@see     PLSTotvsSign
+/*/
+//-------------------------------------------------------------------
+Static Function UpdBQ6Webhook(cEvent as character, jBody as json, cNumGui as character, jResponse as json) as numeric
+    Local nStatus    := 200 as numeric
+    Local lCamposOK  := .F. as logical
+    Local cIdDoc     := "" as character
+
+    If HasProp(jBody, "idDocumento") .and. HasProp(jBody, "status")
+        cIdDoc := cValToChar(jBody["idDocumento"])
+        
+        If cEvent == "sign"
+            lCamposOK := HasProp(jBody, "signer")
+        Else
+            lCamposOK := .T.
+        EndIf
+    EndIf
+
+    If !lCamposOK
+        nStatus := 400
+        jResponse["success"] := .F.
+        jResponse["message"] := "JSON inválido ou campos obrigatórios ausentes."
+        Return nStatus
+    EndIf
+
+    BQ6->(dbSetOrder(2))
+
+    If BQ6->(MsSeek(xFilial("BQ6") + cIdDoc))
+        BQ6->(RecLock("BQ6", .F.))
+        
+        BQ6->BQ6_STATUS := cValToChar(jBody["status"])
+        BQ6->BQ6_DTSIGN := Date()
+        BQ6->BQ6_HRSIGN := Time()
+        
+        If cEvent == "sign"
+            BQ6->BQ6_EMAIL := jBody["signer"]
+        EndIf
+        
+        cNumGui := BQ6->BQ6_NUMGUI
+        BQ6->(MsUnlock())
+
+        nStatus := 200
+        jResponse["success"] := .T.
+        jResponse["message"] := "Documento atualizado com sucesso."
+    Else
+        nStatus := 404
+        jResponse["success"] := .F.
+        jResponse["message"] := "Documento não encontrado no sistema."
+    EndIf
+
+Return nStatus
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} HasProp
+Função auxiliar para verificar se um objeto JSON possui uma propriedade específica.
+
+@author  GuilhermeBonni
+@version P12
+@since   28/05/2026
+@see     PLSTotvsSign
+/*/
+//-------------------------------------------------------------------
+Static Function HasProp(oJson as json, cProp as character) as logical
+Return ( ValType(oJson) == "J" .and. ValType(oJson[cProp]) != "U" )

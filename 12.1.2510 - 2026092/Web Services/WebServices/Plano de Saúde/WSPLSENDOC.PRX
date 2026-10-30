@@ -1,0 +1,1614 @@
+#include "fileIO.ch"
+#include "protheus.ch"
+#include "totvs.ch"
+#include "XMLXFUN.CH"
+#define F_BLOCK  512
+
+//------------------------------------------------------------------- 
+/*/{Protheus.doc} tissEnvioDocumentoWS
+Processa WebService TISS EnvioDocumentoWS
+Mensagem TISS Prestador -> Operadora
+Prestador envia documentos que possam ser necessários aos processos de solicitação, autorização, 
+cobrança e recurso de glosa de procedimentos assistenciais.
+Como retorno, recebe um protocolo de envio ou uma mensagem de erro em caso de falha.
+
+@author  Eduardo Bento
+@version P12
+@since   12/2021 
+/*/
+//-------------------------------------------------------------------
+
+function tissEnvioDocumentoWS(cAuto,cTeste, lAuto)
+
+local   cResposta	:= ""								//resposta para o WebService
+private oRequest	:= RequestEnvioDocumentoWS():new()	//instância da requisição
+private oEnvioDoc	:= EnvioDocumento():new()			//instância do envio
+private cCenaTeste	:= ""								//cenário de teste específico
+private lB1RReqRes	:= .f.
+default cAuto		:= ""								//requisição fake para o teste automatizado
+default cTeste		:= ""								//cenário do teste
+DEFAULT lAuto       := .f.
+
+//defino etiqueta de tempo de acordo com entrada da requisição
+oEnvioDoc:cEtiquetaTime := "_" + DtoS(Date()) + StrTran(Time(),":","")
+
+//coloco o cenário em variável global para ser usada em pontos aninhados
+iif(!empty(cTeste),cCenaTeste:=cTeste,)
+
+//Alimentação para automatização
+if !empty(cAuto)
+    oRequest:cRequest := cAuto
+endif
+
+//Carregando valores de configuração do .INI
+if oRequest:getConfig()
+     //interrompo processamento e devolvo sem response em caso de erro de configuração no servidor
+	return oRequest:getErro() //retorno erro de configuração em caso de falha
+endif
+
+//Se requisição vazia, retorno o schema padrão
+if empty(oRequest:cRequest) .and. !lAuto
+    return ProcOnLine("reciboDocumentosWS")
+endif
+
+//Transformo formato request para formato XML
+if oRequest:requestToXml()
+     //interrompo processamento e devolvo sem response em caso de erro na conversão do request para xml
+	return oEnvioDoc:getErro() //retorno erro de request em caso de falha
+endif
+
+//Parseamento do XML para o objeto TXmlManager
+if oRequest:parseXml(oEnvioDoc:oXml)
+    //interrompo processamento e devolvo sem response em caso de erro no parseamento
+	return oRequest:getErro() //retorno erro de request em caso de falha
+endif
+
+//Registro NameSpace no Objeto TXmlManager
+oEnvioDoc:registraNS(oRequest:cXML)
+
+
+
+//Fim da parte de Estrutura e Configurações
+
+//Capturo as informações do request
+if !oEnvioDoc:getNok()
+    oEnvioDoc:getCabecalho()
+    oEnvioDoc:getDadosMen()
+    if oEnvioDoc:requerAssinatura()
+        oEnvioDoc:getAssinatura()
+    endif
+endif
+
+//Valido assinatura - Implementar (atualmente vefirico se foi enviado campos de assinatura apenas)
+oEnvioDoc:assinatura()
+
+//Consolidação e processamento
+if !oEnvioDoc:getNok()
+	
+	//Ponto B Decodifico e valido o Arquivo
+    if oEnvioDoc:salvaDocumento() .or. cCenaTeste == "conout1"
+		conout("erro: "+oEnvioDoc:getErro())
+
+	//Ponto C - Vinculação a registro
+	elseif oEnvioDoc:identificaVinculo() .or. cCenaTeste == "conout2"
+		conout("erro: "+oEnvioDoc:getErro())
+
+    elseif oEnvioDoc:validaDuplicidade() .or. cCenaTeste == "conout3"
+        conout("erro: "+oEnvioDoc:getErro())
+
+	else
+
+		//Ponto D - Consolidação
+		oEnvioDoc:consBaseConhec()
+        		
+	endif
+endif
+
+//Alimento dados para a Resposta
+oEnvioDoc:getReciboDoc()
+
+//Gero a Resposta para o WebService
+oRequest:respostaEnvioDocumento(oEnvioDoc:geraResposta())
+cResposta := oRequest:cResponse
+
+//Consolido na B1R o Request e o Response - Se há um cenário de teste, não é necessário consolidar
+if !oEnvioDoc:getNok() .and. empty(cCenaTeste)
+	oEnvioDoc:consRequestResponse(oRequest)
+endif
+
+//Finalizo processamento e limpo o sistema
+oEnvioDoc:finaliza()
+FreeObj(oEnvioDoc)
+oEnvioDoc:= nil
+FreeObj(oRequest)
+oRequest:= nil
+
+//Limpo pastas de arquivos residuais antigos
+limpaEnvDoc()
+
+return cResposta
+
+//------------------------------------------------------------------- 
+/*/{Protheus.doc} limpaEnvDoc
+Limpa as pastas do sistemas de arquivos resíduais que tenham sobrado
+de processos intemrrompidos por instabilidade ou falha do sistema
+
+@author  Eduardo Bento
+@version P12
+@since   02/2022 
+/*/
+//-------------------------------------------------------------------
+function limpaEnvDoc()
+
+local aArquivos	:= {}
+local aDatas	:= {}
+local nI := 0
+
+//Verifico e deleto documentos com a data anterior a de ontem
+ADir(PLSMUDSIS("\tiss\envioDocumentos\documento\*.*"),@aArquivos,,@aDatas)
+for nI:=1 to Len(aArquivos)
+	if aDatas[nI] < (date()-1)
+		FErase(PLSMUDSIS("\tiss\envioDocumentos\documento\")+aArquivos[nI])
+	endif
+next
+
+//Verifico e deleto documentos com a data anterior a de ontem
+ADir(PLSMUDSIS("\tiss\envioDocumentos\temp\*.*"),@aArquivos,,@aDatas)
+for nI:=1 to Len(aArquivos)
+	if aDatas[nI] < (date()-1)
+		FErase(PLSMUDSIS("\tiss\envioDocumentos\temp\"+aArquivos[nI]))
+	endif
+next
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} RequestEnvioDocumentoWS
+Classe referente a requisição da mensagem TISS EnvioDocumentoWS
+
+@author    Eduardo Bento
+@version   V12
+@since     11/2021
+/*/
+//-------------------------------------------------------------------
+Class RequestEnvioDocumentoWS
+	
+	//Dados da requisição
+	data cRequest	as String	// request
+	data cResponse	as String	// response
+	data cXML		as String	// request convertido em XML
+	data cVersao	as String	// versão da mensagem TISS
+	data cNameSpace	as String	// nameSpace do request
+	data nEstado	as numeric	// status  processo: 1-OK 22-Erro na criação dos diretórios 25-Parâmetros ausentes no appserver.ini 31-Request Não válido 41-Violação de Schema 42-Erro no Parse
+	data cErro		as String	// erro de processamento - Sem response
+	//Dados de Configuração
+	data cServidor	as String	// enviroment
+	data cEmpresa	as String	// código da empresa
+	data cCodFilial	as String	// código da filial
+	
+	//Métodos
+	Method new() Constructor	// instancia requisição
+	Method getConfig()			// carrega configurações para a configuração
+	Method getVersao()			// captura Versão da mensagem TISS
+	Method requestToXml()		// transforma formato SOAP para XML
+	Method validaXsd()			// Valida Schema do XML
+	Method removeUrl()			// Remove URL do XML
+	Method parseXml()			// Realiza o parse no XML
+    Method criaDiretorios()     // Cria diretórios para o uso do WebService
+    Method addDefNameSpace()    // Adiciona a definição de namespace presente no request 
+	Method respostaEnvioDocumento() //constrói a estrutura para resposta
+	
+	Method getErro()			// captura erro
+	Method getNok()				// retorna se está em estado de erro
+	
+Endclass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new 
+Construtor da Classe RequestEnvioDocumentoWS
+/*/
+//-------------------------------------------------------------------
+Method new() Class RequestEnvioDocumentoWS
+	self:cRequest	:= HttpOtherContent()
+	self:cResponse	:= ""
+	self:nEstado	:= 1
+return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getConfig 
+Carrega variáveis de configurações do ambiente e setadas no 
+appserver.ini
+/*/
+//-------------------------------------------------------------------
+Method getConfig() Class RequestEnvioDocumentoWS
+	
+	self:cServidor	:= GetEnvServer() //GetEnvServer() -> Retorna o nome do ambiente
+	//GetPvProfString () -> Recupera valor de chave no AppServer.INI 
+	//GetADV97() -> Retorna nome do AppServer.INI
+	self:cEmpresa	:= AllTrim(GetPvProfString(self:cServidor,"JEMP","",GetADV97()))
+	self:cCodFilial	:= AllTrim(GetPvProfString(self:cServidor,"JFIL","",GetADV97()))
+	
+	//Verifica se os campos foram recuperados com sucesso
+	if (empty(self:cEmpresa) .or. empty(self:cCodFilial)) .or. cCenaTeste == "25"
+		self:nEstado 	:= 25
+		self:cErro	:= "A ENVIRONMENT [" + self:cServidor + "] não tem declarada as variaveis cEmp e cFil." 
+	else
+		//Abertura do ambiente para rotinas automáticas
+		RpcSetEnv( self:cEmpresa,self:cCodFilial,,,self:cServidor,,)
+		//Indica o tipo de pacote HTTP que será retornado
+		HttpCtType( "text/xml; charset="+'UTF-8' )
+		//Cria diretórios para utilização da rotina
+		self:criaDiretorios()
+        //Capturo versão da mensagem
+        self:getVersao()
+	endif
+
+	lB1RReqRes := B1R->(FieldPos("B1R_REQUES")) > 0 .AND. B1R->(FieldPos("B1R_RESPOS")) > 0
+		
+return self:getNok() //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} criaDiretorios 
+Cria diretórios para utilização do serviço
+/*/
+//-------------------------------------------------------------------
+Method criaDiretorios() Class RequestEnvioDocumentoWS
+
+if !ExistDir(PLSMUDSIS("\tiss\envioDocumentos")) .or. cCenaTeste == "ErroDir"
+	if MakeDir(PLSMUDSIS("\tiss\envioDocumentos")) != 0 .or. cCenaTeste == "ErroDir"
+		self:cErro := "Não foi possivel criar o diretorio" + PLSMUDSIS("\tiss\envioDocumentos")
+		self:nEstado:= 22		
+	endif      
+endif
+
+if !ExistDir(PLSMUDSIS("\tiss\envioDocumentos\documento")) .or. cCenaTeste == "ErroDir"
+	if MakeDir(PLSMUDSIS("\tiss\envioDocumentos\documento")) != 0 .or. cCenaTeste == "ErroDir"
+		self:cErro := "Não foi possivel criar o diretorio" =PLSMUDSIS("\tiss\envioDocumentos\documento")
+		self:nEstado:= 22				
+	endif      
+endif
+
+if !ExistDir(PLSMUDSIS("\tiss\envioDocumentos\temp")) .or. cCenaTeste == "ErroDir"
+	if MakeDir(PLSMUDSIS("\tiss\envioDocumentos\temp")) != 0 .or. cCenaTeste == "ErroDir"
+		self:cErro := "Não foi possivel criar o diretorio" + PLSMUDSIS("\tiss\envioDocumentos\temp")
+		self:nEstado:= 22		
+	endif      
+endif
+
+return self:getNok() //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getVersao 
+Capturo versão da mensagem TISS no corpo do Request
+/*/
+//-------------------------------------------------------------------
+Method getVersao() Class RequestEnvioDocumentoWS
+	self:cVersao := Substr(self:cRequest,At("Padrao>",self:cRequest)+Len("Padrao>"),7)	
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} requestToXml 
+Transforma formato SOAP para XML. processo realizado para utilizar as
+ferramentas da classe TXmlManager 
+/*/
+//-------------------------------------------------------------------
+Method requestToXml() Class RequestEnvioDocumentoWS
+
+	local nPos	:= 0 //Marcador de posição
+	local nX	:= 0 //Marcador de posição
+	local cXmlAux := "" //String usada para verificar se o encodeutf8 deu problema
+
+	//Retiro tudo que vem antes da marcação "BODY"
+	nPos := At("BODY",Upper(self:cRequest))
+	self:cXML := Substr(self:cRequest,nPos+4,len(self:cRequest))    
+	nPos := At(">",Upper(self:cXML))
+	self:cXML := Substr(self:cXML,nPos+1,len(self:cXML)) 
+	if Substr(self:cXML,1,1) <> '<' .and. nPos > 0
+		while Substr(self:cXML,1,1) <> '<'
+			self:cXML := Substr(self:cXML,2,len(self:cXML))
+		enddo
+	endif 
+
+	//Retiro tudo que vem depois da marcação "BODY"
+	nPos := At("BODY>",Upper(self:cXML)) 
+	for nX := 1 to nPos 
+		if Substr(self:cXML,nPos-nX,1) == "<"
+			self:cXML := Substr(self:cXML,1,nPos-(nX+1))
+			Exit
+		endif   
+	next
+	
+    self:addDefNameSpace()
+
+	//Proteção para envios de prestadores em formatos estranhos que fazem cair o encodeutf8
+	cXmlAux := EncodeUTF8(self:cXML)
+	//Caso a conversão dê problemas, self:cXML continua o mesmo, caso contrário, usaremos o resultado da conversão
+	if !empty(cXmlAux) .and. !valtype(cXmlAux) == "U"
+		self:cXML := cXmlAux
+	endif
+
+    //Capturo NameSpace do request
+    oEnvioDoc:getNameSpace()
+
+	//Ponto A Valida estrutura XSD
+	if oRequest:validaXsd()
+		//interrompo processamento e devolvo sem response em caso mensagem fora de schema padrão TISS
+		return self:getNok()
+	endif
+	
+	//Removo URL para evitar problemas no parse da TXmlManager
+	self:removeUrl()
+
+	//Verificação de erro no processo - Não encontrou a marcação "BODY" ou não existe Request
+	if nPos == 0 .or. empty(self:cRequest)
+		self:nEstado 	:= 31
+	endif
+
+return self:getNok() //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} addDefNameSpace 
+Adiciona definições de NameSpace que vieram no Envelope da requisição
+/*/
+//-------------------------------------------------------------------
+Method addDefNameSpace() Class RequestEnvioDocumentoWS
+
+    local cParte1   := ""
+    local cParte2   := ""
+    local cXmlns    := ""
+    local nPos1     := ""
+    local nPos2     := ""
+
+	nPos1 := At("XMLNS",Upper(self:cRequest))
+	if nPos1 > 0
+		nPos2 := At(">",Upper(self:cRequest),nPos1) 
+		cXmlns := subString(self:cRequest, nPos1, nPos2 - nPos1)
+		nPos1 := At(">",Upper(self:cXML))
+		cParte1 := Substr(self:cXML,1,nPos1-1)
+		cParte2 := Substr(self:cXML,nPos1,len(self:cXML))
+		self:cXML := cParte1 + " " + cXmlns + cParte2
+	endif
+
+return self:getNok() //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} validaXsd 
+Valida o Schema do XML 
+/*/
+//-------------------------------------------------------------------
+Method validaXsd() Class RequestEnvioDocumentoWS
+
+	local cErro		:= "" //Mensagem de Erro para o Frame
+	local cAviso	:= "" //Mensagem de Aviso para o Frame
+	local cSchema	:= "tissWebServicesV" + StrTran(self:cVersao, ".", "_")+".xsd" //construção do nome do arquivo XSD
+
+	if !XmlSVldSch(self:cXML,PLSMUDSIS("\tiss\schemas\"+cSchema),@cErro,@cAviso) //validação
+		self:cErro := Iif( !empty(cErro),"Erro: " +cErro,"") 
+		self:cErro += Iif( !empty(cAviso),"Aviso: "+cAviso,"") 
+		self:nEstado := 41
+	endif
+
+return self:getNok()  //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} removeUrl 
+Valida o Schema do XML 
+/*/
+//-------------------------------------------------------------------
+Method removeUrl() Class RequestEnvioDocumentoWS
+
+	local nPos := 0            //Marcador de posição
+	local cSoapNoUrl    := ""   //auxiliar para retirar URL
+    local cXmlInit      := ""   //Início do Request
+    
+	if empty(oEnvioDoc:cNameSpace)
+        nPos := At("WS",Upper(self:cXML))
+        cXmlInit := Substr(self:cXML,0,nPos+1)
+        nPos := 0
+		nPos := At(">",Upper(self:cXML))      
+		cSoapNoUrl := Substr(self:cXML,nPos,len(self:cXML))
+		self:cXML   := cXmlInit+cSoapNoUrl
+	endif
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} parseXml 
+Realiza o parse do XML para o objeto TXmlManager
+/*/
+//-------------------------------------------------------------------
+Method parseXml(oXML) Class RequestEnvioDocumentoWS
+
+	if !oXML:Parse(self:cXml) //Se sucesso, :parse() retorna .t.
+		self:cErro := oXML:Error()
+		self:nEstado := 42
+	endif
+
+return self:getNok()  //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getErro 
+Trata erro para retornar a aplicação
+/*/
+//-------------------------------------------------------------------
+Method getErro() Class RequestEnvioDocumentoWS
+
+return self:cErro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getNok
+Verifica estado do request e retorna booleano - .t.->Erro .f.->OK
+/*/
+//-------------------------------------------------------------------
+Method getNok() Class RequestEnvioDocumentoWS
+
+return self:nEstado>1
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} respostaEnvioDocumento 
+constrói estrutura padrão do WebSewrvice e insere a resposta do processamento no corpo
+/*/
+//-------------------------------------------------------------------
+Method respostaEnvioDocumento(cCorpo) Class RequestEnvioDocumentoWS
+	
+	default cCorpo := ""
+
+	self:cResponse += '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">' + Chr(10)
+	self:cResponse += '<s:Body>' + chr(10)
+	self:cResponse += '<ans:reciboDocumentosWS xmlns:ans="http://www.ans.gov.br/padroes/tiss/schemas">' + chr(10)
+	self:cResponse += cCorpo
+	self:cResponse += '</ans:reciboDocumentosWS>' + chr(10)
+	self:cResponse += '</s:Body>' + chr(10)
+	self:cResponse += '</s:Envelope>'
+
+return self:cResponse
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} EnvioDocumento
+Classe referente ao objeto do webservice envio de documento
+
+@author    Eduardo Bento
+@version   V12
+@since     23/11/2021
+/*/
+//-------------------------------------------------------------------
+Class EnvioDocumento
+
+	//Dados da Classe EnvioDocumento
+	
+	//dados do cabeçalho
+	data oCabecalho as Object 
+		//identificacaoTransacao
+			//tipoTransacao
+			//sequencialTransacao
+			//tipoTransacaoResponse
+			//sequencialTransacaoResponse
+		//falhaNegocio
+		//origem
+			//tipoIdentificacaoPrestador (CNPJ/CPF/codigoPrestadorNaOperadora/registroANS)
+			//identificacaoPrestaroe
+		//destino
+			//tipoIdentificacaoPrestador (CNPJ/CPF/codigoPrestadorNaOperadora/registroANS)
+			//identificacaoPrestaroe		
+		//Padrao
+		//loginSenhaPrestador
+	
+	//dados da mensagem
+	data oEnvioDocumentos as Object //dados do corpo da mensagem
+	//numeroLote
+	//numeroProtocolo
+	//numeroGuiaPrestador
+	//numeroGuiaOperadora
+	//numeroDocumento
+	//naturezaGuia
+	//formatoDocumento
+	//seqReferencialItem
+	//documento
+	//tipoDocumento
+	//observacao
+	
+	//Assinatura Digital
+	data oAssinaturaDigital as Object //dados da assinatura dígital
+	
+	//Hash
+	data cHash as String
+	
+	//Signature
+	data oSignature as Object
+	
+	//Outros Dados
+	data cNameSpace as String //namespace
+	data oXML as Object //Objeto para o Parse
+	
+	//Recebimento do Documento
+	data nEstado as numeric	//status  processo: 1-OK 21-Erro Caceçalho 23-Erro Origem 24-Erro Destino 32-Erro dados 
+	//continuação de status:43-Erro no Decode64 //44-Documento excede limite de tamanho
+	//continuação de status: 61-Não foi possível vincular o documento 62-o vinculo deve ocorrer ou a PEG ou a Guia
+    //continuação de status: 71-Documento já foi enviado e consolidado 81-O documento exige assinatura e não foi enviada 82-A assinatura não foi validadada
+	data cErro as String	// erro de processamento - Sem response
+
+	//Falha
+	data oMensagemErro as Object
+		//codigoGlosa //código do erro
+		//descricaoGlosa //descrição do erro
+	//Sucesso
+	data oReciboDocumentos as Object
+		//numeroLote
+		//numeroProtocolo
+		//numeroGuiaPrestador
+		//numeroGuiaOperadora
+		//numeroDocumento
+		//protocoloDoc
+		//observacao
+
+	data oDadosVincul as Object
+		//cCodpeg
+		//cNumGuia
+		//cNumLote
+		//cNumImp
+
+	data cDocFisico 	as string	//composição caminho+arquivo+formato
+	data cRespCabecalho as string	//cabeçalho do texto resposta
+	data cRespCorpo 	as string	//corpo do texto resposta
+	data cResposta 		as string	//resposta completa
+	data nArqHash 		as numeric	//arquivo para construção do Hash
+	data cPathTemp 		as string	//rota para os arquivos temporários
+
+	data aBcoConhec as array		//Argumentos para consolidar documento {alias,chave}
+	data cEtiquetaTime as String	//Etiqueta com a Data e Horário da transação
+
+	//Métodos
+	Method new() Constructor	// instancia requisição
+	Method destroy()			// destrói instância (libera da memória)
+	
+	Method getCabecalho()		// captura informações do cabeçalho
+    Method getDadosMen()		// captura informações da mensagem
+	Method getAssinatura()		// captura informações da assinatura
+    Method trataCabecalho()		// trata dados do cabeçalho
+	Method registraNS()			// registra o nameSpace no TXmlManager
+	Method getNameSpace()		// captura o name space
+
+	Method salvaDocumento()		// Salva documento na pasta
+	Method arqMaiorLim()		// Método que valida o tamanho do documento
+	Method consBaseConhec()		// Consolida arquivo na base de conhecimento
+	Method geraResposta()		// Gera a Resposta para o WebService
+	Method getReciboDoc()		// Alimenta dados para resposta
+	Method geraCabecalho()		// Gera o cabeçalho para o WebService
+	Method geraCorpo()			// Gera o corpo para o WebService
+	Method geraErro()			// Tratamento de erros
+
+	Method geraTag()			// Formatação da linha para a resposta
+	Method geraHash()			// Calculo do hash
+	Method escreveHash()		// Escreve linha do hasg
+	Method convDataXML()		// Formata data
+	Method deParaFormato()		// Realiza depara do formato do documento
+	Method identificaVinculo()	// Identifica o documento para realizar o vínculo
+	Method consRequestResponse()// Consolida Requisição e Resposta na B1R para consulta posterior 
+	Method finaliza()			// Finaliza o Processamento limpando arquivos e variáveis
+	Method geraProtocolo()		// Crio um registro B1R e gero um protocolo 
+    Method validaDuplicidade()	// Verifica se o documento enviado já foi consolidado
+    Method assinatura()         // Valida assinatura digital do documento
+    Method requerAssinatura()   // Verifica se o tipo de documento requer assinatura
+	Method criaArquivo()		// Crio arquivo temporário
+
+	Method getErro()			// captura erro
+	Method getNok()				// retorna se está em estado de erro
+	
+	Method addNS()				// adiciona namespace nas rotas
+	
+Endclass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new 
+Construtor da Classe RequestEnvioDocumentoWS
+/*/
+//-------------------------------------------------------------------
+Method new() Class EnvioDocumento
+	self:oCabecalho			:= JsonObject():new()
+	self:oEnvioDocumentos	:= JsonObject():new()
+	self:oAssinaturaDigital	:= JsonObject():new()
+	self:oSignature			:= JsonObject():new()
+	self:oMensagemErro		:= JsonObject():new()
+	self:oReciboDocumentos	:= JsonObject():new()
+	self:oDadosVincul		:= JsonObject():new()
+	self:oXml				:= TXmlManager():New()
+	self:cHash			:= ""
+	self:cNameSpace		:= ""	
+	self:cDocFisico		:= ""
+	self:cRespCabecalho	:= ""
+	self:cRespCorpo		:= ""
+	self:cResposta		:= ""
+	self:nEstado		:= 1
+	self:nArqHash		:= 0
+	self:aBcoConhec		:= {,}
+	self:cPathTemp		:= PLSMUDSIS("\tiss\envioDocumentos\temp\")
+return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} destroy 
+Limpa variáveis da memória
+/*/
+//-------------------------------------------------------------------
+Method destroy() Class EnvioDocumento
+
+	if self:oCabecalho != nil
+		FreeObj(self:oCabecalho)
+		self:oCabecalho:= nil
+	endif
+	if self:oEnvioDocumentos != nil
+		FreeObj(self:oEnvioDocumentos)
+		self:oEnvioDocumentos:= nil
+	endif
+	if self:oAssinaturaDigital != nil
+		FreeObj(self:oAssinaturaDigital)
+		self:oAssinaturaDigital:= nil
+	endif
+	if self:oSignature != nil
+		FreeObj(self:oSignature)
+		self:oSignature:= nil
+	endif
+	if self:oXML != nil
+		FreeObj(self:oXML)
+		self:oXML:= nil
+	endif
+	if self:oMensagemErro != nil
+		FreeObj(self:oMensagemErro)
+		self:oMensagemErro:= nil
+	endif
+	if self:oReciboDocumentos != nil
+		FreeObj(self:oReciboDocumentos)
+		self:oReciboDocumentos:= nil
+	endif
+	if self:oDadosVincul != nil
+		FreeObj(self:oDadosVincul)
+		self:oDadosVincul:= nil
+	endif
+	if self:aBcoConhec != nil
+		FreeObj(self:aBcoConhec)
+		self:aBcoConhec:= nil
+	endif
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} addNS 
+Adiciona o namespace dinamicamente nas rotas dos dados no XML.
+/*/
+//-------------------------------------------------------------------
+Method addNS(cTag) Class EnvioDocumento
+
+	default cTag := ""
+	
+	if !empty(self:cNameSpace)
+		cTag := strtran(cTag, "/", "/" + self:cNameSpace + ":")
+	endif
+
+return cTag
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getErro 
+Trata erro para retornar a aplicação
+/*/
+//-------------------------------------------------------------------
+Method getErro() Class EnvioDocumento
+
+    if oRequest:nEstado > 1 
+        self:nEstado := oRequest:nEstado
+    endif
+
+	do case
+		case self:nEstado == 21
+			self:cErro := "Não foi possível extrair os dados de cabeçalho"
+		case self:nEstado == 22
+			self:cErro := "Não foi possível criar os diretórios"
+		case self:nEstado == 23
+			self:cErro := "Não foi possível extrair os dados da origem da mensagem"
+		case self:nEstado == 24
+			self:cErro := "Não foi possível extrair os dados do destino da mensagem"
+		case self:nEstado == 25
+			self:cErro := "Houve um erro de configuração com os parâmetros no AppServer.ini"
+		case self:nEstado == 31
+			self:cErro := "Erro na formatação para XML"
+		case self:nEstado == 32
+			self:cErro := "Não foi possível extrair os dados do corpo da mensagem"
+		case self:nEstado == 41
+			self:cErro := "O request não foi validado no Schema TISS"
+		case self:nEstado == 42
+			self:cErro := "Houve um erro no parseamento"
+		case self:nEstado == 43
+			self:cErro := "Erro na decodificação base64 do documento"
+		case self:nEstado == 44
+			self:cErro := "O tamanho do documento excede o limite estabelecido"
+		case self:nEstado == 61
+			self:cErro := "Não foram enviados dados para vincular o documento à guia"
+		case self:nEstado == 62
+			self:cErro := "O vínculo deve ocorrer no lote ou na guia, não nas duas ao mesmo tempo"
+        case self:nEstado == 71
+			self:cErro := "O documento já foi enviado e consolidado e não será salvo novamente"   
+		case self:nEstado == 81
+			self:cErro := "O documento requer assinatura e esta não foi enviada"    
+		case self:nEstado == 82
+			self:cErro := "A assinatura foi recusada"     
+		otherwise
+			self:cErro := "Não foi detectado erros durante o processo"    
+	endcase
+
+return self:cErro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getNok
+Verifica estado do request e retorna booleano - .t.->Erro .f.->OK
+/*/
+//-------------------------------------------------------------------
+Method getNok() Class EnvioDocumento
+
+    if oRequest:nEstado > 1 
+        self:nEstado := oRequest:nEstado
+    endif
+
+return self:nEstado>1
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} registraNS 
+Registra NameSpace no objeto TXmlManager
+/*/
+//-------------------------------------------------------------------
+Method registraNS() Class EnvioDocumento
+
+	local aNameSpace    := {} //Receberá a lista de NS
+	local nPos          := 0  //Marcador de posição
+	
+	//Registro NamePace no Objeto TXmlManager
+	aNameSpace := self:oXML:XPathGetRootNsList()
+	nPos := aScan(aNameSpace,{|x| upper(alltrim(x[1])) == upper(self:cNameSpace) })
+	if nPos > 0
+		self:oXML:XPathRegisterNs( aNameSpace[ nPos ][ 1 ],aNameSpace[ nPos ][ 2 ] )		
+	endif	
+
+	//Liberando memória
+	FreeObj(aNameSpace)
+	aNameSpace:= nil
+
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getNameSpace
+Capturo namespace da mensagem TISS no corpo do Request
+/*/
+//-------------------------------------------------------------------
+Method getNameSpace() Class EnvioDocumento
+	
+	local nPos1 := 0 //Marcador de posição
+	local nPos2 := 0 //Marcador de posição
+	local nX	:= 0 //Marcador de posição 
+	
+	nPos1 := at("ENVIODOCUMENTOWS",upper(oRequest:cXML)) //Procuro a primeira Tag, pois lá estará o primeiro NameSpace, se houver
+	
+	if substr(oRequest:cXML,nPos1-1,1) == ":" //Se tiver ":" é poruqe há namespace
+		nPos2 := nPos1-2 //Recuo para duas casas, no último caractere do nameSpace
+		
+		//Vou até o primeiro caractere do nameSpace e o capturo
+		for nX := 1 to nPos2
+			if Substr(oRequest:cXML,nPos2-nX,1) == "<"     
+				self:cNameSpace := Substr(oRequest:cXML,nPos2-nX+1,nPos2-(nPos2-nX))
+				exit
+			endIf   
+		next
+		
+	endIf
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getCabecalho 
+Capturo informações metas da mensagem vindas no cabeçalho
+/*/
+//-------------------------------------------------------------------
+Method getCabecalho() Class EnvioDocumento
+	local cPath := self:addNS("/envioDocumentoWS/cabecalho")
+	
+	if( self:oXml:XPathHasNode( cPath ) )
+		
+		//IdentificacaoTransacao
+		self:oCabecalho["tipoTransacao"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/identificacaoTransacao/tipoTransacao"))
+		self:oCabecalho["sequencialTransacao"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/identificacaoTransacao/sequencialTransacao"))
+		self:oCabecalho["dataRegistroTransacao"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/identificacaoTransacao/dataRegistroTransacao"))
+		self:oCabecalho["horaRegistroTransacao"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/identificacaoTransacao/horaRegistroTransacao")) 
+
+		//Origem
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/origem/identificacaoPrestador/CNPJ")),self:oCabecalho["origemCNPJ"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/origem/identificacaoPrestador/CNPJ")),)	
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/origem/identificacaoPrestador/CPF")),self:oCabecalho["origemCPF"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/origem/identificacaoPrestador/CPF")),)
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/origem/identificacaoPrestador/codigoPrestadorNaOperadora")),self:oCabecalho["origemCodigoPrestadorNaOperadora"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/origem/identificacaoPrestador/codigoPrestadorNaOperadora")),)		
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/origem/registroANS")),self:oCabecalho["origemRegistroANS"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/origem/registroANS")),)
+
+		//Destino
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/destino/identificacaoPrestador/CNPJ")),self:oCabecalho["destinoCNPJ"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/destino/identificacaoPrestador/CNPJ")),)
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/destino/identificacaoPrestador/CPF")),self:oCabecalho["destinoCPF"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/destino/identificacaoPrestador/CPF")),)
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/destino/identificacaoPrestador/codigoPrestadorNaOperadora")),self:oCabecalho["destinoCodigoPrestadorNaOperadora"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/destino/identificacaoPrestador/codigoPrestadorNaOperadora")),)
+		iif( self:oXml:XPathHasNode( cPath + self:addNS("/destino/registroANS")),self:oCabecalho["destinoRegistroANS"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/destino/registroANS")),)
+
+		//Padrao
+		self:oCabecalho["Padrao"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/Padrao"))
+
+		//loginSenhaPrestador
+		if( self:oXml:XPathHasNode( cPath + self:addNS("/loginSenhaPrestador")))
+			self:oCabecalho["loginPrestador"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/loginSenhaPrestador/loginPrestador"))
+			self:oCabecalho["senhaPrestador"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/loginSenhaPrestador/senhaPrestador"))
+		endif
+		
+		self:trataCabecalho()
+	else
+		self:nEstado := 21
+	endif    
+		
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} trataCabecalho 
+Tratamento dos dados do cabeçalho
+/*/
+//-------------------------------------------------------------------
+Method trataCabecalho() Class EnvioDocumento
+
+	//busco código da rede de atendimento
+	self:oCabecalho["origem"] := buscaCRede(self:oCabecalho["origemCNPJ"],self:oCabecalho["origemCPF"],self:oCabecalho["origemCodigoPrestadorNaOperadora"])
+	if self:oCabecalho["origem"] == "prestadorInvalido"
+		self:nEstado := 23
+	endif
+
+	//Busco Destino Operadora
+	if Empty(self:oCabecalho["destinoRegistroANS"])
+		self:oCabecalho["destinoRegistroANS"] := buscRegAns(self:oCabecalho["destinoCNPJ"],self:oCabecalho["destinoCPF"],self:oCabecalho["destinoCodigoPrestadorNaOperadora"])
+	endif
+	
+	//Valido Destino Operadora
+	if !Empty(self:oCabecalho["origemRegistroANS"]) .or. !Empty(self:oCabecalho["destinoCPF"]) .or. !ValDestino(self:oCabecalho["destinoRegistroANS"])
+		self:nEstado := 24
+	endif
+		
+return self:getNok() //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getDadosMen
+Capturo informações do Envio de Documentos
+/*/
+//-------------------------------------------------------------------
+Method getDadosMen() Class EnvioDocumento
+	local cPath := self:addNS("/envioDocumentoWS/envioDOcumento") //Atenção! verificar se esse erro de caixa alta vai continuar nas versões posteriores
+	
+	if( self:oXml:XPathHasNode( cPath ) )
+		
+		//opcionais
+		self:oEnvioDocumentos["numeroLote"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/numeroLote"))
+		self:oEnvioDocumentos["numeroProtocolo"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/numeroProtocolo"))
+		self:oEnvioDocumentos["numeroGuiaPrestador"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/numeroGuiaPrestador"))
+		self:oEnvioDocumentos["numeroGuiaOperadora"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/numeroGuiaOperadora"))
+		self:oEnvioDocumentos["seqReferencialItem"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/seqReferencialItem"))
+		self:oEnvioDocumentos["observacao"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/observacao"))
+		
+		//Obrigatórios
+		self:oEnvioDocumentos["numeroDocumento"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/numeroDocumento"))
+		self:oEnvioDocumentos["naturezaGuia"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/naturezaGuia"))
+		self:oEnvioDocumentos["formatoDocumento"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/formatoDocumento"))
+		self:oEnvioDocumentos["documento"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/documento"))
+		self:oEnvioDocumentos["tipoDocumento"] := self:oXml:XPathGetNodeValue( cPath + self:addNS("/tipoDocumento"))
+		
+	else
+		self:nEstado := 32
+	endif    
+		
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getAssinatura
+Capturo informações do Envio de Documentos
+A implementar
+/*/
+//-------------------------------------------------------------------
+Method getAssinatura() Class EnvioDocumento
+	local cPath := self:addNS("/envioDocumentoWS/Signature")
+	
+	if( self:oXml:XPathHasNode( cPath ) )
+		
+		self:oSignature["enviado"] := .t.
+
+	endif    
+		
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} salvaDocumento
+Converte documento de Base64 para seu formato decodificado
+/*/
+//-------------------------------------------------------------------
+Method salvaDocumento() Class EnvioDocumento
+
+	local cDiretorio	:= PLSMUDSIS("\tiss\envioDocumentos\documento\")
+	local cRetDecode	:= ""
+
+	//endereço do documento
+	self:cDocFisico := cDiretorio + self:oEnvioDocumentos["numeroDocumento"] + self:cEtiquetaTime + self:deParaFormato()
+
+	//decodifico documento na base64 - em caso de erro o retorno é <nil>
+	cRetDecode := Decode64( self:oEnvioDocumentos["documento"] , self:cDocFisico )
+
+	//valido decode64
+	if empty(cRetDecode)
+		self:nEstado := 43
+	endif
+
+	//valido o tamanho do arquivo - limite 10mb
+	if self:arqMaiorLim()
+		self:nEstado := 44
+	endif
+
+return self:getNok() //Verifico se está em estado de erro
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraResposta
+Gera a resposta para o WebService
+/*/
+//-------------------------------------------------------------------
+Method geraResposta() Class EnvioDocumento
+
+	local cFileXML	:= self:oEnvioDocumentos["numeroDocumento"] + self:cEtiquetaTime + ".tmp"
+	local cFileHASH	:= CriaTrab(NIL,.F.) + ".tmp"
+	local cCabecaTmp:= ""
+	local cCorpoTmp	:= ""
+	local nArqFull	:= 0
+	local nCabecaXml:= 0
+	local nCorpoXml	:= 0
+	local nBytes	:= 0
+	local lFinal	:= .f.
+	local cBuffer	:= ""
+
+	//crio o arquivo
+	nArqFull := self:criaArquivo(cFileXML)//fCreate( self:cPathTemp + cFileXML,FC_NORMAL,,.F. )
+
+	//crio arquivo de apoio temporário para a construção do cabeçalho
+	self:nArqHash := fCreate( Lower( self:cPathTemp + cFileHASH ),FC_NORMAL,,.F.)
+	cCabecaTmp := self:geraCabecalho()
+	nCabecaXml := fOpen( cCabecaTmp,FO_READ )
+
+	//escrevo o cabeçalho no arquivo
+	lFinal	:= .f.
+	nBytes	:= 0
+	cBuffer	:= ""
+	do while !lFinal
+		nBytes := fRead( nCabecaXml,@cBuffer,F_BLOCK )		
+		iif( fWrite( nArqFull,cBuffer,nBytes ) < nBytes , lFinal := .t. , lFinal := ( nBytes == 0 ) )
+	enddo
+	fClose( nCabecaXml )
+	fErase( cCabecaTmp )
+	
+
+	//crio arquivo de apoio temporário para a construção do corpo
+	cCorpoTmp := self:geraCorpo()
+	nCorpoXml := fOpen( cCorpoTmp,FO_READ )
+
+	//escrevo o corpo do arquivo
+	lFinal	:= .F.
+	nBytes	:= 0
+	cBuffer	:= ""	
+	do while !lFinal
+		nBytes := fRead( nCorpoXml,@cBuffer,F_BLOCK )
+		iif( fWrite( nArqFull,cBuffer,nBytes ) < nBytes , lFinal := .t. , lFinal := ( nBytes == 0 ) )
+	endDo	
+	fClose( nCorpoXml )
+	fErase( cCorpoTmp )
+	
+	//crio o HASH no arquivo
+	fClose( self:nArqHash )
+	fWrite( nArqFull, self:geraHash(self:cPathTemp+cFileHASH) )
+	fClose( nArqFull )
+
+	//contatenação para o retorno
+	cBuffer	:= ""
+	nBytes := FT_FUse( self:cPathTemp+cFileXML )
+	FT_FGotop()
+	while ( !FT_FEof() )
+		cBuffer := FT_FREADLN()
+		self:cResposta += cBuffer
+		FT_FSkip()
+		if !FT_FEof()
+			self:cResposta 	+= CRLF
+		endif
+	enddo
+		
+	FT_FUse() // Fecha o arquivo
+	
+	fClose( nCorpoXml )
+	fErase( self:cPathTemp+cFileXML )
+
+return self:cResposta
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraCorpo
+constroi o corpo da mensagem para compor o retorno
+/*/
+//-------------------------------------------------------------------
+Method geraCorpo() Class EnvioDocumento
+
+	local cFileCorpo:= self:cPathTemp + criaTrab( nil,.f. ) + ".tmp"
+	local cXMLAux	:= ""
+	local nArqCorpo	:= fCreate( cFileCorpo,FC_NORMAL,,.f. )
+
+	if( nArqCorpo != -1 )
+	
+		cXMLAux += self:geraTag( 1,"ans:recebimentoDocumento",'',.t.,.f.,.t. )
+		
+		if !self:getNok()	
+
+			cXMLAux += self:geraTag( 2,"ans:reciboDocumentos",'',.T.,.F.,.T. )
+			iif(!empty(alltrim(self:oReciboDocumentos["numeroLote"])),cXMLAux += self:geraTag( 3,"ans:numeroLote",AllTrim(self:oReciboDocumentos["numeroLote"]),.T.,.T.,.T. ),)
+			iif(!empty(alltrim(self:oReciboDocumentos["numeroProtocolo"])),cXMLAux += self:geraTag( 3,"ans:numeroProtocolo",AllTrim(self:oReciboDocumentos["numeroProtocolo"]),.T.,.T.,.T. ),)
+			iif(!empty(alltrim(self:oReciboDocumentos["numeroGuiaPrestador"])),cXMLAux += self:geraTag( 3,"ans:numeroGuiaPrestador",AllTrim(self:oReciboDocumentos["numeroGuiaPrestador"]),.T.,.T.,.T. ),)
+			if !empty(alltrim(self:oReciboDocumentos["numeroGuiaOperadora"]))
+				cXMLAux += self:geraTag( 3,"ans:numeroGuiaOperadora",AllTrim(self:oReciboDocumentos["numeroGuiaOperadora"]),.T.,.T.,.T. )
+			endif
+			cXMLAux += self:geraTag( 3,"ans:numeroDocumento",AllTrim(self:oReciboDocumentos["numeroDocumento"]),.T.,.T.,.T. )
+			cXMLAux += self:geraTag( 3,"ans:protocoloDoc",AllTrim(self:oReciboDocumentos["protocoloDoc"]),.T.,.T.,.T. )
+			iif(!empty(alltrim(self:oReciboDocumentos["observacao"])),cXMLAux += self:geraTag( 3,"ans:observacao",AllTrim(self:oReciboDocumentos["observacao"]),.T.,.T.,.T. ),)
+			cXMLAux += self:geraTag( 2,"ans:reciboDocumentos",'',.f.,.t.,.t. )
+
+		else
+
+			self:geraErro()
+			cXMLAux += self:geraTag( 2,"ans:mensagemErro",'',.T.,.F.,.T. )
+			cXMLAux += self:geraTag( 3,"ans:codigoGlosa",self:oMensagemErro["codigoGlosa"],.T.,.T.,.T. )
+			if !Empty(self:oMensagemErro["descricaoGlosa"])
+				cXMLAux += self:geraTag( 3,"ans:descricaoGlosa", ENCODEUTF8(self:oMensagemErro["descricaoGlosa"]),.T.,.T.,.T.,.F.)
+			endif
+			cXMLAux += self:geraTag( 2,"ans:mensagemErro",'',.F.,.T.,.T. )
+		endif
+
+		cXMLAux += self:geraTag( 1,"ans:recebimentoDocumento",'',.f.,.t.,.t. )
+
+		fWrite( nArqCorpo,cXMLAux )
+		fClose( nArqCorpo )
+
+	endif			
+	
+return cFileCorpo
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraCabecalho
+constroi o cabeçalho para compor o retorno
+/*/
+//-------------------------------------------------------------------
+Method geraCabecalho() Class EnvioDocumento
+
+	local cXML	:= ""
+	local cFileCAB	:= self:cPathTemp + criatrab( nil,.F. ) + ".tmp"
+	local nArqCab	:= fCreate( cFileCAB,FC_NORMAL,,.F. )
+
+	if( nArqCab <> -1 )
+
+		cXML += self:geraTag( 1,"ans:cabecalho",'',.T.,.F.,.T. )
+		cXML += self:geraTag( 2,"ans:identificacaoTransacao",'',.T.,.F.,.T. )
+		cXML += self:geraTag( 3,"ans:tipoTransacao",self:oCabecalho["tipoTransacaoResponse"],.T.,.T.,.T.,.F. )
+		cXML += self:geraTag( 3,"ans:sequencialTransacao",self:oCabecalho["sequencialTransacaoResponse"] ,.T.,.T.,.T. )
+		cXML += self:geraTag( 3,"ans:dataRegistroTransacao",self:convDataXML( dDataBase ),.T.,.T.,.T. )
+		cXML += self:geraTag( 3,"ans:horaRegistroTransacao",AllTrim(time()),.T.,.T.,.T.,.F. )
+		cXML += self:geraTag( 2,"ans:identificacaoTransacao",'',.F.,.T.,.T. )
+		
+		//Dados da Origem
+		cXML += self:geraTag( 2,"ans:origem",'',.T.,.F.,.T. )
+		cXML += self:geraTag( 3,"ans:registroANS",self:oCabecalho["destinoRegistroANS"],.T.,.T.,.T. )
+		cXML += self:geraTag( 2,"ans:origem",'',.F.,.T.,.T. )	
+		
+		//Dados do destino
+		cXML += self:geraTag( 2,"ans:destino",'',.T.,.F.,.T. )
+		cXML += self:geraTag( 3,"ans:identificacaoPrestador",'',.T.,.F.,.T. )
+		if !empty(self:oCabecalho["origemCPF"])
+			cXML += self:geraTag( 4,"ans:CPF",self:oCabecalho["origemCPF"],.T.,.T.,.T. )
+		elseif !empty(self:oCabecalho["origemCNPJ"])
+			cXML += self:geraTag( 4,"ans:CNPJ",self:oCabecalho["origemCNPJ"],.T.,.T.,.T. )
+		else
+			cXML += self:geraTag( 4,"ans:codigoPrestadorNaOperadora",self:oCabecalho["origemCodigoPrestadorNaOperadora"],.T.,.T.,.T. )
+		endif
+		cXML += self:geraTag( 3,"ans:identificacaoPrestador",'',.F.,.T.,.T. )
+		cXML += self:geraTag( 2,"ans:destino",'',.F.,.T.,.T. )
+				
+		cXML += self:geraTag( 2,"ans:Padrao",self:oCabecalho["Padrao"],.T.,.T.,.T.,.F. )
+		cXML += self:geraTag( 1,"ans:cabecalho",'',.F.,.T.,.T. )
+		
+		fWrite( nArqCab,cXML )
+		fClose( nArqCab )
+
+	endif
+
+return cFileCAB
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraTag
+Formata a linha para construção do Response
+/*/
+//-------------------------------------------------------------------
+Method geraTag( nSpc,cTag,cVal,lIni,lFin,lPerNul,lRetPto,lEnvTag ) Class EnvioDocumento
+
+	local cRetTag	:= ""
+	default nSpc	:= 0
+	default cTag	:= ""
+	default cVal	:= ""
+	default lIni	:= .t.
+	default lFin	:= .t.
+	default lPerNul	:= .t.
+	default lRetPto	:= .t.
+	default lEnvTag	:= .t.
+
+	if( !empty( cVal ) .or. lPerNul )
+		if( lIni ) // Inicializa a tag ?
+			cRetTag += '<' + cTag + '>'
+			cRetTag += AllTrim( iIf( lRetPto,PlRetPonto( cVal ),cVal ) )
+		endif
+
+		if( lFin ) // Finaliza a tag ?
+			cRetTag += '</' + cTag + '>'
+		endif
+		
+		if lEnvTag .And. ( self:nArqHash > 0 ) // Escreve conteudo da tag no temporario pra calculo do hash 
+			FWrite(self:nArqHash,AllTrim(IIf(lRetPto,PlRetPonto(cVal),cVal))) 
+		endif
+
+		cRetTag := replicate( "	", nSpc ) + cRetTag + CRLF // Identa o arquivo
+	endif
+
+return iif( lEnvTag,cRetTag,"" )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} convDataXML
+Formata data
+/*/
+//-------------------------------------------------------------------
+Method convDataXML( ) Class EnvioDocumento
+
+	local cNovaData := ""
+	local cDataAnt :=  DtoS( dDataBase )
+		
+	if(! empty( cDataAnt ))
+		cNovaData := subStr( cDataAnt,1,4 ) + "-"
+		cNovaData += subStr( cDataAnt,5,2 ) + "-"
+		cNovaData += subStr( cDataAnt,7,2 )
+	endif
+	
+return cNovaData
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} getRecibo
+Alimenta dados do objeto para resposta
+/*/
+//-------------------------------------------------------------------
+Method getReciboDoc() Class EnvioDocumento
+
+	//Gero registro na B1R e gero um protocolo
+	self:geraProtocolo()
+
+	//Alimento dados para o response
+	iif(!empty(self:oEnvioDocumentos["numeroLote"]),self:oReciboDocumentos["numeroLote"] := self:oEnvioDocumentos["numeroLote"],)
+	iif(!empty(self:oEnvioDocumentos["numeroProtocolo"]),self:oReciboDocumentos["numeroProtocolo"] := self:oEnvioDocumentos["numeroProtocolo"],)
+	iif(!empty(self:oEnvioDocumentos["numeroGuiaPrestador"]),self:oReciboDocumentos["numeroGuiaPrestador"] := self:oEnvioDocumentos["numeroGuiaPrestador"],)
+	iif(!empty(self:oEnvioDocumentos["numeroGuiaOperadora"]),self:oReciboDocumentos["numeroGuiaOperadora"] := self:oEnvioDocumentos["numeroGuiaOperadora"],)
+	self:oReciboDocumentos["numeroDocumento"] := self:oEnvioDocumentos["numeroDocumento"]
+	self:oCabecalho["tipoTransacaoResponse"] := "RECEBIMENTO_DOCUMENTO"
+	self:oCabecalho["sequencialTransacaoResponse"] := self:oReciboDocumentos["protocoloDoc"]
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} deParaFormato 
+Realiza depara do formato do arquivo para extenção do arquivo
+/*/
+//-------------------------------------------------------------------
+Method deParaFormato() Class EnvioDocumento
+
+	local cExtensao := ""
+
+	do case
+		case self:oEnvioDocumentos["formatoDocumento"] = "01"
+			cExtensao := ".jpeg"
+		case self:oEnvioDocumentos["formatoDocumento"] = "02"
+			cExtensao := ".pdf"
+		case self:oEnvioDocumentos["formatoDocumento"] = "03"
+			cExtensao := ".png"
+		case self:oEnvioDocumentos["formatoDocumento"] = "04"
+			cExtensao := ".tiff"
+	endCase
+	
+return cExtensao
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} consBaseConhec 
+Consolida arquivo no Banco de Conhecimentos vinculado ao CODPEG ou a Guia
+/*/
+//-------------------------------------------------------------------
+Method consBaseConhec() Class EnvioDocumento
+		
+	//Consolido - Chave -> Chave Unica da Tabela + Doc:<Numero Documento> + Data e Hora
+    PLSINCONH(self:cDocFisico, self:aBcoConhec[1] , self:aBcoConhec[2], .t.)
+
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} identificaVinculo
+Identifica vínculo do documento para a Guia ou o Lote em que ele ficará associado no banco de conhecimento. 
+/*/ 
+//-------------------------------------------------------------------
+Method identificaVinculo() Class EnvioDocumento
+
+	local cAlias		:= ""
+	local cChave		:= ""
+	local cNatureza		:= "Solicitacao" //definido default porque fazer um controle de envio incorreto será problemático por conta da exigência de cobertura 100%. O Schema teoricamente já vetaria um erro antes desse ponto. Só são permitidas entradas "1, 2 e 3". Colocar isso no documento de desenvolvedor e tirar daqui
+	local cTipoVinculo	:= "" //Guia->Vinculo à Guia - Peg->Vinculo à PEG
+	local cGuiaEnviada	:= ""
+	local cPegEnviada	:= ""
+	local lAchei		:= .f. //Flag adicionada para cobrir dbSkip na cobertura 100%
+
+	//Seto a natureza da guia à qual o documento se refere
+	if self:oEnvioDocumentos["naturezaGuia"] == "1"
+		cNatureza := "Solicitacao"
+	elseif self:oEnvioDocumentos["naturezaGuia"] == "2"
+		cNatureza := "Faturamento"
+	elseif self:oEnvioDocumentos["naturezaGuia"] == "3"
+		cNatureza := "RecursoGlosa"
+	endif
+			
+	//verifico se foram enviadas as informações de guia
+	if !empty(self:oEnvioDocumentos["numeroGuiaOperadora"]) .or. !empty(self:oEnvioDocumentos["numeroGuiaPrestador"])
+		self:oDadosVincul["cNumGuia"] 	:= self:oEnvioDocumentos["numeroGuiaOperadora"]
+		self:oDadosVincul["cNumImp"]	:= self:oEnvioDocumentos["numeroGuiaPrestador"]
+		if cNatureza == "Faturamento" .and. !empty(self:oDadosVincul["cNumGuia"])
+			//A chave tem 20 caracteres, sendo os 8 últimos dígitos a guia e os 8 primeiros a PEG
+			cGuiaEnviada:= SubStr( self:oDadosVincul["cNumGuia"], 9,8)
+			cPegEnviada	:= SubStr( self:oDadosVincul["cNumGuia"], 1,8)
+		endif		
+		cTipoVinculo := "Guia"
+	endif
+
+	//verifico se foram enviadas as informações de PEG
+	if !empty(self:oEnvioDocumentos["numeroProtocolo"])
+		//verifico se não está com dupla identificação (de PEG e GUIA ao mesmo tempo)
+		if cTipoVinculo == "Guia"
+			self:nEstado := 62
+			return self:getNok()
+		else
+			self:oDadosVincul["cCodpeg"]	:= self:oEnvioDocumentos["numeroProtocolo"]
+			self:oDadosVincul["cNumLote"]	:= self:oEnvioDocumentos["numeroLote"] 
+			cTipoVinculo := "Peg"
+		endif
+	endif
+
+	//Critico se não foi enviados dados para vinculação
+	if empty(cTipoVinculo)
+		self:nEstado := 61
+		return self:getNok()
+	endif
+
+	//Setando indice BCI_FILIAL+BCI_CODPEG
+	BCI->(DbSetOrder(14))
+
+	//Vincula para Natureza Solicitação
+	if cNatureza = "Solicitacao"
+		if cTipoVinculo == "Guia"
+			BEA->(DbSetOrder(1)) 
+			if !empty(self:oDadosVincul["cNumGuia"]) .and. BEA->(MsSeek(xFilial("BEA") + self:oDadosVincul["cNumGuia"]))
+				cAlias := "BEA"
+				cChave	:= BEA->(BEA_FILIAL+BEA_OPEMOV+BEA_ANOAUT+BEA_MESAUT+BEA_NUMAUT)//cChave	:= BEA->(BEA_FILIAL+BEA_OPEMOV+BEA_ANOAUT+BEA_MESAUT+BEA_NUMAUT)+DTOS(BEA->BEA_DATPRO)+BEA->BEA_HORPRO
+			else
+				BEA->(DbSetOrder(9))
+				if !empty(self:oDadosVincul["cNumImp"]) .and. BEA->(MsSeek(xFilial("BEA") + self:oDadosVincul["cNumImp"]))
+					while xFilial("BEA") + self:oDadosVincul["cNumImp"] == alltrim(BEA->(BEA_FILIAL+BEA_NUMIMP))
+						if self:oCabecalho["origem"] == BEA->BEA_CODRDA
+							cAlias := "BEA"
+							cChave	:= BEA->(BEA_FILIAL+BEA_OPEMOV+BEA_ANOAUT+BEA_MESAUT+BEA_NUMAUT)//cChave	:= BEA->(BEA_FILIAL+BEA_OPEMOV+BEA_ANOAUT+BEA_MESAUT+BEA_NUMAUT)+DTOS(BEA->BEA_DATPRO)+BEA->BEA_HORPRO
+							exit
+						endif
+						BEA->(DbSkip())
+					enddo
+				endif		
+			endif	
+		endif
+
+	elseif cNatureza = "Faturamento"
+		if cTipoVinculo == "Peg"
+			if BCI->(MsSeek(xFilial("BCI") + self:oDadosVincul["cCodpeg"]))
+				cAlias := "BCI"
+				cChave	:= BCI->(BCI_FILIAL+BCI_CODOPE+BCI_CODLDP+BCI_CODPEG)
+			endif
+		elseif cTipoVinculo == "Guia"
+			//Busco através do número da guia da operadora
+			if BCI->(MsSeek(xFilial("BCI") + cPegEnviada))
+				if BCI->BCI_TIPGUI <> "05"
+					BD5->(DbSetOrder(1)) 
+					if !empty(cGuiaEnviada) .and. BD5->(MsSeek(xFilial("BD5") + BCI->(BCI_CODOPE + BCI_CODLDP + BCI_CODPEG) + cGuiaEnviada))
+						cAlias := "BD5"
+						cChave	:= BD5->(BD5_FILIAL+BD5_CODOPE+BD5_CODLDP+BD5_CODPEG+BD5_NUMERO+BD5_SITUAC+BD5_FASE)
+					endif
+				else
+					BE4->(DbSetOrder(1))
+					if  !empty(cGuiaEnviada) .and. BE4->(MsSeek(xFilial("BE4") + BCI->(BCI_CODOPE + BCI_CODLDP + BCI_CODPEG) + cGuiaEnviada))
+						cAlias := "BE4"
+						cChave	:= BE4->(BE4_FILIAL+BE4_CODOPE+BE4_CODLDP+BE4_CODPEG+BE4_NUMERO+BE4_SITUAC+BE4_FASE)
+					endif
+				endif
+			endif
+
+			//Se não encontro, busco pelas chaves alias_NUMIMP
+			if empty(cAlias) .and. empty(cChave) 
+				BD5->(DbSetOrder(6))
+				if !empty(self:oDadosVincul["cNumImp"]) .and. BD5->(MsSeek(xFilial("BD5") + self:oDadosVincul["cNumImp"]))
+					lAchei := .f.
+					while xFilial("BD5") + self:oDadosVincul["cNumImp"] == alltrim(BD5->(BD5_FILIAL+BD5_NUMIMP))
+						iif(self:oCabecalho["origem"] == BD5->BD5_CODRDA,lAchei:=.t.,BD5->(DbSkip()))
+						if lAchei
+							cAlias := "BD5"
+							cChave	:= BD5->(BD5_FILIAL+BD5_CODOPE+BD5_CODLDP+BD5_CODPEG+BD5_NUMERO+BD5_SITUAC+BD5_FASE)
+							exit
+						endif	
+					enddo
+				endif
+				if empty(cAlias) .and. empty(cChave) 
+					BE4->(DbSetOrder(6))
+					if !empty(self:oDadosVincul["cNumImp"]) .and. BE4->(MsSeek(xFilial("BE4") + self:oDadosVincul["cNumImp"]))
+						lAchei := .f.
+						while xFilial("BE4") + self:oDadosVincul["cNumImp"] == alltrim(BE4->(BE4_FILIAL+BE4_NUMIMP))
+							iif(self:oCabecalho["origem"] == BE4->BE4_CODRDA,lAchei:=.t.,BE4->(DbSkip()))
+							if lAchei
+								cAlias := "BE4"
+								cChave	:= BE4->(BE4_FILIAL+BE4_CODOPE+BE4_CODLDP+BE4_CODPEG+BE4_NUMERO+BE4_SITUAC+BE4_FASE)
+								exit
+							endif
+						enddo
+					endif
+				endif
+			endif
+
+		endif
+
+	//Vincula para Recurso de Glosa
+	elseif cNatureza = "RecursoGlosa"
+		if cTipoVinculo == "Peg"
+			B4D->(DbSetOrder(8)) 
+			if B4D->(MsSeek(xFilial("B4D") + self:oDadosVincul["cCodpeg"]))
+				cAlias := "B4D"
+				cChave	:= B4D->(B4D_FILIAL+B4D_OPEMOV+B4D_CODLDP+B4D_CODPEG+B4D_NUMAUT)+STR(B4D->B4D_QTDIRP)
+			endif
+		elseif cTipoVinculo == "Guia"
+			B4D->(DbSetOrder(1)) 
+			if !empty(self:oDadosVincul["cNumGuia"]) .and.  B4D->(MsSeek(xFilial("B4D") + self:oDadosVincul["cNumGuia"]))
+				cAlias := "B4D"
+				cChave	:= B4D->(B4D_FILIAL+B4D_OPEMOV+B4D_CODLDP+B4D_CODPEG+B4D_NUMAUT)+STR(B4D->B4D_QTDIRP)
+			endif
+		endif	
+	endif
+
+	//Alimento os dados para consolidar o documento na Base do Conhecimento
+	if !empty(cAlias) .and. !empty(cChave)  //Se houver a chave e o alias, o processo ocorreu OK
+		self:aBcoConhec := {cAlias,cChave}
+	else
+		self:nEstado := 61
+	endif
+	
+return self:getNok()
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} consRequestResponse
+Grava Requisição e Resposta para possível consulta posterior. Vinculada ao número de protocolo interno
+/*/
+//-------------------------------------------------------------------
+Method consRequestResponse(oRequest) Class EnvioDocumento
+
+	if lB1RReqRes
+		B1R->(DbSetOrder(1))
+		if B1R->(MsSeek(xFilial("B1R") + self:oReciboDocumentos["protocoloDoc"])) //não necessário origem porque é chave única
+			B1R->(recLock("B1R", .F.))
+			B1R->B1R_RESPON := oRequest:cResponse
+			B1R->(MsUnLock())
+		endif
+	endif
+
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} finaliza 
+Finaliza o Processamento limpando arquivos e variáveis
+/*/
+//-------------------------------------------------------------------
+Method finaliza() Class EnvioDocumento
+
+	FErase(self:cDocFisico)
+	self:destroy()
+
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraProtocolo 
+Consolida arquivo no Banco de Conhecimentos vinculado ao CODPEG ou a Guia
+/*/
+//-------------------------------------------------------------------
+Method geraProtocolo() Class EnvioDocumento
+
+	//Gero um protocolo na B1R
+	self:oReciboDocumentos["protocoloDoc"] := GetSXeNum("B1R","B1R_PROTOC")
+	B1R->(confirmSX8())
+	
+	//Controle de chave duplicada - Teoricamente isso nunca irá ocorrer, mas um processamento interrompido, antes do término, pode dar ruim 
+	B1R->(DbSetOrder(1))
+	while B1R->(MsSeek(xFilial("B1R") + self:oReciboDocumentos["protocoloDoc"]))
+		self:oReciboDocumentos["protocoloDoc"] := GetSXeNum("B1R","B1R_PROTOC")
+		B1R->(confirmSX8())
+	enddo
+
+	//Crio registrto na B1R com o novo protocolo
+	B1R->(recLock("B1R", .T.))
+	B1R->B1R_FILIAL := xfilial("B1R")
+	B1R->B1R_PROTOC := self:oReciboDocumentos["protocoloDoc"]
+	if lB1RReqRes
+		B1R->B1R_REQUES := oRequest:cRequest
+	endif
+	B1R->(MsUnLock())
+
+return 
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraHash
+Método para Calculo do hasg (original Function A270Hash)
+/*/
+//-------------------------------------------------------------------
+Method geraHash(cHashFile) Class EnvioDocumento
+
+	local cBuffer		:= ""			// Buffer lido
+	local cHashBuffer	:= ""			// Buffer do hash calculado
+	local cFnHash		:= "MD5File"	// Definicao da função MD5File
+	local nBytesRead	:= 0			// Quantidade de bytes lidos no arquivo
+	local nTamArq		:= 0			// Tamanho do arquivo em bytes
+	local aPatch		:= {}			// Conteudo do diretorio
+	local lNTamArq		:= .f.			// bandeira para estruturar para cobertura 100%
+
+	aPatch := directory( cHashFile,"F" )
+	nTamArq := aPatch[1,2]/1048576
+	iif(nTamArq > 0.9,self:cHash := &( cFnHash + "('" + cHashFile + "')" ),lNTamArq:=.T.)
+	
+	if lNTamArq
+		cBuffer   := space( F_BLOCK )
+		self:nArqHash := fOpen( lower( cHashFile),FO_READ )    //nFileHash := fOpen( lower( cHashFile),FO_READ )
+		nTamArq   := aPatch[ 1,2 ]	//Tamanho em bytes
+
+		do while nTamArq > 0
+			nBytesRead	:= fRead( self:nArqHash,@cBuffer,F_BLOCK )
+			nTamArq		-= nBytesRead
+			cHashBuffer	+= cBuffer
+		enddo
+		
+		fClose( self:nArqHash )
+		fErase( lower( cHashFile ) )
+		self:cHash := md5( cHashBuffer,2 )
+	endif
+
+	//liberando memória
+	FreeObj(aPatch)
+	aPatch:= nil
+
+return self:geraTag( 1,"ans:hash",lower( self:cHash ),.T.,.T.,.T. )
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} arqMaiorLim 
+Valida o tamanho do arquivo. Na atual especificação JULHO/2021 são 10mb
+/*/
+//-------------------------------------------------------------------
+Method arqMaiorLim() Class EnvioDocumento
+
+	local aArquivos	:= {}
+	local aTamanhos	:= {}
+	local nLimite 	:= 10000000 //Limite do tamanho do arquivo 10mb
+
+	ADir(self:cDocFisico,@aArquivos,@aTamanhos)
+
+return aTamanhos[1] > nLimite
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} geraErro 
+Tratamento de Erros
+/*/
+//-------------------------------------------------------------------
+Method geraErro() Class EnvioDocumento
+
+	self:getErro()
+
+	do case
+		case self:nEstado == 23
+			self:oMensagemErro["codigoGlosa"]	 := "1203"
+			self:oMensagemErro["descricaoGlosa"] := "CÓDIGO PRESTADOR INVÁLIDO"
+		case self:nEstado == 61
+			self:oMensagemErro["codigoGlosa"]	 := "1307"
+			self:oMensagemErro["descricaoGlosa"] := "NÚMERO DA GUIA INVÁLIDO"
+		case self:nEstado == 62
+			self:oMensagemErro["codigoGlosa"]	 := "5047"
+			self:oMensagemErro["descricaoGlosa"] := "NÚMERO DO LOTE NÃO INFORMADO"
+		case self:nEstado == 43
+			self:oMensagemErro["codigoGlosa"]	 := "3165"
+			self:oMensagemErro["descricaoGlosa"] := "ARQUIVO DE IMAGEM CORROMPIDO"
+		case self:nEstado == 44
+			self:oMensagemErro["codigoGlosa"]	 := "3166"
+			self:oMensagemErro["descricaoGlosa"] := "ARQUIVO ENVIADO EXCEDE O TAMANHO MÁXIMO PERMITIDO"
+		case self:nEstado == 71
+			self:oMensagemErro["codigoGlosa"]	 := "5053"
+			self:oMensagemErro["descricaoGlosa"] := "IDENTIFICADOR JÁ INFORMADO"
+        case self:nEstado == 81 .or. self:nEstado == 82
+			self:oMensagemErro["codigoGlosa"]	 := "5022"
+			self:oMensagemErro["descricaoGlosa"] := "ASSINATURA DIGITAL NÃO CONFERE"       
+        otherwise
+			self:oMensagemErro["codigoGlosa"]	 := "5007"
+			self:oMensagemErro["descricaoGlosa"] :=	"MENSAGEM INCONSISTENTE OU INCOMPLETA"
+	endcase
+
+return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} validaDuplicidade
+Verifica duplicidade no documento enviado
+Nota: é analisado o vínculo e o número do documento que o prestador da a ela,
+caso seja necessário vincular outro documento na mesma chave, deve se trocar o número do documento.
+/*/
+//-------------------------------------------------------------------
+Method validaDuplicidade() Class EnvioDocumento
+
+AC9->(DbSetOrder(2))
+if AC9->(MsSeek(xFilial("AC9") + self:aBcoConhec[1] + xFilial(self:aBcoConhec[1]) + self:aBcoConhec[2] ))
+    ACB->(DbSetOrder(1))
+    if ACB->(MsSeek(xFilial("ACB") + AC9->AC9_CODOBJ ))    
+		iif( left(ACB->ACB_OBJETO,len(self:oEnvioDocumentos["numeroDocumento"])) == self:oEnvioDocumentos["numeroDocumento"] , self:nEstado := 71 ,)
+    endif    
+endif 
+
+return self:getNok()
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} assinatura
+Valida assinatura de documentos que requerem essa validação
+!!(Não implementado ainda)!!
+/*/
+//-------------------------------------------------------------------
+Method assinatura() Class EnvioDocumento
+
+if self:requerAssinatura()
+    
+    //Validação assinatura - Implementar
+    if !self:oSignature["enviado"]
+        self:nEstado := 81
+    endif
+
+endif
+
+return self:getNok()
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} requerAssinatura
+Verifica se o documento enviado requer ou não assinatura
+/*/
+//-------------------------------------------------------------------
+Method requerAssinatura() Class EnvioDocumento
+
+    //Tipos de documentos que requerem assinatura - conforme TUSS-Tabela 81 da ANS (versão 202108)
+    local cTiposTab81 := "02,03,04,05,10,12,13,17"
+
+return self:oEnvioDocumentos["tipoDocumento"] $ cTiposTab81
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} criaArquivo
+Criação de arquivo temporário
+!Atenção! - Se o servidor ficar preso neste método é porque não está sendo possível criar o arquivo
+/*/
+//-------------------------------------------------------------------
+Method criaArquivo(cFileXML) Class EnvioDocumento
+
+	local nArquivo		:= -1
+	default cFileXML	:= "arquivo_default"
+
+	//Tento, até obter sucesso, criar o arquivo
+	while nArquivo == -1
+		nArquivo := fCreate( self:cPathTemp + cFileXML,FC_NORMAL,,.F. )
+		iif(nArquivo==-1,conout("erro: " + FERROR()),)
+	enddo
+
+return nArquivo

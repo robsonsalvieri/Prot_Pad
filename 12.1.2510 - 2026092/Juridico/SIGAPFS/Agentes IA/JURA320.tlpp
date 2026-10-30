@@ -1,0 +1,399 @@
+#include "tlpp-object.th"
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "totvs.protheus.legal.requisicaoAgente.ch"
+
+namespace totvs.protheus.legal.requisicaoAgente
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ModelDef
+Modelo de dados de Requisicao de Agente IA.
+
+Define o modelo MVC para a tabela OIE (entidade unica - Modelo 1),
+vinculando regras de negocio via JurSetRules e o commit via JA320Commit.
+
+@type   staticfunction
+@author Abner Fogaça de Oliveira
+@since  23/07/2026
+@Return object, instancia de MPFormModel configurada
+@obs OIEMASTER - Fila da Requisicao de Agente IA
+/*/
+//-------------------------------------------------------------------
+Function ModelDef() as object
+Local oModel  as object
+Local oStruct as object
+Local oCommit as object
+
+	oCommit := JA320COMMIT():New()
+	oStruct := FWFormStruct(1, "OIE")
+
+	oModel := MPFormModel():New( ;
+		"JURA320"          , ;
+		/*Pre-Validacao*/  , ;
+		/*Pos-Validacao*/  , ;
+		/*Commit*/         , ;
+		/*Cancel*/           ;
+	)
+
+	oModel:AddFields("OIEMASTER", NIL, oStruct)
+	oModel:SetPrimaryKey({"OIE_FILIAL","OIE_CODIGO"})
+	oModel:SetDescription(STR0001) // "Modelo de Dados de para gerenciar a Fila de Requisicao de Agente IA"
+	oModel:GetModel("OIEMASTER"):SetDescription(STR0002) // "Dados de Requisicao de Agente IA"
+	
+	oModel:InstallEvent("JA320COMMIT", /*cOwner*/, oCommit)
+
+Return oModel
+
+//-------------------------------------------------------------------
+/*/ { Protheus.doc } JA320COMMIT
+Classe interna implementando o FWModelEvent, para execução de função
+durante o commit.
+
+@author Abner Fogaça de Oliveira
+@since 23/07/2026
+/*/
+//-------------------------------------------------------------------
+Class JA320COMMIT FROM FWModelEvent
+	public method New()
+	public method ModelPosVld()
+End Class
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+Método construtor da classe JA320COMMIT.
+
+@type method
+@author Abner Fogaça de Oliveira
+@since 23/07/2026
+@return nil, Retorno padrão do método de inicialização
+/*/
+//-------------------------------------------------------------------
+Method New() Class JA320COMMIT
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ModelPosVld
+Ponto de injeção (evento) do FWModelEvent executado durante a pós-validação 
+(Pos-Vld) do modelo MVC. Valida se os campos obrigatórios (Cliente, Loja, 
+Caso, TraceID e SessionID) estão preenchidos na tabela OIE em casos de 
+inclusão (operação 3) ou processamento via automação.
+
+@type method
+@author Abner Fogaça de Oliveira
+@since 23/07/2026
+@param oModel, object, Instância do modelo de dados (MPFormModel) em execução
+@return logical, Retorna .T. se as validações passarem e puder seguir para o commit, ou .F. caso contrário
+/*/
+//-------------------------------------------------------------------
+Method ModelPosVld(oModel) Class JA320COMMIT
+Local lRet  := .T. as logical
+Local nOpc  as numeric
+
+	nOpc := oModel:GetOperation()
+
+	If nOpc == 3 .Or. J320IsAuto() // Inclusao ou automacao
+		If Empty(oModel:GetValue("OIEMASTER", "OIE_CCLIEN")) .Or. Empty(oModel:GetValue("OIEMASTER", "OIE_CLOJA")) .Or. Empty(oModel:GetValue("OIEMASTER", "OIE_CCASO"))
+			lRet := .F.
+			oModel:SetErrorMessage(,, oModel:GetId(),, "JA320Commit", STR0003) // "Nao e permitido gravar na fila de requisicao de Agente IA sem informar Cliente, Loja e Caso."
+		EndIf
+		
+		If Empty(oModel:GetValue("OIEMASTER", "OIE_TRACE")) .Or. Empty(oModel:GetValue("OIEMASTER", "OIE_SESSID"))
+			lRet := .F.
+			oModel:SetErrorMessage(,, oModel:GetId(),, "JA320Commit", STR0004) // "Nao e permitido gravar na fila de requisicao de Agente IA sem informar TraceID e SessionID."
+		EndIf
+	EndIf
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} JVerificaFilaAgente
+Verifica se algum dos campos de permissao de lancamento do caso
+(NVE_LANTS, NVE_LANDSP, NVE_LANTAB) foi alterado no modelo MVC.
+Quando lAutomato eh .T., registra na fila sem chamar o agente externo,
+utilizando os dados de rastreamento fornecidos (cSessionId, cTraceId).
+
+@type   function
+@author Abner Fogaça de Oliveira
+@since  23/07/2026
+@param  oModel, object, instancia do modelo MVC ativo
+@param  lAutomato, logical, .T. para executar como automacao sem chamar agente externo [opcional - padrao .F.]
+@param  cSessionId, character, ID da sessao da automacao [opcional - usado quando lAutomato = .T.]
+@param  cTraceId, character, ID de rastreamento da automacao [opcional - usado quando lAutomato = .T.]
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Function JVerificaFilaAgente(oModel, lAutomato, cSessionId, cTraceId)
+Local lContinua        as logical
+Local lInclui          as logical
+Local nI               as numeric
+Local cModelID         as character
+Local cRotina          as character
+Local cContent         as character // Mensagem que será enviado para o agente LYNN
+Local cPrefixoEntidade as character
+Local cFilialEntidade  as character
+Local cCodCliente      as character
+Local cCodLoja         as character
+Local cCodCaso	       as character
+Local cStatusJob       as character
+Local aFields          as array
+Local aDadosOIE        as array
+Local aArea            as array
+
+Default lAutomato  := .F.
+Default cSessionId := ""
+Default cTraceId   := ""
+
+	If FWAliasInDic("OIE")
+		cRotina := oModel:GetId()
+		aArea   := GetArea()
+		lInclui := oModel:GetOperation() == 3
+		OIE->(DbSetOrder(2)) // OIE_FILIAL+OIE_CCLIEN+OIE_CLOJA+OIE_CCASO+OIE_ANOMES+OIE_STATUS
+		If cRotina == "JURA070"
+			cModelID        := "NVEMASTER"
+			aFields         := {"NVE_ENCHON","NVE_ENCDES","NVE_ENCTAB","NVE_LANTS", "NVE_LANDSP", "NVE_LANTAB"}
+			cFilialEntidade := oModel:GetValue(cModelID, "NVE_FILIAL")
+			cCodCliente     := Alltrim(oModel:GetValue(cModelID, "NVE_CCLIEN"))
+			cCodLoja        := Alltrim(oModel:GetValue(cModelID, "NVE_LCLIEN"))
+			cCodCaso        := oModel:GetValue(cModelID, "NVE_NUMCAS")
+			
+			For nI := 1 To Len(aFields)
+				If oModel:GetModel(cModelID):IsFieldUpdated(aFields[nI])
+					lContinua := .T.
+					Exit
+				EndIf
+			Next nI
+			
+		ElseIf cRotina == "JURA027" .And. lInclui // Tabelado
+			cModelID         := "NV4MASTER"
+			cPrefixoEntidade := "NV4"
+		ElseIf cRotina == "JURA049" .And. lInclui // Despesa
+			cModelID         := "NVYMASTER"
+			cPrefixoEntidade := "NVY"
+		ElseIf cRotina == "JURA144" .And. lInclui // TimeSheet
+			cModelID         := "NUEMASTER"
+			cPrefixoEntidade := "NUE"
+		EndIf
+		
+		If cRotina <> "JURA070" .And. lInclui
+			cFilialEntidade := oModel:GetValue(cModelID, cPrefixoEntidade + "_FILIAL")
+			cCodCliente     := Alltrim(oModel:GetValue(cModelID, cPrefixoEntidade + "_CCLIEN"))
+			cCodLoja        := Alltrim(oModel:GetValue(cModelID, cPrefixoEntidade + "_CLOJA"))
+			cCodCaso        := oModel:GetValue(cModelID, cPrefixoEntidade + "_CCASO")
+		EndIf
+		
+		lContinua := !OIE->(DbSeek(cFilialEntidade + cCodCliente + cCodLoja + cCodCaso + AnoMes(Date()))) // Só registra na fila se não houver registro para o período atual, evitando chamadas redundantes ao agente
+		
+		If lContinua
+			aDadosOIE := {cFilialEntidade, cRotina, cCodCliente, cCodLoja, cCodCaso}
+			cContent  := I18n(STR0005, {cCodCaso, cCodCliente, cCodLoja}) // "Analise o caso '#1' do cliente '#2' loja '#3'"
+			
+			If lAutomato
+				cStatusJob := "PENDING"
+				JGravaFila(cSessionId, cTraceId, cStatusJob, aDadosOIE)
+			Else
+				JChamaAgente(cContent, aDadosOIE)
+			EndIf
+		EndIf
+		RestArea(aArea)
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} JChamaAgente
+Envia uma requisicao POST para o agente DTA (TOTVS AI) configurado
+para o projeto juridicopfs, disparando um job de processamento.
+
+A chave de API deve ser configurada no parametro de sistema MV_DTAAKEY.
+
+@type   staticfunction
+@author Abner Fogaça de Oliveira
+@since  23/07/2026
+@param  cConteudo, character, mensagem a ser enviada ao agente
+@param  aDadosOIE, array, Array contendo dados da requisicao OIE
+@return Nil
+/*/
+//-------------------------------------------------------------------
+Static Function JChamaAgente(cConteudo as character, aDadosOIE as array)
+Local oRestClient   as object
+Local lRet          as logical
+Local jResp         as json
+Local jBody         as json
+Local aHeadOut      as array
+Local aCustomRules  := {} as array
+Local cResp         as character
+Local cApiKey       as character
+Local cSessionId    as character
+Local cTraceId      as character
+Local cStatusJob    as character
+Local cURLAuditor   as character
+Local cBody         := "" as character
+
+	cApiKey             := SuperGetMV("MV_JAPIKEY", .F., "")
+	cURLAuditor         := SuperGetMV("MV_JURLADT", .F., "")
+	jResp               := JsonObject():New()
+	jBody               := JsonObject():New()
+	jBody["content"]    := cConteudo
+	jBody["data"]       := JsonObject():New()
+	jBody["dta_extras"] := JsonObject():New()
+	jBody["dta_extras"]:fromJson("{}")
+
+	If FwAliasIndic('OIF') // Regras adicionais para auditoria dos casos
+		aCustomRules  := J320RegrasAdicionais()
+	EndIf
+	
+	jBody["data"]["custom_rules"] := aCustomRules
+	
+	aHeadOut := {}
+	aAdd(aHeadOut, "Content-Type: application/json; charset=utf-8")
+	aAdd(aHeadOut, "x-dta-api-key: " + cApiKey)
+	
+	cBody := EncodeUTF8(jBody:toJson())
+	
+	oRestClient := FWRest():New("")
+	oRestClient:SetPath(cURLAuditor)
+	oRestClient:SetTimeOut(120)
+	oRestClient:SetPostParams(cBody)
+
+	If lRet := oRestClient:Post(aHeadOut)
+		cResp := oRestClient:GetResult()
+		jResp:fromJson(cResp)
+		cTraceId   := jResp["dta_extras"]["trace_id"]
+		cSessionId := jResp["dta_extras"]["session_id"]
+		cStatusJob := jResp["dta_extras"]["status"]
+	Else
+		JurLogMsg(STR0006 + oRestClient:GetLastError(), "ERROR", "JURA320") // "Erro ao chamar Agente: "
+	EndIf
+
+	FwFreeObj(oRestClient)
+	If lRet
+		JGravaFila(cSessionId, cTraceId, cStatusJob, aDadosOIE)
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} JGravaFila
+Grava na fila de requisicao de agente IA, persistindo os dados relevantes 
+da chamada para consulta futura.
+
+@type   staticfunction
+@author Abner Fogaça de Oliveira
+@since  23/07/2026
+@param  cSessionId, character, ID da sessao
+@param  cTraceId, character, ID de rastreamento 
+@param  cStatusJob, character, Status do job retornado
+@param  aDadosOIE, array, Array contendo dados para gravacao da tabela OIE
+@return nil
+/*/
+//-------------------------------------------------------------------
+Static Function JGravaFila(cSessionId, cTraceId, cStatusJob, aDadosOIE)
+Local oModelOIE as object
+Local lRet	    as logical
+Local cChave    := "" as character
+Local cUUID     := "" as character
+	
+	If Len(aDadosOIE) > 0
+
+		cChave := aDadosOIE[3] + '|' + aDadosOIE[4] + '|' + aDadosOIE[5]
+		cUUID  := FWUUIDV4(.T.)
+		
+		oModelOIE := FWLoadModel("totvs.protheus.legal.requisicaoAgente.JURA320")
+		oModelOIE:SetOperation(3)
+		oModelOIE:Activate()
+		
+		oModelOIE:SetValue("OIEMASTER", "OIE_CODIGO", cUUID)
+		oModelOIE:SetValue("OIEMASTER", "OIE_MODELO", aDadosOIE[2])
+		oModelOIE:SetValue("OIEMASTER", "OIE_CCLIEN", aDadosOIE[3])
+		oModelOIE:SetValue("OIEMASTER", "OIE_CLOJA" , aDadosOIE[4])
+		oModelOIE:SetValue("OIEMASTER", "OIE_CCASO" , aDadosOIE[5])
+		oModelOIE:SetValue("OIEMASTER", "OIE_ANOMES", AnoMes(Date()))
+		oModelOIE:SetValue("OIEMASTER", "OIE_TRACE" , cTraceId)
+		oModelOIE:SetValue("OIEMASTER", "OIE_STATUS", IIf(Upper(cStatusJob) == "PENDING", '1', '2'))
+		oModelOIE:SetValue("OIEMASTER", "OIE_SESSID", cSessionId)
+		
+		If lRet := oModelOIE:VldData() .And. oModelOIE:CommitData()
+			JurLogMsg(I18n(STR0007, {cTraceId, cChave}), "SUCESS", "JURA320") // "Gravacao da fila (OIE) - TraceID:  '#1' Chave: '#2'"
+		EndIf
+		ASize(aDadosOIE, 0)
+	EndIf
+	
+	If !lRet .And. ValType(oModelOIE) == "O"
+		JurLogMsg(STR0008 + oModelOIE:GetErrorMessage()[6], "ERROR", "JURA320") // "Erro na gravacao da fila (OIE): "
+	EndIf
+
+Return Nil
+
+//-------------------------------------------------------------------
+/*/ { Protheus.doc } J320IsAuto
+Indica se a chamada veio da automação
+@type   staticfunction
+@author Abner Fogaça de Oliveira
+@since  23/07/2026
+@return logical, .T. se a chamada veio da automação, .F. caso contrário
+/*/
+//-------------------------------------------------------------------
+Static Function J320IsAuto()
+Local lAuto    := .F.
+Local aRetAuto := {}
+
+	If FindFunction("GetParAuto")
+		aRetAuto  := GetParAuto("JURA320TestCase")
+		If (ValType(aRetAuto) == "A" .And. Len(aRetAuto) == 1 .And. ValType(aRetAuto[1]) == "L")
+			lAuto := aRetAuto[1]
+		EndIf
+	EndIf
+
+Return lAuto
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} J320RegrasAdicionais
+Busca as regras adicionais cadastradas na tabela OIF para a auditoria 
+dos casos. Retorna um array de objetos JSON contendo os dados de 
+cada regra (ID, título, descrição e condição) para serem enviados 
+ao agente de IA.
+
+@type   staticfunction
+@author Abner Fogaça de Oliveira
+@since  23/07/2026
+@return array, Array de objetos Json contendo as regras adicionais
+/*/
+//-------------------------------------------------------------------
+Static Function J320RegrasAdicionais()
+	Local aCustomRules := {} as array
+	Local jRule        as Json
+	Local aBind        := {} as array
+	Local cAliasQry    as character
+	Local cQuery       as character
+	Local oQuery       as object
+	
+	cAliasQry := GetNextAlias()
+	
+	cQuery := " SELECT OIF_CODIGO, OIF_TITULO, OIF_DESCRI, OIF_REGRA"
+	cQuery +=   " FROM " + RetSqlName("OIF")
+	cQuery +=  " WHERE OIF_FILIAL = ?"
+	cQuery +=    " AND D_E_L_E_T_ = ?"
+	Aadd(aBind, {"C", xFilial("OIF")})
+	Aadd(aBind, {"C", ' '})
+
+	oQuery := FWPreparedStatement():New(cQuery)
+	oQuery := JQueryPSPr(oQuery, aBind)
+	cQuery := oQuery:GetFixQuery()
+		
+	MpSysOpenQuery(cQuery, cAliasQry)
+
+	While (cAliasQry)->(!Eof())
+		jRule := JsonObject():new()
+		
+		jRule["id"]          := (cAliasQry)->OIF_CODIGO
+		jRule["rule"]        := (cAliasQry)->OIF_TITULO
+		jRule["description"] := (cAliasQry)->OIF_DESCRI
+		jRule["condition"]   := (cAliasQry)->OIF_REGRA
+		
+		Aadd(aCustomRules, jRule)
+		(cAliasQry)->(DbSkip())
+	EndDo
+	
+	(cAliasQry)->(DbCloseArea())
+	
+Return aCustomRules

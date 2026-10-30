@@ -1,0 +1,2379 @@
+#include 'tlpp-core.th'
+#include 'tlpp-object.th'
+#include 'backoffice.ctb.dere.d1011.ch'
+
+NameSpace backoffice.ctb.dere.d1011
+
+static __cQltSint := "000"
+static __cDerMist := "000"
+static __cIdLei   := "00-00"
+static __cNatVar  := "V"
+static __cNatRes  := "04"
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DeReD1011PGCC
+    (backoffice.ctb.dere.d1011.DeReD1011PGCC)
+
+    Classe responsavel por processar o Plano de Contas Comentado da
+    Declaracao de Rendimentos (DeRE), evento D-1011 (evtPGCC), e
+    devolver ao chamador um JsonObject contendo exclusivamente o no
+    infoContas, composto por duas origens: os nos de registros da
+    QLT (Plano de Contas Comentado), combinados com a CT1 (Plano de
+    Contas) da filial logada, e os nos das Sintetica_Derivada, que
+    sao as contas sinteticas ascendentes pela cadeia CT1_CTASUP sem
+    registro proprio na QLT. Os nos de envelope do evento (ideEvento,
+    ideContrib, idePeriodo, infoPGCC, planoCtaRef e freqEncerr) ficam
+    fora do escopo desta classe e sao de responsabilidade do programa
+    chamador.
+
+    Convencao de chave dos mapas JsonObject: como o codigo de uma
+    conta contabil pode ser composto apenas de digitos, toda chave
+    utilizada nos mapas desta classe (oContasQLT, oMapaSint, oAcum,
+    oCacheNivel e oCacheCT1) e prefixada com a letra "K" seguida do
+    conteudo de AllTrim(cConta), ou seja "K" + AllTrim(cConta). Essa
+    convencao garante que o JsonObject trate a chave como nome de
+    propriedade e nao como indice numerico, e e aplicada de forma
+    uniforme em todos os mapas da classe.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+/*/
+//-------------------------------------------------------------------
+Class DeReD1011PGCC
+
+    // --- Estado de retorno (leitura por metodos publicos) ---
+    Private Data lSuccess     as Logical    // sucesso do processamento
+    Private Data cErrorMsg    as Character  // mensagem de erro fatal
+    Private Data aInconsist   as Array      // mensagens de inconsistencia nao fatais
+    Private Data oJsonRet     as Json       // JsonObject { "infoContas": { "infoConta": [] } }
+
+    // --- Contexto de execucao ---
+    Private Data cFilCT1      as Character  // xFilial("CT1")
+    Private Data cFilQLT      as Character  // xFilial("QLT")
+    Private Data cAliasQry    as Character  // alias temporario da consulta
+    Private Data oStatement   as Object     // FWExecStatement
+    Private Data aAreaQLT     as Array      // area da QLT preservada
+    Private Data aAreaCT1     as Array      // area da CT1 preservada
+
+    // --- Estruturas de trabalho: nos de origem QLT ---
+    Private Data aGrupos      as Array      // [ { cConta, aRegs } ] agrupado por QLT_CONTA
+    Private Data aNos         as Array      // colecao unica de nos infoConta (QLT + derivados)
+    Private Data nTotNos      as Numeric    // total de nos previstos (QLT + derivados)
+    Private Data oContasQLT   as Json       // JsonObject: conta com registro na QLT -> .T.
+
+    // --- Estruturas de trabalho: derivacao das sinteticas ---
+    Private Data oMapaSint    as Json       // JsonObject: conta -> dados da Sintetica_Derivada
+    Private Data oAcum        as Json       // JsonObject: conta pai -> { aNat, aIni } dos filhos diretos
+    Private Data oSintNivel   as Json       // JsonObject: "N" + nivel -> array de contas sinteticas daquele nivel
+    Private Data nMaiorNivel  as Numeric    // maior nivel hierarquico ja atribuido a uma sintetica derivada
+
+    // --- Caches de hierarquia e cadastro ---
+    Private Data oCacheNivel  as Json       // JsonObject: conta -> nivel calculado
+    Private Data oCacheCT1    as Json       // JsonObject: conta -> { desc01, ctasup, natcta, normal }
+    Private Data oCacheCtaRef as Json       // JsonObject: conta pura -> cCtaRef ja resolvido/sanitizado
+
+    // --- Contexto do plano de contas referencial (cCtaRef) ---
+    Private Data cCodPla      as Character  // CVD_CODPLA/CVN_CODPLA informado pelo chamador
+    Private Data cVersaoRef   as Character  // CVD_VERSAO/CVN_VERSAO informado pelo chamador
+
+    // --- Ciclo de vida e API publica ---
+    Public Method New() Constructor
+    Public Method Execute() as Logical
+    Public Method GetJson() as Json
+    Public Method IsSuccess() as Logical
+    Public Method GetError() as Character
+    Public Method GetInconsistencias() as Array
+
+    // --- Nucleo de dados: origem QLT ---
+    Private Method ValidaDicionario() as Logical
+    Private Method ConsultaContas() as Logical
+    Private Method AgrupaRegistros() as Logical
+    Private Method MapeiaNosQLT() as Logical
+    Private Method MapeiaConta(oReg as Json, lContaMista as Logical) as Json
+    Private Method LeMemoDscCta(nRecnoQLT as Numeric) as Character
+    Private Method NivelHierarquia(cConta as Character) as Numeric
+
+    // --- Nucleo de dados: derivacao das sinteticas ascendentes ---
+    Private Method DerivaSinteticas() as Logical
+    Private Method ColetaAscendentes() as Logical
+    Private Method LeCT1(cConta as Character) as Json
+    Private Method MontaNoSintetico(oSint as Json) as Json
+    Private Method AcumulaNoPai(cCtaSup as Character, cNatCta as Character, ;
+                               cIniVig as Character, cFimVig as Character)
+
+    // --- Apoio geral ---
+    Private Method OrdenaNos()
+    Private Method AddInconsist(cCampo as Character, cConta as Character, ;
+                                cDbMist as Character, cMotivo as Character)
+    Private Method FinalizaRecursos()
+
+    // --- Nucleo puro (publico por testabilidade em AdvPR) ---
+    Public Method ResolveIndCta(cClasse as Character, cDbMist as Character, ;
+                                lContaMista as Logical) as Character
+    Public Method CalculaNivel(cConta as Character, lDesdobramento as Logical) as Numeric
+    Public Method FormataData(dData) as Character
+    Public Method Sanitiza(cValor as Character, nTamMax as Numeric) as Character
+    Public Method TruncaTexto(cValor as Character, nTamMax as Numeric) as Character
+    Public Method ResolveCtaRef(cConta as Character) as Character
+    Public Method AgregaNatCta(aNatFilhos as Array, cConta as Character) as Character
+    Public Method DerivaCodNat(cNatCta as Character, cNormal as Character, cConta as Character) as Character
+    Public Method MenorIniVig(aIniFilhos as Array, cConta as Character) as Character
+    Public Method MaiorFimVig(aFimFilhos as Array) as Character
+    Public Method ChaveOrdem(cCtaInterna as Character, cDbMist as Character) as Character
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} New
+    Metodo construtor da classe DeReD1011PGCC.
+
+    Inicializa o estado de retorno como bem sucedido, zera as listas
+    de inconsistencia e de trabalho, instancia os sete mapas JsonObject
+    de apoio (oContasQLT, oMapaSint, oAcum, oSintNivel, oCacheNivel,
+    oCacheCT1 e oCacheCtaRef) - oSintNivel populado dinamicamente por
+    ColetaAscendentes(), sem quantidade fixa de niveis pre-alocada - e
+    resolve as filiais de CT1 e QLT a serem consideradas no
+    processamento (ver paragrafo "Filial" abaixo). As areas de
+    trabalho de QLT e CT1 sao inicializadas como
+    arrays vazios, ficando prontas para serem preenchidas por
+    GetArea() quando as respectivas tabelas forem efetivamente
+    abertas durante o processamento.
+
+    Filial: parametro opcional. Quando informado (cFilEnv preenchido),
+    e usado como base para resolver ::cFilCT1/::cFilQLT por meio de
+    FWXFilial(), respeitando o compartilhamento de cada tabela (CT1 e
+    QLT podem ter modos de compartilhamento distintos entre si).
+    Quando NAO informado (cFilEnv vazio ou omitido), o comportamento e
+    identico ao anterior: usa a filial logada, via xFilial().
+
+    Plano de contas referencial: cCodPlaRef (CVD_CODPLA/CVN_CODPLA) e
+    cVersaoPla (CVD_VERSAO/CVN_VERSAO) sao informados pelo chamador
+    para localizar a conta referencial na CVD/CVN, usados por
+    ResolveCtaRef(). Quando QUALQUER um dos dois estiver vazio, a
+    amarracao com o plano referencial fica desativada e cCtaRef
+    permanece placeholder vazio para todas as contas - ambos precisam
+    estar preenchidos para que a busca seja executada.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cCodPlaRef, character, codigo do plano de contas
+    referencial (CVD_CODPLA/CVN_CODPLA) para resolucao de cCtaRef;
+    vazio desativa a amarracao referencial
+    @param cVersaoPla, character, versao do plano de contas
+    referencial (CVD_VERSAO/CVN_VERSAO) para resolucao de cCtaRef;
+    vazio desativa a amarracao referencial
+    @param cFilEnv, character, filial a ser considerada no
+    processamento; vazio/omitido mantem a filial logada
+
+    @return object, a propria instancia (Self)
+/*/
+//-------------------------------------------------------------------
+Method New(cCodPlaRef as Character, cVersaoPla as Character, cFilEnv as Character) Class DeReD1011PGCC
+
+    Default cCodPlaRef := ""
+    Default cVersaoPla := ""
+    Default cFilEnv    := ""
+
+    // --- Estado de retorno ---
+    ::lSuccess    := .T.
+    ::cErrorMsg   := ""
+    ::aInconsist  := {}
+
+    // --- Contexto de execucao ---
+    // Filial informada pelo chamador: resolve por FWXFilial(), que
+    // respeita o compartilhamento de cada tabela; filial nao
+    // informada (vazia): mantem o comportamento anterior, usando a
+    // filial logada via xFilial(). CT1 e QLT sao resolvidas de forma
+    // independente, pois podem ter modos de compartilhamento distintos.
+    If Empty(cFilEnv)
+        ::cFilCT1 := xFilial("CT1")
+        ::cFilQLT := xFilial("QLT")
+    Else
+        ::cFilCT1 := FWXFilial("CT1", cFilEnv)
+        ::cFilQLT := FWXFilial("QLT", cFilEnv)
+    EndIf
+
+    ::cAliasQry   := ""
+    ::oStatement  := Nil
+    ::aAreaQLT    := {}
+    ::aAreaCT1    := {}
+
+    // --- Estruturas de trabalho: nos de origem QLT ---
+    ::aGrupos     := {}
+    ::aNos        := {}
+    ::nTotNos     := 0
+    ::oContasQLT  := JsonObject():New()
+
+    // --- Estruturas de trabalho: derivacao das sinteticas ---
+    // oSintNivel e populado dinamicamente por ColetaAscendentes(), sem
+    // quantidade fixa de niveis pre-alocada: cada chave "N" + nivel e
+    // criada sob demanda na primeira sintetica encontrada naquele
+    // nivel. nMaiorNivel acompanha o maior nivel ja atribuido, usado
+    // por DerivaSinteticas() para percorrer os niveis do mais
+    // profundo ao mais raso sem depender de um limite fixo.
+    ::oMapaSint   := JsonObject():New()
+    ::oAcum       := JsonObject():New()
+    ::oSintNivel  := JsonObject():New()
+    ::nMaiorNivel := 0
+
+    // --- Caches de hierarquia e cadastro ---
+    ::oCacheNivel  := JsonObject():New()
+    ::oCacheCT1    := JsonObject():New()
+    ::oCacheCtaRef := JsonObject():New()
+
+    // --- Contexto do plano de contas referencial ---
+    // Codigo do plano (CVD_CODPLA/CVN_CODPLA) e versao (CVD_VERSAO/
+    // CVN_VERSAO) informados pelo chamador, usados para localizar a
+    // conta referencial na CVD/CVN em ResolveCtaRef(). Qualquer um
+    // dos dois vazio desativa a amarracao: cCtaRef permanece
+    // placeholder vazio para todas as contas.
+    ::cCodPla    := AllTrim(cCodPlaRef)
+    ::cVersaoRef := AllTrim(cVersaoPla)
+
+Return Self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Execute
+    Orquestra o processamento completo do evento D-1011 (evtPGCC):
+    validacao de dicionario, consulta de dados, agrupamento,
+    mapeamento dos nos de origem QLT, derivacao das Sintetica_Derivada,
+    ordenacao final e montagem do JsonObject de retorno.
+
+    A sequencia inteira e protegida por TRY/CATCH/FINALLY. Cada etapa
+    que pode falhar de forma fatal (ValidaDicionario, ConsultaContas,
+    AgrupaRegistros, DerivaSinteticas) ja deixa ::lSuccess e
+    ::cErrorMsg preenchidos quando devolve .F., portanto este metodo
+    apenas propaga a falha sem sobrescrever essas duas propriedades.
+    MapeiaNosQLT() sempre devolve .T. nesta implementacao, mas seu
+    retorno e verificado por robustez contra alteracao futura do
+    contrato do metodo. Em caso de sucesso de todas as etapas,
+    OrdenaNos() e chamado antes de montar ::oJsonRet, garantindo que
+    a colecao ::aNos - ja contendo nos de origem QLT e Sintetica_Derivada -
+    seja devolvida ordenada por cCtaInterna e cDbrMista (Req 3.7).
+
+    Uma excecao nao prevista, lancada por qualquer etapa, e capturada
+    pelo CATCH: a mensagem da excecao alimenta ::cErrorMsg, ::lSuccess
+    e definido como .F., e o metodo devolve .F. sem propagar a
+    excecao ao chamador. Nenhum Help(), MsgStop() ou MsgInfo() e
+    utilizado em qualquer caminho.
+
+    O bloco FINALLY chama ::FinalizaRecursos() uma unica vez, em todos
+    os caminhos de saida (sucesso, falha reportada por um dos metodos
+    chamados e excecao capturada), liberando alias, FWExecStatement,
+    areas de QLT/CT1 e os mapas de cache (Req 11.5). Como
+    FinalizaRecursos() e idempotente, essa chamada e segura mesmo
+    quando AgrupaRegistros() ou DerivaSinteticas() ja a tenham
+    chamado internamente ao exceder o limite de 50000 nos (Req 10.6).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. quando o processamento foi concluido com
+    sucesso, .F. em caso de erro fatal ou excecao capturada
+/*/
+//-------------------------------------------------------------------
+Method Execute() as Logical Class DeReD1011PGCC
+
+    Local lRet as Logical
+
+    lRet := .F.
+
+    If !::ValidaDicionario()
+        // ::lSuccess e ::cErrorMsg ja preenchidos pelo proprio
+        // metodo (Req 11.1, 11.2, 11.3, 11.4).
+        lRet := .F.
+    ElseIf ::ConsultaContas()
+
+        ::AgrupaRegistros()
+        ::MapeiaNosQLT()
+        ::DerivaSinteticas()
+        ::OrdenaNos()
+
+        // Monta o JsonObject de retorno contendo exclusivamente o
+        // no infoContas, com a colecao ja ordenada (Req 4.1, 4.2,
+        // 4.3, 4.4).
+        ::oJsonRet := JsonObject():New()
+        ::oJsonRet["infoContas"] := JsonObject():New()
+        ::oJsonRet["infoContas"]["infoConta"] := ::aNos
+
+        ::lSuccess := .T.
+        lRet       := .T.
+    Else //Deu erro na ConsultaContas() e ela retornou falso. A própria função retorna o preenche o cErrorMsg.
+        lRet := .F. 
+    EndIf
+
+    // Libera alias, FWExecStatement, areas de QLT/CT1 e mapas de
+    // cache em todos os caminhos de saida (Req 11.5). Chamada
+    // segura mesmo quando ja executada internamente por
+    // AgrupaRegistros() ou DerivaSinteticas(), pois
+    // FinalizaRecursos() e idempotente.
+    ::FinalizaRecursos()
+
+Return lRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GetJson
+    Retorna o Json montado pela classe, contendo os dados do PGCC.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return object, JsonObject com o no infoContas, nunca Nil
+/*/
+//-------------------------------------------------------------------
+Method GetJson() as Json Class DeReD1011PGCC
+
+    If ::oJsonRet == Nil
+
+        // Execute() nao chegou a montar ::oJsonRet (falha fatal antes
+        // do bloco de sucesso). Monta aqui um JsonObject vazio e
+        // coerente, para que o chamador nunca receba Nil (Req 4.4).
+        ::oJsonRet := JsonObject():New()
+        ::oJsonRet["infoContas"] := JsonObject():New()
+        ::oJsonRet["infoContas"]["infoConta"] := {}
+
+    EndIf
+
+Return ::oJsonRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} IsSuccess
+    Informa se o processamento foi concluido com sucesso, expondo o
+    estado interno ::lSuccess sem torna-lo publico (Req 4.5).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. em caso de sucesso, .F. em caso de falha
+/*/
+//-------------------------------------------------------------------
+Method IsSuccess() as Logical Class DeReD1011PGCC
+Return ::lSuccess
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GetError
+    Devolve a mensagem de erro fatal do processamento, quando houver,
+    expondo o estado interno ::cErrorMsg sem torna-lo publico (Req 4.5).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return character, mensagem de erro fatal ou cadeia vazia
+/*/
+//-------------------------------------------------------------------
+Method GetError() as Character Class DeReD1011PGCC
+Return ::cErrorMsg
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} GetInconsistencias
+    Devolve a lista de mensagens de inconsistencia nao fatais
+    acumuladas durante o processamento, expondo o estado interno
+    ::aInconsist sem torna-lo publico (Req 4.5).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return array, mensagens de inconsistencia registradas
+/*/
+//-------------------------------------------------------------------
+Method GetInconsistencias() as Array Class DeReD1011PGCC
+Return ::aInconsist
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ValidaDicionario
+    Verifica a disponibilidade da tabela QLT no ambiente e a
+    existencia, via FWSX3Util():SeekX3File(), dos campos da QLT e da
+    CT1 utilizados no mapeamento e na derivacao das Sintetica_Derivada.
+    A tabela QLT ausente do ambiente e erro fatal imediato (MSG_QLTINDISP),
+    sem sentido em validar campos de uma tabela que nao existe. Os
+    campos ausentes de QLT e de CT1 sao acumulados em uma unica
+    mensagem (MSG_CAMPOAUS), evitando ciclo de correcao campo a campo.
+
+    Quando o chamador informar o plano de contas referencial em New()
+    (::cCodPla e ::cVersaoRef ambos preenchidos), valida tambem a
+    disponibilidade da tabela CVD (De/Para do Plano de Contas
+    Referencial) e dos campos utilizados por ResolveCtaRef():
+    CVD_CONTA, CVD_CTAREF, CVD_CODPLA, CVD_VERSAO. Plano/versao nao
+    informados dispensam essa validacao, pois a funcionalidade fica
+    desativada.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. quando o dicionario esta completo, .F. caso
+    algum campo ou tabela obrigatoria estejam ausentes
+/*/
+//-------------------------------------------------------------------
+Method ValidaDicionario() as Logical Class DeReD1011PGCC
+
+    // Tabela QLT (Plano de Contas Comentado) ausente do ambiente: erro
+    // fatal imediato, sem sentido em validar campos de uma tabela que
+    // nao existe no dicionario de dados (Req 11.3).
+    If !AliasInDic("QLT")
+        ::lSuccess  := .F.
+        ::cErrorMsg := STR0001//"Tabela QLT (Plano de Contas Comentado) indisponivel no ambiente."
+        Return .F.
+    EndIf
+        
+    If !FWSX3Util():SeekX3File("QLT_NATCTA") //Campo usado de exemplo, se ele não existir os demais também não existirão.
+        ::cErrorMsg := STR0003 + " QLT_NATCTA"
+        ::lSuccess := .F.
+        Return .F.
+    EndIf
+
+    ::lSuccess  := .T.
+    ::cErrorMsg := ""
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ConsultaContas
+    Monta e executa, via FWExecStatement, a consulta com INNER JOIN
+    entre QLT e CT1 filtrada pela filial logada, sem filtro por data
+    de vigencia, ordenada por QLT_CONTA e QLT_DBMIST. O bind dos
+    quatro parametros (::cFilCT1, D_E_L_E_T_, ::cFilQLT, D_E_L_E_T_)
+    e feito via SetString(), sem concatenacao de conteudo na string
+    SQL. Falha na execucao/abertura do alias e tratada como erro
+    fatal, com mensagem identificando a etapa de consulta.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. quando a consulta foi aberta com sucesso,
+    .F. em caso de falha na execucao ou abertura
+/*/
+//-------------------------------------------------------------------
+Method ConsultaContas() as Logical Class DeReD1011PGCC
+
+    Local cQuery as Character
+
+    // Monta a consulta com INNER JOIN entre QLT e CT1 pela filial e
+    // pela conta (QLT_CONTA = CT1_CONTA), filtrando D_E_L_E_T_ = ' '
+    // nas duas tabelas e sem qualquer filtro por data de vigencia
+    // (Req 3.8: todas as vigencias da QLT da filial logada retornam).
+    // O conteudo de filial e passado exclusivamente por bind (?),
+    // nunca concatenado na string SQL.
+    cQuery := " SELECT QLT.QLT_CONTA  QLT_CONTA,  "
+    cQuery += "        QLT.QLT_DBMIST QLT_DBMIST, "
+    cQuery += "        QLT.QLT_CODTRB QLT_CODTRB, "
+    cQuery += "        QLT.QLT_INDISS QLT_INDISS, "
+    cQuery += "        QLT.QLT_INIVIG QLT_INIVIG, "
+    cQuery += "        QLT.QLT_FIMVIG QLT_FIMVIG, "
+    cQuery += "        QLT.QLT_CODNAT QLT_CODNAT, "
+    cQuery += "        QLT.QLT_NATCTA QLT_NATCTA, "
+    cQuery += "        QLT.R_E_C_N_O_ QLTRECNO,   "
+    cQuery += "        CT1.CT1_DESC01 CT1_DESC01, "
+    cQuery += "        CT1.CT1_CLASSE CT1_CLASSE, "
+    cQuery += "        CT1.CT1_CTASUP CT1_CTASUP  "
+    cQuery += "   FROM " + RetSqlName("QLT") + " QLT "
+    cQuery += "  INNER JOIN " + RetSqlName("CT1") + " CT1 "
+    cQuery += "     ON CT1.CT1_FILIAL = ?           "
+    cQuery += "    AND CT1.CT1_CONTA  = QLT.QLT_CONTA "
+    cQuery += "    AND CT1.D_E_L_E_T_ = ?           "
+    cQuery += "  WHERE QLT.QLT_FILIAL = ?           "
+    cQuery += "    AND QLT.D_E_L_E_T_ = ?           "
+    cQuery += "  ORDER BY QLT.QLT_CONTA, QLT.QLT_DBMIST "
+
+    // Falha na execucao/abertura da query e erro fatal (Req 4.5): a
+    // instanciacao do FWExecStatement e a abertura do alias sao
+    // protegidas por Begin Sequence/Recover para capturar qualquer
+    // excecao lancada pela camada de acesso a dados.
+    ::oStatement := FWExecStatement():New(cQuery)
+    ::oStatement:SetString(1, ::cFilCT1)
+    ::oStatement:SetString(2, " ")
+    ::oStatement:SetString(3, ::cFilQLT)
+    ::oStatement:SetString(4, " ")
+
+    ::cAliasQry := ::oStatement:OpenAlias(GetNextAlias())
+
+    // Alias nao aberto ou consulta sem retorno de linhas validas:
+    // trata como erro fatal, identificando a etapa de consulta.
+    If Empty(::cAliasQry) .OR. (::cAliasQry)->(EOF())
+        ::lSuccess  := .F.
+        ::cErrorMsg := STR0004 + STR0014//"Falha ao executar a consulta de contas do evento D-1011: "###"abertura do alias de consulta CT1 x QLT"
+        Return .F.
+    EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AgrupaRegistros
+    Percorre o alias da consulta uma unica vez e monta aGrupos,
+    agrupando os registros por QLT_CONTA, alem de popular oContasQLT
+    com as contas que possuem registro na QLT (usado depois por
+    ColetaAscendentes() para nao duplicar ascendente). Detecta
+    Conta_Mista - grupo com mais de um registro e contendo o registro
+    sintetico "000" - e trata como nao mista, com inconsistencia
+    registrada, o caso de borda de grupo com mais de um registro sem
+    nenhum registro "000".
+
+    Como o alias vem ordenado por QLT_CONTA (garantido por
+    ConsultaContas()), a quebra de grupo e detectada por comparacao
+    com a conta do grupo aberto, sem uso de aScan().
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, sempre .T. (mantido como Logical por
+    compatibilidade com o contrato de orquestracao de Execute())
+/*/
+//-------------------------------------------------------------------
+Method AgrupaRegistros() as Logical Class DeReD1011PGCC
+
+    Local cContaAtu as Character
+    Local cContaAnt as Character
+    Local oGrupo    as Json
+    Local aRegsAtu  as Array
+    Local oReg      as Json
+    Local lTemSint  as Logical
+    Local nPos      as Numeric
+
+    cContaAnt := ""
+    oGrupo    := Nil
+    aRegsAtu  := Nil
+
+    (::cAliasQry)->(DbGoTop())
+
+    While !(::cAliasQry)->(Eof())
+
+        cContaAtu := AllTrim((::cAliasQry)->QLT_CONTA)
+
+        // Quebra de grupo: primeiro registro do alias ou conta diferente
+        // da conta do grupo em aberto. O alias vem ordenado por
+        // QLT_CONTA (Req 3.6), portanto a comparacao com a conta do
+        // grupo aberto e suficiente, sem uso de aScan() (Req 3.3).
+        If oGrupo == Nil .Or. cContaAtu != cContaAnt
+
+            // Fecha o grupo em aberto, aplicando a regra de Conta_Mista
+            // (Req 6.1) antes de abrir o proximo grupo.
+            If oGrupo != Nil
+                lTemSint := .F.
+                For nPos := 1 To Len(aRegsAtu)
+                    If aRegsAtu[nPos]["QLT_DBMIST"] == __cQltSint
+                        lTemSint := .T.
+                        Exit
+                    EndIf
+                Next nPos
+
+                If Len(aRegsAtu) > 1 .And. lTemSint
+                    oGrupo["lContaMista"] := .T.
+                ElseIf Len(aRegsAtu) > 1 .And. !lTemSint
+                    // Caso de borda: grupo com mais de um registro e sem
+                    // nenhum registro sintetico "000" - dados
+                    // inconsistentes no cadastro. Tratado como nao mista.
+                    oGrupo["lContaMista"] := .F.
+                    ::AddInconsist("indCta", oGrupo["cConta"], "", ;
+                        STR0005 + AllTrim(oGrupo["cConta"]))//"Conta com multiplos registros na QLT sem o registro sintetico 000: "
+                Else
+                    oGrupo["lContaMista"] := .F.
+                EndIf
+            EndIf
+
+            // Abre o novo grupo para a conta atual.
+            oGrupo := JsonObject():New()
+            oGrupo["cConta"]      := cContaAtu
+            oGrupo["aRegs"]       := {}
+            oGrupo["lContaMista"] := .F.
+            AAdd(::aGrupos, oGrupo)
+            aRegsAtu := oGrupo["aRegs"]
+
+            // Popula oContasQLT com a conta que possui registro na QLT,
+            // usado depois por ColetaAscendentes() para nao duplicar
+            // ascendente (tarefa 6.1).
+            ::oContasQLT["K" + cContaAtu] := .T.
+
+            cContaAnt := cContaAtu
+
+        EndIf
+
+        // Monta o registro da linha atual como JsonObject, com os campos
+        // usados pelo mapeamento (tarefa 5.1) e pela derivacao (tarefa 6).
+        oReg := JsonObject():New()
+        oReg["QLT_DBMIST"] := (::cAliasQry)->QLT_DBMIST
+        oReg["QLT_CODTRB"] := (::cAliasQry)->QLT_CODTRB
+        oReg["QLT_INDISS"] := (::cAliasQry)->QLT_INDISS
+        oReg["QLT_INIVIG"] := (::cAliasQry)->QLT_INIVIG
+        oReg["QLT_FIMVIG"] := (::cAliasQry)->QLT_FIMVIG
+        oReg["QLT_CODNAT"] := (::cAliasQry)->QLT_CODNAT
+        oReg["QLT_NATCTA"] := (::cAliasQry)->QLT_NATCTA
+        oReg["QLTRECNO"]   := (::cAliasQry)->QLTRECNO
+        oReg["CT1_DESC01"] := (::cAliasQry)->CT1_DESC01
+        oReg["CT1_CLASSE"] := (::cAliasQry)->CT1_CLASSE
+        oReg["CT1_CTASUP"] := (::cAliasQry)->CT1_CTASUP
+
+        AAdd(aRegsAtu, oReg)
+
+        ::nTotNos += 1
+
+        (::cAliasQry)->(DbSkip())
+
+    EndDo
+
+    // Fecha o ultimo grupo remanescente apos o fim do alias, com a mesma
+    // avaliacao de Conta_Mista aplicada nas quebras intermediarias.
+    If oGrupo != Nil
+        lTemSint := .F.
+        For nPos := 1 To Len(aRegsAtu)
+            If aRegsAtu[nPos]["QLT_DBMIST"] == __cQltSint
+                lTemSint := .T.
+                Exit
+            EndIf
+        Next nPos
+
+        If Len(aRegsAtu) > 1 .And. lTemSint
+            oGrupo["lContaMista"] := .T.
+        ElseIf Len(aRegsAtu) > 1 .And. !lTemSint
+            oGrupo["lContaMista"] := .F.
+            ::AddInconsist("indCta", oGrupo["cConta"], "", ;
+                STR0005 + AllTrim(oGrupo["cConta"]))//Conta com multiplos registros na QLT sem o registro sintetico 000: 
+        Else
+            oGrupo["lContaMista"] := .F.
+        EndIf
+    EndIf
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MapeiaNosQLT
+    Percorre aGrupos, gera cada no infoConta de origem QLT por meio de
+    MapeiaConta() e acumula a contribuicao de cada no para o seu pai
+    via AcumulaNoPai(). Para cada registro do grupo, a chave "cConta"
+    e adicionada ao registro (oReg["cConta"] := oGrupo["cConta"]) antes
+    da chamada a MapeiaConta(), pois este metodo nao tem acesso ao
+    agrupamento por conta (aGrupos) e espera o registro ja com essa
+    chave preenchida. O cCtaSup usado em AcumulaNoPai() e lido do no
+    gerado com HasProperty("cCtaSup"), pois essa chave e condicional em
+    MapeiaConta - sua ausencia e tratada como pai vazio (conta raiz com
+    registro na QLT, sem contribuicao para nenhum pai).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. quando o mapeamento foi concluido com sucesso
+/*/
+//-------------------------------------------------------------------
+Method MapeiaNosQLT() as Logical Class DeReD1011PGCC
+
+    Local nPosGrupo as Numeric
+    Local nPosReg   as Numeric
+    Local oGrupo    as Json
+    Local aRegs     as Array
+    Local oReg      as Json
+    Local oNo       as Json
+    Local cCtaSup   as Character
+
+    // Percorre cada grupo montado por AgrupaRegistros() (Req 3.3) e,
+    // dentro dele, cada registro QLT, gerando um no infoConta por
+    // registro via MapeiaConta() (Req 5.1) e acumulando a contribuicao
+    // de cada no para o seu pai via AcumulaNoPai() (Req 6.4, 12.14,
+    // 12.22).
+    For nPosGrupo := 1 To Len(::aGrupos)
+
+        oGrupo := ::aGrupos[nPosGrupo]
+        aRegs  := oGrupo["aRegs"]
+
+        For nPosReg := 1 To Len(aRegs)
+
+            oReg := aRegs[nPosReg]
+
+            // MapeiaConta() nao tem acesso ao agrupamento por conta
+            // (aGrupos) e espera que oReg ja contenha a chave "cConta"
+            // preenchida por quem chama este metodo, antes da chamada.
+            oReg["cConta"] := oGrupo["cConta"]
+
+            oNo := ::MapeiaConta(oReg, oGrupo["lContaMista"])
+
+            AAdd(::aNos, oNo)
+
+            // A chave de agregacao usada em AcumulaNoPai() precisa ser
+            // EXATAMENTE a mesma chave usada por ColetaAscendentes()/
+            // LeCT1() para registrar a conta ascendente em oMapaSint/
+            // oCacheCT1, ou seja, o codigo PURO e BRUTO da conta
+            // superior (apenas AllTrim, sem Sanitiza e sem o
+            // desdobramento fixo "000"). oNo["cCtaSup"] tem semantica
+            // e formato diferentes - e o cCta completo (sanitizado,
+            // com o desdobramento "000") do NO superior, usado
+            // exclusivamente para exibicao no JSON de saida. Usar
+            // oNo["cCtaSup"] aqui quebraria a agregacao (chave
+            // divergente da usada em oMapaSint), fazendo a
+            // Sintetica_Derivada nunca encontrar sua contribuicao.
+            cCtaSup := AllTrim(oReg["CT1_CTASUP"])
+
+            ::AcumulaNoPai(cCtaSup, oNo["natCta"], oNo["iniVig"], oNo["fimVig"])
+
+        Next nPosReg
+
+    Next nPosGrupo
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MapeiaConta
+    Monta o JsonObject de um no infoConta de origem QLT a partir de
+    um registro combinado CT1 x QLT, aplicando o mapeamento De/Para
+    do Requirement 5 e a regra de Conta_Mista do Requirement 6, na
+    ordem de montagem do XSD definida no design ("Ordem de montagem
+    do no de origem QLT"). Espera que oReg ja contenha a chave
+    "cConta" preenchida por quem chama este metodo (MapeiaNosQLT,
+    tarefa 5.2), pois MapeiaConta nao tem acesso ao agrupamento por
+    conta (aGrupos).
+
+    Campos obrigatorios (cCta, cCtaInterna, cDbrMista, nomeCta,
+    indCta, cCtaRef, nivelCta, natCta, codNat, iniVig) sao sempre
+    gravados no no, mesmo quando o mapeamento resulta em valor vazio;
+    nesse caso uma inconsistencia e registrada identificando o campo,
+    a conta e o desdobramento (Req 10.7), mas o no e gerado do mesmo
+    jeito - a rotina e geradora de dados, nao validadora de bloqueio.
+    Por decisao de negocio, descCta, codTrib e indTribISS sao SEMPRE
+    gravados no no (ainda que vazios/Nil quando o dado de origem nao
+    estiver preenchido ou nao se aplicar - ex.: indTribISS em conta
+    sintetica). A unica chave condicional deste no e cCtaSup, que
+    permanece estruturalmente ausente quando CT1_CTASUP estiver vazio
+    (a conta simplesmente nao possui superior).
+
+    Conta referencial (cCtaRef) nao preenchida: quando a amarracao com
+    o plano de contas referencial estiver habilitada (::cCodPla e
+    ::cVersaoRef informados em New()) e ::ResolveCtaRef() nao encontrar
+    amarracao para a conta processada, uma inconsistencia nao fatal e
+    registrada via AddInconsist(), alertando o usuario de que o
+    preenchimento da conta referencial e necessario. O no infoConta e
+    gerado normalmente, com cCtaRef vazio - mesmo padrao aplicado aos
+    demais campos obrigatorios deste metodo.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param oReg, object, registro combinado CT1 x QLT (JsonObject),
+    com a chave adicional "cConta" ja preenchida pelo chamador
+    @param lContaMista, logical, indica se a conta do registro e
+    Conta_Mista
+
+    @return object, JsonObject do no infoConta gerado
+/*/
+//-------------------------------------------------------------------
+Method MapeiaConta(oReg as Json, lContaMista as Logical) as Json Class DeReD1011PGCC
+
+    Local oNo         as Json
+    Local cConta      as Character
+    Local cDbMist     as Character
+    Local cIndCta     as Character
+    Local cNatCta     as Character
+    Local cCodNat     as Character
+    Local cCodTrb     as Character
+    Local nCodTrib    as Numeric
+    Local cIndIss     as Character
+    Local lDesdobra   as Logical
+    Local cIniVig     as Character
+
+    // Conta de origem (adicionada ao oReg por MapeiaNosQLT, tarefa 5.2)
+    // e desdobramento resolvido (QLT_DBMIST vazio assume o sintetico
+    // "000" - Requirement 5.4).
+    cConta  := oReg["cConta"]
+    cDbMist := PadL(AllTrim(oReg["QLT_DBMIST"]), 3, "0")
+
+    oNo := JsonObject():New()
+
+    // Montagem na ordem do XSD (design: "Ordem de montagem do no de
+    // origem QLT"). cCta e formado a partir do cDbMist ja resolvido,
+    // e nao do campo bruto, garantindo cCta == cCtaInterna + cDbrMista
+    // mesmo no caso de borda de QLT_DBMIST vazio (Req 5.2, 5.3, 5.4).
+    // Sanitiza() remove pontos/tracos de mascara do codigo da conta,
+    // pois o layout exige apenas caracteres alfanumericos em cCta,
+    // cCtaInterna e cCtaSup (Req 10.1).
+    oNo["cCta"]        := ::Sanitiza(cConta + cDbMist, 53)
+    oNo["cCtaInterna"] := ::Sanitiza(cConta, 50)
+    oNo["cDbrMista"]   := cDbMist
+    oNo["nomeCta"]     := ::TruncaTexto(oReg["CT1_DESC01"], 100)
+
+    // descCta: campo SEMPRE presente no no, mesmo em branco (por
+    // decisao de negocio), a partir do conteudo do memo QLT_DSCCTA
+    // (Req 5.11 adaptado).
+    oNo["descCta"] := ::LeMemoDscCta(oReg["QLTRECNO"])
+
+    cIndCta := ::ResolveIndCta(oReg["CT1_CLASSE"], cDbMist, lContaMista)
+    oNo["indCta"] := cIndCta
+
+    // cCtaSup: chave presente somente quando CT1_CTASUP estiver
+    // preenchido; desdobramento de Conta_Mista herda o mesmo
+    // CT1_CTASUP da conta de origem, pois oReg["CT1_CTASUP"] e o
+    // mesmo para todos os registros do grupo (Req 5.10, 6.4). O valor
+    // gravado e o cCta do NO SUPERIOR, nao apenas o codigo puro da
+    // conta superior: como toda conta superior e representada, na
+    // hierarquia, pelo seu no sintetico/raiz (QLT_DBMIST/cDbrMista
+    // igual a __cQltSint, "000"), cCtaSup e a concatenacao de
+    // CT1_CTASUP com esse desdobramento fixo "000".
+    //
+    // Excecao (Conta_Mista, Req 6.4): quando o registro processado e
+    // um desdobramento analitico (cDbMist != "000") de uma Conta_Mista,
+    // a propria conta de origem foi transformada em conta sintetica e
+    // recebeu o desdobramento "000" (::ResolveIndCta). Logo, a conta
+    // superior desses desdobramentos analiticos NAO e o CT1_CTASUP
+    // herdado da conta de origem - esse CT1_CTASUP so se aplica ao no
+    // sintetico "000" em si -, e sim o proprio no sintetico recem
+    // criado da conta de origem (cConta + "000").
+    If lContaMista .And. cDbMist != __cQltSint
+        oNo["cCtaSup"] := ::Sanitiza(AllTrim(cConta) + __cQltSint, 53)
+    ElseIf !Empty(oReg["CT1_CTASUP"])
+        oNo["cCtaSup"] := ::Sanitiza(AllTrim(oReg["CT1_CTASUP"]) + __cQltSint, 53)
+    EndIf
+
+    // cCtaRef: sempre presente, ainda que vazio (Req 9.4).
+    oNo["cCtaRef"] := ::ResolveCtaRef(cConta)
+    // Se estiver vazio gera inconsistência.
+    If Empty(oNo["cCtaRef"])
+        ::AddInconsist("cCtaRef", cConta, cDbMist, ;
+            STR0015 + AllTrim(cConta) + STR0016)//"Conta referencial nao preenchida para a conta contabil "###". O preenchimento e necessario."
+    EndIf
+
+    // nivelCta: desdobramento de Conta_Mista soma 1 ao nivel da conta
+    // de origem (Req 7.3); demais registros usam o nivel direto.
+    lDesdobra := lContaMista .And. cDbMist != __cQltSint
+    oNo["nivelCta"] := ::CalculaNivel(cConta, lDesdobra)
+
+    // natCta: restrito ao dominio {"C","D","V"}; fora do dominio ou
+    // vazio gera inconsistencia, mas o campo e mantido no no (Req 5.6).
+    // Comparacao por igualdade explicita (nao por "$"), pois cadeia
+    // vazia seria erroneamente considerada contida em qualquer cadeia
+    // de dominio pelo operador de substring.
+    cNatCta := AllTrim(oReg["QLT_NATCTA"])
+    If !(cNatCta == "C" .Or. cNatCta == "D" .Or. cNatCta == __cNatVar)
+        ::AddInconsist("natCta", cConta, cDbMist, ;
+            "Valor de QLT_NATCTA fora do dominio {'C','D','V'} ou vazio: '" + cNatCta + "'")
+    EndIf
+    oNo["natCta"] := cNatCta
+
+    // codNat: restrito ao dominio {"1".."5"}; fora do dominio ou vazio
+    // gera inconsistencia, mas o campo e mantido no no (Req 5.7).
+    cCodNat := AllTrim(oReg["QLT_CODNAT"])
+    If !(cCodNat == "1" .Or. cCodNat == "2" .Or. cCodNat == "3" .Or. ;
+         cCodNat == "4" .Or. cCodNat == "5")
+        ::AddInconsist("codNat", cConta, cDbMist, ;
+            "Valor de QLT_CODNAT fora do dominio {'1'..'5'} ou vazio: '" + cCodNat + "'")
+    EndIf
+    oNo["codNat"] := cCodNat
+
+    // codTrib: campo SEMPRE presente no no, mesmo em branco (por
+    // decisao de negocio, mesmo tratamento de indTribISS). Valido
+    // (QLT_CODTRB numerico entre 1 e 999999999) grava o valor
+    // numerico; em branco grava cadeia vazia, sem inconsistencia
+    // (branco e um estado normal, nao um erro); fora da faixa porem
+    // preenchido grava cadeia vazia e registra inconsistencia
+    // (Req 5.12, 5.13, 10.4, 6.5 adaptados).
+    cCodTrb  := AllTrim(oReg["QLT_CODTRB"])
+    nCodTrib := Val(cCodTrb)
+    If nCodTrib >= 1 .And. nCodTrib <= 999999999
+        oNo["codTrib"] := nCodTrib
+    Else
+        oNo["codTrib"] := ""
+        If !Empty(cCodTrb)
+            ::AddInconsist("codTrib", cConta, cDbMist, ;
+                "Valor de QLT_CODTRB fora da faixa 1..999999999: '" + cCodTrb + "'")
+        EndIf
+    EndIf
+
+    // indTribISS: campo SEMPRE presente no no, mesmo em branco (por
+    // decisao de negocio). Quando indCta == "A", assume QLT_INDISS
+    // (registrando inconsistencia se fora do dominio {"0","1"} e
+    // preenchido); quando indCta == "S", permanece cadeia vazia sem
+    // gerar inconsistencia, pois o XSD do evento nao preve o
+    // preenchimento deste campo para conta sintetica (Req 9.1, 9.2) -
+    // isso cobre tambem o desdobramento "000" de Conta_Mista, que e
+    // sempre sintetico (::ResolveIndCta) e por isso nunca entra neste
+    // bloco.
+    //
+    // Conta analitica com QLT_INDISS em branco assume o valor "0"
+    // (regra de negocio), sem gerar inconsistencia - branco e um
+    // estado normal, nao um erro. Conta analitica com QLT_INDISS
+    // preenchido porem fora do dominio {"0","1"} mantem o
+    // comportamento ja existente: registra inconsistencia e grava
+    // cadeia vazia.
+    cIndIss := ""
+    If cIndCta == "A"
+        cIndIss := AllTrim(oReg["QLT_INDISS"])
+        If Empty(cIndIss)
+            cIndIss := "0"
+        ElseIf !(cIndIss == "0" .Or. cIndIss == "1")
+            ::AddInconsist("indTribISS", cConta, cDbMist, ;
+                "Valor de QLT_INDISS fora do dominio {'0','1'}: '" + cIndIss + "'")
+            cIndIss := ""
+        EndIf
+    EndIf
+    oNo["indTribISS"] := cIndIss
+
+    oNo["idLeiDisp"] := __cIdLei
+
+    // iniVig: QLT_INIVIG vazio gera inconsistencia (Req 8.5), mas o
+    // campo e mantido no no com cadeia vazia.
+    cIniVig := ::FormataData(oReg["QLT_INIVIG"])
+    If Empty(cIniVig)
+        ::AddInconsist("iniVig", cConta, cDbMist, STR0008 + "iniVig")////"Campo obrigatorio vazio apos o mapeamento: "
+    EndIf
+    oNo["iniVig"] := cIniVig
+
+    // fimVig: sempre presente, cadeia vazia quando QLT_FIMVIG estiver
+    // vazio (Req 8.4).
+    oNo["fimVig"] := ::FormataData(oReg["QLT_FIMVIG"])
+
+Return oNo
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LeMemoDscCta
+    Posiciona a QLT diretamente pelo RECNO informado (DbGoto), mais
+    eficiente que remontar a chave por MsSeek, e le o conteudo do
+    campo memo QLT_DSCCTA. O conteudo lido e normalizado por
+    TruncaTexto(cConteudo, 600), que converte CRLF/LF/tabulacao em
+    espaco, comprime espacos consecutivos, aplica AllTrim e trunca em
+    600 caracteres. Campo do dicionario e QLT_DSCCTA (memo),
+    divergindo da nomenclatura QLT_DESCCTA usada no esboco original
+    da DeRE. A preservacao/restauracao da area da QLT (::aAreaQLT) e
+    de responsabilidade de outra etapa do processamento, nao deste
+    metodo.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param nRecnoQLT, numeric, RECNO do registro da QLT
+
+    @return character, conteudo normalizado de QLT_DSCCTA, podendo ser
+    cadeia vazia quando o memo esta vazio
+/*/
+//-------------------------------------------------------------------
+Method LeMemoDscCta(nRecnoQLT as Numeric) as Character Class DeReD1011PGCC
+
+    Local cConteudo as Character
+
+    // Posicionamento direto pelo RECNO: acesso mais eficiente que
+    // remontar a chave QLT_FILIAL+QLT_CONTA+QLT_DBMIST via MsSeek.
+    QLT->(DbGoTo(nRecnoQLT))
+
+    cConteudo := QLT->QLT_DSCCTA
+
+Return ::TruncaTexto(cConteudo, 600)
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} NivelHierarquia
+    Determina o nivel hierarquico de uma conta pelo encadeamento de
+    CT1_CTASUP, com cache em oCacheNivel. Sem limite fixo de
+    profundidade: o encadeamento sobe ate encontrar a conta raiz
+    (CT1_CTASUP vazio) ou uma conta superior inexistente na CT1 da
+    filial logada. A unica interrupcao antecipada e a deteccao real
+    de ciclo - quando uma conta ja visitada no proprio caminho desta
+    subida volta a aparecer, o que so ocorre com CT1_CTASUP corrompido
+    (referencia circular), nunca em uma hierarquia legitima, por mais
+    profunda que seja. Atende tanto os nos de origem QLT quanto as
+    Sintetica_Derivada.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cConta, character, conta contabil a calcular o nivel
+
+    @return numeric, nivel hierarquico da conta (>= 1)
+/*/
+//-------------------------------------------------------------------
+Method NivelHierarquia(cConta as Character) as Numeric Class DeReD1011PGCC
+
+    Local cChaveOrig as Character
+    Local cChaveAtu  as Character
+    Local cContaAtu  as Character
+    Local cCtaSup    as Character
+    Local aCaminho   as Array
+    Local nNivel     as Numeric
+    Local nPos       as Numeric
+    Local nTot       as Numeric
+    Local nCiclo     as Numeric
+
+    cChaveOrig := "K" + AllTrim(cConta)
+
+    // 1. Cache: chamada repetida para a mesma conta, ou para uma conta
+    // intermediaria ja memoizada em uma subida anterior, devolve
+    // direto sem reposicionar a CT1.
+    If ::oCacheNivel:HasProperty(cChaveOrig)
+        Return ::oCacheNivel[cChaveOrig]
+    EndIf
+
+    aCaminho  := {}
+    cContaAtu := AllTrim(cConta)
+    nNivel    := 0
+
+    // 2. Posiciona a CT1 pela filial logada, encadeando as contas
+    // superiores (CT1_CTASUP) em laco, nao em recursao (Req 2.3).
+    CT1->(DbSetOrder(1))
+
+    Do While .T.
+
+        // Deteccao real de ciclo (Req 7.5): interrompe apenas quando a
+        // conta corrente ja apareceu no caminho percorrido nesta
+        // mesma subida - unica situacao possivel com CT1_CTASUP
+        // corrompido (referencia circular). Nao ha limite de
+        // profundidade para hierarquias legitimas.
+        nCiclo := AScan(aCaminho, { |x| x == cContaAtu })
+        If nCiclo > 0
+            nNivel := Len(aCaminho)
+            ::AddInconsist("nivelCta", AllTrim(cConta), "", ;
+                STR0006 + AllTrim(cConta))//"Ciclo detectado na hierarquia de contas superiores (CT1_CTASUP) na conta: "
+            Exit
+        EndIf
+
+        If !CT1->(MsSeek(::cFilCT1 + cContaAtu))
+            // Conta superior inexistente na CT1 da filial logada:
+            // encerra o encadeamento no nivel corrente, tratando a
+            // ultima conta ja confirmada (aCaminho) como base da
+            // hierarquia (Req 7.5).
+            nNivel := Len(aCaminho)
+            If nNivel == 0
+                nNivel := 1   // a propria conta original nao foi encontrada
+            EndIf
+            ::AddInconsist("nivelCta", AllTrim(cConta), "", ;
+                STR0007 + AllTrim(cConta))//"Conta superior inexistente na CT1 da filial logada a partir da conta: "
+            Exit
+        EndIf
+
+        AAdd(aCaminho, cContaAtu)
+
+        cCtaSup := AllTrim(CT1->CT1_CTASUP)
+
+        // Se CT1_CTASUP esta vazio, a conta corrente e a base da
+        // hierarquia: nivel 1 para ela (Req 7.2).
+        If Empty(cCtaSup)
+            nNivel := Len(aCaminho)
+            Exit
+        EndIf
+
+        // Sobe para a conta superior e repete, incrementando o nivel
+        // atraves do proprio tamanho de aCaminho ao final.
+        cContaAtu := cCtaSup
+
+    EndDo
+
+    // 4. Memoiza no cache TODAS as contas do caminho percorrido, com
+    // seus respectivos niveis (decrescente do fundo do caminho - a
+    // conta original - para o topo, raiz ou ultima ascendente
+    // confirmada), para que chamadas futuras a contas intermediarias
+    // sejam O(1).
+    nTot := Len(aCaminho)
+    For nPos := 1 To nTot
+        cChaveAtu := "K" + aCaminho[nPos]
+        ::oCacheNivel[cChaveAtu] := nTot - nPos + 1
+    Next nPos
+
+    // Cobre o caso de borda em que a propria conta original nao foi
+    // encontrada na CT1 (aCaminho vazio, nada memoizado no laco acima).
+    If !::oCacheNivel:HasProperty(cChaveOrig)
+        ::oCacheNivel[cChaveOrig] := nNivel
+    EndIf
+
+    // 5. Retorna o nivel calculado da conta original pedida.
+Return nNivel
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DerivaSinteticas
+    Orquestra a derivacao das contas sinteticas ascendentes sem
+    registro na QLT (Sintetica_Derivada). Chama ColetaAscendentes()
+    para popular oMapaSint e oSintNivel a partir da semente (contas
+    com registro na QLT) e, em seguida, resolve oSintNivel do nivel
+    mais profundo (::nMaiorNivel, calculado dinamicamente por
+    ColetaAscendentes()) ao mais raso (1).
+
+    A resolucao por nivel decrescente e a base da agregacao bottom-up:
+    pela invariante de profundidade da hierarquia (design, secao
+    "Calculo de nivelCta"), ao chegar em uma sintetica de um dado
+    nivel, todos os seus filhos diretos - nos de origem QLT, ja
+    acumulados em oAcum por MapeiaNosQLT()/AcumulaNoPai(), ou outras
+    Sintetica_Derivada de nivel mais profundo, ja resolvidas em uma
+    iteracao anterior deste mesmo laco - ja contribuiram para a
+    entrada correspondente de oAcum. Para cada conta do nivel
+    corrente: le a contribuicao acumulada em oAcum (ou uma entrada
+    vazia, quando a sintetica nao recebeu nenhuma contribuicao), deriva
+    natCtaResolvido via AgregaNatCta(), iniVigResolvido via
+    MenorIniVig() e codNatResolvido via DerivaCodNat() a partir dos
+    dados brutos de CT1_NATCTA/CT1_NORMAL gravados em oMapaSint por
+    ColetaAscendentes(), monta o no via MontaNoSintetico() e o
+    acrescenta a aNos, e propaga a propria contribuicao consolidada
+    para o nivel acima via AcumulaNoPai() - que, internamente, nao faz
+    nada quando a conta e raiz (ctasup vazio).
+
+    Ao final, atualiza ::nTotNos com o total de nos (origem QLT mais
+    derivados), sem aplicar nenhum limite de quantidade - este metodo
+    nao transmite o evento, apenas monta o JsonObject completo para
+    consumo por outro processo.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. quando a derivacao foi concluida com sucesso,
+    .F. quando ColetaAscendentes() falhou
+/*/
+//-------------------------------------------------------------------
+Method DerivaSinteticas() as Logical Class DeReD1011PGCC
+
+    Local nNivel      as Numeric
+    Local nPosConta   as Numeric
+    Local aContas     as Array
+    Local cConta      as Character
+    Local cChave      as Character
+    Local cChaveNivel as Character
+    Local oSint       as Json
+    Local oAcumEntry  as Json
+    Local oNo         as Json
+
+    //Declara como padrão para não dar erro se não for preenchido
+    oAcumEntry := JsonObject():New()
+    oAcumEntry["aNat"] := {}
+    oAcumEntry["aIni"] := {}
+    oAcumEntry["aFim"] := {}
+
+    // 1. ColetaAscendentes() popula oMapaSint (dados brutos da CT1 de
+    // cada Sintetica_Derivada) e oSintNivel (contas sinteticas
+    // agrupadas por nivel), a partir da semente em aGrupos. Falha e
+    // propagada sem processamento adicional.
+    ::ColetaAscendentes()
+
+    // 2. Percorre oSintNivel do nivel mais profundo (::nMaiorNivel,
+    // calculado dinamicamente por ColetaAscendentes()) ao mais raso
+    // (1). Pela invariante de profundidade da hierarquia, ao chegar
+    // em uma sintetica deste nivel, todos os seus filhos diretos -
+    // nos QLT do Passo 1 (MapeiaNosQLT) ou sinteticas de nivel mais
+    // profundo, ja resolvidas em uma iteracao anterior deste mesmo
+    // laco - ja contribuiram em oAcum.
+    For nNivel := ::nMaiorNivel To 1 Step -1
+
+        cChaveNivel := "N" + cValToChar(nNivel)
+        aContas := ::oSintNivel[cChaveNivel]
+
+        // 3. Cada conta do nivel corrente.
+        For nPosConta := 1 To Len(aContas)
+
+            cConta := aContas[nPosConta]
+            cChave := "K" + cConta
+
+            // 3a. Dados brutos da conta (CT1_DESC01, CT1_CTASUP,
+            // CT1_NATCTA, CT1_NORMAL, nivel), coletados por
+            // ColetaAscendentes()/LeCT1().
+            oSint := ::oMapaSint[cChave]
+
+            // 3b. Contribuicao acumulada dos filhos diretos: quando a
+            // sintetica nao recebeu nenhuma contribuicao (nenhum filho
+            // contribuiu em oAcum), assume uma entrada vazia, para que
+            // AgregaNatCta()/MenorIniVig() tratem o caso como lista
+            // vazia (com a respectiva inconsistencia registrada).
+            If ::oAcum:HasProperty(cChave)
+                oAcumEntry := ::oAcum[cChave]
+            EndIf
+
+            // 3c, 3d, 3e, 3e2. Deriva os quatro valores agregados/
+            // derivados exigidos pelo contrato de MontaNoSintetico()
+            // (Req 12.14 a 12.22, e fimVig por simetria com iniVig).
+            oSint["natCtaResolvido"] := ::AgregaNatCta(oAcumEntry["aNat"], cConta)
+            oSint["iniVigResolvido"] := ::MenorIniVig(oAcumEntry["aIni"], cConta)
+            oSint["fimVigResolvido"] := ::MaiorFimVig(oAcumEntry["aFim"])
+            oSint["codNatResolvido"] := ::DerivaCodNat(oSint["natcta"], oSint["normal"], cConta)
+
+            // 3f, 3g. Monta o no da Sintetica_Derivada e o acrescenta a
+            // colecao unica de nos.
+            oNo := ::MontaNoSintetico(oSint)
+            AAdd(::aNos, oNo)
+
+            // 3h. Propaga os valores ja consolidados deste no para o
+            // nivel acima (o proprio pai, identificado por ctasup);
+            // AcumulaNoPai() nao faz nada quando ctasup e vazio (conta
+            // raiz).
+            ::AcumulaNoPai(oSint["ctasup"], oSint["natCtaResolvido"], ;
+                           oSint["iniVigResolvido"], oSint["fimVigResolvido"])
+
+        Next nPosConta
+
+    Next nNivel
+
+    // 4. Total de nos apos a derivacao: soma os nos de origem QLT
+    // (ja contabilizados por AgrupaRegistros()) aos nos derivados
+    // recem acrescentados a aNos. Sem limite de quantidade aplicado.
+    ::nTotNos := Len(::aNos)
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ColetaAscendentes
+    Percorre, para cada conta distinta da semente (contas com registro
+    na QLT, disponiveis em aGrupos), o encadeamento de CT1_CTASUP ate a
+    raiz da filial logada, em laco (nao recursao). Sem limite fixo de
+    profundidade por cadeia: a unica interrupcao antecipada e a
+    deteccao real de ciclo, quando uma conta ja visitada na propria
+    subida corrente volta a aparecer (CT1_CTASUP corrompido).
+
+    Para cada ascendente encontrada: se ja possui registro proprio na
+    QLT (oContasQLT), e ignorada - e representada exclusivamente pelos
+    nos de origem QLT (Req 12.2) - e a subida continua a partir dela;
+    se ja esta em oMapaSint, e ignorada e a subida daquele ramo e
+    interrompida, pois o restante da cadeia acima ja foi coletado por
+    uma subida anterior, garantindo no unico por conta (Req 12.3);
+    caso contrario, e uma ascendente nova, registrada em oMapaSint com
+    os dados de LeCT1() (desc01, ctasup, natcta, normal) e o nivel de
+    NivelHierarquia(), com a conta tambem adicionada a oSintNivel na
+    chave "N" + nivel (criada sob demanda) e ::nMaiorNivel atualizado
+    quando o nivel calculado supera o maior ja visto. Quando LeCT1()
+    devolve Nil (conta inexistente na CT1 da filial), a inconsistencia
+    ja foi registrada pelo proprio LeCT1() e a subida daquele ramo e
+    apenas interrompida.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @return logical, .T. quando a coleta foi concluida com sucesso
+/*/
+//-------------------------------------------------------------------
+Method ColetaAscendentes() as Logical Class DeReD1011PGCC
+
+    Local nPosGrupo   as Numeric
+    Local oGrupo      as Json
+    Local cConta      as Character
+    Local cAscendente as Character
+    Local cChave      as Character
+    Local cChaveNivel as Character
+    Local oDados      as Json
+    Local oSint       as Json
+    Local nNivel      as Numeric
+    Local aCaminho    as Array
+
+    // Percorre cada conta distinta da semente (contas com registro na
+    // QLT, disponiveis em aGrupos), subindo o encadeamento CT1_CTASUP
+    // ate a raiz da filial logada (Req 12.1).
+    For nPosGrupo := 1 To Len(::aGrupos)
+
+        oGrupo := ::aGrupos[nPosGrupo]
+        cConta := oGrupo["cConta"]
+
+        // Ponto de partida da subida: o CT1_CTASUP da propria conta
+        // semente, ja disponivel no registro lido pela consulta,
+        // dispensando reposicionar a CT1 para a propria semente.
+        cAscendente := AllTrim(oGrupo["aRegs"][1]["CT1_CTASUP"])
+
+        // Caminho percorrido nesta subida especifica, usado apenas
+        // para deteccao real de ciclo (Req 12 adaptado): sem limite
+        // fixo de iteracoes.
+        aCaminho := {}
+
+        Do While !Empty(cAscendente)
+
+            If AScan(aCaminho, { |x| x == cAscendente }) > 0
+                // Ciclo real detectado: a conta ascendente corrente ja
+                // apareceu nesta mesma subida (CT1_CTASUP corrompido).
+                ::AddInconsist("hierarquia", cConta, "", ;
+                    STR0006 + AllTrim(cConta))//"Ciclo detectado na hierarquia de contas superiores (CT1_CTASUP) na conta: "
+                Exit
+            EndIf
+
+            AAdd(aCaminho, cAscendente)
+
+            cChave := "K" + cAscendente
+
+            If ::oContasQLT:HasProperty(cChave)
+
+                // 3a. Ascendente com registro proprio na QLT: e
+                // representada exclusivamente pelos nos de origem QLT
+                // (Req 12.2). Ignora o registro em oMapaSint e
+                // continua subindo a partir dela, buscando o
+                // CT1_CTASUP dela via LeCT1().
+                oDados := ::LeCT1(cAscendente)
+                IIF(oDados != Nil, cAscendente := oDados["ctasup"], cAscendente := "" )
+
+            ElseIf ::oMapaSint:HasProperty(cChave)
+
+                // 3b. Ascendente ja coletada por uma subida anterior
+                // (Req 12.3): garante no unico por conta e interrompe a
+                // subida deste ramo, pois o restante da cadeia acima
+                // dela ja foi coletado anteriormente.
+                Exit
+
+            Else
+
+                // 3c. Ascendente nova (sem QLT e ainda nao coletada):
+                // registra em oMapaSint um JsonObject com conta,
+                // desc01, ctasup, natcta, normal (dos campos de
+                // LeCT1()) e nivel (de NivelHierarquia()), e adiciona a
+                // conta a oSintNivel na chave "N" + nivel.
+                oDados := ::LeCT1(cAscendente)
+                If oDados == Nil
+                    // LeCT1() ja registrou a inconsistencia: interrompe
+                    // a subida deste ramo sem erro adicional.
+                    Exit
+                EndIf
+
+                nNivel := ::NivelHierarquia(cAscendente)
+
+                oSint := JsonObject():New()
+                oSint["conta"]  := cAscendente
+                oSint["desc01"] := oDados["desc01"]
+                oSint["ctasup"] := oDados["ctasup"]
+                oSint["natcta"] := oDados["natcta"]
+                oSint["normal"] := oDados["normal"]
+                oSint["nivel"]  := nNivel
+
+                ::oMapaSint[cChave] := oSint
+
+                cChaveNivel := "N" + cValToChar(nNivel)
+                If !::oSintNivel:HasProperty(cChaveNivel)
+                    ::oSintNivel[cChaveNivel] := {}
+                EndIf
+                AAdd(::oSintNivel[cChaveNivel], cAscendente)
+
+                If nNivel > ::nMaiorNivel
+                    ::nMaiorNivel := nNivel
+                EndIf
+
+                cAscendente := oDados["ctasup"]
+
+            EndIf
+
+        EndDo
+
+    Next nPosGrupo
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} LeCT1
+    Posiciona a CT1 pela filial logada e pela conta informada,
+    devolvendo um JsonObject com desc01, ctasup, natcta e normal, com
+    cache proprio em oCacheCT1 - distinto do oCacheNivel usado por
+    NivelHierarquia(), que guarda apenas o nivel calculado. Antes de
+    posicionar a CT1, verifica se a chave "K" + AllTrim(cConta) ja
+    esta presente em oCacheCT1 e, se estiver, devolve o valor
+    cacheado sem executar MsSeek. Conta inexistente na CT1 da filial
+    logada devolve Nil e registra inconsistencia informando que a
+    hierarquia daquele ramo fica incompleta. A preservacao/restauracao
+    da area da CT1 (::aAreaCT1) e de responsabilidade de outra etapa
+    do processamento, nao deste metodo.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cConta, character, conta contabil a posicionar na CT1
+
+    @return object, JsonObject com os dados da conta na CT1 (desc01,
+    ctasup, natcta, normal), ou Nil quando a conta nao existe na
+    filial logada
+/*/
+//-------------------------------------------------------------------
+Method LeCT1(cConta as Character) as Json Class DeReD1011PGCC
+
+    Local cChave as Character
+    Local oDados as Json
+
+    cChave := "K" + AllTrim(cConta)
+
+    // Cache proprio dos dados cadastrais da CT1 (distinto do cache de
+    // nivel): chamada repetida para a mesma conta devolve direto sem
+    // executar MsSeek.
+    If ::oCacheCT1:HasProperty(cChave)
+        Return ::oCacheCT1[cChave]
+    EndIf
+
+    CT1->(DbSetOrder(1))
+
+    If !CT1->(MsSeek(::cFilCT1 + AllTrim(cConta)))
+        // Conta ascendente inexistente na CT1 da filial logada: a
+        // hierarquia daquele ramo fica incompleta a partir deste
+        // ponto da cadeia (Req 12.1).
+        ::AddInconsist("hierarquia", AllTrim(cConta), "", ;
+            STR0012 + AllTrim(cConta))//"Conta ascendente inexistente na CT1 da filial logada: "
+        Return Nil
+    EndIf
+
+    oDados := JsonObject():New()
+    oDados["desc01"] := CT1->CT1_DESC01
+    oDados["ctasup"] := AllTrim(CT1->CT1_CTASUP)
+    oDados["natcta"] := AllTrim(CT1->CT1_NATCTA)
+    oDados["normal"] := AllTrim(CT1->CT1_NORMAL)
+
+    ::oCacheCT1[cChave] := oDados
+
+Return oDados
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MontaNoSintetico
+    Monta o JsonObject de um no infoConta de Sintetica_Derivada,
+    conforme o mapeamento De/Para do Requirement 12 (tabela "nos de
+    Sintetica_Derivada" do design) e a ordem de montagem descrita na
+    secao "Ordem de montagem do no de Sintetica_Derivada". Nenhum
+    campo deste no e originado da QLT.
+
+    CONTRATO com DerivaSinteticas() (tarefa 6.3): este metodo NAO
+    calcula natCta, codNat, iniVig nem fimVig - esses quatro valores
+    devem chegar JA RESOLVIDOS dentro de oSint, pois dependem da
+    agregacao bottom-up dos nos filhos diretos (AgregaNatCta(),
+    MenorIniVig(), MaiorFimVig() e DerivaCodNat()), calculada pela
+    etapa de resolucao por nivel decrescente antes de chamar este
+    metodo. As chaves esperadas em oSint sao:
+
+    - "conta"           : Character - CT1_CONTA da sintetica (preenchida
+                           por ColetaAscendentes()/LeCT1())
+    - "desc01"          : Character - CT1_DESC01 (idem)
+    - "ctasup"          : Character - CT1_CTASUP da propria conta (idem);
+                           vazio identifica a conta raiz
+    - "nivel"           : Numeric   - nivelCta, de NivelHierarquia() (idem)
+    - "natCtaResolvido" : Character - natCta ja agregado dos filhos
+                           diretos, calculado por AgregaNatCta() em
+                           DerivaSinteticas() (tarefa 6.3)
+    - "codNatResolvido" : Character - codNat ja derivado de
+                           CT1_NATCTA/CT1_NORMAL, calculado por
+                           DerivaCodNat() em DerivaSinteticas() (tarefa 6.3)
+    - "iniVigResolvido" : Character - iniVig ja agregado (menor valor)
+                           dos filhos diretos, calculado por
+                           MenorIniVig() em DerivaSinteticas() (tarefa 6.3)
+    - "fimVigResolvido" : Character - fimVig ja agregado (maior valor,
+                           por simetria com iniVig) dos filhos diretos,
+                           calculado por MaiorFimVig() em
+                           DerivaSinteticas() (tarefa 6.3); cadeia
+                           vazia quando nenhum filho direto possui
+                           fimVig preenchido
+
+    As chaves "natcta" e "normal", tambem presentes em oSint (dados
+    brutos da CT1, usados como entrada de DerivaCodNat()), NAO sao
+    lidas por este metodo - apenas os quatro valores ja resolvidos
+    acima. descCta, codTrib e indTribISS sao SEMPRE gravados no no,
+    ainda que vazios/Nil, pois a Sintetica_Derivada nunca tem fonte de
+    dados na QLT para esses tres campos (Req 12.9, 12.24 adaptados).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param oSint, object, dados consolidados da conta sintetica: campos
+    brutos da CT1 (conta, desc01, ctasup, nivel) acrescidos dos tres
+    valores ja resolvidos pela agregacao (natCtaResolvido,
+    codNatResolvido, iniVigResolvido)
+
+    @return object, JsonObject do no infoConta da Sintetica_Derivada
+/*/
+//-------------------------------------------------------------------
+Method MontaNoSintetico(oSint as Json) as Json Class DeReD1011PGCC
+
+    Local oNo    as Json
+    Local cConta as Character
+
+    cConta := oSint["conta"]
+
+    oNo := JsonObject():New()
+
+    // Montagem na ordem do XSD (design: "Ordem de montagem do no de
+    // Sintetica_Derivada"). cCta e formado a partir da constante fixa
+    // __cDerMist, garantindo cCta == cCtaInterna + "000" (Req 12.6).
+    // Sanitiza() remove pontos/tracos de mascara do codigo da conta,
+    // pois o layout exige apenas caracteres alfanumericos em cCta,
+    // cCtaInterna e cCtaSup (Req 10.1).
+    oNo["cCta"]        := ::Sanitiza(cConta + __cDerMist, 53)
+    oNo["cCtaInterna"] := ::Sanitiza(cConta, 50)
+    oNo["cDbrMista"]   := __cDerMist
+    oNo["nomeCta"]     := ::TruncaTexto(oSint["desc01"], 100)
+
+    // descCta: campo SEMPRE presente no no, mesmo em branco, por
+    // decisao de negocio (mesmo tratamento aplicado aos nos de origem
+    // QLT em MapeiaConta()). A Sintetica_Derivada nao tem registro
+    // proprio na QLT, logo nunca ha fonte de dados (QLT_DSCCTA) da
+    // qual extrair uma descricao - o valor e sempre vazio, mas a
+    // chave e mantida no no (Req 12.24 adaptado).
+    oNo["descCta"] := ""
+
+    oNo["indCta"] := "S"   // fixo (Req 12.8)
+
+    // cCtaSup: chave presente somente quando CT1_CTASUP da propria
+    // conta estiver preenchido; ausente na conta raiz (Req 12.10,
+    // 12.11). Diferente de indTribISS/codTrib abaixo, esta ausencia e
+    // estruturalmente correta: a conta raiz genuinamente NAO possui
+    // conta superior, entao nao ha valor a "vir em branco" - a chave
+    // em si nao existe no cadastro. O valor gravado e o cCta do NO
+    // SUPERIOR (codigo puro + desdobramento fixo __cDerMist, "000"),
+    // mesma regra aplicada aos nos de origem QLT em MapeiaConta().
+    If !Empty(oSint["ctasup"])
+        oNo["cCtaSup"] := ::Sanitiza(AllTrim(oSint["ctasup"]) + __cDerMist, 53)
+    EndIf
+
+    oNo["cCtaRef"]  := ::ResolveCtaRef(cConta)   // sempre presente (Req 12.12)
+    // Se estiver vazio gera inconsistência.
+    If Empty(oNo["cCtaRef"])
+        ::AddInconsist("cCtaRef", cConta, __cDerMist, ;
+            STR0015 + AllTrim(cConta) + STR0016)//"Conta referencial nao preenchida para a conta contabil "###". O preenchimento e necessario."
+    EndIf
+    oNo["nivelCta"] := oSint["nivel"]
+
+    // natCta e codNat: valores ja resolvidos pela agregacao bottom-up
+    // de DerivaSinteticas() (tarefa 6.3) - ver contrato no cabecalho
+    // deste metodo.
+    oNo["natCta"] := oSint["natCtaResolvido"]
+    oNo["codNat"] := oSint["codNatResolvido"]
+
+    // codTrib e indTribISS: SEMPRE presentes no no, mesmo em branco
+    // (cadeia vazia), por decisao de negocio - mesmo tratamento
+    // aplicado aos nos de origem QLT em MapeiaConta(). A
+    // Sintetica_Derivada nunca tem fonte de dados para esses dois
+    // campos (nao ha registro proprio na QLT), entao o valor e
+    // sempre cadeia vazia, mas a chave e mantida no no (Req 12.9,
+    // 12.24 adaptados).
+    oNo["codTrib"]    := ""
+    oNo["indTribISS"] := ""
+
+    oNo["idLeiDisp"] := __cIdLei   // fixo (Req 12.13)
+
+    // iniVig: valor ja resolvido (minimo dos filhos diretos) pela
+    // agregacao bottom-up de DerivaSinteticas() (tarefa 6.3).
+    oNo["iniVig"] := oSint["iniVigResolvido"]
+
+    // fimVig: valor ja resolvido (maior/ultimo dos filhos diretos)
+    // pela agregacao bottom-up de DerivaSinteticas() (tarefa 6.3),
+    // por simetria com iniVig (Req 12.23 adaptado). Cadeia vazia
+    // quando nenhum filho direto possui fimVig preenchido (nenhuma
+    // filha encerrada) - o que e um estado normal, nao uma
+    // inconsistencia, pois fimVig e opcional (Req 8.4).
+    oNo["fimVig"] := oSint["fimVigResolvido"]
+
+Return oNo
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AcumulaNoPai
+    Registra em oAcum a contribuicao de um no filho (natCta e iniVig)
+    para o seu pai, identificado por cCtaSup. Considera-se filho
+    direto todo no infoConta cujo cCtaSup aponta para a conta pai, e
+    nao a relacao de conta da CT1: por efeito do Requirement 6.4, o no
+    "000" de uma Conta_Mista e seus desdobramentos sao irmaos, todos
+    filhos diretos do avo, pois todos eles herdam o mesmo CT1_CTASUP
+    da conta contabil de origem. Por isso o no sintetico e cada
+    desdobramento contribuem para a MESMA entrada de oAcum (mesma
+    chave "K" + cCtaSup), nunca em entradas separadas por
+    desdobramento. No com cCtaSup vazio (conta raiz com registro na
+    QLT) nao contribui para pai algum: o metodo apenas retorna.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cCtaSup, character, conta pai que recebe a contribuicao
+    @param cNatCta, character, natCta do no filho
+    @param cIniVig, character, iniVig do no filho, no formato AAAAMMDD
+/*/
+//-------------------------------------------------------------------
+Method AcumulaNoPai(cCtaSup as Character, cNatCta as Character, ;
+                     cIniVig as Character, cFimVig as Character) Class DeReD1011PGCC
+
+    Local cChave as Character
+    Local oEntry as Json
+
+    // No com cCtaSup vazio e conta raiz com registro na QLT: nao ha
+    // pai a contribuir, o metodo apenas retorna sem alterar oAcum.
+    If Empty(cCtaSup)
+        Return
+    EndIf
+
+    cChave := "K" + AllTrim(cCtaSup)
+
+    // "Filho direto" e todo no infoConta cujo cCtaSup aponta para a
+    // conta pai - e nao a relacao de conta da CT1. Por efeito da
+    // Conta_Mista (Req 6.4), o no sintetico "000" de uma conta mista e
+    // cada um dos seus desdobramentos recebem o mesmo CT1_CTASUP
+    // herdado da conta contabil de origem: sao irmaos entre si, todos
+    // filhos diretos do avo, e por isso contribuem para a MESMA
+    // entrada de ::oAcum (a mesma chave cChave), nunca em entradas
+    // separadas por desdobramento.
+    If ::oAcum:HasProperty(cChave)
+        oEntry := ::oAcum[cChave]
+    Else
+        oEntry := JsonObject():New()
+        oEntry["aNat"] := {}
+        oEntry["aIni"] := {}
+        oEntry["aFim"] := {}
+        ::oAcum[cChave] := oEntry
+    EndIf
+
+    AAdd(oEntry["aNat"], cNatCta)
+    AAdd(oEntry["aIni"], cIniVig)
+    AAdd(oEntry["aFim"], cFimVig)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} OrdenaNos
+    Ordena aNos por meio de ChaveOrdem(), intercalando os nos de
+    origem QLT e os nos de Sintetica_Derivada por cCtaInterna e, dentro
+    da mesma conta, por cDbrMista.
+
+    Os nos de origem QLT sao gerados na ordem da query (QLT_CONTA +
+    QLT_DBMIST) e os nos de Sintetica_Derivada sao gerados por nivel
+    decrescente (do mais profundo ao mais raso), portanto a colecao
+    ::aNos chega a este ponto fora da ordem final exigida pelo
+    Requirement 3.7. A ordenacao e feita em memoria, apos as duas
+    origens terem contribuido para ::aNos (MapeiaNosQLT + DerivaSinteticas).
+
+    aSort() reordena o array em-lugar (mesma quantidade de elementos,
+    nenhum no perdido ou duplicado), usando ChaveOrdem() - largura fixa,
+    independente de SET EXACT - como criterio crescente de comparacao.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+/*/
+//-------------------------------------------------------------------
+Method OrdenaNos() Class DeReD1011PGCC
+
+    aSort(::aNos,,, { |x, y| ::ChaveOrdem(x["cCtaInterna"], x["cDbrMista"]) < ;
+                             ::ChaveOrdem(y["cCtaInterna"], y["cDbrMista"]) })
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AddInconsist
+    Acrescenta em aInconsist uma mensagem de inconsistencia nao fatal
+    em portugues, identificando o campo, a conta, o desdobramento e o
+    motivo da inconsistencia. Conta e desdobramento sao omitidos da
+    mensagem quando vazios; os nucleos puros (AgregaNatCta(),
+    DerivaCodNat() e MenorIniVig()) recebem a conta processada de seu
+    chamador (DerivaSinteticas()) e a repassam para identificar a conta
+    inconsistente na mensagem. O desdobramento continua omitido quando
+    nao aplicavel - evita poluir a mensagem com "Desdobramento: " em
+    branco.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cCampo, character, nome do campo relacionado a inconsistencia
+    @param cConta, character, conta contabil processada
+    @param cDbMist, character, desdobramento processado (QLT_DBMIST)
+    @param cMotivo, character, descricao do motivo da inconsistencia
+/*/
+//-------------------------------------------------------------------
+Method AddInconsist(cCampo as Character, cConta as Character, ;
+                     cDbMist as Character, cMotivo as Character) Class DeReD1011PGCC
+
+    Local cMsg as Character
+
+    cMsg := "Campo: " + cCampo
+
+    If !Empty(cConta)
+        cMsg += " | Conta: " + cConta
+    EndIf
+
+    If !Empty(cDbMist)
+        cMsg += " | Desdobramento: " + cDbMist
+    EndIf
+
+    cMsg += " | " + cMotivo
+
+    AAdd(::aInconsist, cMsg)
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FinalizaRecursos
+    Libera os recursos abertos durante o processamento: fecha o alias
+    temporario da consulta, destroi o FWExecStatement, restaura as
+    areas de QLT e CT1 (apenas quando efetivamente preservadas por
+    GetArea() em algum momento da execucao) e libera os mapas de
+    trabalho e de cache (oAcum, oMapaSint, oContasQLT, oSintNivel,
+    oCacheNivel e oCacheCT1). A estrutura aGrupos e reinicializada
+    como array vazio. A colecao aNos NAO e liberada aqui, pois e a
+    colecao referenciada pelo JsonObject devolvido em GetJson().
+    Chamado em todos os caminhos de saida de Execute() (sucesso, erro
+    fatal e excecao capturada).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+/*/
+//-------------------------------------------------------------------
+Method FinalizaRecursos() Class DeReD1011PGCC
+
+    // 1. Fecha o alias temporario da consulta, quando efetivamente
+    // aberto.
+    If !Empty(::cAliasQry) .And. Select(::cAliasQry) > 0
+        (::cAliasQry)->(DbCloseArea())
+    EndIf
+
+    // 2. Destroi o FWExecStatement, quando instanciado, e anula a
+    // referencia. Destroy() so e chamado quando o metodo existir na
+    // classe (MethIsMemberOf), por seguranca entre builds.
+    If ::oStatement != Nil
+        ::oStatement:Destroy()
+        ::oStatement := Nil
+    EndIf
+
+    // 3. Zera as estruturas de trabalho da coleta/agrupamento e da
+    // derivacao das sinteticas. aNos NAO e zerada aqui: e a colecao
+    // referenciada pelo JsonObject devolvido em GetJson() (tarefa 7.3).
+    ::aGrupos    := {}
+
+    // 4. Libera os mapas de trabalho e de cache (JsonObject usados
+    // como mapa chave->valor durante o processamento).
+    FreeObj(::oAcum)
+    FreeObj(::oMapaSint)
+    FreeObj(::oContasQLT)
+    FreeObj(::oSintNivel)
+    FreeObj(::oCacheNivel)
+    FreeObj(::oCacheCT1)
+    FreeObj(::oCacheCtaRef)
+
+    ::oAcum        := Nil
+    ::oMapaSint    := Nil
+    ::oContasQLT   := Nil
+    ::oSintNivel   := Nil
+    ::oCacheNivel  := Nil
+    ::oCacheCT1    := Nil
+    ::oCacheCtaRef := Nil
+
+Return
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ResolveIndCta
+    Deriva o valor de indCta a partir da classe da conta (CT1_CLASSE)
+    ou, quando a conta e Conta_Mista, a partir do desdobramento
+    (QLT_DBMIST): registro sintetico "000" (constante __cQltSint)
+    devolve "S", demais desdobramentos devolvem "A". Nucleo puro, sem
+    acesso a banco: a decisao de qual regra aplicar (classe x conta
+    mista) e feita integralmente com base nos parametros recebidos.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cClasse, character, CT1_CLASSE da conta ("1" sintetica,
+    "2" analitica)
+    @param cDbMist, character, QLT_DBMIST do registro
+    @param lContaMista, logical, indica se a conta e Conta_Mista
+
+    @return character, "S" para conta/no sintetico ou "A" para conta/no
+    analitico
+/*/
+//-------------------------------------------------------------------
+Method ResolveIndCta(cClasse as Character, cDbMist as Character, ;
+                      lContaMista as Logical) as Character Class DeReD1011PGCC
+
+    Local cIndCta as Character
+    cIndCta := ""
+
+    If lContaMista
+        // Conta mista: o registro sintetico (QLT_DBMIST == "000") e o
+        // no "S"; qualquer outro desdobramento e "A".
+        If cDbMist == __cQltSint
+            cIndCta := "S"
+        Else
+            cIndCta := "A"
+        EndIf
+    Else
+        // Sem conta mista: indCta deriva diretamente da classe CT1_CLASSE.
+        If cClasse == "1"
+            cIndCta := "S"
+        ElseIf cClasse == "2"
+            cIndCta := "A"
+        EndIf
+    EndIf
+
+Return cIndCta
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} CalculaNivel
+    Calcula o nivelCta de um no infoConta a partir de NivelHierarquia():
+    para desdobramento de Conta_Mista soma 1 ao nivel da conta de
+    origem; para os demais casos devolve o proprio nivel da conta. Sem
+    limite de valor maximo aplicado - este metodo nao transmite o
+    evento, apenas monta o JsonObject completo para consumo por outro
+    processo.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cConta, character, conta contabil a calcular o nivel
+    @param lDesdobramento, logical, indica se o no e desdobramento de
+    Conta_Mista
+
+    @return numeric, nivelCta calculado (>= 1)
+/*/
+//-------------------------------------------------------------------
+Method CalculaNivel(cConta as Character, lDesdobramento as Logical) as Numeric Class DeReD1011PGCC
+
+    Local nNivel as Numeric
+
+    // Nivel base pelo encadeamento de CT1_CTASUP (Req 7.1, 7.2, 7.6).
+    nNivel := ::NivelHierarquia(cConta)
+
+    // Desdobramento de Conta_Mista: nivel da conta de origem somado
+    // de 1 (Req 7.3).
+    If lDesdobramento
+        nNivel += 1
+    EndIf
+
+Return nNivel
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} FormataData
+    Devolve a data do Protheus no formato AAAAMMDD, padrao de datas do
+    tipo string do Protheus (sem hifens), sem dependencia de SET DATE
+    FORMAT. Vazio (Date ou Character) devolve cadeia vazia; caso
+    contrario, devolve o conteudo normalizado em AAAAMMDD.
+
+    O parametro e recebido sem tipagem estrita porque o campo de data
+    lido do alias de uma consulta via FWExecStatement pode chegar
+    tanto como Date quanto como Character ("AAAAMMDD"), a depender do
+    DBMS/driver utilizado pelo TCGetField/ADO subjacente. Quando o
+    valor recebido e do tipo Date, e convertido para "AAAAMMDD" via
+    DToS(); quando ja e Character, e usado diretamente (apos AllTrim),
+    sem qualquer dependencia de SET DATE FORMAT.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param dData, date ou character, data a ser formatada
+
+    @return character, data no formato AAAAMMDD, ou cadeia vazia
+    quando dData estiver vazia
+/*/
+//-------------------------------------------------------------------
+Method FormataData(dData) as Character Class DeReD1011PGCC
+
+    Local cAaaaMmDd as Character
+
+    If Empty(dData)
+        Return ""
+    EndIf
+
+    If ValType(dData) == "D"
+        cAaaaMmDd := DToS(dData)          // "AAAAMMDD"
+    Else
+        cAaaaMmDd := AllTrim(cValToChar(dData))   // ja "AAAAMMDD" (Character)
+    EndIf
+
+Return cAaaaMmDd
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Sanitiza
+    Remove pontos, tracos, barras, espacos e demais separadores de
+    uma cadeia de caracteres, mantendo apenas caracteres alfanumericos
+    (IsAlpha() ou IsDigit()), e trunca o resultado no tamanho maximo
+    informado. Comportamento idempotente: aplicar Sanitiza() sobre o
+    proprio resultado devolve o mesmo valor, pois o resultado ja e
+    composto exclusivamente por caracteres alfanumericos e ja respeita
+    o tamanho maximo.
+
+    Utilizado nos codigos de conta do no infoConta (cCta, cCtaInterna
+    e cCtaSup): o layout do evento D-1011 exige apenas caracteres
+    alfanumericos nesses campos (sem pontos ou tracos de mascara),
+    ainda que o codigo cadastrado no Protheus eventualmente contenha
+    esses separadores (Req 10.1).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cValor, character, valor a ser sanitizado
+    @param nTamMax, numeric, tamanho maximo do resultado
+
+    @return character, valor sanitizado, apenas alfanumerico, limitado
+    a nTamMax caracteres
+/*/
+//-------------------------------------------------------------------
+Method Sanitiza(cValor as Character, nTamMax as Numeric) as Character Class DeReD1011PGCC
+
+    Local cLimpo   as Character
+    Local cRetorno as Character
+    Local nPos     as Numeric
+    Local cChar    as Character
+
+    cLimpo   := AllTrim(cValor)
+    cRetorno := ""
+
+    For nPos := 1 To Len(cLimpo)
+        cChar := SubStr(cLimpo, nPos, 1)
+        If IsAlpha(cChar) .Or. IsDigit(cChar)
+            cRetorno += cChar
+        EndIf
+    Next nPos
+
+    If Len(cRetorno) > nTamMax
+        cRetorno := SubStr(cRetorno, 1, nTamMax)
+    EndIf
+
+Return cRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} TruncaTexto
+    Normaliza um texto livre convertendo CRLF, LF e tabulacao (Chr(9))
+    em espaco, comprimindo espacos consecutivos em um unico espaco e
+    truncando o resultado no tamanho maximo informado. Utilizado em
+    campos de texto livre como nomeCta e descCta, que nao passam por
+    sanitizacao alfanumerica.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cValor, character, texto a ser normalizado
+    @param nTamMax, numeric, tamanho maximo do resultado
+
+    @return character, texto normalizado, limitado a nTamMax caracteres
+/*/
+//-------------------------------------------------------------------
+Method TruncaTexto(cValor as Character, nTamMax as Numeric) as Character Class DeReD1011PGCC
+
+    Local cTexto   as Character
+    Local cRetorno as Character
+    Local nPos     as Numeric
+    Local cChar    as Character
+    Local lEspAnt  as Logical
+
+    cTexto := AllTrim(cValor)
+
+    // Converte CRLF, LF e tabulacao (Chr(9)) em espaco
+    cTexto := StrTran(cTexto, Chr(13) + Chr(10), " ")
+    cTexto := StrTran(cTexto, Chr(10), " ")
+    cTexto := StrTran(cTexto, Chr(13), " ")
+    cTexto := StrTran(cTexto, Chr(9), " ")
+
+    // Comprime espacos consecutivos em um unico espaco
+    cRetorno := ""
+    lEspAnt  := .F.
+    For nPos := 1 To Len(cTexto)
+        cChar := SubStr(cTexto, nPos, 1)
+        If cChar == " "
+            If !lEspAnt
+                cRetorno += cChar
+            EndIf
+            lEspAnt := .T.
+        Else
+            cRetorno += cChar
+            lEspAnt := .F.
+        EndIf
+    Next nPos
+
+    If Len(cRetorno) > nTamMax
+        cRetorno := SubStr(cRetorno, 1, nTamMax)
+    EndIf
+
+Return cRetorno
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ResolveCtaRef
+    Resolve o valor de cCtaRef para a conta informada, buscando na
+    CVD (De/Para do Plano de Contas Referencial) pelo codigo PURO da
+    conta contabil (CT1_CONTA/QLT_CONTA, sem o desdobramento de conta
+    mista QLT_DBMIST) e pelo CVD_CODPLA+CVD_VERSAO informados pelo
+    chamador do metodo Execute() (ver New()). O mesmo valor resolvido
+    para uma conta e reutilizado para TODOS os desdobramentos daquela
+    conta (todos os nos infoConta cujo cCtaInterna seja a mesma conta
+    pura recebem o mesmo cCtaRef), e cacheado em ::oCacheCtaRef para
+    nao repetir a busca a cada desdobramento/registro.
+
+    Regra de selecao quando a CVD possui mais de uma linha para a
+    mesma conta, o mesmo CVD_CODPLA e a mesma CVD_VERSAO (variando
+    apenas por centro de custo, CVD_CUSTO): e escolhida a PRIMEIRA
+    encontrada, por ordem de posicionamento do indice, conforme
+    decisao de negocio - o campo cCtaRef aceita apenas um valor por
+    conta, entao a amarracao por centro de custo especifico nao e
+    representavel neste campo.
+
+    Contas sinteticas: a amarracao com o plano referencial e
+    normalmente opcional. Quando a conta nao possui nenhuma linha na
+    CVD para o CVD_CODPLA+CVD_VERSAO informados, o metodo devolve
+    cadeia vazia, sem registrar inconsistencia - ausencia de amarracao
+    referencial e um estado normal do cadastro, nao um erro de
+    mapeamento.
+
+    ::cCodPla ou ::cVersaoRef vazios (nao informados pelo chamador em
+    New()): desativa esta funcionalidade por completo, e o metodo
+    sempre devolve cadeia vazia.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cConta, character, conta contabil de referencia (codigo
+    PURO, sem desdobramento QLT_DBMIST)
+
+    @return character, codigo da conta do plano de contas referencial
+    (CVD_CTAREF), sanitizado (apenas alfanumerico, sem pontos/tracos
+    de mascara) e limitado a 13 caracteres conforme o padrao do
+    XSD_D1011 (Req 10.1, 10.2), ou cadeia vazia quando nao ha
+    amarracao ou o plano/versao nao foram informados pelo chamador
+/*/
+//-------------------------------------------------------------------
+Method ResolveCtaRef(cConta as Character) as Character Class DeReD1011PGCC
+
+    Local cContaPura   as Character
+    Local cChave       as Character
+    Local cCtaRef      as Character
+    Local cQuery       as Character
+    Local cAliasCtaRef as Character
+    Local oStmtCtaRef  as Object
+
+    // Plano de contas referencial nao informado pelo chamador em
+    // New(): funcionalidade desativada, comportamento identico ao
+    // placeholder original desta entrega.
+    If Empty(::cCodPla) .Or. Empty(::cVersaoRef)
+        Return ""
+    EndIf
+
+    // A busca na CVD e feita pelo codigo PURO da conta (QLT_CONTA/
+    // CT1_CONTA), sem o desdobramento QLT_DBMIST: o mesmo cCtaRef
+    // resolvido e reutilizado para todos os desdobramentos da conta.
+    cContaPura := AllTrim(cConta)
+    cChave     := "K" + cContaPura
+    cCtaRef      := ""
+    cAliasCtaRef := ""
+
+    // Cache: chamada repetida para a mesma conta pura (ex.: nos
+    // sintetico e desdobramentos da mesma Conta_Mista) devolve direto
+    // sem repetir a consulta a CVD.
+    If ::oCacheCtaRef:HasProperty(cChave)
+        Return ::oCacheCtaRef[cChave]
+    EndIf
+
+    // Consulta via FWExecStatement (mesmo padrao de ConsultaContas()):
+    // busca por consulta parametrizada, e nao por posicionamento ISAM,
+    // pois a composicao exata dos indices da CVD varia entre ambientes
+    // e nenhuma das combinacoes conhecidas comeca por
+    // CVD_CODPLA+CVD_VERSAO+CVD_CONTA. ORDER BY CVD_CUSTO garante que,
+    // havendo mais de uma linha para a mesma conta (variando por
+    // centro de custo), a primeira do resultado seja sempre a mesma
+    // entre execucoes (Req: pegar a primeira encontrada).
+    cQuery := " SELECT CVD_CTAREF CVD_CTAREF "
+    cQuery += "   FROM " + RetSqlName("CVD") + " CVD "
+    cQuery += "  WHERE CVD.CVD_FILIAL = ?      "
+    cQuery += "    AND CVD.CVD_CONTA  = ?      "
+    cQuery += "    AND CVD.CVD_CODPLA = ?      "
+    cQuery += "    AND CVD.CVD_VERSAO = ?      "
+    cQuery += "    AND CVD.D_E_L_E_T_ = ?      "
+    cQuery += "  ORDER BY CVD.CVD_CUSTO        "
+
+    oStmtCtaRef := FWExecStatement():New(cQuery)
+    oStmtCtaRef:SetString(1, xFilial("CVD"))
+    oStmtCtaRef:SetString(2, cContaPura)
+    oStmtCtaRef:SetString(3, ::cCodPla)
+    oStmtCtaRef:SetString(4, ::cVersaoRef)
+    oStmtCtaRef:SetString(5, " ")
+
+    cAliasCtaRef := oStmtCtaRef:OpenAlias(GetNextAlias())
+
+    If !Empty(cAliasCtaRef) .And. Select(cAliasCtaRef) > 0
+
+        If !(cAliasCtaRef)->(Eof())
+            // Primeira linha do resultado: encontrou amarracao para a
+            // conta pura, no plano e na versao informados pelo
+            // chamador. Diferente dos codigos de conta (cCta/
+            // cCtaInterna/cCtaSup), cCtaRef segue estritamente o
+            // padrao do XSD_D1011 ([0-9A-Za-z]{1,13}) - Sanitiza()
+            // remove pontos/tracos da mascara do CVD_CTAREF, que
+            // tipicamente vem no formato "1.01.01.01.01".
+            cCtaRef := ::Sanitiza((cAliasCtaRef)->CVD_CTAREF, 13)
+        EndIf
+        // Ausencia de linhas (Eof() logo na abertura): conta sem
+        // amarracao com o plano/versao informados - estado normal,
+        // sem inconsistencia (contas sinteticas costumam ser opcionais).
+
+        (cAliasCtaRef)->(DbCloseArea())
+
+    EndIf
+
+    If oStmtCtaRef != Nil
+        oStmtCtaRef:Destroy()
+    EndIf
+
+    ::oCacheCtaRef[cChave] := cCtaRef
+
+Return cCtaRef
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} AgregaNatCta
+    Agrega os valores de natCta dos nos filhos diretos de uma
+    Sintetica_Derivada: devolve "V" quando algum filho e "V" ou quando
+    os filhos divergem entre si, e devolve o valor unico ("D" ou "C")
+    quando todos os filhos coincidem. Lista vazia, apos descartar
+    valores fora do dominio {"C","D","V"}, devolve __cNatVar e
+    registra inconsistencia.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param aNatFilhos, array, valores de natCta dos nos filhos diretos
+    @param cConta, character, conta sintetica processada, usada para
+    identificar a conta inconsistente na mensagem
+
+    @return character, natCta agregado ("C", "D" ou "V")
+/*/
+//-------------------------------------------------------------------
+Method AgregaNatCta(aNatFilhos as Array, cConta as Character) as Character Class DeReD1011PGCC
+
+    Local aValidos    as Array
+    Local cValor      as Character
+    Local nPos        as Numeric
+    Local cUnico      as Character
+    Local lDivergente as Logical
+
+    aValidos := {}
+
+    // Descarta valores vazios ou fora do dominio {"C","D","V"}, registrando
+    // uma inconsistencia para cada valor descartado.
+    For nPos := 1 To Len(aNatFilhos)
+        cValor := AllTrim(aNatFilhos[nPos])
+        If cValor == "C" .Or. cValor == "D" .Or. cValor == __cNatVar
+            AAdd(aValidos, cValor)
+        Else
+            ::AddInconsist("natCta", cConta, "", "Valor de natCta fora do dominio descartado na agregacao: '" + cValor + "'")
+        EndIf
+    Next nPos
+
+    // Lista vazia (sem nenhum filho informado): nao ha base para inferir a
+    // natureza. Quando a lista fica vazia por causa de descartes, as
+    // inconsistencias registradas acima ja documentam o motivo, entao a
+    // inconsistencia adicional so e registrada quando nao houve nenhum
+    // filho informado.
+    If Len(aValidos) == 0
+        If Len(aNatFilhos) == 0
+            ::AddInconsist("natCta", cConta, "", STR0009 + AllTrim(cConta))//"Nenhum filho valido para agregar natCta na conta sintetica: "
+        EndIf
+        Return __cNatVar
+    EndIf
+
+    // Algum filho valido e "V": a agregacao e sempre "V".
+    For nPos := 1 To Len(aValidos)
+        If aValidos[nPos] == __cNatVar
+            Return __cNatVar
+        EndIf
+    Next nPos
+
+    // Verifica divergencia entre os valores validos restantes ("D"/"C").
+    cUnico      := aValidos[1]
+    lDivergente := .F.
+    For nPos := 2 To Len(aValidos)
+        If aValidos[nPos] != cUnico
+            lDivergente := .T.
+            Exit
+        EndIf
+    Next nPos
+
+    If lDivergente
+        Return __cNatVar
+    EndIf
+
+Return cUnico
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} DerivaCodNat
+    Reproduz a regra da funcao Ctb20NtCta() do CTBa020.PRw para
+    derivar codNat de uma Sintetica_Derivada a partir de CT1_NATCTA e
+    CT1_NORMAL: conta de resultado ("04") credora devolve "4", devedora
+    devolve "5"; demais valores preenchidos devolvem CT1_NATCTA sem o
+    zero a esquerda; CT1_NATCTA em branco devolve cadeia vazia e
+    registra inconsistencia.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cNatCta, character, CT1_NATCTA da conta sintetica
+    @param cNormal, character, CT1_NORMAL da conta sintetica
+    @param cConta, character, conta sintetica processada, usada para
+    identificar a conta inconsistente na mensagem
+
+    @return character, codNat derivado, entre "1" e "5", ou cadeia
+    vazia em caso de inconsistencia
+/*/
+//-------------------------------------------------------------------
+Method DerivaCodNat(cNatCta as Character, cNormal as Character, cConta as Character) as Character Class DeReD1011PGCC
+
+    Local cCodNat as Character
+
+    // Conta de resultado ("04"): codNat depende do sentido normal do
+    // saldo (CT1_NORMAL). Credora ("2") -> Receita ("4"); devedora
+    // ("1") -> Despesa ("5"). Fora desse dominio e inconsistencia: a
+    // conta processada e recebida em cConta do chamador
+    // (DerivaSinteticas()) e repassada a AddInconsist() para
+    // identificar a conta inconsistente na mensagem.
+    If AllTrim(cNatCta) == __cNatRes
+        If cNormal == "2"
+            cCodNat := "4"
+        ElseIf cNormal == "1"
+            cCodNat := "5"
+        Else
+            cCodNat := ""
+            ::AddInconsist("codNat", cConta, "", "CT1_NORMAL fora do dominio {'1','2'} ao derivar codNat de conta de resultado: '" + cNormal + "'")
+        EndIf
+    ElseIf !Empty(cNatCta)
+        // Demais naturezas preenchidas: codNat e o proprio CT1_NATCTA
+        // sem o zero a esquerda (ex.: "01" -> "1", "09" -> "9").
+        cCodNat := AllTrim(Str(Val(cNatCta), 3, 0))
+    Else
+        // CT1_NATCTA em branco: nao ha base para derivar codNat.
+        cCodNat := ""
+        ::AddInconsist("codNat", cConta, "", STR0011 + AllTrim(cConta))//"CT1_NATCTA em branco ao derivar codNat na conta sintetica: "
+    EndIf
+
+Return cCodNat
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MenorIniVig
+    Devolve o menor valor de iniVig entre os nos filhos diretos de
+    uma Sintetica_Derivada, no formato AAAAMMDD, por comparacao
+    lexicografica direta. Lista vazia, apos descartar cadeias vazias,
+    devolve cadeia vazia e registra inconsistencia.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param aIniFilhos, array, valores de iniVig dos nos filhos diretos,
+    no formato AAAAMMDD
+    @param cConta, character, conta sintetica processada, usada para
+    identificar a conta inconsistente na mensagem
+
+    @return character, menor iniVig entre os filhos, ou cadeia vazia
+    em caso de inconsistencia
+/*/
+//-------------------------------------------------------------------
+Method MenorIniVig(aIniFilhos as Array, cConta as Character) as Character Class DeReD1011PGCC
+
+    Local aValidos  as Array
+    Local cValor    as Character
+    Local nPos      as Numeric
+    Local cMenor    as Character
+
+    aValidos := {}
+
+    // Descarta cadeias vazias entre os iniVig dos filhos diretos.
+    For nPos := 1 To Len(aIniFilhos)
+        cValor := AllTrim(aIniFilhos[nPos])
+        If !Empty(cValor)
+            AAdd(aValidos, cValor)
+        EndIf
+    Next nPos
+
+    // Nenhum filho com iniVig preenchido: nao ha base para propagar a
+    // vigencia para a conta sintetica.
+    If Len(aValidos) == 0
+        ::AddInconsist("iniVig", cConta, "", STR0010 + AllTrim(cConta))//"Nenhum filho com iniVig preenchido na conta sintetica: "
+        Return ""
+    EndIf
+
+    // Formato AAAA-MM-DD de largura fixa: a comparacao lexicografica
+    // direta entre as cadeias coincide com a ordem cronologica, sem
+    // necessidade de conversao para Date.
+    cMenor := aValidos[1]
+    For nPos := 2 To Len(aValidos)
+        If aValidos[nPos] < cMenor
+            cMenor := aValidos[nPos]
+        EndIf
+    Next nPos
+
+Return cMenor
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} MaiorFimVig
+    Devolve o maior valor de fimVig entre os nos filhos diretos de
+    uma Sintetica_Derivada, no formato AAAAMMDD, por comparacao
+    lexicografica direta - simetrico a MenorIniVig(), mas com o
+    criterio de comparacao invertido (maior em vez de menor) e SEM
+    registrar inconsistencia quando a lista fica vazia, pois fimVig e
+    campo opcional: nenhum filho direto com fimVig preenchido e um
+    estado normal (nenhuma filha encerrada), nao um erro de mapeamento
+    (Req 8.4, 12.23 adaptado).
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param aFimFilhos, array, valores de fimVig dos nos filhos diretos,
+    no formato AAAAMMDD (podem incluir cadeias vazias)
+
+    @return character, maior fimVig entre os filhos preenchidos, ou
+    cadeia vazia quando nenhum filho direto possui fimVig preenchido
+/*/
+//-------------------------------------------------------------------
+Method MaiorFimVig(aFimFilhos as Array) as Character Class DeReD1011PGCC
+
+    Local aValidos as Array
+    Local cValor   as Character
+    Local nPos     as Numeric
+    Local cMaior   as Character
+
+    aValidos := {}
+
+    // Descarta cadeias vazias entre os fimVig dos filhos diretos.
+    For nPos := 1 To Len(aFimFilhos)
+        cValor := AllTrim(aFimFilhos[nPos])
+        If !Empty(cValor)
+            AAdd(aValidos, cValor)
+        EndIf
+    Next nPos
+
+    // Nenhum filho com fimVig preenchido: estado normal (nenhuma
+    // filha encerrada), sem inconsistencia - fimVig e opcional.
+    If Len(aValidos) == 0
+        Return ""
+    EndIf
+
+    // Formato AAAAMMDD de largura fixa: a comparacao lexicografica
+    // direta entre as cadeias coincide com a ordem cronologica, sem
+    // necessidade de conversao para Date.
+    cMaior := aValidos[1]
+    For nPos := 2 To Len(aValidos)
+        If aValidos[nPos] > cMaior
+            cMaior := aValidos[nPos]
+        EndIf
+    Next nPos
+
+Return cMaior
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} ChaveOrdem
+    Monta a chave de ordenacao de um no infoConta em largura fixa de
+    53 caracteres, concatenando cCtaInterna preenchido a direita com
+    espacos em 50 posicoes (PadR) com cDbMist preenchido a esquerda
+    com zeros em 3 posicoes (PadL). Usada como criterio de comparacao
+    pelo aSort() da ordenacao final da colecao (tarefa 6.4), atendendo
+    o Requirement 3.7.
+
+    A largura fixa e deliberada: torna a comparacao entre chaves
+    independente da configuracao de SET EXACT, que em AdvPL altera o
+    resultado do operador de comparacao entre cadeias de tamanhos
+    diferentes. Como cCtaInterna e sempre preenchido a direita ate 50
+    posicoes antes da comparacao, contas mais curtas ordenam antes de
+    contas mais longas que compartilham o mesmo prefixo (por exemplo,
+    "11" ordena antes de "111", pois a chave de "11" tem espacos nas
+    posicoes seguintes ao prefixo, e espaco e menor que qualquer
+    digito na comparacao caractere a caractere). O desdobramento
+    (cDbMist) concatenado em 3 digitos ao final garante o criterio
+    secundario de ordenacao dentro da mesma conta ("000" antes de
+    "001"), sem exigir um segundo aSort().
+
+    Nucleo puro, sem acesso a banco: o resultado depende exclusivamente
+    dos parametros recebidos.
+
+    @author pierre.nascimento
+    @since 15/01/2026
+    @version P12.1.2510
+
+    @param cCtaInterna, character, cCtaInterna do no
+    @param cDbMist, character, cDbrMista do no
+
+    @return character, chave de ordenacao de 53 caracteres
+/*/
+//-------------------------------------------------------------------
+Method ChaveOrdem(cCtaInterna as Character, cDbMist as Character) as Character Class DeReD1011PGCC
+Return PadR(cCtaInterna, 50) + PadL(cDbMist, 3, "0")

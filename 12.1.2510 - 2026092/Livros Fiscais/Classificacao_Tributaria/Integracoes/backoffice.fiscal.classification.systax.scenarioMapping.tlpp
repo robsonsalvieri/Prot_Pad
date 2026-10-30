@@ -1,0 +1,701 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "classificadorfiscal.ch"
+
+Namespace totvs.protheus.backoffice.fiscal.Classifier
+
+/*/{Protheus.doc} FISScenarioMappingSystax
+Classe para consumir a API de de-para de cenarios da Systax
+E fornecer consulta simples entre codigo novo e codigo antigo.
+@type class
+@author Juliano Fernandes
+@since 06/05/2026
+/*/
+Class FISScenarioMappingSystax
+
+    Private Data cUrl as character
+    Private Data cUsername as character
+    Private Data oRestClient as object
+    Private Data cToken as character
+    Private Data cError as character
+    Private Data jResponse as json
+    Private Data aScenarioMappings as array
+    Private Data lDictUpdated as logical
+
+    Public Method new() constructor
+    Public Method loadScenarioMapping(cMockServer as character, cPath as character, nPagination as numeric, cPointer as character, cNextPageParam as character) as logical
+    Public Method getLegacyCode(cNewCode as character) as character
+    Public Method getNewCode(cLegacyCode as character) as character
+    Public Method getScenarioMappings() as array
+    Public Method getError() as character
+    Public Method destroy()
+
+    Private Method loadConfig()
+    Private Method clearMap()
+    Private Method parseResponse(cBody as character) as logical
+    Private Method mapScenarioPairs(xNode as variant) as numeric
+    Private Method resolveNewCode(jNode as json) as character
+    Private Method resolveLegacyCode(jNode as json) as character
+    Private Method resolveValueByCandidates(jNode as json, aCandidates as array) as character
+    Private Method fetchPage(cPath as character, aHeader as array, nPagination as numeric, cPointer as character, cNextPageParam as character) as character
+    Private Method extractNextPageParam(cBody as character) as character
+    Private Method extractPointer(cBody as character) as character
+    Private Method saveScenarioPairsToCI5(aPairs as array, cPointer as character)
+
+    Public Method loadPointerFromCJI() as character
+    Public Method savePointerToCJI(cPointer as character)
+    Public Method setDictUpdated(lDictUpdated as logical)
+    Public Method setUrlForTest(cUrl as character)
+
+EndClass
+
+/*/{Protheus.doc} new
+Metodo construtor.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@return object, instancia da classe
+/*/
+Method new() Class FISScenarioMappingSystax
+
+    self:cUrl := ""
+    self:cUsername := ""
+    self:oRestClient := Nil
+    self:cToken := ""
+    self:cError := ""
+    self:jResponse := JsonObject():New()
+    self:aScenarioMappings := {}
+
+    self:setDictUpdated(FISExtCmp("12.1.2510",.T.,"CJI","CJI_TIPO") .And. FwSIXUtil():ExistIndex("CJI","3") .And. FwAliasInDic("CI5"))
+    self:loadConfig()
+
+Return self
+
+/*/{Protheus.doc} loadConfig
+Carrega parametros da integracao Systax no padrao atual do produto.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+/*/
+Method loadConfig() Class FISScenarioMappingSystax
+
+    Local aParam := {"URLREGRA2", "USERNAMEDEFAULT"} as array
+    Local cParameter := GetConfigClassif(aParam) as character
+    Local jParameter := JsonObject():New() as json
+
+    If jParameter:FromJson(cParameter) == Nil
+        self:cUrl := jParameter:URLREGRA2
+        self:cUsername := jParameter:USERNAMEDEFAULT
+    EndIf
+
+    FreeObj(jParameter)
+    FWFreeArray(aParam)
+
+Return
+
+/*/{Protheus.doc} loadScenarioMapping
+Consulta endpoint da API de de-para e popula os atributos de mapa.
+Realiza paginacao automatica: quando a resposta retornar paramProxPag,
+faz novas requisicoes acumulando os pares ate a ultima pagina.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param cMockServer, character, URL opcional para ambiente de mock
+@param cPath, character, endpoint de de-para da API
+@param nPagination, numeric, flag de paginacao
+@param cPointer, character, ponteiro de controle da API (fixo entre paginas)
+@param cNextPageParam, character, valor inicial do paramProxPag
+@return logical, .T. se ao menos um par foi carregado
+/*/
+Method loadScenarioMapping(cMockServer as character, cPath as character, nPagination as numeric, cPointer as character, cNextPageParam as character) as logical Class FISScenarioMappingSystax
+
+    Local aHeader := {} as array
+    Local cResult := "" as character
+    Local cCurrentNextPage := "" as character
+    Local cBaseUrl := self:cUrl as character
+    Local lHasMore := .T. as logical
+    Local cFirstPointer := "" as character
+    Local cCjiPointer := "" as character
+
+    Default cMockServer := ""
+    Default cPath := "/api/regrasreforma/deparacenarios/{paginacao}/{ponteiro}/{paramProxPag}"
+    Default nPagination := 100
+    Default cPointer := "0"
+    Default cNextPageParam := "0"
+
+    self:cError := ""
+    self:clearMap()
+
+    If !self:lDictUpdated
+        self:cError := STR0246 // "Dicionário desatualizado. Verifique as atualizações da Classificação Tributária"
+        Return .F.
+    EndIf
+
+    If !Empty(cMockServer)
+        cBaseUrl := cMockServer
+    Else
+        cCjiPointer := self:loadPointerFromCJI()
+        cPointer := cCjiPointer
+    EndIf
+
+    self:oRestClient := FwRest():New(cBaseUrl)
+    self:oRestClient:SetChkStatus(.F.)
+
+    cCurrentNextPage := AllTrim(cNextPageParam)
+
+    While lHasMore
+
+        // Atualiza token a cada requisicao para prevenir expiracao durante a paginacao
+        self:cToken := AllTrim(ConsultTok(self:cUsername, cMockServer))
+
+        FWFreeArray(aHeader)
+        aHeader := {}
+        AAdd(aHeader, "Content-Type: application/json; charset=UTF-8")
+        AAdd(aHeader, "User-Agent: Chrome/65.0 (compatible; Protheus " + GetBuild() + ")")
+
+        If !Empty(self:cToken)
+            AAdd(aHeader, "Authorization: Bearer " + self:cToken)
+        EndIf
+
+        cResult := self:fetchPage(cPath, aHeader, nPagination, cPointer, cCurrentNextPage)
+
+        If Empty(cResult)
+            FWFreeArray(aHeader)
+            Return .F.
+        EndIf
+
+        If !self:parseResponse(cResult)
+            FWFreeArray(aHeader)
+            Return .F.
+        EndIf
+
+        // Captura o ponteiro somente da primeira pagina para posterior gravacao no CJI
+        If Empty(cFirstPointer)
+            cFirstPointer := self:extractPointer(cResult)
+        EndIf
+
+        cCurrentNextPage := self:extractNextPageParam(cResult)
+        lHasMore := !Empty(cCurrentNextPage)
+
+    EndDo
+
+    FWFreeArray(aHeader)
+
+    // Grava o ponteiro retornado pela API na tabela CJI
+    If Empty(cMockServer) .And. !Empty(cFirstPointer)
+        self:savePointerToCJI(cFirstPointer)
+    EndIf
+
+    If Len(self:aScenarioMappings) == 0
+        self:cError := STR0337 // "Nenhum par de cenario novo x legado foi encontrado na resposta."
+        Return .F.
+    EndIf
+
+    // Grava os pares de cenarios na tabela CI5
+    self:saveScenarioPairsToCI5(self:aScenarioMappings, cFirstPointer)
+
+Return .T.
+
+/*/{Protheus.doc} clearMap
+Limpa os atributos com dados do de-para.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+/*/
+Method clearMap() Class FISScenarioMappingSystax
+
+    If ValType(self:jResponse) == "J"
+        FreeObj(self:jResponse)
+    EndIf
+
+    If ValType(self:aScenarioMappings) == "A"
+        FWFreeArray(self:aScenarioMappings)
+    EndIf
+
+    self:jResponse := JsonObject():New()
+    self:aScenarioMappings := {}
+
+Return
+
+/*/{Protheus.doc} parseResponse
+Interpreta e mapeia o retorno JSON da API em memoria.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param cBody, character, retorno JSON da API
+@return logical, .T. quando encontrou pares novo/antigo
+/*/
+Method parseResponse(cBody as character) as logical Class FISScenarioMappingSystax
+
+    Local jResponseBody := JsonObject():New() as json
+    Local cJsonError := "" as character
+
+    cJsonError := jResponseBody:FromJson(cBody)
+
+    If !Empty(cJsonError)
+        self:cError := STR0338 + ": " + cJsonError // "Falha ao interpretar o retorno JSON da API de mapeamento"
+        FreeObj(jResponseBody)
+        Return .F.
+    EndIf
+
+    self:mapScenarioPairs(jResponseBody)
+
+    FreeObj(jResponseBody)
+
+Return .T.
+
+/*/{Protheus.doc} fetchPage
+Executa uma unica requisicao GET para a pagina informada e retorna o corpo da resposta.
+@type method
+@author Juliano Fernandes
+@since 13/05/2026
+@param cPath, character, template do endpoint com placeholders
+@param aHeader, array, headers HTTP da requisicao
+@param nPagination, numeric, flag de paginacao
+@param cPointer, character, ponteiro de controle da API
+@param cNextPageParam, character, parametro de proxima pagina
+@return character, corpo da resposta ou vazio em caso de erro
+/*/
+Method fetchPage(cPath as character, aHeader as array, nPagination as numeric, cPointer as character, cNextPageParam as character) as character Class FISScenarioMappingSystax
+
+    Local cRequestPath := cPath as character
+
+    cRequestPath := StrTran(cRequestPath, "{paginacao}",    AllTrim(cValToChar(nPagination)))
+    cRequestPath := StrTran(cRequestPath, "{ponteiro}",     AllTrim(cPointer))
+    cRequestPath := StrTran(cRequestPath, "{paramProxPag}", AllTrim(cNextPageParam))
+
+    self:oRestClient:SetPath(cRequestPath)
+
+    If !self:oRestClient:Get(aHeader)
+        self:cError := self:oRestClient:GetLastError()
+        Return ""
+    EndIf
+
+Return self:oRestClient:GetResult()
+
+/*/{Protheus.doc} extractNextPageParam
+Extrai o valor de paramProxPag do corpo JSON da resposta para controle de paginacao.
+@type method
+@author Juliano Fernandes
+@since 13/05/2026
+@param cBody, character, corpo JSON da resposta da API
+@return character, valor de paramProxPag ou vazio quando nao ha proxima pagina
+/*/
+Method extractNextPageParam(cBody as character) as character Class FISScenarioMappingSystax
+
+    Local jPage := JsonObject():New() as json
+    Local cParam := "" as character
+
+    If jPage:FromJson(cBody) == Nil
+        If jPage:HasProperty("paramProxPag")
+            If jPage["paramProxPag"] != "0"
+                cParam := AllTrim(cValToChar(jPage["paramProxPag"]))
+            EndIf
+        EndIf
+    EndIf
+
+    FreeObj(jPage)
+
+Return cParam
+
+/*/{Protheus.doc} extractPointer
+Extrai o campo ponteiro do corpo JSON da resposta da API.
+@type method
+@author Juliano Fernandes
+@since 14/05/2026
+@param cBody, character, corpo JSON da resposta da API
+@return character, valor do campo ponteiro ou vazio quando ausente
+/*/
+Method extractPointer(cBody as character) as character Class FISScenarioMappingSystax
+
+    Local jPage := JsonObject():New() as json
+    Local cPointer := "" as character
+
+    If jPage:FromJson(cBody) == Nil
+        If jPage:HasProperty("ponteiro")
+            cPointer := AllTrim(cValToChar(jPage["ponteiro"]))
+        EndIf
+    EndIf
+
+    FreeObj(jPage)
+
+Return cPointer
+
+/*/{Protheus.doc} loadPointerFromCJI
+Busca o ultimo ponteiro gravado na tabela CJI para a filial corrente.
+O valor retornado e enviado como ponteiro de controle na API da Systax,
+permitindo consultas incrementais. Retorna "0" quando nao ha registro.
+Nota: filtra por CJI_TIPO = '3' (tipo ponteiro de De-Para de cenarios).
+@type method
+@author Juliano Fernandes
+@since 14/05/2026
+@return character, valor de CJI_ULTPON do registro mais recente, ou "0"
+/*/
+Method loadPointerFromCJI() as character Class FISScenarioMappingSystax
+
+    Local cUltPon := "0" as character
+    Local cQuery := "" as character
+    Local oExec as object
+    Local xResult as variant
+
+    cQuery := " SELECT CJI_ULTPON "
+    cQuery += " FROM " + RetSqlName("CJI")
+    cQuery += " WHERE CJI_FILIAL = ? "
+    cQuery += "     AND CJI_DTCONS <= ? "
+    cQuery += "     AND CJI_TIPO = ? "
+    cQuery += "     AND D_E_L_E_T_ = ? "
+    cQuery += " ORDER BY R_E_C_N_O_ DESC "
+
+    cQuery := ChangeQuery(cQuery)
+
+    oExec := FWExecStatement():New(cQuery)
+    oExec:SetString(1, xFilial("CJI"))
+    oExec:SetDate(2, Date())
+    oExec:SetString(3, "3")
+    oExec:SetString(4, " ")
+
+    xResult := oExec:ExecScalar("CJI_ULTPON")
+
+    If ValType(xResult) != "U" .And. !Empty(xResult)
+        cUltPon := AllTrim(xResult)
+    EndIf
+
+    oExec:Destroy()
+    oExec := Nil
+
+Return cUltPon
+
+/*/{Protheus.doc} savePointerToCJI
+Grava o primeiro ponteiro retornado pela API da Systax na tabela CJI.
+O registro inclui filial, data e hora da consulta, ponteiro inicial e
+ponteiro final, e o indicador de tipo de De-Para de cenarios (CJI_TIPO = '3').
+@type method
+@author Juliano Fernandes
+@since 14/05/2026
+@param cPointer, character, valor do ponteiro a ser gravado
+/*/
+Method savePointerToCJI(cPointer as character) Class FISScenarioMappingSystax
+
+    Local cFil := xFilial("CJI") as character
+
+    DbSelectArea("CJI")
+    CJI->(DbSetOrder(3)) // CJI_FILIAL+DTOS(CJI_DTCONS)+CJI_TIPO
+    If CJI->(MsSeek(cFil + DToS(Date()) + "3"))
+        RecLock("CJI", .F.)
+        CJI->CJI_ULTPON := cPointer
+        CJI->(MsUnlock())
+    Else
+        CJI->(DbSetOrder(2)) // CJI_FILIAL+CJI_PRIPON
+        If !CJI->(MsSeek(cFil + cPointer))
+            RecLock("CJI", .T.)
+            CJI->CJI_FILIAL := cFil
+            CJI->CJI_TIPO   := "3"
+            CJI->CJI_PRIPON := cPointer
+            CJI->CJI_DTCONS := Date()
+            CJI->CJI_HRCONS := Time()
+            CJI->CJI_ULTPON := cPointer
+            CJI->(MsUnlock())
+        EndIf
+    EndIf
+    
+    CJI->(DbCloseArea())
+
+Return
+
+/*/{Protheus.doc} mapScenarioPairs
+Percorre recursivamente o JSON para encontrar pares novo/antigo.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param xNode, variant, no atual do JSON
+@return numeric, quantidade de pares mapeados
+/*/
+Method mapScenarioPairs(xNode as variant) as numeric Class FISScenarioMappingSystax
+
+    Local aNames := {} as array
+    Local cName := "" as character
+    Local cNewCode := "" as character
+    Local cLegacyCode := "" as character
+    Local nI := 0 as numeric
+    Local nMapped := 0 as numeric
+
+    If ValType(xNode) == "A"
+        For nI := 1 To Len(xNode)
+            nMapped += self:mapScenarioPairs(xNode[nI])
+        Next nI
+
+        Return nMapped
+    EndIf
+
+    If ValType(xNode) != "J"
+        Return 0
+    EndIf
+
+    cNewCode    := self:resolveNewCode(xNode)
+    cLegacyCode := self:resolveLegacyCode(xNode)
+
+    If !Empty(cNewCode) .And. !Empty(cLegacyCode)
+        // Ignora par duplicado: a API retorna o ultimo cenario da pagina N como primeiro da pagina N+1
+        If AScan(self:aScenarioMappings, {|aPar| AllTrim(aPar[1]) == AllTrim(cNewCode) .And. AllTrim(aPar[2]) == AllTrim(cLegacyCode)}) == 0
+            AAdd(self:aScenarioMappings, {cNewCode, cLegacyCode})
+            nMapped++
+        EndIf
+    EndIf
+
+    aNames := xNode:GetNames()
+
+    For nI := 1 To Len(aNames)
+        cName := aNames[nI]
+
+        If ValType(xNode[cName]) == "J" .Or. ValType(xNode[cName]) == "A"
+            nMapped += self:mapScenarioPairs(xNode[cName])
+        EndIf
+    Next nI
+
+    FWFreeArray(aNames)
+
+Return nMapped
+
+/*/{Protheus.doc} resolveNewCode
+Resolve o codigo RT (novo) por chaves conhecidas.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param jNode, json, no JSON a inspecionar
+@return character, codigo RT encontrado, ou vazio quando nao localizado
+/*/
+Method resolveNewCode(jNode as json) as character Class FISScenarioMappingSystax
+
+    Local cCode := "" as character
+
+    If jNode:HasProperty("rt") .And. ValType(jNode["rt"]) == "J"
+        If jNode["rt"]:HasProperty("idCenario")
+            cCode := AllTrim(cValToChar(jNode["rt"]["idCenario"]))
+            If !Empty(cCode)
+                Return cCode
+            EndIf
+        EndIf
+    EndIf
+
+Return self:resolveValueByCandidates(jNode, {"codigoCenarioNovo","codigo_cenario_novo","idCenarioNovo","id_cenario_novo","cenarioNovo","cenario_novo","novo","newCode"})
+
+/*/{Protheus.doc} resolveLegacyCode
+Resolve o codigo Legado (antigo) por chaves conhecidas.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param jNode, json, no JSON a inspecionar
+@return character, codigo Legado encontrado, ou vazio quando nao localizado
+/*/
+Method resolveLegacyCode(jNode as json) as character Class FISScenarioMappingSystax
+
+    Local cCode := "" as character
+
+    If jNode:HasProperty("atual") .And. ValType(jNode["atual"]) == "J"
+        If jNode["atual"]:HasProperty("idCenario")
+            cCode := AllTrim(cValToChar(jNode["atual"]["idCenario"]))
+            If !Empty(cCode)
+                Return cCode
+            EndIf
+        EndIf
+    EndIf
+
+Return self:resolveValueByCandidates(jNode, {"codigoCenarioAntigo","codigo_cenario_antigo","idCenarioAntigo","id_cenario_antigo","cenarioAntigo","cenario_antigo","antigo","oldCode"})
+
+/*/{Protheus.doc} resolveValueByCandidates
+Retorna o primeiro valor encontrado em jNode de acordo com as chaves candidatas.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param jNode, json, no json
+@param aCandidates, array, lista de chaves candidatas
+@return character, valor convertido para character
+/*/
+Method resolveValueByCandidates(jNode as json, aCandidates as array) as character Class FISScenarioMappingSystax
+
+    Local nI := 0 as numeric
+    Local cKey := "" as character
+    Local xValue := Nil
+
+    For nI := 1 To Len(aCandidates)
+        cKey := aCandidates[nI]
+
+        If jNode:HasProperty(cKey)
+            xValue := jNode[cKey]
+
+            If ValType(xValue) != "U"
+                Return AllTrim(cValToChar(xValue))
+            EndIf
+        EndIf
+    Next nI
+
+Return ""
+
+/*/{Protheus.doc} getLegacyCode
+Retorna o codigo Legado (atual) correspondente ao codigo RT informado.
+Realiza a busca diretamente na tabela CI5 pelo indice 1 (CI5_FILIAL+CI5_IDCENR).
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param cNewCode, character, codigo RT do cenario
+@return character, codigo Legado correspondente ou vazio quando nao mapeado
+/*/
+Method getLegacyCode(cNewCode as character) as character Class FISScenarioMappingSystax
+
+    Local cFil := xFilial("CI5") as character
+    Local cLegacy := "" as character
+
+    If Empty(cNewCode)
+        Return ""
+    EndIf
+
+    DbSelectArea("CI5")
+    CI5->(DbSetOrder(1)) // CI5_FILIAL+CI5_IDCENR+CI5_IDCENA+CI5_PTSYS
+    If CI5->(MsSeek(cFil + PadR(AllTrim(cNewCode), 36)))
+        cLegacy := AllTrim(CI5->CI5_IDCENA)
+    EndIf
+
+Return cLegacy
+
+/*/{Protheus.doc} getNewCode
+Retorna o codigo RT correspondente ao codigo Legado (atual) informado.
+Realiza a busca diretamente na tabela CI5 pelo indice 2 (CI5_FILIAL+CI5_IDCENA).
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@param cLegacyCode, character, codigo Legado do cenario
+@return character, codigo RT correspondente ou vazio quando nao mapeado
+/*/
+Method getNewCode(cLegacyCode as character) as character Class FISScenarioMappingSystax
+
+    Local cFil := xFilial("CI5") as character
+    Local cNew := "" as character
+
+    If Empty(cLegacyCode)
+        Return ""
+    EndIf
+
+    DbSelectArea("CI5")
+    CI5->(DbSetOrder(2)) // CI5_FILIAL+CI5_IDCENA+CI5_IDCENR+CI5_PTSYS
+    If CI5->(MsSeek(cFil + cLegacyCode))
+        cNew := AllTrim(CI5->CI5_IDCENR)
+    EndIf
+    CI5->(DbCloseArea())
+
+Return cNew
+
+/*/{Protheus.doc} getScenarioMappings
+Retorna a lista de pares de cenarios mapeados.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@return array, pares no formato {codigoNovo, codigoLegado}
+/*/
+Method getScenarioMappings() as array Class FISScenarioMappingSystax
+Return self:aScenarioMappings
+
+/*/{Protheus.doc} getError
+Retorna a ultima mensagem de erro registrada na classe.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+@return character, mensagem de erro
+/*/
+Method getError() as character Class FISScenarioMappingSystax
+Return self:cError
+
+/*/{Protheus.doc} destroy
+Libera objetos da classe.
+@type method
+@author Juliano Fernandes
+@since 06/05/2026
+/*/
+Method destroy() Class FISScenarioMappingSystax
+
+    If ValType(self:jResponse) == "J"
+        FreeObj(self:jResponse)
+    EndIf
+
+    If ValType(self:oRestClient) == "O"
+        FreeObj(self:oRestClient)
+    EndIf
+
+Return
+
+/*/{Protheus.doc} saveScenarioPairsToCI5
+Insere os pares de cenarios na tabela CI5, preservando registros pre-existentes.
+A CI5 e uma tabela de consulta acumulativa: cada chamada adiciona os novos
+pares obtidos da API sem remover os registros anteriores.
+Utiliza FWBulk para ganho de performance de 30-40% em importacoes com grande volume de pares. 
+@type method
+@author Juliano Fernandes
+@since 15/05/2026
+@param aPairs, array, pares de cenarios no formato {{codigoNovo, codigoLegado},...}
+@param cPointer, character, ponteiro Systax da consulta
+/*/
+Method saveScenarioPairsToCI5(aPairs as array, cPointer as character) Class FISScenarioMappingSystax
+
+    Local cFil := xFilial("CI5") as character
+    Local nI := 0 as numeric
+    Local lCanBulk := FwBulk():CanBulk() as logical
+    Local oBulk as object
+    Local aStruct := {} as array
+    Local lOk := .T. as logical
+
+    aStruct := FWSX3Util():GetListFieldsStruct("CI5", .F., .F.)
+
+    If lCanBulk
+        oBulk := FwBulk():New(RetSqlName("CI5"))
+        oBulk:SetFields(aStruct)
+
+        For nI := 1 To Len(aPairs)
+            If lOk
+                lOk := oBulk:AddData({;
+                    PadR(cFil, aStruct[1][3]),; 
+                    PadR(aPairs[nI][1], aStruct[2][3]),; 
+                    PadR(aPairs[nI][2], aStruct[3][3]),; 
+                    PadR(cPointer, aStruct[4][3]);
+                })
+            EndIf
+        Next nI
+
+        If lOk
+            lOk := oBulk:Close()
+        EndIf
+
+        If !lOk
+            self:cError := oBulk:GetError()
+        EndIf
+
+        oBulk:Destroy()
+        oBulk := Nil
+    EndIf
+
+    FWFreeArray(aStruct)
+
+Return
+
+/*/{Protheus.doc} setDictUpdated
+Define o estado do dicionario de dados para teste unitario.
+Permite simular o cenario de dicionario desatualizado (linha 129)
+sem depender do ambiente de producao.
+@type method
+@author Juliano Fernandes
+@since 18/05/2026
+@param lDictUpdated, logical, .F. para simular dicionario desatualizado; .T. para restaurar
+/*/
+Method setDictUpdated(lDictUpdated as logical) Class FISScenarioMappingSystax
+    self:lDictUpdated := lDictUpdated
+Return
+
+/*/{Protheus.doc} setUrlForTest
+Define a URL base da integracao Systax para teste unitario.
+Permite exercitar o path de producao (cMockServer vazio) apontando para servidor mock.
+@type method
+@author Juliano Fernandes
+@since 18/05/2026
+@param cUrl, character, URL do servidor a ser usada como URL de producao
+/*/
+Method setUrlForTest(cUrl as character) Class FISScenarioMappingSystax
+    self:cUrl := cUrl
+Return

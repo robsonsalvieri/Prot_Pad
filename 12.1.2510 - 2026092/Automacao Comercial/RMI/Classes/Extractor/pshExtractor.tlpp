@@ -1,0 +1,844 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+namespace totvs.protheus.retail.rmi.classes.extractor.pshExtractor
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} pshExtractor
+@description Classe responsável pela extração de dados utilizando múltiplas threads e paginação.
+
+@type class
+
+@author evandro.pattaro
+@since 28/07/2026
+/*/
+//-------------------------------------------------------------------
+
+Class pshExtractor
+
+    Public Method new(cAssin as Character, cFilDest as Character, nPageSize as Numeric, nThreads as Numeric) as Object
+    Public Method Inicia(aProcesses as Array, lEnvia as Logical) as Logical
+    
+    Private Method Processa(jSchema as json, cProcess as character, nTotalRegs as numeric, nMinRecno as numeric, nMaxRecno as numeric, cTabela as Character,cFiltro as Character, lEnvia as Logical) as Logical
+    Private Method SetProprietary(jSchema as json) as Logical
+    Private Method cargaMIN(aProcessos as Array, lStart as Logical, lRetorno as Logical) as Variant    
+    Private Method GetPgRecno() as Array
+    Private Method Prepara(aProcesses as Array) as Array
+    Private Method logErro(cProcess as character, cTabela as character, cErro as character, cStamp as character) as Logical
+
+    Data cAssinante as Character
+    Data cFilDest as Character
+    Data nPageSize as Numeric
+    Data nThreads as Numeric
+    Data lSucesso as Logical
+    Data cRetorno as Character
+    Data cuidCarga as Character
+
+EndClass
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} new
+@description Método construtor
+@type method
+
+@author evandro.pattaro
+@since 28/07/2026
+
+@param cAssin, character, Código do assinante
+@param cFilDest, character, Filial de destino
+@param nPageSize, numeric, Tamanho da página (quantidade de registros por thread)
+@param nThreads, numeric, Quantidade limitadora de threads alocadas
+
+@return object, Objeto instanciado
+/*/
+//-------------------------------------------------------------------
+Method new(cAssin as Character,cFilDest as Character,nPageSize as Numeric, nThreads as Numeric) as object class pshExtractor
+    
+    Default nThreads := 4
+    Default nPageSize := 50000
+
+
+    ::cAssinante := cAssin
+    ::cFilDest    := cFilDest
+    ::nPageSize  := nPageSize
+    ::nThreads   := nThreads
+
+Return self
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Inicia
+@description Inicia o processamento lendo as configurações da tabela MHP e validando os schemas em JSON.
+@type method
+
+@author evandro.pattaro
+@since 28/07/2026
+
+@param aProcesses, array, Array contendo a lista dos nomes de processos a serem inicializados.
+
+@return logical, .T. indicando a finalização da varredura nos processos
+/*/
+//-------------------------------------------------------------------
+
+Method Inicia(aProcesses as Array, lEnvia as Logical) as logical class pshExtractor
+
+    Local nI as numeric
+    Local cProcess as character
+    Local cSchema as character
+    Local jSchema as json
+    Local aCargas as array
+
+    Default lEnvia := .F.
+
+    ::cUidCarga := FWUUIDV4(.T.)
+
+    // Marca todos os registros na MIN como em andamento antes de iniciar as extracoes
+    aCargas := ::Prepara(aProcesses)
+
+    For nI := 1 to Len(aCargas)
+
+        cProcess := aCargas[nI]['processo']
+        
+        Conout("pshExtractor: Iniciando extracao do processo: " + cProcess + " - " + FwTimeStamp(3))
+        
+        MHP->(DbGoTo(aCargas[nI]['recnoMHP']))
+        cSchema := MHP->MHP_SCHEMA
+        
+        If !Empty(cSchema)
+            jSchema := JsonObject():New()
+            // Se FromJson retornar Nil, significa que o parse do texto em Json ocorreu com sucesso
+            If jSchema:FromJson(cSchema) == Nil
+                ::Processa(jSchema, cProcess, aCargas[nI]['qtdRegistros'], aCargas[nI]['nMinRecno'], aCargas[nI]['nMaxRecno'],aCargas[nI]['tabela'],aCargas[nI]['filtro'], lEnvia)
+            EndIf
+            FwFreeObj(jSchema)
+        EndIf
+        
+        FwFreeObj(aCargas[nI])
+    Next
+
+    Conout("pshExtractor: Finalizada a extração dos processos. - " + FwTimeStamp(3))
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Processa
+@description Quebra em páginas os dados da query montada pelo dicionário de dados (Schema) e instancia workers assíncronos.
+@type method
+
+@author evandro.pattaro
+@since 28/07/2026
+
+@param jSchema, json, Objeto JSON lido do schema no banco.
+@param cProcess, character, Código do processo atual.
+@param nTotalRegs, numeric, Total de registros a serem processados.
+@param nMinRecno, numeric, Recno mínimo do bloco.
+@param nMaxRecno, numeric, Recno máximo do bloco.
+@param cTabela, character, Nome da tabela a ser processada.
+@param cFiltro , character , conteudo do filtro do processo
+
+@return logical, .T. após executar os IPCs ou .F. se nenhum registro for encontrado para este processo.
+/*/
+//-------------------------------------------------------------------
+
+Method Processa(jSchema as json, cProcess as character, nTotalRegs as numeric, nMinRecno as numeric, nMaxRecno as numeric, cTabela as Character, cFiltro as Character ,lEnvia as Logical) as logical class pshExtractor
+    Local oBuilder      as object
+    Local cBaseQuery    as character
+    Local nCurrentStart as numeric
+    Local cTableName    as character
+    Local cAlias        as character
+    Local cDirDest      as character
+    Local cSemaforo     as character
+    Local nActive       as numeric
+    Local aFiles        as array
+    Local aComp         as array
+    Local aRecnos       as array
+    Local nPage         as numeric
+    Local lComp         as logical
+    Local nI            as numeric
+    Local nJ            as numeric
+    Local nSize         as numeric
+    Local nFile         as numeric
+    Local lZip          as logical
+    Local jCarga        as json
+    Local aErrExt       as array
+    Local nErrExt       as numeric
+    Local lErroExt      as logical
+    Local aDirs         as Array
+    Local cPath         as Character
+    Local nIdx          as Numeric
+    Local nErro         as Numeric
+    Local oEnvia        as Object
+    Local cGlbName      as Character
+    Local cGlbProg      as Character
+    Local aProgress     as Array
+    
+    Default cFiltro := ""
+    Default lEnvia := .F.
+
+    aComp := {}
+    aRecnos := {}
+    lComp := .F.
+    nSize := 0
+    nFile := 1
+    nActive := 0
+    lErroExt := .F.
+    cGlbName := "PSHErr"
+    cGlbProg := "PSHExtProg"
+
+    jCarga := JsonObject():New()
+    jCarga['processo'] := cProcess
+    jCarga['filialSelecionada'] := ::cFilDest
+    jCarga['tabela'] := cTabela
+    jCarga['envio'] := lEnvia
+    
+    TRY
+
+        oBuilder := totvs.protheus.retail.rmi.classes.extractor.pshDynamicQueryBuilder.dynamicQueryBuilder():New()
+
+        cTableName  := jSchema['table']['name']
+        cAlias      := jSchema['table']['alias']
+        
+        ::SetProprietary(jSchema)
+
+        cBaseQuery  := oBuilder:Build(jSchema,cFiltro)
+
+    CATCH oError
+        
+        ::logErro(cProcess, cTabela, "Erro ao montar a query do processo " + cProcess + " - " + oError:description, "")
+
+    ENDTRY
+
+    If nTotalRegs == 0
+        Return .F.
+    EndIf
+
+    aRecnos := ::GetPgRecno(nTotalRegs, nMaxRecno, cTableName, cAlias, oBuilder:cFilter)
+
+    aProgress := {cProcess, Len(aRecnos), 0,"Gerando arquivos..."}
+    PutGlbVars(cGlbProg, aProgress)
+
+    nCurrentStart := nMinRecno    
+
+    cDirDest := "\autocom\psh\extractor\"
+
+    // Cria o diretório destino caso não exista
+    aDirs := StrTokArr(StrTran(cDirDest, "/", "\"), "\")
+    cPath := ""
+    For nIdx := 1 To Len(aDirs)
+        If !Empty(aDirs[nIdx])
+            cPath += "\" + aDirs[nIdx]
+            If !ExistDir(cPath)
+                MakeDir(cPath)
+            EndIf
+        EndIf
+    Next nIdx
+
+    cSemaforo := "PSH_EXT_" + cValToChar(ThreadId())    
+
+    For nPage := 1 To Len(aRecnos)
+        
+        // Limita a quantidade de threads ativas ao maximo configurado
+        While nActive >= ::nThreads
+            // Timeout de 5 minutos, aguarda sinalizacao de alguma thread que finalizou
+            If IpcWaitEx(cSemaforo, 300000)
+                nActive--
+                aProgress[3]++
+                PutGlbVars(cGlbProg, aProgress)
+            Else
+                FWLogMsg("ERROR", , "RMI", "pshExtractor", "", "01", "Timeout de 5 minutos atingido no aguardo das threads.", 0, 0, {})
+                nActive--
+            EndIf
+        EndDo
+        
+        // Despacha o processamento da pagina
+        StartJob("totvs.protheus.retail.rmi.classes.extractor.pshExtractor.PshExtWrkr", GetEnvServer(), .F., cBaseQuery, nCurrentStart, aRecnos[nPage][1], nPage, cSemaforo, cProcess, cDirDest, cEmpAnt, ::cFilDest, ::cUidCarga,cGlbName)
+        nActive++
+
+        nCurrentStart := aRecnos[nPage][1] + 1
+    Next
+    
+    // Aguarda a finalizacao das threads que ainda estao processando as ultimas paginas
+    While nActive > 0   
+        If IpcWaitEx(cSemaforo, 300000)
+            nActive--
+            aProgress[3]++
+            PutGlbVars(cGlbProg, aProgress)
+        Else
+            FWLogMsg("ERROR", , "RMI", "pshExtractor", "", "01", "Timeout de 5 minutos atingido no aguardo do termino das threads restantes.", 0, 0, {})
+            nActive := 0
+        EndIf
+    EndDo
+
+    aErrExt := {}
+    If GetGlbVars(cGlbName, aErrExt)
+        nErrExt := aScan(aErrExt, {|aErro| aErro[1] == ::cUidCarga})
+        If nErrExt > 0
+            ::logErro(cProcess, cTabela, aErrExt[nErrExt][2], "")
+            lErroExt := .T.
+            aErrExt := {}
+            PutGlbVars(cGlbName, aErrExt)
+        EndIf
+    EndIf
+
+    aFiles := Directory(cDirDest + dToS(Date()) +"_" + cProcess + "_*.json")
+
+    aProgress[4] := "Compactando arquivos..."
+    PutGlbVars(cGlbProg, aProgress)
+
+    If Len(aFiles) > 0
+        
+        For nI := 1 To Len(aFiles)
+            
+            // Se adicionar o arquivo atual for exceder o limite de 4GB e o array não estiver vazio, gera o ZIP
+            If Len(aComp) > 0 .And. nSize + aFiles[nI][2] >= 4294967296 // 4GB
+                // Adiciona o sequencial nFile no nome para não sobrescrever arquivos
+                TRY
+                    If FZip( cDirDest + FwTimeStamp(1) + "_" + cProcess + "_" + cValToChar(nFile) + ".zip" , aComp,cDirDest) != 0
+                        nErro := FError()
+                        ::logErro(cProcess, cTabela, I18n("Erro ao gerar o arquivo .zip do processo de #1. Verifique o console.log para mais detalhes.",{cProcess}), "")
+                        lErroExt := .T.
+                    Else
+                        lZip := .T.
+                    EndIf
+                CATCH oError
+                    ::logErro(cProcess, cTabela, "Exceção ao gerar o arquivo .zip do processo de " + cProcess + ": " + oError:description, "")
+                    lErroExt := .T.
+                ENDTRY
+                                                
+                If lZip
+                    // Arquivos zipados com sucesso, pode apagar
+                    For nJ := 1 To Len(aComp)
+                        FErase(aComp[nJ])
+                    Next nJ
+                    lZip := .F.
+                EndIf
+                
+                aComp := {}
+                nSize := 0
+                nFile ++
+            EndIf
+            
+            // Adiciona o arquivo atual no array para ser compactado
+            nSize += aFiles[nI][2]
+            AAdd(aComp, cDirDest + aFiles[nI][1])
+                
+        Next nI
+
+        // Verifica se ainda restaram arquivos no array para gerar o ultimo ZIP
+        If Len(aComp) > 0
+            
+            TRY
+                If FZip( cDirDest + FwTimeStamp(1) + "_" + cProcess + "_" + cValToChar(nFile) + ".zip" , aComp,cDirDest) != 0
+                    nErro := FError()
+                    ::logErro(cProcess, cTabela, I18n("Erro ao gerar o arquivo .zip do processo de #1. Verifique o console.log para mais detalhes.",{cProcess}), "")
+                    lErroExt := .T.
+                Else
+                    lZip := .T.
+                EndIf
+            CATCH oError
+                ::logErro(cProcess, cTabela, "Exceção ao gerar o arquivo .zip do processo de " + cProcess + ": " + oError:description, "")
+                lErroExt := .T.
+            ENDTRY
+                            
+            If lZip
+                // Arquivos zipados com sucesso, pode apagar
+                For nJ := 1 To Len(aComp)
+                    FErase(aComp[nJ])
+                    lZip := .F.
+                Next nJ
+            EndIf
+
+        EndIf
+
+    EndIf
+
+    If lEnvia .And. !lErroExt
+        
+        aProgress[4] := "Enviando arquivos..."
+        PutGlbVars(cGlbProg, aProgress)
+
+        oEnvia := totvs.protheus.retail.rmi.classes.extractor.pshEnviaArquivo.pshEnviaArquivoCH():New(cDirDest, ::cFilDest)
+        oEnvia:PreparaEnvio(cProcess, ::cUidCarga)
+        
+        If !oEnvia:lSucesso
+            lErroExt := .T.
+            ::logErro(cProcess, cTabela, "Erro no envio do arquivo: " + oEnvia:cRetorno, "")
+        EndIf
+        
+        FwFreeObj(oEnvia)
+    EndIf
+
+    //encerra o controle de carga inicial na MIN
+    self:cargaMIN({jCarga},.F., !lErroExt)
+    FwFreeObj(jCarga)
+    ClearGlbValue(cGlbName)
+    ClearGlbValue(cGlbProg)
+    FwFreeArray(aProgress)
+
+Return !lErroExt
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} SetProprietary
+@description Adiciona o campo idProprietario no array de fields do schema, caso não exista, com valor constante do tipo string, preenchido com o nome do cadastro de loja.
+@type method
+@author evandro.pattaro
+@since 28/07/2026
+@param aFields, array, Array de fields do schema.
+@param cAlias, character, Alias da tabela principal do schema.
+@return logical, .T. indicando que o campo foi adicionado com sucesso.
+/*/
+//-------------------------------------------------------------------
+Method SetProprietary(jSchema as json) as Logical Class pshExtractor   
+
+    Local nProp         := 0                            as numeric
+    Local jProprietary  := JsonObject():New()           as json
+    Local jDataRegistro := JsonObject():New()           as json
+    Local aFields       := jSchema['fields']            as array
+    Local cAlias        := jSchema['table']['alias']    as character
+
+    If (nProp := aScan(aFields,{|x| x['alias'] == 'idProprietario'})) > 0
+        aDel(aFields,nProp)
+        aSize(aFields,Len(aFields) - 1 )
+    EndIf
+
+    jProprietary['alias'] := 'idProprietario'
+    jProprietary['is_physical'] := .F.
+    jProprietary['is_constant'] := .T.
+    jProprietary['static_value'] := LjRetComp(::cFilDest, 'CADASTRO DE LOJA')
+
+    AAdd(aFields,Eval({|| x := JsonObject():New(), x:FromJson(jProprietary:ToJson()), x}))
+
+    If (nProp := aScan(aFields,{|x| x['alias'] == 'dataRegistro'})) > 0
+        aDel(aFields,nProp)
+        aSize(aFields,Len(aFields) - 1 )
+    EndIf
+
+    jDataRegistro['alias'] := 'dataRegistro'
+    jDataRegistro['is_physical'] := .T.
+    jDataRegistro['column_name'] := cAlias + ".S_T_A_M_P_"
+
+    AAdd(aFields,Eval({|| x := JsonObject():New(), x:FromJson(jDataRegistro:ToJson()), x}))
+    
+    fwFreeObj(jProprietary)
+    fwFreeObj(jDataRegistro)
+Return .T.
+
+/*/{Protheus.doc} cargaMIN
+@description Atualiza a tabela MIN (Controle de publicações) com o status de carga em andamento ou finalizado, e atualiza a tabela MHP (Cadastro de processos) com o status de ativo ou inativo.
+@type method
+@author evandro.pattaro
+@since 28/07/2026
+@param aProcessos, array, Array contendo a lista dos processos a serem atualizados.
+@param lStart, logical, .T. para iniciar a carga e .F. para finalizar
+@param lRetorno, logical, Indica sucesso ou falha da carga
+@return variant, Nil
+/*/
+Method cargaMIN(aProcessos as Array, lStart as Logical, lRetorno as Logical) as Variant Class pshExtractor
+
+Local lInclui    := .F.
+Local nX         := 1
+Local aAreas     := GetArea()
+Local aAreasMHP  := MHP->(GetArea("MHP"))
+Local aAreasMIN  := MIN->(GetArea("MIN"))
+Local nMINProce  := 0
+Local nMINFilpub := 0
+Local nMHPCassin := 0
+Local nMHPProce  := 0
+Local cLayfil    := ''
+Local jUltRecno  := Nil
+
+Default lRetorno := .T.
+
+DbSelectArea("MIN")
+MIN->(DbSetOrder(1)) // -- MIN_FILIAL+MIN_CPROCE+MIN_FILPUB
+
+DbSelectArea("MHP")
+MHP->(DbSetOrder(1))
+
+//Pegar o tamanho antes do loop
+nMINProce := TamSX3("MIN_CPROCE")[1]
+nMINFilpub := TamSX3("MIN_FILPUB")[1]
+nMHPCassin := TamSX3("MHP_CASSIN")[1]
+nMHPProce := TamSX3("MHP_CPROCE")[1]
+
+For nX := 1 To Len(aProcessos)
+
+    /* Status da carga : 
+    1 - Em andamento
+    2 - Finalizado com sucesso
+    3 - Finalizado com erro
+     */
+    jUltRecno := JsonObject():New()
+
+    lInclui := !MIN->(Dbseek(xFilial("MIN") + PadR(aProcessos[nX]["processo"],nMINProce) + PadR(xFilial(aProcessos[nX]["tabela"],aProcessos[nX]["filialSelecionada"]),nMINFilpub)  ))
+
+    RecLock("MIN", lInclui)
+
+        If lStart
+            
+            jUltRecno[aProcessos[nX]["tabela"]] := 0 
+            jUltRecno["extractor"] := JsonObject():New()
+            jUltRecno["extractor"]["idCarga"] := ::cUidCarga 
+            jUltRecno["extractor"]["status"] := IIF(lRetorno,1,3)   
+            If aProcessos[nX]:HasProperty("detalhesErro")
+                jUltRecno["extractor"]["detalhesErro"] := aProcessos[nX]["detalhesErro"]
+            ElseIf jUltRecno["extractor"]:HasProperty("detalhesErro")
+                jUltRecno["extractor"]:DelName("detalhesErro")
+            EndIf
+            If aProcessos[nX]:HasProperty("envio")
+                jUltRecno["extractor"]["envio"] := aProcessos[nX]["envio"]
+            EndIf
+
+            REPLACE MIN->MIN_FILIAL WITH xFilial("MIN")
+            REPLACE MIN->MIN_CPROCE WITH aProcessos[nX]["processo"]
+            REPLACE MIN->MIN_ULTPUB WITH aProcessos[nX]["ultimaPublicacao"]       
+            REPLACE MIN->MIN_FILPUB WITH PadR(xFilial(aProcessos[nX]["tabela"],aProcessos[nX]["filialSelecionada"]),nMINFilpub)
+            REPLACE MIN->MIN_QTDTOT WITH aProcessos[nX]["qtdRegistros"]
+            REPLACE MIN->MIN_LJDEST WITH aProcessos[nX]["filialSelecionada"]
+            REPLACE MIN->MIN_DTINIC	WITH FwTimeStamp(3)
+            REPLACE MIN->MIN_DTFIMC	WITH IIF(lRetorno,"",FwTimeStamp(3))
+            REPLACE MIN->MIN_CARGA	WITH IIf(lRetorno,"2","0")
+            REPLACE MIN->MIN_ULTREC WITH jUltRecno:ToJson()
+        Else            
+
+            jUltRecno:FromJson(MIN->MIN_ULTREC)
+            jUltRecno["extractor"]["status"] := IIF(lRetorno,2,3)
+            If aProcessos[nX]:HasProperty("detalhesErro")
+                jUltRecno["extractor"]["detalhesErro"] := aProcessos[nX]["detalhesErro"]
+            EndIf
+            If aProcessos[nX]:HasProperty("envio")
+                jUltRecno["extractor"]["envio"] := aProcessos[nX]["envio"]
+            EndIf
+            
+            REPLACE MIN->MIN_QTDTOT WITH 0            
+            REPLACE MIN->MIN_DTFIMC WITH FwTimeStamp(3)
+            REPLACE MIN->MIN_CARGA	WITH "0"    
+            REPLACE MIN->MIN_ULTREC WITH jUltRecno:ToJson()
+        EndIf
+
+    MIN->(MsUnLock())
+    
+    If lStart .And. lRetorno .And. MHP->(Dbseek( xFilial("MHP") + PadR("PDVSYNC",nMHPCassin) + PadR(aProcessos[nX]["processo"],nMHPProce) +"1" ))
+        cLayfil := IIF(PadR(MIN->MIN_LJDEST,nMINFilpub)+';' $ MHP->MHP_LAYFIL,MHP->MHP_LAYFIL,Alltrim(MHP->MHP_LAYFIL)+PadR(MIN->MIN_LJDEST,nMINFilpub)+';')
+        cLayfil := IIF(!Empty(MHP->MHP_LAYFIL) .AND. Alltrim(aProcessos[nX]["filialSelecionada"]) == 'COMPARTILHADA',MHP->MHP_LAYFIL,cLayfil)
+        RecLock("MHP", .F.)
+            REPLACE MHP->MHP_ATIVO WITH '1'
+            REPLACE MHP->MHP_LAYFIL WITH cLayfil
+        MHP->(MsUnLock())
+    EndIf
+
+    FwFreeObj(jUltRecno)
+Next
+
+
+RestArea(aAreas)
+RestArea(aAreasMHP)
+RestArea(aAreasMIN)
+Return Nil
+
+
+/*/{Protheus.doc} GetPgRecno
+@description Retorna um array com os recnos de cada página do processo atual, baseado no tamanho de página configurado.
+@type method
+@author evandro.pattaro
+@since 10/08/2026
+@param nTotReg, numeric, Total de registros
+@param nRecMax, numeric, Recno maximo do bloco
+@param cTableName, character, Nome da tabela
+@param cAlias, character, Alias da tabela
+@param cFilter, character, Filtro a ser adicionado
+@return array, Array contendo os recnos de cada página do processo atual.
+/*/
+Method GetPgRecno(nTotReg as numeric, nRecMax as numeric, cTableName as character, cAlias as character, cFilter as character) as Array Class pshExtractor
+    Local aRet := {}
+    Local aAux := {}
+    Local nTotalPages := 0
+    Local nPage := 0
+    Local cRecQry := ""
+
+    nTotalPages := Int(nTotReg / ::nPageSize)
+    If (nTotReg % ::nPageSize) > 0
+        nTotalPages++
+    EndIf
+
+    If nTotalPages > 1
+        For nPage := 1 To nTotalPages
+            Aadd(aAux,(nPage * ::nPageSize) - 1)
+        Next
+        
+        cRecQry := "SELECT REC_END FROM ( SELECT R_E_C_N_O_ AS REC_END, ROW_NUMBER() OVER (ORDER BY R_E_C_N_O_) AS RN FROM "+ RetSqlName(cTableName) +" "+ cAlias + cFilter + " ) T WHERE T.RN IN ("+ArrTokStr(aAux,",")+")"
+
+        LjGrvLog("pshExtractor", "Método GetPgRecno - Query executada -> " + cRecQry)
+
+        TcSqlToArr(cRecQry,aRet)
+
+        IIf( Len(aRet) < nTotalPages, Eval({|| AAdd(aRet, {nRecMax})}) ,Eval({|| aRet[Len(aRet)] := {nRecMax}}))
+
+    Else
+        AAdd(aRet, {nRecMax})
+    EndIf    
+
+Return aRet
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} Prepara
+@description Prepara e marca todos os registros na MIN antes do processamento de extracao.
+@type method
+@author evandro.pattaro
+@since 12/08/2026
+
+@param aProcesses, array, Array contendo a lista dos processos a serem atualizados na MIN.
+@return array, Array contendo a carga dos processos
+/*/
+//-------------------------------------------------------------------
+Method Prepara(aProcesses as Array) as Array Class pshExtractor
+    Local nI as numeric
+    Local cProcess as character
+    Local cQuery as character
+    Local cAliasMHP as character
+    Local cSchema as character
+    Local jSchema as json
+    Local cTableName as character
+    Local cAlias as character
+    Local oBuilder as object
+    Local cCountQuery as character
+    Local cAliasCount as character
+    Local cSGBD as character
+    Local cUltPub as character
+    Local nTotalRegs as numeric
+    Local aCargas as array
+    Local jCarga as json
+    Local cStampAtu as Character
+    Local cFilter as Character
+    Local aPrecedencia as Array
+
+    cFilter := ""
+    aCargas := {}
+    cSGBD := UPPER(Alltrim(TcGetDb()))
+    cUltPub := IIf(cSGBD == "MSSQL", "CONVERT(VARCHAR(23), MAX(S_T_A_M_P_) , 21 ) ", "to_char(MAX(S_T_A_M_P_),'YYYY-MM-DD HH24:MI:SS.FF3')")
+    cStampAtu := IIf(cSGBD == "MSSQL", " CONVERT(VARCHAR(23), GETUTCDATE() , 21 ) ", " to_char(sys_extract_utc(systimestamp),'YYYY-MM-DD HH24:MI:SS.FF3') ")
+
+
+    aPrecedencia := {'CADASTRO LOJA','COMPARTILHAMENT','ICMS','PIS/COFINS','NCM','PRODUTO','PRECO','SALDO ESTOQUE','PERFIL OPERADOR','OPERADOR LOJA','ADMINISTRADORA','CONDICAO PAGTO','COMPL PAGAMENTO','FORMA PAGAMENTO'}
+
+    // Reordena o array de processos de acordo com a ordem de precedencia pre-estabelecida
+    aSort(aProcesses, , , {|x, y| IIf(aScan(aPrecedencia, AllTrim(x)) == 0, 999, aScan(aPrecedencia, AllTrim(x))) < IIf(aScan(aPrecedencia, AllTrim(y)) == 0, 999, aScan(aPrecedencia, AllTrim(y))) })
+
+    For nI := 1 to Len(aProcesses)
+        cProcess := aProcesses[nI]
+        
+        cQuery := "SELECT MHP.R_E_C_N_O_ AS REC, MHN_TABELA, MHN_FILTRO,  "+cStampAtu+" STAMPATU FROM " + RetSqlName("MHP") + " MHP "
+        cQuery += "INNER JOIN " + RetSqlName("MHN") + " MHN ON MHP_CPROCE = MHN_COD
+        cQuery += " WHERE MHP_FILIAL = '" + xFilial("MHP") + "' AND MHP_CASSIN = '"+PadR(::cAssinante, TamSx3("MHP_CASSIN")[1])+"' AND MHP_CPROCE = '" +   PadR(cProcess, TamSx3("MHP_CPROCE")[1])+ "' AND MHP_TIPO = '1' AND MHP.D_E_L_E_T_ = ' ' "
+        
+        cAliasMHP := GetNextAlias()
+
+        LjGrvLog("pshExtractor", "Método Prepara - Query executada -> " + cQuery)
+
+        DbUseArea(.T., "TOPCONN", TcGenQry(,,cQuery), cAliasMHP, .T., .F.)
+        
+        If !(cAliasMHP)->(Eof())
+            MHP->(DbGoTo((cAliasMHP)->REC))
+            cSchema := MHP->MHP_SCHEMA
+            
+            cFilter := IIF(SubStr((cAliasMHP)->MHN_FILTRO, 1, 1) == "&",&( AllTrim( SubStr((cAliasMHP)->MHN_FILTRO, 2) ) ),(cAliasMHP)->MHN_FILTRO)
+
+            If !Empty(cSchema)
+
+                jSchema := JsonObject():New()
+                TRY
+                    If jSchema:FromJson(cSchema) == Nil
+                        cTableName  := jSchema['table']['name']
+                        cAlias      := jSchema['table']['alias']
+                        
+                        ::SetProprietary(jSchema)
+                        
+                        oBuilder := totvs.protheus.retail.rmi.classes.extractor.pshDynamicQueryBuilder.dynamicQueryBuilder():New()
+                        oBuilder:Build(jSchema,cFilter)
+                        
+                        cCountQuery := "SELECT MIN(R_E_C_N_O_) AS MIN_ID, MAX(R_E_C_N_O_) AS MAX_ID, COUNT(*) AS TOTAL, "+cUltPub+" as ULTPUB FROM " + RetSqlName(cTableName) + " " + cAlias + oBuilder:cFilter
+                        
+                        cAliasCount := GetNextAlias()
+
+                        LjGrvLog("pshExtractor", "Método Prepara - Query executada -> " + cCountQuery)
+
+                        DbUseArea(.T., "TOPCONN", TcGenQry(,,cCountQuery), cAliasCount, .T., .F.)
+                        
+                        If !(cAliasCount)->(Eof())
+                            nTotalRegs := (cAliasCount)->TOTAL
+                            If nTotalRegs > 0
+                                jCarga := JsonObject():New()
+                                jCarga['processo'] := cProcess
+                                jCarga['filialSelecionada'] := ::cFilDest
+                                jCarga['qtdRegistros'] := nTotalRegs
+                                jCarga['ultimaPublicacao'] := (cAliasCount)->ULTPUB
+                                jcarga['tabela'] := cTableName
+                                jCarga['nMinRecno'] := (cAliasCount)->MIN_ID
+                                jCarga['nMaxRecno'] := (cAliasCount)->MAX_ID
+                                jCarga['recnoMHP'] := (cAliasMHP)->REC
+                                JCarga['filtro'] := cFilter
+                                
+                                AAdd(aCargas, Eval({|| x := JsonObject():New(), x:FromJson(jCarga:ToJson()), x}))
+                                
+                                FwFreeObj(jCarga)        
+                            EndIf
+                        EndIf
+                        (cAliasCount)->(DbCloseArea())
+                        FwFreeObj(oBuilder)
+                    EndIf
+                CATCH oError
+                    ::logErro(cProcess, (cAliasMHP)->MHN_TABELA, "Erro ao processar o schema do processo " + cProcess + " - " + oError:description, (cAliasMHP)->STAMPATU)
+                ENDTRY
+                
+                FwFreeObj(jSchema)
+            Else
+                ::cRetorno := "Schema não encontrado para o processo " + cProcess
+                ljxjMsgErr(::cRetorno,/* cSolucao */,"RmiBusPdvSyncObj")
+                ::cRetorno := ""
+            EndIf
+        EndIf
+        (cAliasMHP)->(DbCloseArea())
+    Next
+    
+    If Len(aCargas) > 0
+        ::cargaMIN(aCargas, .T.)
+    EndIf
+
+Return aCargas
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} logErro
+@description Registra o log de erro e atualiza o status na MIN.
+@type method
+@author evandro.pattaro
+@since 14/08/2026
+@param cProcess, character, Código do processo atual
+@param cTabela, character, Nome da tabela
+@param cErro, character, Mensagem de erro a ser gravada
+@param cStamp, character, Opcional. Última publicação
+@return logical, .T.
+/*/
+//-------------------------------------------------------------------
+Method logErro(cProcess as character, cTabela as character, cErro as character, cStamp as character) as Logical Class pshExtractor
+    Local jCarga as json
+    
+    Default cStamp := ""
+
+    ::cRetorno := cErro
+    ljxjMsgErr(::cRetorno,/* cSolucao */,"pshExtractor")
+
+    jCarga := JsonObject():New()
+    jCarga['processo']          := cProcess
+    jCarga['filialSelecionada'] := ::cFilDest
+    jCarga['tabela']            := cTabela
+    jCarga['ultimaPublicacao']  := cStamp
+    jCarga['qtdRegistros']      := 0
+    jCarga['detalhesErro']      := cErro
+
+    ::cargaMIN({jCarga}, IIf(!Empty(cStamp),.T.,.F.), .F.)
+
+    FwFreeObj(jCarga)    
+    
+    ::cRetorno := ""
+
+Return .T.
+
+//-------------------------------------------------------------------
+/*/{Protheus.doc} PshExtWrkr
+@description Função worker manipulada por thread via FWIPCWait para extração paginada de dados.
+
+@type function
+@author evandro.pattaro
+@since 28/07/2026
+
+@param cQueryBase, character, Query SQL base
+@param nStart, numeric, Recno inicial do bloco
+@param nEnd, numeric, Recno final do bloco
+@param nPage, numeric, Número da página atual
+@param cIpcEvent, character, Nome do evento IPCWait
+@param cProcess, character, Código do processo
+@param cDirDest, character, Diretório destino de gravação
+@param cEmp, character, Codigo da Empresa
+@param cFil, character, Codigo da Filial
+@param cUidCarga, character, Identificador da execução da carga
+@param cGlbName, character, Nome da variável global para controle de erros
+/*/
+//-------------------------------------------------------------------
+Function PshExtWrkr(cQueryBase as character, nStart as numeric, nEnd as numeric, nPage as numeric, cIpcEvent as character, cProcess as character, cDirDest as character, cEmp as character, cFil as character, cUidCarga as character,cGlbName As character)
+    Local cQueryFinal   as Character
+    Local cAlias        as Character
+    Local lErro         as Logical
+    Local nHandle       as Numeric 
+    Local cFileName     as Character  
+    Local nWait         as Numeric
+    Local aErrExt       as Array
+    
+    Default cGlbName := "PSHErr"
+
+    RpcSetEnv(cEmp, cFil)
+    
+    cAlias      := GetNextAlias()
+    // format dataYYYYMMDD + process + page
+    cFileName   := cDirDest + dToS(Date()) + "_" + cProcess + "_" + PadL(cValToChar(nPage), 6, "0") + ".json"
+    lErro       := .F.
+
+
+    TRY
+        
+        cQueryFinal := cQueryBase + " AND R_E_C_N_O_ BETWEEN " + cValToChar(nStart) + " AND " + cValToChar(nEnd)
+
+        nHandle := FCreate(cFileName)
+
+        LjGrvLog("pshExtractor", "Função PshExtWrkr - Query executada -> " + cQueryFinal)
+
+        DbUseArea(.T., "TOPCONN", TcGenQry(,,cQueryFinal), cAlias, .T., .F.)
+
+        If nHandle > 0
+
+            FWrite(nHandle, "[")
+            
+            While !(cAlias)->(Eof())   
+                FWrite(nHandle, (cAlias)->json_result)
+                (cAlias)->(DbSkip())
+                If !(cAlias)->(Eof())
+                    FWrite(nHandle, "," + CRLF)
+                EndIf
+            EndDo
+
+            FWrite(nHandle, "]")
+            (cAlias)->(DbCloseArea())
+            
+            FClose(nHandle)
+            FWLogMsg("INFO", , "RMI", "PshExtWrkr", "", "01", "Arquivo gerado com sucesso: " + cFileName, 0, 0)
+        EndIf
+                
+    CATCH oError
+        
+        lErro := .T.
+        FWLogMsg("ERROR", , "RMI", "PshExtWrkr", "", "01", "Erro ao gerar arquivo: " + cFileName + " - " +oError:description, 0, 0)      
+
+        aErrExt := {}
+        GetGlbVars(cGlbName, aErrExt)
+        AAdd(aErrExt, {cUidCarga, "Erro ao extrair os dados de " + cProcess + " : " + oError:description})
+        PutGlbVars(cGlbName, aErrExt)
+        
+        If nHandle > 0
+            FClose(nHandle)
+        EndIf  
+
+    ENDTRY
+    // Se ocorrer erro, apaga o arquivo gerado
+    if lErro .and. file(cFileName)
+        FErase(cFileName)
+    endIf
+
+    // Avisa a thread principal que terminou
+    nWait := 0
+    // Garante o envio do sinal de termino a thread principal por ate 5 minutos (3000 iteracoes de 100ms)
+    While !IpcGo(cIpcEvent) .And. nWait < 3000
+        Sleep(100)
+        nWait++
+    EndDo
+
+    RpcClearEnv()
+
+Return

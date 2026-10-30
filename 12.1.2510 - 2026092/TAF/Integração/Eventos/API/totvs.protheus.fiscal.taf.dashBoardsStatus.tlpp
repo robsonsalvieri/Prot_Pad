@@ -1,0 +1,332 @@
+#include "tlpp-core.th"
+#include "tlpp-rest.th"
+#include "totvs.ch"
+#include "totvs.protheus.fiscal.taf.dashBoardsStatus.ch"
+
+namespace totvs.protheus.fiscal.taf.event
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus
+Controller REST responsavel pela consulta de contagem de eventos
+fiscais da tabela T7A agrupados por status, para o intervalo de
+datas informado (startDate/endDate). Suporta filtro opcional por
+event (valores aceitos: conforme a tabela T7E).
+O campo hasNext e sempre false - sem suporte a paginacao (FR-009).
+
+@type      class
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+/*/
+//----------------------------------------------------------------
+Class DashBoardsStatus
+
+	private data cStart     as character
+	private data cEnd       as character
+	private data aTypeEvent as array
+
+	public method New() Constructor
+
+	@Get('/api/taf/fiscal/v1/dashboardStatus')
+	public method getDashboardStatus()
+
+	private method getParams()
+	private method validateParams() as object
+	private method queryStatus() as array
+	private method mapStatusLabel() as character
+	private method buildErrorResp() as object
+	private method buildSuccessResp() as character
+
+EndClass
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:New
+Metodo construtor da classe DashBoardsStatus.
+Inicializa as propriedades com valores padrao.
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+@return    Self  Object  Instancia corrente da classe
+/*/
+//----------------------------------------------------------------
+method New() class DashBoardsStatus
+
+	::cStart     := ""
+	::cEnd       := ""
+	::aTypeEvent := {}
+
+return Self
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:getDashboardStatus
+Endpoint REST GET /api/taf/fiscal/v1/dashboardStatus.
+Retorna a contagem de eventos fiscais da tabela T7A agrupados por
+status para o intervalo de datas informado (startDate/endDate).
+Suporta filtro opcional por event (valores aceitos: conforme T7E).
+O campo hasNext e sempre false - sem suporte a paginacao (FR-009).
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+/*/
+//----------------------------------------------------------------
+method getDashboardStatus() class DashBoardsStatus
+
+	Local oErr    As Object
+	Local aResult As Array
+	Local cJson   As Character
+
+	Self:getParams()
+
+	oErr := Self:validateParams()
+	If oErr <> Nil
+		cJson := oErr:toJson()
+		oRest:setStatusResponse(400, cJson)
+		FreeObj(oErr)
+		Return
+	EndIf
+
+	aResult := Self:queryStatus()
+	cJson   := Self:buildSuccessResp(aResult)
+
+	oRest:setStatusResponse(200, cJson)
+
+Return
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:getParams
+Obtem os parametros startDate, endDate e event da query string
+da requisicao REST e armazena nas propriedades da classe.
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+/*/
+//----------------------------------------------------------------
+method getParams() class DashBoardsStatus
+
+	Local cStart := ""   As Character
+	Local cEnd 	 := ""   As Character
+	Local oUtil          As Object
+
+	oUtil := Utils():New()
+
+	If Valtype(oRest:getQueryRequest()['startDate']) == "C"
+		cStart := oRest:getQueryRequest()['startDate']
+	EndIf
+	If  Valtype(oRest:getQueryRequest()['endDate']) == "C"
+		cEnd   := oRest:getQueryRequest()['endDate']
+	EndIf
+
+	::cStart := StrTran(cStart, "-", "")
+	::cEnd   := StrTran(cEnd,   "-", "")
+
+	If !Empty(oRest:getQueryRequest()['event'])
+		::aTypeEvent := oUtil:ParseFilterIn(oRest:getQueryRequest()['event'])
+	EndIf
+	FreeObj(oUtil)
+Return
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:validateParams
+Valida os parametros de entrada do endpoint dashboardStatus.
+Verifica presenca obrigatoria de startDate e endDate (FR-003)
+e a ordem cronologica startDate <= endDate (FR-005).
+Rejeita string vazia e valores fora do dominio.
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+@return    oErr  Object  JsonObject de erro se invalido; Nil se valido
+/*/
+//----------------------------------------------------------------
+method validateParams() as object class DashBoardsStatus
+
+	If Empty(::cStart)
+		Return Self:buildErrorResp(400, ;
+			STR0001, ; //"O parametro 'startDate' e obrigatorio e nao foi informado."
+		STR0002)   //"Informe 'startDate' no formato YYYYMMDD."
+	EndIf
+
+	If Empty(::cEnd)
+		Return Self:buildErrorResp(400, ;
+			STR0003, ; //"O parametro 'endDate' e obrigatorio e nao foi informado."
+		STR0004)   //"Informe 'endDate' no formato YYYYMMDD."
+	EndIf
+
+	If ::cStart > ::cEnd
+		Return Self:buildErrorResp(400, ;
+			STR0005, ; //"O parametro 'startDate' nao pode ser posterior a 'endDate'."
+		STR0006)   //"Informe 'startDate' com data igual ou anterior a 'endDate'.")
+	EndIf
+
+Return Nil
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:queryStatus
+Executa a consulta na tabela T7A agrupando eventos fiscais por
+status no intervalo de datas informado. Utiliza FwExecStatement
+e ChangeQuery para portabilidade cross-SGBD. Filtra
+obrigatoriamente por filial e por D_E_L_E_T_. Quando aTypeEvent
+nao e vazio, adiciona filtro por T7A_TPEVEN (FR-006).
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+@return    aResult  Array  Array de arrays {cStatus, nQtde}
+/*/
+//----------------------------------------------------------------
+method queryStatus() as array class DashBoardsStatus
+
+	Local oQry    As Object
+	Local cSQL    As Character
+	Local cAlias  As Character
+	Local aResult := {} As Array
+	Local aRow    := {} As Array
+
+	cSQL := "SELECT T7A.T7A_STATUS, COUNT(*) AS QTDE " + ;
+		"FROM " + RetSqlName("T7A") + " T7A " + ;
+		"WHERE T7A.T7A_FILIAL = ? " + ;
+		"AND T7A.T7A_DTEMIS >= ? " + ;
+		"AND T7A.T7A_DTEMIS <= ? " + ;
+		"AND T7A.D_E_L_E_T_ = ' ' "
+
+	If Len(::aTypeEvent) > 0
+		cSQL += "AND T7A.T7A_TPEVEN IN (?) "
+	EndIf
+
+	cSQL += "GROUP BY T7A.T7A_STATUS"
+
+	cSQL := ChangeQuery(cSQL)
+
+	oQry := FwExecStatement():New(cSQL)
+	oQry:SetString(1, FWxFilial("T7A"))
+	oQry:SetString(2, ::cStart)
+	oQry:SetString(3, ::cEnd)
+
+	If Len(::aTypeEvent) > 0
+		oQry:SetIn(4, ::aTypeEvent)
+	EndIf
+
+	cAlias := oQry:OpenAlias()
+
+	While !(cAlias)->(EOF())
+		aRow := {AllTrim((cAlias)->T7A_STATUS), (cAlias)->QTDE}
+		aAdd(aResult, aRow)
+		(cAlias)->(DBSkip())
+	EndDo
+
+	(cAlias)->(DBCloseArea())
+	oQry:Destroy()
+
+Return aResult
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:mapStatusLabel
+Mapeia o codigo de status T7A para o rotulo descritivo
+correspondente. Valores aceitos: "1" (Solicitado), "2" (Enviado),
+"3" (Solicitacao de Cancelamento), "4" (Cancelado), "5" (Com Falha).
+Qualquer outro valor retorna "" (FR-015).
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+@param     cId   Character  Codigo do status (T7A_STATUS)
+@return    cLbl  Character  Descricao do status correspondente
+/*/
+//----------------------------------------------------------------
+method mapStatusLabel(cId as character) as character class DashBoardsStatus
+
+	Local cLbl := "" As Character
+
+	Do Case
+	Case cId == "1"
+		cLbl := STR0007 //"Solicitado"
+	Case cId == "2"
+		cLbl := STR0008 //"Enviado"
+	Case cId == "3"
+		cLbl := STR0009 //"Solicitacao de Cancelamento"
+	Case cId == "4"
+		cLbl := STR0010 //"Cancelado"
+	Case cId == "5"
+		cLbl := STR0011 //"Com Falha"
+	EndCase
+
+Return cLbl
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:buildErrorResp
+Monta o objeto JSON de resposta de erro padrao do endpoint
+dashboardStatus. Retorna um JsonObject com os campos
+code, message e detailedMessage conforme contrato de erros.
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+@param     nCode    Numeric    Codigo HTTP do erro (ex.: 400, 500)
+@param     cMsg     Character  Mensagem principal do erro
+@param     cDetail  Character  Mensagem detalhada do erro
+@return    oErr     Object     JsonObject com campos code, message e detailedMessage
+/*/
+//----------------------------------------------------------------
+method buildErrorResp(nCode as numeric, cMsg as character, cDetail as character) as object class DashBoardsStatus
+
+	Local oErr As Object
+
+	oErr := JsonObject():New()
+	oErr["code"]            := nCode
+	oErr["message"]         := cMsg
+	oErr["detailedMessage"] := cDetail
+
+Return oErr
+
+//----------------------------------------------------------------
+/*/{Protheus.doc} DashBoardsStatus:buildSuccessResp
+Monta o JSON de resposta de sucesso do endpoint dashboardStatus.
+Itera sobre o resultado da query e mapeia cada status para seu
+rotulo descritivo. Retorna o JSON com items e hasNext.
+
+@type      method
+@author    Evandro Italo
+@since     01/04/2026
+@version   2.0
+@param     aResult  Array  Array de arrays {cStatus, nQtde}
+@return    cJson    Character  JSON serializado com items e hasNext
+/*/
+//----------------------------------------------------------------
+method buildSuccessResp(aResult as array) as character class DashBoardsStatus
+
+	Local oResp  As Object
+	Local aItems As Array
+	Local oItem  As Object
+	Local nX     As Numeric
+	Local cJson  As Character
+
+	oResp  := JsonObject():New()
+	aItems := {}
+
+	For nX := 1 To Len(aResult)
+		oItem := JsonObject():New()
+		oItem["event"]    := Self:mapStatusLabel(aResult[nX][1])
+		oItem["id"]       := aResult[nX][1]
+		oItem["quantity"] := aResult[nX][2]
+		aAdd(aItems, oItem)
+		FreeObj(oItem)
+	Next nX
+
+	oResp["items"]   := aItems
+	oResp["hasNext"] := .F.
+
+	cJson := oResp:toJson()
+	
+	FreeObj(oResp)
+
+Return cJson

@@ -1,0 +1,310 @@
+#include 'tlpp-core.th'
+#include 'tlpp-rest.th'
+#Include "totvs.ch"
+#Include "rh.sigagpe.integration.specialretirement.ch"
+
+#DEFINE CodeRespOK 200
+#DEFINE CodeRespCreated 201
+#DEFINE CodeRespBadRequest 400
+#DEFINE CodeRespConflict 409
+#DEFINE CodeRespLocked 423
+#DEFINE CodeRespInternalServerError 500
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GPESpecialRetirementNg
+Classe de processamento da Integração de Aposentadoria Especial
+
+@author	Bruno Costa
+@since	14/07/2026
+-------------------------------------------------------------------*/
+class GPESpecialRetirementNg
+
+	public method new() as object
+
+	@POST(endpoint='/api/rh/v1/specialRetirement', description='API de Integração de Aposentadoria Especial')
+	public method procSpecialRetirementNg() as object
+
+	@PUT(endpoint='/api/rh/v1/specialRetirement/:id', description='API de Integração de Aposentadoria Especial')
+	public method putSpecialRetirementNg() as object
+
+	private method sendReqMsn() 
+	private method gravaGrauExpOcorrencia()
+	private method validateBody() as character 
+
+endclass
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GPESpecialRetirementNg::New
+Construtor da classe GPESpecialRetirementNg
+
+@return	Self, objeto do tipo GPESpecialRetirementNg
+@author	Bruno Costa
+@since	14/07/2026
+-------------------------------------------------------------------*/
+method new() as object class GPESpecialRetirementNg
+return self
+
+/*-------------------------------------------------------------------
+{Protheus.doc} Post GPESpecialRetirementNg::procSpecialRetirementNg
+API de integração de Aposentadoria Especial
+
+@author	Bruno Costa
+@since	14/07/2026
+-------------------------------------------------------------------*/
+method procSpecialRetirementNg(lAlt) class GPESpecialRetirementNg
+Local jQryParams  := oRest:getQueryRequest() as json
+local oJsBody     := JsonObject():new() as json
+local oJsHeader   := oRest:getHeaderRequest() as json
+local cError as character
+local cCompanyId as character
+local cBranchId as character
+local cEmployeeId as character
+local cEntryDate as character
+local cSpecialRet as character
+local cOcorren as character
+local cFilMat as character
+local cMatric as character
+local cTenantId as character
+local dEntryDate as date
+local aEmployee as array
+local nCodRet as numeric
+
+DEFAULT lAlt := .F.
+
+BEGIN SEQUENCE
+
+	If jQryParams:hasProperty("forcaErro")
+		BREAK
+	EndIf
+
+	If oJsHeader:hasProperty("tenantId")
+		cTenantId := oJsHeader["tenantId"]
+
+		If oJsBody:fromJson(oRest:GetBodyRequest()) != Nil
+			cError := OemToAnsi(STR0001) //"Corpo da requisicao (JSON) inválido."
+		EndIf
+	Else 
+		cError := OemToAnsi(STR0002) //"Header 'tenantId' obrigatório."
+	EndIf  
+
+	If Empty(cError)
+		cError := self:validateBody(oJsBody, cTenantId, @dEntryDate, lAlt)
+	EndIf
+
+	If !Empty(cError)
+		nCodRet := CodeRespBadRequest
+		self:sendReqMsn("400", cError, CodeRespBadRequest)
+		FwFreeObj(oJsBody)
+		BREAK 
+	EndIf
+
+	//Extrai os valores do JSON
+	cCompanyId  := oJsBody['companyId']
+	cBranchId   := oJsBody['branchId']
+	cEmployeeId := oJsBody['employeeId']
+	cEntryDate  := oJsBody['entryDate']
+	cSpecialRet := If(oJsBody['specialRetirement'] == "N", "  ", oJsBody['specialRetirement'])
+	
+	aEmployee := StrTokArr2(cEmployeeId, "|")
+	If Len(aEmployee) >= 3
+		cFilMat := aEmployee[2] 
+		cMatric := aEmployee[3]
+	EndIf
+
+	DbSelectArea("SRA")
+	SRA->(DbSetOrder(1))
+	If(SRA->(DbSeek(cFilMat + cMatric)))  
+	    
+		If AllTrim(SRA->RA_OCORREN) == AllTrim(cSpecialRet)
+			SRA->(DbCloseArea())
+			nCodRet := CodeRespConflict
+			self:sendReqMsn("409", OemToAnsi(STR0003), CodeRespConflict) //"O registro do funcionário já possui a ocorrência de aposentadoria especial informada."
+			FwFreeObj(oJsBody)
+			BREAK
+		ElseIf !dEntryDate >= SRA->RA_ADMISSA 
+			cError := OemToAnsi(STR0004) + dToC(SRA->RA_ADMISSA) //"Data de entrada menor que a data de admissão do funcionário. Data de Admissão: "
+		ElseIf dEntryDate > dDataBase .And. !dEntryDate == SRA->RA_ADMISSA
+			cError := OemToAnsi(STR0005) + dToC(dDataBase) //"Data de entrada maior que a data base do sistema. Data Base: "
+		EndIf	 
+
+		If !Empty(cError)
+			SRA->(DbCloseArea())
+			nCodRet := CodeRespBadRequest
+			self:sendReqMsn("400", cError, CodeRespBadRequest)
+			FwFreeObj(oJsBody)
+			BREAK 
+		EndIf 
+
+		If SimpleLock() 
+			cOcorren := SRA->RA_OCORREN
+			SRA->RA_OCORREN := cSpecialRet
+			SRA->(MsUnlock())
+			self:gravaGrauExpOcorrencia("RA_OCORREN", cSpecialRet, cOcorren, dEntryDate)
+			SRA->(DbCloseArea())
+			If !lAlt
+				self:sendReqMsn("201", OemToAnsi(STR0006), CodeRespCreated, cCompanyId+";"+cBranchId+";"+cEmployeeId+";"+cEntryDate) //"Aposentadoria especial integrada com sucesso."
+			Else
+				self:sendReqMsn("200", OemToAnsi(STR0028), CodeRespOK, cCompanyId+";"+cBranchId+";"+cEmployeeId+";"+cEntryDate) //"Aposentadoria especial atualizada com sucesso."
+			EndIf
+			FwFreeObj(oJsBody)
+		Else
+			SRA->(DbCloseArea())
+			nCodRet := CodeRespLocked
+			self:sendReqMsn("423", OemToAnsi(STR0007), CodeRespLocked) //"O registro do funcionário encontra-se bloqueado para edição por outro usuário. Tente novamente mais tarde."
+			FwFreeObj(oJsBody) 
+		EndIf
+	Else
+		SRA->(DbCloseArea())
+		nCodRet := CodeRespBadRequest
+		self:sendReqMsn("400", OemToAnsi(STR0008), CodeRespBadRequest) //"Funcionário não localizado na base de dados."
+		FwFreeObj(oJsBody) 
+	EndIf 
+
+RECOVER
+	If nCodRet == 0
+		self:sendReqMsn("500", OemToAnsi(STR0009), CodeRespInternalServerError) //"Ocorreu um erro interno durante o processamento da solicitação."
+		FwFreeObj(oJsBody) 
+	EndIf
+END SEQUENCE
+
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} Put GPESpecialRetirementNg::putSpecialRetirementNg
+API de integração de Aposentadoria Especial
+
+@author	Bruno Costa
+@since	14/07/2026
+-------------------------------------------------------------------*/
+method putSpecialRetirementNg() class GPESpecialRetirementNg
+self:procSpecialRetirementNg(.T.)
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GPESpecialRetirementNg::sendReqMsn
+Método para enviar mensagens de resposta para o cliente
+
+@author	Bruno Costa
+@since	14/07/2026
+@param	cCodResp, character, Codigo de resposta HTTP
+@param	cMsn, character, Mensagem de resposta HTTP
+@param	nStatusCode, numeric, Codigo de status HTTP
+@param	cId, character, Identificador opcional
+@return	Null
+-------------------------------------------------------------------*/
+method sendReqMsn(cCodResp as character, cMsn as character, nStatusCode as numeric, cId as character) class GPESpecialRetirementNg
+local oJsResponse := JsonObject():new() as object
+
+DEFAULT cId := ""
+
+oJsResponse['code']    := cCodResp
+oJsResponse['message'] := cMsn
+If !Empty(cId)
+	oJsResponse['id'] := cId
+EndIf 
+If nStatusCode <> 200 .And. nStatusCode <> 201
+	oJsResponse['helpUrl'] := "https://tdn.totvs.com/x/9yJ8QQ"
+EndIf 
+
+oRest:setStatusCode(nStatusCode)
+oRest:setResponse(oJsResponse:toJson())
+
+FwFreeObj(oJsResponse)
+
+Return 
+
+/*-------------------------------------------------------------------
+{Protheus.doc} GPESpecialRetirementNg::validateBody
+Método para validar os campos obrigatorios do corpo da requisicao
+
+@author	Bruno Costa
+@since	14/07/2026
+@param	oJsBody, json, Corpo da requisicao
+@param	cTenantId, character, Tenant ID informado no header da requisicao
+@param	dEntryDate, date, Data de entrada informada no corpo da requisicao
+@return	character, Mensagem de erro (vazio se valido)
+-------------------------------------------------------------------*/
+method validateBody(oJsBody as Json, cTenantId as Character, dEntryDate as Date, lAlt as logical) as character class GPESpecialRetirementNg
+local cError as character
+local lEmpty as logical
+local aData := {} as array
+
+If !oJsBody:hasProperty("companyId") .Or. (lEmpty := Empty(oJsBody:GetJsonText('companyId')))
+    cError := If(lEmpty, OemToAnsi(STR0010), OemToAnsi(STR0011)) //"Campo 'companyId' obrigatorio." ### "Propriedade 'companyId' inexistente."
+ElseIf !oJsBody:hasProperty("branchId") .Or. (lEmpty := Empty(oJsBody:GetJsonText('branchId')))
+    cError := If(lEmpty, OemToAnsi(STR0012), OemToAnsi(STR0013)) //"Campo 'branchId' obrigatorio." ### "Propriedade 'branchId' inexistente."
+ElseIf !oJsBody:hasProperty("employeeId") .Or. (lEmpty := Empty(oJsBody:GetJsonText('employeeId')))
+    cError := If(lEmpty, OemToAnsi(STR0014), OemToAnsi(STR0015)) //"Campo 'employeeId' obrigatorio." ### "Propriedade 'employeeId' inexistente."	
+ElseIf !oJsBody:hasProperty("entryDate") .Or. (lEmpty := Empty(oJsBody:GetJsonText('entryDate')))
+    cError := If(lEmpty, OemToAnsi(STR0016), OemToAnsi(STR0017)) //"Campo 'entryDate' obrigatorio." ### "Propriedade 'entryDate' inexistente."
+ElseIf !oJsBody:hasProperty("specialRetirement") .Or. (lEmpty := Empty(oJsBody:GetJsonText('specialRetirement')))
+    cError := If(lEmpty, OemToAnsi(STR0018), OemToAnsi(STR0019)) //"Campo 'specialRetirement' obrigatorio." ### "Propriedade 'specialRetirement' inexistente."
+EndIf
+
+If Empty(cError)
+	If lAlt .And. (!oJsBody:hasProperty("id") .Or. (lEmpty := Empty(oJsBody:GetJsonText('id'))))
+		cError := If(lEmpty, OemToAnsi(STR0026), OemToAnsi(STR0027)) //"Campo 'id' obrigatório para atualização." ### "Propriedade 'id' inexistente."
+		Return cError
+	EndIf 
+	If cTenantId <> oJsBody:GetJsonText('companyId')
+		cError := OemToAnsi(STR0020) //"O tenantId informado no header da requisição não corresponde ao companyId informado no corpo da requisição."
+		Return cError
+	EndIf 
+	If !FWFilExist(oJsBody:GetJsonText('companyId'), oJsBody:GetJsonText('branchId'))
+		cError := OemToAnsi(STR0021) //"Verifique os valores dos campos 'companyId' e 'branchId', pois a empresa e a filial correspondentes não foram encontradas no Protheus."
+		Return cError
+	EndIf
+	If !Alltrim(oJsBody:GetJsonText('specialRetirement')) $ "N*01*02*03*04*05*06*07*08"
+		cError := OemToAnsi(STR0022) //"Verifique o conteúdo do campo 'specialRetirement', pois o conteúdo informado não é válido."
+		Return cError
+	EndIf 
+
+	cEntryDate := AllTrim(oJsBody:GetJsonText('entryDate'))
+
+    If Len(cEntryDate) <> 10 .Or. SubStr(cEntryDate, 5, 1) <> "-" .Or. SubStr(cEntryDate, 8, 1) <> "-"
+        cError := OemToAnsi(STR0023) //"Campo 'entryDate' deve estar no formato ISO (yyyy-MM-dd)."
+    Else
+        aData := StrTokArr2(cEntryDate, "-")
+
+        If Len(aData) < 3 .Or. !IsDigit(AllTrim(aData[1])) .Or. !IsDigit(AllTrim(aData[2])) .Or. !IsDigit(AllTrim(aData[3]))
+            cError := OemToAnsi(STR0024) //"Campo 'entryDate' contém caracteres inválidos."
+        Else
+            dEntryDate := sToD(StrTran(cEntryDate, "-", ""))
+            If Empty(dEntryDate) .Or. Year(dEntryDate) <> Val(aData[1]) .Or. Month(dEntryDate) <> Val(aData[2]) .Or. Day(dEntryDate) <> Val(aData[3])
+                cError := OemToAnsi(STR0025) //"Campo 'entryDate' não corresponde a uma data válida (Ano, Mês e Dia)."
+            EndIf
+        EndIf
+    EndIf
+EndIf
+
+Return cError
+
+method gravaGrauExpOcorrencia(cCampo as character, cOcorren as character, cContAnt as character, dEntryDate as date) class GPESpecialRetirementNg
+local lAddNew as logical
+
+DbSelectArea("SR9")
+SR9->(DbSetOrder(1))
+
+If SR9->(!dbSeek(SRA->(RA_FILIAL + RA_MAT) + cCampo))
+	If SR9->(RecLock("SR9", .T.))
+		SR9->R9_FILIAL := SRA->RA_FILIAL
+		SR9->R9_MAT    := SRA->RA_MAT
+		SR9->R9_DATA   := SRA->RA_ADMISSA
+		SR9->R9_CAMPO  := cCampo
+		SR9->R9_DESC   := cContAnt
+		SR9->(MsUnLock())
+	EndIf
+EndIf
+
+lAddNew := !(SR9->(dbSeek(SRA->RA_FILIAL + SRA->RA_MAT + cCampo + dToS(dEntryDate))))
+
+If SR9->(RecLock("SR9", lAddNew, .T.))
+	SR9->R9_FILIAL := SRA->RA_FILIAL
+	SR9->R9_MAT    := SRA->RA_MAT
+	SR9->R9_DATA   := dEntryDate
+	SR9->R9_CAMPO  := cCampo
+	SR9->R9_DESC   := cOcorren
+	SR9->(MsUnLock())
+EndIf
+
+Return 		

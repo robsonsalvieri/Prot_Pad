@@ -1,0 +1,394 @@
+#include "totvs.ch"
+#include "tlpp-core.th"
+#include "retail.salesconnectretail.credit.writeoff.obj.ch"
+
+namespace totvs.protheus.retail.salesconnectretail.obj
+
+using namespace totvs.protheus.retail.salesconnectretail.dto
+
+/*/{Protheus.doc} SalesConnectRetailCreditWriteOffObj
+Objeto do POST /api/retail/v1/SalesConnectRetail/credit/writeoff/ (v2).
+Compensa NCC (E1_TIPO='NCC') usadas numa venda reaproveitando o nativo STWBOBxNCC
+(cria o CR via FrtIncluiCR + compensa via MaIntBxCR, respeita MV_LJCPNCC). Valida
+cada credito (posiciona SE1 por RECNO), monta o aNCCs + parametros da venda e chama
+STWBOBxNCC em transacao/Try-Catch. 1 chamada = 1 venda (atomico).
+@author  Thalys Augusto Alves Juvenal
+@since   07/08/2026
+@version 2.0
+@type class
+/*/
+Class SalesConnectRetailCreditWriteOffObj
+    Public Data cBodyJson   as Character
+    Public Data nHttpStatus as Numeric
+    Public Data cReturn     as Character
+    Public Data cUuid       as Character
+
+    Protected Data cAuthToken   as Character // token X-PASS-KEY recebido (nao expor)
+    Protected Data oReq         as Object   // SalesConnectRetailCreditWriteOffRequestDto
+    Protected Data aNCCs        as Array    // 11 colunas por credito (padrao STDGetNCCs)
+    Protected Data nValorUsado  as Numeric
+    Protected Data cSerEst      as Character
+    Protected Data cCreditTitle as Character
+
+    Public Method New(cAuthToken as Character, cBodyJson as Character) as Object
+    Public Method Process() as Logical
+
+    Protected Method Authenticate() as Logical
+    Protected Method ParseBody() as Logical
+    Protected Method ValidateAndBuild() as Logical
+    Protected Method Compensate() as Logical
+    Protected Method BuildResponse() as Logical
+    Protected Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical
+EndClass
+
+/*/{Protheus.doc} New
+Construtor. Recebe o X-PASS-KEY e o corpo em JSON.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@param cAuthToken, character, valor cru do header X-PASS-KEY
+@param cBodyJson, character, corpo bruto da requisicao (JSON)
+@return object, Self
+/*/
+Method New(cAuthToken as Character, cBodyJson as Character) as Object Class SalesConnectRetailCreditWriteOffObj
+    ::cAuthToken  := cAuthToken
+    ::cBodyJson   := cBodyJson
+    ::nHttpStatus := 200
+    ::cReturn     := ""
+    ::cUuid       := FwUUIDv4()
+    ::oReq        := Nil
+    ::aNCCs       := {}
+    ::nValorUsado := 0
+    ::cSerEst     := ""
+    ::cCreditTitle := ""
+Return Self
+
+/*/{Protheus.doc} Process
+Orquestra: autentica -> parseia -> valida/monta -> compensa (STWBOBxNCC) -> response.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@return logical, .T. sucesso, .F. erro (nHttpStatus/cReturn preenchidos)
+/*/
+Method Process() as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local lRet as Logical
+    Local nI   as Numeric
+
+    LjGrvLog("SalesConnectRetailCreditWriteOffObj", ;
+        "[" + ::cUuid + "] inicio - empresa '" + AllTrim(cEmpAnt) + "' filial '" + AllTrim(cFilAnt) + "'")
+
+    lRet := ::Authenticate()
+    If lRet
+        lRet := ::ParseBody()
+    EndIf
+    If lRet
+        lRet := ::ValidateAndBuild()
+    EndIf
+    If lRet
+        lRet := ::Compensate()
+    EndIf
+    If lRet
+        ::BuildResponse()
+    EndIf
+
+    If ::oReq != Nil
+        For nI := 1 To Len(::oReq:aCredits)
+            FWFreeObj(::oReq:aCredits[nI])
+        Next nI
+        FWFreeObj(::oReq)
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} Authenticate
+Valida o X-PASS-KEY contra o token fixo.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@return logical, .T. autorizado, .F. token invalido/ausente (nHttpStatus=401)
+/*/
+Method Authenticate() as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local lRet        := .T. as Logical
+    Local cAuthHeader := ""  as Character
+    Local cExpected   := "2lz3fw3vOvPd0TsQ1Kj8hGast77d1YKZRj6LYRwIZG3M" as Character
+
+    If ValType(::cAuthToken) == "C"
+        cAuthHeader := AllTrim(::cAuthToken)
+    EndIf
+    If Empty(cAuthHeader) .Or. !(cAuthHeader == cExpected)
+        ::BuildError("0002", STR0001, 401) // Token X-PASS-KEY invalido ou ausente
+        LjGrvLog("SalesConnectRetailCreditWriteOffObj", "[" + ::cUuid + "] 401: X-PASS-KEY invalido/ausente")
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ParseBody
+Desserializa o corpo em SalesConnectRetailCreditWriteOffRequestDto. JSON invalido -> 400/0001.
+Valida presenca de sale + credits (0006) e campos obrigatorios da venda (0007).
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@return logical, .T. corpo valido, .F. erro (nHttpStatus/cReturn preenchidos)
+/*/
+Method ParseBody() as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local lRet  := .T. as Logical
+    Local cMiss := ""  as Character
+    Local oErr  as Object
+
+    Try
+        ::oReq := SalesConnectRetailCreditWriteOffRequestDto():New()
+        ::oReq:fromJson(::cBodyJson)
+    Catch oErr
+        ::BuildError("0001", STR0002, 400) // Corpo da requisicao invalido (JSON)
+        LjGrvLog("SalesConnectRetailCreditWriteOffObj", "[" + ::cUuid + "] 400: corpo JSON invalido: " + oErr:Description)
+        lRet := .F.
+    EndTry
+
+    If lRet .And. (!::oReq:hasSale() .Or. !::oReq:hasCredits())
+        ::BuildError("0006", STR0003, 400) // Informe o objeto 'sale' e ao menos um item em 'credits'
+        lRet := .F.
+    EndIf
+    If lRet
+        cMiss := ::oReq:missingSaleField()
+        If !Empty(cMiss)
+            ::BuildError("0007", STR0004 + cMiss, 400) // Campo obrigatorio da venda ausente: <campo>
+            lRet := .F.
+        EndIf
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} ValidateAndBuild
+Para cada credito: posiciona a SE1 por RECNO e valida (NCC, saldo>0, filial, valor<=saldo);
+monta o aNCCs (11 colunas) e acumula nValorUsado. Falha rejeita a chamada inteira (atomico).
+Confere ainda a consistencia dos totais (0012).
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@return logical, .T. todos os creditos validos, .F. erro (0007/0009/0010/0011/0012)
+/*/
+Method ValidateAndBuild() as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local lRet     := .T. as Logical
+    Local nI       := 0   as Numeric
+    Local oCred    as Object
+    Local aLinha   as Array
+    Local cFil     := xFilial("SE1") as Character
+    Local cIdTxt   := "" as Character
+
+    ::aNCCs       := {}
+    ::nValorUsado := 0
+
+    For nI := 1 To Len(::oReq:aCredits)
+        oCred  := ::oReq:aCredits[nI]
+        cIdTxt := cValToChar(oCred:nId) + ")"
+
+        If oCred:nId <= 0 .Or. oCred:nAmount <= 0
+            ::BuildError("0007", STR0010 + cIdTxt, 400) // Credito invalido - id e amount devem ser maiores que zero (id=...)
+            lRet := .F.
+            Exit
+        EndIf
+
+        DbSelectArea("SE1")
+        SE1->(DbGoTo(oCred:nId))
+        If SE1->(Eof()) .Or. SE1->(Deleted()) .Or. SE1->(RecNo()) != oCred:nId .Or. ;
+           AllTrim(SE1->E1_TIPO) != "NCC" .Or. SE1->E1_SALDO <= 0
+            ::BuildError("0009", STR0005 + cIdTxt, 400) // Credito NCC nao encontrado, nao e NCC, ou ja baixado (id=...)
+            lRet := .F.
+            Exit
+        EndIf
+        If AllTrim(SE1->E1_FILIAL) != AllTrim(cFil)
+            ::BuildError("0011", STR0007 + cIdTxt, 400) // Credito de outra filial - envie na filial do titulo (id=...)
+            lRet := .F.
+            Exit
+        EndIf
+        If oCred:nAmount > SE1->E1_SALDO
+            ::BuildError("0010", STR0006 + cIdTxt, 400) // Valor a compensar maior que o saldo do credito (id=...)
+            lRet := .F.
+            Exit
+        EndIf
+
+        // Linha do aNCCs (layout de STDGetNCCs - STDNCCModel.prw:146-160; consumido por
+        // STWBOBxNCC em WSFRTNCC.PRW). col 6 (Saldo2) = E1_SALDO por contrato nativo; col 7
+        // (MvMoeda) = SuperGetMV("MV_MOEDA1"). O valor a compensar vai em nValorUsado (escalar).
+        aLinha := Array(11)
+        aLinha[1]  := .T.                     // Seleciona
+        aLinha[2]  := SE1->E1_SALDO           // Saldo
+        aLinha[3]  := SE1->E1_NUM             // NumTitulo
+        aLinha[4]  := SE1->E1_EMISSAO         // DataNCC
+        aLinha[5]  := SE1->(RecNo())          // NumRecno
+        aLinha[6]  := SE1->E1_SALDO           // Saldo2 (= E1_SALDO, STDNCCModel.prw:155)
+        aLinha[7]  := SuperGetMV("MV_MOEDA1") // MvMoeda (STDNCCModel.prw:156)
+        aLinha[8]  := SE1->E1_MOEDA           // Moeda
+        aLinha[9]  := SE1->E1_PREFIXO         // Prefixo
+        aLinha[10] := SE1->E1_PARCELA         // Parcela
+        aLinha[11] := SE1->E1_TIPO            // Tipo (NCC)
+        AAdd(::aNCCs, aLinha)
+        ::nValorUsado += oCred:nAmount
+    Next nI
+
+    // Consistencia dos totais (blinda contra totais divergentes do IPaaS): a soma
+    // dos creditos deve ser creditUsed + changeGenerated. Vale p/ modo sem troco
+    // (changeGenerated=0 -> soma == creditUsed) e p/ troco (soma == creditUsed +
+    // troco). NOTA: a aritmetica exata depende de MV_LJCPNCC - confirmar no TDS.
+    If lRet .And. Abs(::nValorUsado - (::oReq:nCreditUsed + ::oReq:nChangeGenerated)) > 0.01
+        ::BuildError("0012", STR0009, 400) // Totais inconsistentes: soma de credits.amount = creditUsed + changeGenerated
+        lRet := .F.
+    EndIf
+Return lRet
+
+/*/{Protheus.doc} Compensate
+Deriva cSerEst (MV_LJPREF) e o nNccGerada (por MV_LJCPNCC) e chama STWBOBxNCC dentro de
+BEGIN TRANSACTION + Try/Catch. Captura erro da rotina automatica interna via
+lMsErroAuto/GetAutoGrLog. Sucesso confirma a numeracao (ConfirmSX8); falha reverte
+(DisarmTransaction/RollBackSX8) -> 0099/500.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@return logical, .T. compensacao efetuada, .F. erro (nHttpStatus=500/0099)
+/*/
+Method Compensate() as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local lRet      := .F. as Logical
+    Local cMsgErro  := ""  as Character
+    Local cMvLjPref := SuperGetMV("MV_LJPREF", , "SF2->F2_SERIE") as Character
+    Local dEmis     as Date
+    Local oErr      as Object
+    Local lStwOk    := .F. as Logical
+    Local aErrLog   := {} as Array
+    Local nI        := 0  as Numeric
+    Local nNccGerada := -::oReq:nChangeGenerated as Numeric
+    Local nTPCompNCC := SuperGetMV("MV_LJCPNCC", , 1) as Numeric
+    Private lMsErroAuto    := .F. as Logical
+    Private lMsHelpAuto    := .T. as Logical
+    Private lAutoErrNoFile := .T. as Logical
+
+    // cSerEst (serie da estacao gravada no E1_PREFIXO) - espelha o STWBxNCC
+    If AllTrim(Upper(cMvLjPref)) == "SF2->F2_SERIE"
+        ::cSerEst := ::oReq:cSeries
+    Else
+        ::cSerEst := &(cMvLjPref)
+    EndIf
+    dEmis := StoD(StrTran(::oReq:cIssueDate, "-", ""))
+    If Empty(dEmis)
+        dEmis := dDataBase
+    EndIf
+
+    // nNccGerada espelha o STWBxNCC (STWBxNCC.prw:39-52): default = creditUsed - Sum(amount)
+    // = -changeGenerated (negativo quando ha troco; STWBOBxNCC gera a NCC-troco se
+    // nNccGerada < 0, WSFRTNCC:879). Excecao MV_LJCPNCC=2 ("alteracao do saldo"): o padrao
+    // usa sinal POSITIVO (STWBxNCC.prw:46-52).
+    If nTPCompNCC == 2
+        nNccGerada := ::oReq:nChangeGenerated
+    EndIf
+
+    Try
+        BEGIN TRANSACTION
+            lMsErroAuto := .F.
+            // Chamada identica ao padrao STWBxNCC (STWBxNCC.prw:87-91): param2 e param11 sao
+            // AMBOS o total das NCCs aplicadas (::nValorUsado = Sum(amount)); o troco vai em
+            // nNccGerada (sinal ja tratado acima conforme MV_LJCPNCC). lOffline=.F.
+            lStwOk := STWBOBxNCC( ::aNCCs, ::nValorUsado, nNccGerada, ::oReq:cDocument, ;
+                        ::cSerEst, ::oReq:cSeries, ::oReq:cOperator, dEmis, ;
+                        ::oReq:cCustomerCode, ::oReq:cCustomerStore, ::nValorUsado, .F. )
+            // Falha: exige o retorno .T. do nativo E ausencia de erro de ExecAuto.
+            // NAO basta lMsErroAuto: STBNCCInc redeclara Private lMsErroAuto (sombreia)
+            // e FrtInMovNCC nao seta a flag - so o retorno .F. sinaliza esses casos.
+            If !lStwOk .Or. lMsErroAuto
+                // GetAutoGrLog() retorna ARRAY de linhas do log (padrao dos irmaos
+                // Vendas/POST e CANCEL) - concatena em texto antes de logar/retornar.
+                aErrLog := GetAutoGrLog()
+                For nI := 1 To Len(aErrLog)
+                    cMsgErro += aErrLog[nI] + Chr(10)
+                Next nI
+                If Empty(cMsgErro)
+                    cMsgErro := STR0008 // Erro ao compensar a NCC (STWBOBxNCC)
+                EndIf
+                DisarmTransaction()
+                MsUnLockAll()
+            Else
+                lRet := .T.
+            EndIf
+        END TRANSACTION
+
+        If lRet
+            ConfirmSX8()
+        Else
+            RollBackSX8()
+            ::BuildError("0099", cMsgErro, 500)
+            LjGrvLog("SalesConnectRetailCreditWriteOffObj", "[" + ::cUuid + "] 500: erro STWBOBxNCC: " + cMsgErro)
+        EndIf
+    Catch oErr
+        DisarmTransaction()
+        MsUnLockAll()
+        RollBackSX8()
+        ::BuildError("0099", STR0008, 500) // Erro ao compensar a NCC (STWBOBxNCC)
+        LjGrvLog("SalesConnectRetailCreditWriteOffObj", "[" + ::cUuid + "] 500: excecao STWBOBxNCC: " + oErr:Description)
+        lRet := .F.
+    EndTry
+Return lRet
+
+/*/{Protheus.doc} BuildResponse
+Rele o saldo de cada NCC (residualBalance), localiza o CR gerado (creditTitle) e monta
+o envelope de sucesso (HTTP 200).
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@return logical, sempre .T.
+/*/
+Method BuildResponse() as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local oResp    as Object
+    Local nI       := 0 as Numeric
+    Local oCred    as Object
+    Local cFil     := xFilial("SE1") as Character
+    Local lRet     := .T. as Logical
+
+    // residualBalance por credito (rele E1_SALDO pelo RECNO)
+    DbSelectArea("SE1")
+    For nI := 1 To Len(::oReq:aCredits)
+        oCred := ::oReq:aCredits[nI]
+        SE1->(DbGoTo(oCred:nId))
+        // Guarda (espelha ValidateAndBuild): so le E1_SALDO se o RECNO ainda aponta para
+        // o titulo certo; se o ponteiro mudou/registro deletado, residualBalance = 0.
+        If !SE1->(Eof()) .And. !SE1->(Deleted()) .And. SE1->(RecNo()) == oCred:nId
+            oCred:setResult(oCred:nAmount, SE1->E1_SALDO)
+        Else
+            oCred:setResult(oCred:nAmount, 0)
+        EndIf
+    Next nI
+
+    // creditTitle (best-effort): tenta localizar o CR gerado. ATENCAO: o FrtIncluiCR
+    // AUTO-NUMERA o E1_NUM do CR (o documento da venda fica no E1_NUMNOTA), entao o
+    // seek por E1_NUM=documento tende a NAO achar e o campo fica vazio. Localizacao
+    // precisa (por E1_NUMNOTA) e refinamento a validar no TDS - campo cosmetico.
+    ::cCreditTitle := ""
+    SE1->(DbSetOrder(1)) // E1_FILIAL+E1_PREFIXO+E1_NUM+E1_PARCELA+E1_TIPO
+    If SE1->(DbSeek(cFil + PadR(::cSerEst, TamSx3("E1_PREFIXO")[1]) + PadR(::oReq:cDocument, TamSx3("E1_NUM")[1])))
+        If AllTrim(SE1->E1_TIPO) == "CR"
+            ::cCreditTitle := AllTrim(SE1->E1_PREFIXO) + " " + AllTrim(SE1->E1_NUM) + " " + ;
+                              AllTrim(SE1->E1_PARCELA) + " " + AllTrim(SE1->E1_TIPO)
+        EndIf
+    EndIf
+
+    oResp := SalesConnectRetailCreditWriteOffResponseDto():New(::oReq:cDocument, ::cCreditTitle, ;
+                ::oReq:nChangeGenerated, ::oReq:aCredits, ::cUuid)
+    ::nHttpStatus := 200
+    ::cReturn     := oResp:toJson()
+    FWFreeObj(oResp)
+    LjGrvLog("SalesConnectRetailCreditWriteOffObj", "[" + ::cUuid + "] 200 - venda " + AllTrim(::oReq:cDocument) + " compensada")
+Return lRet
+
+/*/{Protheus.doc} BuildError
+Preenche nHttpStatus e cReturn com um SalesConnectRetailErrorDto.
+@type method
+@author Thalys Augusto Alves Juvenal
+@since  07/08/2026
+@param cCode, character, codigo de negocio do erro (ex.: "0009")
+@param cMessage, character, mensagem do erro
+@param nStatus, numeric, HTTP status final (ex.: 400/401/500)
+@return logical, sempre .F.
+/*/
+Method BuildError(cCode as Character, cMessage as Character, nStatus as Numeric) as Logical Class SalesConnectRetailCreditWriteOffObj
+    Local oDto as Object
+    Local lRet := .F. as Logical
+    ::nHttpStatus := nStatus
+    oDto := SalesConnectRetailErrorDto():New(cCode, cMessage)
+    ::cReturn := oDto:toJson()
+    FWFreeObj(oDto)
+Return lRet

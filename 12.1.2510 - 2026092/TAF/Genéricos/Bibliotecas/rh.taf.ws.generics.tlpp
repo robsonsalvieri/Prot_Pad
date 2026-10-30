@@ -1,0 +1,214 @@
+#Include "FWLibVersion.ch"
+#Include "msobject.ch"
+#Include "Protheus.ch"
+#Include "RestFul.ch"
+#Include "Tlpp-Core.th"
+#Include "Tlpp-Rest.th"
+#Include "Totvs.ch"
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} TafGenericServices
+    @type       class
+    @description Classe genérica provedora de serviços e validações compartilhadas
+                 para as APIs de relatórios de conferência do eSocial/TAF (INSS, FGTS, IRRF).
+                 Centraliza a verificação de parâmetros, estado do ERP Legado e preparação de ambiente.
+    @author     rodrigo.nicolino
+    @since      06/03/2026
+/*/
+//---------------------------------------------------------------------
+Class TafGenericServices
+
+    public data cEmpRequest   as character
+    public data cFilRequest   as character
+    public data cRequestId    as character
+
+    public Method New() as object
+
+    @Get("/api/rh/esocial/v1/genericServices/legacyStatus")
+    public Method legacyStatus() 
+    
+    // Método PUBLIC para ser usado por outras classes
+    public Method validateAndPrepare( jQuery, lCheckRequestId )
+
+EndClass
+
+Method New() as object Class TafGenericServices
+
+    self:cEmpRequest := ""
+    self:cFilRequest := ""
+    self:cRequestId  := ""
+
+Return self
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} legacyStatus
+    @type       method
+    @description Consulta se o serviço de integração com o ERP Legado  
+                 está ativo, bem como o status de integridade das views de 
+                 conferência (INSS, FGTS, IRRF).
+    @author     rodrigo.nicolino
+    @since      06/03/2026
+    @return     Nil - O retorno é feito via oRest:SetResponse com o JSON de status.
+/*/
+//---------------------------------------------------------------------
+Method legacyStatus() Class TafGenericServices
+
+    Local aHeader         as array
+    Local cError          as character
+    Local cErrorApi       as character
+    Local cFilRH          as character
+    Local cRmUrl          as character
+    Local cRmLog          as character
+    Local cRmPwd          as character
+    Local jQuery          as Json
+    Local jResponse       as Json
+    Local lFgtsIsUpToDate as logical
+    Local lInssIsUpToDate as logical
+    Local lIrrfIsUpToDate as logical
+    Local lIsAvailable    as logical
+    Local lIsConfigured   as logical
+    Local lHasIntegration as logical
+    Local oRestRM         as object
+
+    cErrorApi       := ""
+    cFilRH          := ""
+    jQuery          := oRest:getQueryRequest() // Objeto global oRest do TLPP
+    jResponse       := JsonObject():New()
+    lFgtsIsUpToDate := .T.
+    lInssIsUpToDate := .T.
+    lIrrfIsUpToDate := .T.
+    lIsAvailable    := .F.
+    lIsConfigured   := .F.
+
+    // Valida parâmetros e prepara ambiente (PrepEnv)
+    // CORREÇÃO: Passando .F. para indicar que não exige RequestId
+    If !Self:validateAndPrepare( jQuery, .F. )
+        Return 
+    EndIf
+
+    // Lógica de verificação do RM (Legado)
+    cRmUrl := AllTrim( GetNewPar( "MV_TAFRHUR", "" ))
+    cRmLog := AllTrim( GetNewPar( "MV_TAFRHLG", "" ))
+    cRmPwd := AllTrim( GetNewPar( "MV_TAFRHPW", "" ))
+
+    // REGRA NOVA: Tem pelo menos algum parâmetro preenchido?
+    lHasIntegration := !Empty(cRmUrl) .Or. !Empty(cRmLog) .Or. !Empty(cRmPwd)
+
+    lIsConfigured := (TAFAlsInDic( "V5H" ) .And. !Empty( cRmUrl ) )
+
+    If lIsConfigured
+
+        aHeader := Iif( !Empty( cRmLog ), GetHeader(), {} )
+
+        // Busca coligada RM
+        cFilRH := GetFilRH(aHeader)
+        
+        If ValType(cFilRH) != "C"
+            cFilRH := ""
+        EndIf
+
+        lIsAvailable := !Empty(cFilRH)
+
+        If !lIsAvailable 
+            cErrorApi := "Falha de comunicação ou Coligada não encontrada no RH."
+        EndIf
+
+        If lIsAvailable
+
+            oRestRM := FWRest():New(cRmUrl)
+            // Path fixo para checagem de integridade (Exemplo: InssRetValues)
+            oRestRM:SetPath("/api/rh/esocial/v1/reportEsocialBaseConfer/InssRetValues")
+            oRestRM:Get(aHeader)
+            
+            cError          := oRestRM:GetLastError()
+            lInssIsUpToDate := !("404" $ cError)
+            
+            FreeObj(oRestRM)
+
+        EndIf
+        
+    EndIf
+
+    // Monta o JSON de retorno padrão que seu Frontend já espera
+    jResponse["hasIntegration"] := lHasIntegration
+    jResponse["isConfigured"]   := lIsConfigured
+    jResponse["isAvailable"]    := lIsAvailable
+    jResponse["inssIsUpToDate"] := lInssIsUpToDate
+    jResponse["fgtsIsUpToDate"] := lFgtsIsUpToDate
+    jResponse["irrfIsUpToDate"] := lIrrfIsUpToDate
+    jResponse["apiReturnError"] := cErrorApi
+
+    oRest:SetResponse( jResponse:toJson() )
+    
+    FreeObj( jResponse )
+
+Return
+
+//---------------------------------------------------------------------
+/*/{Protheus.doc} validateAndPrepare
+    @type       method
+    @description Método auxiliar centralizado para extração e validação de parâmetros 
+                 da requisição (companyId, requestId). Executa também a preparação do 
+                 ambiente (PrepEnv) para garantir o contexto correto da Thread.
+                 Possui blindagem contra requisições malformadas (Type Mismatch) 
+                 retornando os devidos status HTTP 400.
+    @author     rodrigo.nicolino
+    @since      06/03/2026
+    @param      jQuery, variant, Objeto JSON (ou Nil) contendo os parâmetros recebidos via requisição.
+    @param      lCheckRequestId, logical, Flag que indica se o parâmetro 'requestId' é obrigatório na validação.
+    @return     lRet, logical, .T. se a validação e o PrepEnv ocorreram com sucesso, .F. caso contrário.
+/*/
+//---------------------------------------------------------------------
+Method validateAndPrepare( jQuery as variant, lCheckRequestId as logical ) Class TafGenericServices
+
+    Local aCompany as Array
+    Local cCompany as Character
+    
+    Default lCheckRequestId := .F. 
+
+    // USO DO HASPROPERTY PARA ACESSO SEGURO AO JSON
+    cCompany        := IIF(jQuery:HasProperty("companyId"), jQuery["companyId"] , "") 
+    self:cRequestId := IIF(jQuery:HasProperty("requestId"), jQuery["requestId"] , "")
+
+    If Empty(cCompany)
+
+        oRest:setStatusCode(400)
+        oRest:SetResponse( EncodeUTF8( "Empresa|Filial não informado." ) )
+        Return .F.
+
+    EndIf
+
+    If lCheckRequestId .And. Empty(self:cRequestId)
+
+        oRest:setStatusCode(400)
+        oRest:SetResponse( EncodeUTF8( "requestId não informado." ) )
+        Return .F. 
+
+    EndIf
+
+    aCompany := StrTokArr( cCompany, "|" )
+
+    If Len( aCompany ) < 2
+
+        oRest:setStatusCode(400)
+        oRest:SetResponse( EncodeUTF8( "Formato de Empresa|Filial inválido no parâmetro 'companyId'." ) )
+        Return .F.
+
+    EndIf
+
+    self:cEmpRequest := aCompany[1]
+    self:cFilRequest := aCompany[2]
+
+    If ( cEmpAnt != self:cEmpRequest ) .Or. ( cFilAnt != self:cFilRequest )
+
+        If !PrepEnv( self:cEmpRequest, self:cFilRequest )
+
+            oRest:setStatusCode(400)
+            oRest:SetResponse( EncodeUTF8( "Falha na preparação do ambiente." ) )
+            Return .F.
+
+        EndIf
+
+    EndIf
+
+Return .T.

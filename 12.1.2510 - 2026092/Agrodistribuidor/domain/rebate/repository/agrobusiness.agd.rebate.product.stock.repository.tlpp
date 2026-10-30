@@ -1,0 +1,576 @@
+#Include "totvs.ch"
+#Include "tlpp-core.th"
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} RebateProductStockRepository
+Repository responsável pela consulta dos saldos de produtos para integração
+de rebate, considerando produtos sem lote, por lote e por sublote.
+@type class
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+/*/
+Class RebateProductStockRepository From UtilsRepository
+	Private data cFilialUsada  As character
+	
+	Public Method New()
+	Public Method findProductStock(nPage,nPageSize,jQueryParams)
+	Public Method findStockPosition(nPage,nPageSize,jQueryParams)
+
+	Private Method buildProductStockQuery() As Character
+	Private Method buildStockPositionQuery() As Character
+	Private Method getFields() As Array
+	Private Method getStockPositionFields() As Array
+	Private Method formatResponse(jResponse) As Object
+	Private Method formatStockPositionResponse(jResponse) As Object
+	Private Method getAvailableBalance(jItem) As Numeric
+	Private Method getMonthAbbreviation(nMonth) As Character
+	
+EndClass
+
+/*/{Protheus.doc} New
+Construtor da classe.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+@return object, instância da classe
+/*/
+Method New() Class RebateProductStockRepository
+	Self:cFilialUsada := cFilAnt
+	_Super:New("SB2")
+Return Self
+
+/*/{Protheus.doc} findProductStock
+Consulta o estoque dos produtos, utilizando a SB2 para produtos sem
+rastreabilidade e a SB8 para produtos controlados por lote ou sublote.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+@param nPage, numeric, número da página
+@param nPageSize, numeric, quantidade de registros por página
+@param jQueryParams, json, parâmetros da query string
+/*/
+Method findProductStock(nPage,nPageSize,jQueryParams) Class RebateProductStockRepository
+	Local cOrder    := "B2_COD, ARMAZEM, B8_LOTECTL, SUBLOTE"
+	Local cQuery    := ""
+	Local cWhere    as character
+	Local jResponse as Object
+	Default nPage        := 1
+	Default nPageSize    := 10
+	Default jQueryParams := Nil
+
+	If jQueryParams != Nil .And. jQueryParams:HasProperty("codi_rev") .And. !Empty(jQueryParams["codi_rev"])
+		Self:cFilialUsada := jQueryParams["codi_rev"]
+	EndIf
+
+	nPageSize := Min(nPageSize,200) //Min: Limita a quantidade máxima de registros por página para 200.
+
+	cQuery := Self:buildProductStockQuery(jQueryParams)
+	cOrder := Self:getOrderQueryParam(jQueryParams,Self:getFields())
+	cWhere := Self:getWhereQueryParam(jQueryParams,Self:getFields())
+
+	Self:setFieldsConsulta(Self:getFields())
+	Self:setPage(nPage)
+	Self:setPageSize(nPageSize)
+	Self:SetQuery(Self:getQueryDefault(,cQuery))
+	Self:SetWhere(if(Empty(cWhere),"1=1",cWhere))
+	self:SetUrlFilter(self:getFilterAdvancedQueryParam(jQueryParams))
+	Self:SetUseSpaces(.F.)
+	Self:SetOrder(cOrder)
+
+	If Self:Execute()
+		Self:FillGetResponse()
+
+		If Self:lOk
+			jResponse := Self:convertToJson(Self:getJSONResponse())
+			Self:setSuccess(Self:formatResponse(jResponse))
+		EndIf
+	EndIf
+
+Return Nil
+
+/*/{Protheus.doc} buildProductStockQuery
+Monta a consulta unificada de estoque:
+- SB2 para produtos sem controle por lote;
+- SB8 para produtos controlados por lote ou sublote.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+@return character, consulta SQL preparada
+/*/
+Method buildProductStockQuery(jQueryParams) As Character Class RebateProductStockRepository
+	Local cQuery        := ""
+	Local oStatement    := FWPreparedStatement():New()
+	Local aBindParam    := {}
+	Local nParamPos     := 1
+	Local nX            := 0
+	Local cFabricanteID := ""
+
+	Default jQueryParams := Nil
+
+	If ValType(jQueryParams) == "J" .And. jQueryParams:HasProperty("codi_fab")
+		cFabricanteID := AllTrim(jQueryParams["codi_fab"])
+	EndIf
+
+	// Produtos sem controle de lote.
+	cQuery += " SELECT SB2.B2_FILIAL, "
+	cQuery += "        SB1.B1_PROC, "
+	cQuery += "        SB2.B2_COD, "
+	cQuery += "        SB1.B1_DESC, "
+	cQuery += "        SB1.B1_POSIPI, "
+	cQuery += "        SB1.B1_UM, "
+	cQuery += "        SB1.B1_CODBAR, "
+	cQuery += "        NCR.NCR_FABCOD, "
+	cQuery += "        (SELECT TOP 1 A5_CODPRF "
+	cQuery += "           FROM " + RetSqlName("SA5") + " SA5 "
+	cQuery += "          WHERE SA5.D_E_L_E_T_ = ' ' "
+	cQuery += "            AND A5_CODPRF <> ' ' "
+	cQuery += "            AND A5_PRODUTO = SB2.B2_COD) AS CODIGOCIND, "
+	cQuery += "        CAST(NULL AS VARCHAR(8)) AS B8_DATA, "
+	cQuery += "        CAST(NULL AS VARCHAR(20)) AS B8_LOTECTL, "
+	cQuery += "        CAST(NULL AS VARCHAR(6)) AS SUBLOTE, "
+	cQuery += "        CASE WHEN SB5.B5_SEMENTE = '1' THEN 'S' ELSE 'D' END AS SEMENTE, "
+	cQuery += "        CASE "
+	cQuery += "            WHEN SB5.B5_SEMENTE = '1' "
+	cQuery += "             AND NKD.NKD_DESCRI IS NOT NULL "
+	cQuery += "            THEN NKD.NKD_DESCRI "
+	cQuery += "            ELSE ' ' "
+	cQuery += "        END AS TRATAMENTO, "
+	cQuery += "        CAST(NULL AS VARCHAR(8)) AS DATAVALID, "
+	cQuery += "        SB2.B2_QATU AS QTDFISICA, "
+	cQuery += "        CAST(0 AS FLOAT) AS QTDEDISPON, "
+	cQuery += "        CAST(0 AS FLOAT) AS QTDTRANSIT, "
+	cQuery += "        CAST(0 AS FLOAT) AS QTDEBLOQ, "
+	cQuery += "        SB2.B2_CM1 AS CUSTOMEDIO, "
+	cQuery += "        SB1.B1_RASTRO AS TIPORASTRO, "
+	cQuery += "        SB2.B2_LOCAL AS ARMAZEM, "
+	cQuery += "        SB2.R_E_C_N_O_ AS RECNOSB2, "
+	cQuery += "        CAST(0 AS BIGINT) AS RECNOSB8, "
+	cQuery += "        SB2.D_E_L_E_T_ "
+
+	cQuery += "   FROM " + RetSqlName("SB2") + " SB2 "
+
+	cQuery += "  INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += "     ON SB1.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB1.B1_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB1", Self:cFilialUsada))
+	cQuery += "    AND SB1.B1_COD = SB2.B2_COD "
+
+	cQuery += "  INNER JOIN " + RetSqlName("NCR") + " NCR "
+	cQuery += "     ON NCR.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND NCR.NCR_FILIAL = SB1.B1_FILIAL "
+	cQuery += "    AND NCR.NCR_PROD = SB1.B1_COD "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SB5") + " SB5 "
+	cQuery += "     ON SB5.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB5.B5_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB5"))
+	cQuery += "    AND SB5.B5_COD = SB2.B2_COD "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("NKD") + " NKD "
+	cQuery += "     ON NKD.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND NKD.NKD_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("NKD", Self:cFilialUsada))
+	cQuery += "    AND NKD.NKD_TRATAM = SB5.B5_TRATAM "
+
+	cQuery += "  WHERE SB2.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB2.B2_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB2", Self:cFilialUsada))
+	cQuery += "    AND SB1.B1_RASTRO NOT IN ('L','S') "
+
+	If !Empty(cFabricanteID)
+		cQuery += "    AND NCR.NCR_FABCOD = ? "
+		AAdd(aBindParam, SubStr(cFabricanteID, 1, TAMSX3("NCR_FABCOD")[1]))
+	EndIf
+
+	// Produtos controlados por lote ou sublote.
+	cQuery += " UNION ALL "
+
+	cQuery += " SELECT SB2.B2_FILIAL, "
+	cQuery += "        SB1.B1_PROC, "
+	cQuery += "        SB2.B2_COD, "
+	cQuery += "        SB1.B1_DESC, "
+	cQuery += "        SB1.B1_POSIPI, "
+	cQuery += "        SB1.B1_UM, "
+	cQuery += "        SB1.B1_CODBAR, "
+	cQuery += "        NCR.NCR_FABCOD, "
+	cQuery += "        (SELECT TOP 1 A5_CODPRF "
+	cQuery += "           FROM " + RetSqlName("SA5") + " SA5 "
+	cQuery += "          WHERE SA5.D_E_L_E_T_ = ' ' "
+	cQuery += "            AND A5_CODPRF <> ' ' "
+	cQuery += "            AND A5_PRODUTO = SB2.B2_COD) AS CODIGOCIND, "
+	cQuery += "        SB8.B8_DATA, "
+	cQuery += "        SB8.B8_LOTECTL, "
+	cQuery += "        SB8.B8_NUMLOTE AS SUBLOTE, "
+	cQuery += "        CASE WHEN SB5.B5_SEMENTE = '1' THEN 'S' ELSE 'D' END AS SEMENTE, "
+	cQuery += "        CASE "
+	cQuery += "            WHEN SB5.B5_SEMENTE = '1' "
+	cQuery += "             AND NKD.NKD_DESCRI IS NOT NULL "
+	cQuery += "            THEN NKD.NKD_DESCRI "
+	cQuery += "            ELSE ' ' "
+	cQuery += "        END AS TRATAMENTO, "
+	cQuery += "        SB8.B8_DTVALID AS DATAVALID, "
+	cQuery += "        SB8.B8_SALDO AS QTDFISICA, "
+	cQuery += "        CAST(0 AS FLOAT) AS QTDEDISPON, "
+	cQuery += "        CAST(0 AS FLOAT) AS QTDTRANSIT, "
+	cQuery += "        CAST(0 AS FLOAT) AS QTDEBLOQ, "
+	cQuery += "        SB2.B2_CM1 AS CUSTOMEDIO, "
+	cQuery += "        SB1.B1_RASTRO AS TIPORASTRO, "
+	cQuery += "        SB8.B8_LOCAL AS ARMAZEM, "
+	cQuery += "        SB2.R_E_C_N_O_ AS RECNOSB2, "
+	cQuery += "        SB8.R_E_C_N_O_ AS RECNOSB8, "
+	cQuery += "        SB2.D_E_L_E_T_ "
+
+	cQuery += "   FROM " + RetSqlName("SB8") + " SB8 "
+
+	cQuery += "  INNER JOIN " + RetSqlName("SB2") + " SB2 "
+	cQuery += "     ON SB2.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB2.B2_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB2", Self:cFilialUsada))
+	cQuery += "    AND SB2.B2_FILIAL = SB8.B8_FILIAL "
+	cQuery += "    AND SB2.B2_COD = SB8.B8_PRODUTO "
+	cQuery += "    AND SB2.B2_LOCAL = SB8.B8_LOCAL "
+
+	cQuery += "  INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += "     ON SB1.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB1.B1_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB1", Self:cFilialUsada))
+	cQuery += "    AND SB1.B1_COD = SB8.B8_PRODUTO "
+
+	cQuery += "  INNER JOIN " + RetSqlName("NCR") + " NCR "
+	cQuery += "     ON NCR.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND NCR.NCR_FILIAL = SB1.B1_FILIAL "
+	cQuery += "    AND NCR.NCR_PROD = SB1.B1_COD "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("SB5") + " SB5 "
+	cQuery += "     ON SB5.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB5.B5_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB5", Self:cFilialUsada))
+	cQuery += "    AND SB5.B5_COD = SB8.B8_PRODUTO "
+
+	cQuery += "   LEFT JOIN " + RetSqlName("NKD") + " NKD "
+	cQuery += "     ON NKD.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND NKD.NKD_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("NKD", Self:cFilialUsada))
+	cQuery += "    AND NKD.NKD_TRATAM = SB5.B5_TRATAM "
+
+	cQuery += "  WHERE SB8.D_E_L_E_T_ = ' ' "
+	cQuery += "    AND SB8.B8_FILIAL = ? " ;AAdd(aBindParam, FWXFilial("SB8", Self:cFilialUsada))
+	cQuery += "    AND SB1.B1_RASTRO IN ('L','S') "
+
+	If !Empty(cFabricanteID)
+		cQuery += "    AND NCR.NCR_FABCOD = ? "
+		AAdd(aBindParam, SubStr(cFabricanteID, 1, TAMSX3("NCR_FABCOD")[1]))
+	EndIf
+
+	oStatement:SetQuery(cQuery)
+
+	For nX := 1 To Len(aBindParam)
+		oStatement:SetString(nParamPos++, aBindParam[nX])
+	Next nX
+
+	cQuery := ChangeQuery(oStatement:GetFixQuery())
+
+Return cQuery
+
+/*/{Protheus.doc} getFields
+Define os campos retornados pela API.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+@return array, mapeamento dos campos
+/*/
+Method getFields() As Array Class RebateProductStockRepository
+	Local aFields := {}
+
+	AAdd(aFields,{"codi_rev","B2_FILIAL","C",.T.})
+	AAdd(aFields,{"codi_fab","NCR_FABCOD","C",.T.})
+	AAdd(aFields,{"codi_pro","B2_COD","C",.T.})
+	AAdd(aFields,{"desc_pro","B1_DESC","C",.T.})
+	AAdd(aFields,{"ncmp_pro","B1_POSIPI","C",.T.})
+	AAdd(aFields,{"unid_pro","B1_UM","C",.T.})
+	AAdd(aFields,{"barr_pro","B1_CODBAR","C",.T.})
+	AAdd(aFields,{"cind_pro","CODIGOCIND","C",.T.})
+	AAdd(aFields,{"date_pro","B8_DATA","D",.T.})
+	AAdd(aFields,{"lote_pro","B8_LOTECTL","C",.T.})
+	AAdd(aFields,{"fsem_pro","SEMENTE","C",.T.})
+	AAdd(aFields,{"trat_pro","TRATAMENTO","C",.T.})
+	AAdd(aFields,{"dven_pro","DATAVALID","D",.T.})
+	AAdd(aFields,{"qtde_pro","QTDFISICA","N",.T.})	
+	AAdd(aFields,{"qtdi_pro","QTDEDISPON","N",.T.})
+	AAdd(aFields,{"qttr_pro","QTDTRANSIT","N",.T.})
+	AAdd(aFields,{"qtbl_pro","QTDEBLOQ","N",.T.})
+	AAdd(aFields,{"cmed_pro","CUSTOMEDIO","N",.T.})
+	AAdd(aFields,{"armazem","ARMAZEM","C",.T.})
+	AAdd(aFields,{"tipo_rastro","TIPORASTRO","C",.T.})
+
+	// Campos auxiliares utilizados somente na formatação do retorno.
+	AAdd(aFields,{"sublote","SUBLOTE","C",.T.})
+	AAdd(aFields,{"recno_sb2","RECNOSB2","N",.T.})
+	AAdd(aFields,{"recno_sb8","RECNOSB8","N",.T.})
+
+Return aFields
+
+/*/{Protheus.doc} formatResponse
+Calcula o saldo disponível pelas funções padrão do Estoque e remove
+os campos técnicos do retorno.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+@param jResponse, json, resposta gerada pelo repository
+@return json, resposta formatada
+/*/
+Method formatResponse(jResponse) As Object Class RebateProductStockRepository
+	Local nIndex := 0
+	Local jItem  As Object
+
+	For nIndex := 1 To Len(jResponse["items"])
+		jItem := jResponse["items"][nIndex]
+
+		jItem["qtdi_pro"] := Self:getAvailableBalance(jItem)
+
+		/* Para produtos por sublote, concatena lote e sublote para não gerar
+		identificadores iguais no layout, que possui somente lote_pro.
+		*/
+		If jItem["tipo_rastro"] == "S" .And. !Empty(jItem["sublote"])
+			jItem["lote_pro"] := AllTrim(jItem["lote_pro"]) + "." + AllTrim(jItem["sublote"])
+		EndIf
+
+		If !(jItem["tipo_rastro"] $ "LS")
+			jItem["date_pro"] := ""
+			jItem["dven_pro"] := ""
+			jItem["lote_pro"] := ""
+		EndIf
+
+		jItem:DelName("sublote")
+		jItem:DelName("recno_sb2")
+		jItem:DelName("recno_sb8")
+
+		jResponse["items"][nIndex] := jItem
+	Next nIndex
+
+Return jResponse
+
+/*/{Protheus.doc} getAvailableBalance
+Retorna o saldo disponível utilizando as funções padrão SaldoSB2()
+e SB8Saldo(), com o registro original corretamente posicionado.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 28/07/2026
+@param jItem, json, item do estoque
+@return numeric, quantidade disponível
+/*/
+Method getAvailableBalance(jItem) As Numeric Class RebateProductStockRepository
+	Local aAreaSB2 := SB2->(GetArea())
+	Local aAreaSB8 := SB8->(GetArea())
+	Local nBalance := 0
+	Local nRecno   := 0
+
+	If jItem["tipo_rastro"] $ "LS"
+		nRecno := jItem["recno_sb8"]
+
+		If nRecno > 0
+			SB8->(DbGoTo(nRecno))
+
+			If !SB8->(Eof()) .And. SB8->B8_PRODUTO == jItem["codi_pro"]
+				nBalance := SB8Saldo()
+			EndIf
+		EndIf
+	Else
+		nRecno := jItem["recno_sb2"]
+
+		If nRecno > 0
+			SB2->(DbGoTo(nRecno))
+
+			If !SB2->(Eof()) .And. SB2->B2_COD == jItem["codi_pro"]
+				nBalance := SaldoSB2()
+			EndIf
+		EndIf
+	EndIf
+
+	RestArea(aAreaSB8)
+	RestArea(aAreaSB2)
+Return nBalance
+
+/*/{Protheus.doc} findStockPosition
+Consulta a posição consolidada de estoque por produto e filial,
+sem detalhamento por lote.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 03/08/2026
+@param nPage, numeric, número da página
+@param nPageSize, numeric, quantidade de registros por página
+@param jQueryParams, json, parâmetros da query string
+/*/
+Method findStockPosition(nPage,nPageSize,jQueryParams) Class RebateProductStockRepository
+	Local cOrder    := ""
+	Local cQuery    := ""
+	Local cWhere    := ""
+	Local jResponse As Object
+
+	Default nPage        := 1
+	Default nPageSize    := 10
+	Default jQueryParams := Nil
+
+	nPageSize := Min(nPageSize,200)
+	cQuery := Self:buildStockPositionQuery()
+	cOrder := Self:getOrderQueryParam(jQueryParams,Self:getStockPositionFields())
+	cWhere := Self:getWhereQueryParam(jQueryParams,Self:getStockPositionFields())
+
+	If Empty(cOrder)
+		cOrder := "B1_COD"
+	EndIf
+
+	Self:setFieldsConsulta(Self:getStockPositionFields())
+	Self:setPage(nPage)
+	Self:setPageSize(nPageSize)
+	Self:SetQuery(Self:getQueryDefault(,cQuery))
+	Self:SetWhere(Self:getWhereDefault(IIf(Empty(cWhere),"1=1",cWhere)))
+	Self:SetUrlFilter(Self:getFilterAdvancedQueryParam(jQueryParams))
+	Self:SetUseSpaces(.F.)
+	Self:SetOrder(cOrder)
+
+	If Self:Execute()
+		Self:FillGetResponse()
+
+		If Self:lOk
+			jResponse := Self:convertToJson(Self:getJSONResponse())
+			Self:setSuccess(Self:formatStockPositionResponse(jResponse))
+		EndIf
+	EndIf
+Return Nil
+
+/*/{Protheus.doc} buildStockPositionQuery
+Monta a consulta consolidada de estoque por produto e filial para
+o layout específico da integração.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 03/08/2026
+@return character, consulta SQL
+/*/
+Method buildStockPositionQuery() As Character Class RebateProductStockRepository
+	Local cQuery := ""
+
+	cQuery += " SELECT CAST(NULL AS VARCHAR(4)) AS ESTOQUEANO, "
+	cQuery += "        CAST(NULL AS VARCHAR(8)) AS ESTOQDATA, "
+	cQuery += "        NCR.NCR_FABCOD, "
+	cQuery += "        CAST(NULL AS VARCHAR(20)) AS ESTFAMILIA, "
+	cQuery += "        SB2.B2_FILIAL, "
+	cQuery += "        SB1.B1_GRUPO, "
+	cQuery += "        CAST(NULL AS VARCHAR(3)) AS ESTOQUEMES, "
+	cQuery += "        CAST(NULL AS VARCHAR(7)) AS MUNICIBGE, "
+	cQuery += "        SB1.B1_COD, "
+	cQuery += "        SUM(SB2.B2_QATU) AS ESTOQSALDO, "
+	cQuery += "        SUM(SB2.B2_QATU) AS SALDOEMBAL, "
+	cQuery += "        NCR.NCR_SUBGRP, "
+	cQuery += "        SB1.B1_TIPO, "
+	cQuery += "        CAST(NULL AS VARCHAR(20)) AS ESTTRANSAC, "
+	cQuery += "        ' ' AS D_E_L_E_T_ "
+
+	cQuery += "   FROM " + RetSqlName("SB2") + " SB2 "
+
+	cQuery += "  INNER JOIN " + RetSqlName("SB1") + " SB1 "
+	cQuery += "     ON SB1.B1_COD = SB2.B2_COD "
+	cQuery += "    AND " + RetSqlCond("SB1")
+
+	cQuery += "  LEFT JOIN " + RetSqlName("NCR") + " NCR "
+	cQuery += "     ON NCR.NCR_PROD = SB2.B2_COD "
+	cQuery += "    AND " + RetSqlCond("NCR")
+
+	cQuery += "  WHERE " + RetSqlCond("SB2")
+
+	cQuery += "  GROUP BY "
+	cQuery += "        SB2.B2_FILIAL, "
+	cQuery += "        NCR.NCR_FABCOD, "
+	cQuery += "        SB1.B1_GRUPO, "
+	cQuery += "        SB1.B1_COD, "
+	cQuery += "        NCR.NCR_SUBGRP, "
+	cQuery += "        SB1.B1_TIPO "
+
+	cQuery := ChangeQuery(cQuery)
+Return cQuery
+
+/*/{Protheus.doc} getStockPositionFields
+Define os campos do layout consolidado de posição de estoque.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 03/08/2026
+@return array, mapeamento dos campos
+/*/
+Method getStockPositionFields() As Array Class RebateProductStockRepository
+	Local aFields := {}
+
+	AAdd(aFields,{"EstoqueAno","ESTOQUEANO","C",.T.})
+	AAdd(aFields,{"EstoqueData","ESTOQDATA","D",.T.})
+	AAdd(aFields,{"EstoqueFabricante","NCR_FABCOD","C",.T.})
+	AAdd(aFields,{"EstoqueFamilia","ESTFAMILIA","C",.T.})
+	AAdd(aFields,{"EstoqueFilial","B2_FILIAL","C",.T.})
+	AAdd(aFields,{"EstoqueGrupo","B1_GRUPO","C",.T.})
+	AAdd(aFields,{"EstoqueMes","ESTOQUEMES","C",.T.})
+	AAdd(aFields,{"EstoqueMunicipioIBGE","MUNICIBGE","C",.T.})
+	AAdd(aFields,{"EstoqueProduto","B1_COD","C",.T.})
+	AAdd(aFields,{"EstoqueSaldo","ESTOQSALDO","N",.T.})
+	AAdd(aFields,{"EstoqueSaldoEmbalagem","SALDOEMBAL","N",.T.})
+	AAdd(aFields,{"EstoqueSubgrupo","NCR_SUBGRP","C",.T.})
+	AAdd(aFields,{"EstoqueTipoProduto","B1_TIPO","C",.T.})
+	AAdd(aFields,{"EstoqueTransacao","ESTTRANSAC","C",.T.})
+Return aFields
+
+/*/{Protheus.doc} formatStockPositionResponse
+Preenche os campos derivados da data-base e os dados cadastrais
+da filial no retorno da posição de estoque.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 03/08/2026
+@param jResponse, json, resposta gerada pelo repository
+@return object, resposta formatada
+/*/
+Method formatStockPositionResponse(jResponse) As Object Class RebateProductStockRepository
+	Local aBranchData as Array
+	Local cBranchCode as Character
+	Local cState      as Character
+	Local cCityCode   as Character
+	Local cDataAtual  as Character
+	Local nIndex      as Numeric
+	Local jItem       As Object
+
+	aFields := {"M0_CODFIL","M0_ESTENT","M0_CODMUN"}
+	aBranchData := FWSM0Util():GetSM0Data(cEmpAnt,Self:cFilialUsada,aFields)
+	cDataAtual := DtoS(dDataBase)
+	cDataAtual := SubStr(cDataAtual,1,4)+"-"+SubStr(cDataAtual,5,2)+"-"+SubStr(cDataAtual,7)
+
+	If Len(aBranchData) >= 3
+		cBranchCode := AllTrim(aBranchData[1][2])
+		cState      := AllTrim(aBranchData[2][2])
+		cCityCode   := AllTrim(aBranchData[3][2])
+	EndIf
+
+	For nIndex := 1 To Len(jResponse["items"])
+		jItem := jResponse["items"][nIndex]
+
+		jItem["EstoqueAno"] := cValToChar(Year(dDataBase))
+		jItem["EstoqueData"] := cDataAtual
+		jItem["EstoqueMes"] := Self:getMonthAbbreviation(Month(dDataBase))
+		jItem["EstoqueFilial"] := IIf(Empty(cBranchCode),jItem["EstoqueFilial"],cBranchCode)
+		jItem["EstoqueMunicipioIBGE"] := Tms120CdUf(cState,"1") + cCityCode
+
+		jResponse["items"][nIndex] := jItem
+	Next nIndex
+Return jResponse
+
+/*/{Protheus.doc} getMonthAbbreviation
+Retorna a abreviação do mês em português com três caracteres.
+@type method
+@version 12
+@author rodrigo.nsoledade
+@since 03/08/2026
+@param nMonth, numeric, número do mês
+@return character, abreviação do mês
+/*/
+Method getMonthAbbreviation(nMonth) As Character Class RebateProductStockRepository
+	Local aMonths := {"jan","fev","mar","abr","mai","jun",;
+		"jul","ago","set","out","nov","dez"}
+Return IIf(nMonth >= 1 .And. nMonth <= 12,aMonths[nMonth],"")

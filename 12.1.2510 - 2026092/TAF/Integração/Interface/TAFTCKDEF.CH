@@ -1,0 +1,5 @@
+#DEFINE paramDataInicio		aParamT[1]
+#DEFINE paramDataFinal		aParamT[2]
+#DEFINE paramMIntegracao	aParamT[3]
+#DEFINE paramMValidacao		aParamT[4]
+#DEFINE paramVisaoTicket	aParamT[5]

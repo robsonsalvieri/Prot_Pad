@@ -1,0 +1,258 @@
+#include "tlpp-core.th"
+#include "TBICONN.ch"
+#include "FwMVCDef.ch"
+
+/*/{Protheus.doc} AntecipaWalletUpdateResponseV1MessageReader
+	Classe de Integração Novo Antecipa
+	Leitura do retorno dos eventos de pós faturamento
+	Eventos suportados nessa classe: Baixa, Estorno de baixa, Coobrigação e Divergência Comercial
+
+	@type class
+	@author Squad TechFin
+	@since 10/31/2025
+/*/
+class AntecipaWalletUpdateResponseV1MessageReader from LongNameClass	
+	data jMessage  as json
+    data cMock     as character
+    data lMock     as logical
+	data jMSGData  as json
+	data aDataOrgs as array
+	data aSM0	   as array
+
+	public method new() constructor
+	public method read()
+	public method mock()
+	method splitMsgOrg()
+end class
+
+/*/{Protheus.doc} AntecipaWalletUpdateResponseV1MessageReader::New
+	Método construtor da classe
+	@type method
+	@author Squad TechFin
+	@since 10/31/2025
+/*/
+method New() class AntecipaWalletUpdateResponseV1MessageReader
+	::jMessage  := JsonObject():new()
+	::jMSGData  := JsonObject():new()
+	::aSM0      := FWLoadSM0()
+	::aDataOrgs := {}
+    ::cMock     := ""
+    ::lMock     := .F.
+return Self
+
+/*/{Protheus.doc} AntecipaWalletUpdateResponseV1MessageReader::mock
+    Método para mockar a mensagem recebida para testes
+    @type method
+    @author Squad TechFin
+    @since 10/31/2025
+    @param cData, character, dados da mensagem a ser mockada
+/*/
+method mock(cData as character) class AntecipaWalletUpdateResponseV1MessageReader
+    ::cMock := cData
+    ::lMock := .T.
+return
+
+/*/{Protheus.doc} AntecipaWalletUpdateResponseV1MessageReader::read
+	Responsável pela leitura e processamento da mensagem.
+	@type method
+	@author Squad TechFin
+	@since 10/31/2025
+	@param oLinkMessage, object, Instância de FwTotvsLinkMesage da mensagem
+	@return logical, sucesso ou falha. Determina se deve ou não retirar a mensagem da fila.
+/*/
+method read(oLinkMessage as object) class AntecipaWalletUpdateResponseV1MessageReader
+	local nX       := 0                  as numeric
+	local cPayload := ""                 as character
+	local jNewData := JsonObject():new() as json
+	local cDecoded := ""                 as character
+
+	cPayload :=  if(::lMock, ::cMock,  oLinkMessage:RawMessage())
+	cDecoded := DecodeUTF8(cPayload)
+	if !Empty(cDecoded)
+		cPayload := cDecoded
+	endIf
+
+	if ::jMessage:FromJSON(cPayload) == NIL
+		::jMSGData  := ::jMessage["data"]
+		::aDataOrgs := {}
+		::splitMsgOrg()
+		For nX:=1 to Len(::aDataOrgs)
+			jNewData["entries"] := aClone(::aDataOrgs[nX,2])
+				StartJob("AntPostaWallet", GetEnvServer(), .T., ::aDataOrgs[nX, 3], ::aDataOrgs[nX, 4], jNewData:toJson(), cPayload)
+		Next nX
+	endIf
+	FwFreeObj(::jMessage)
+	FwFreeObj(::jMSGData)
+	FwFreeArray(::aDataOrgs)
+
+Return .T.
+
+/*/{Protheus.doc} AntecipaWalletUpdateResponseV1MessageReader::splitMsgOrg
+	Separa os dados por Empresa/Filial
+	@type method
+	@author Squad TechFin
+	@since 10/31/2025	
+/*/
+method splitMsgOrg() class AntecipaWalletUpdateResponseV1MessageReader	
+	
+	local nOrg         := 0  as numeric
+	local nPosFil      := 0  as numeric
+	local cBranchCNPJ  := "" as character
+	
+	for nOrg := 1 to len(::jMSGData["entries"])
+
+		cBranchCNPJ  := ::jMSGData["entries"][nOrg]["documentNumber"]
+
+		if (nPosFil := AScan(::aSM0, { |x| x[18] $ cBranchCNPJ})) > 0
+			if (nPoCNPJ := AScan(::aDataOrgs, { |x| x[1] == cBranchCNPJ})) > 0
+				Aadd( ::aDataOrgs[nPoCNPJ,2], ::jMSGData["entries"][nOrg] )
+			Else
+				Aadd( ::aDataOrgs, Array(4))
+				::aDataOrgs[Len(::aDataOrgs), 1] := cBranchCNPJ
+				::aDataOrgs[Len(::aDataOrgs), 2] := {}
+				::aDataOrgs[Len(::aDataOrgs), 3] := ::aSM0[nPosFil,1] //Empresa
+				::aDataOrgs[Len(::aDataOrgs), 4] := ::aSM0[nPosFil,2] //Filial
+				 Aadd( ::aDataOrgs[Len(::aDataOrgs),2], ::jMSGData["entries"][nOrg] )
+			EndIf
+		endIf
+	Next nOrg
+Return
+
+/*/{Protheus.doc} AntPostaWallet
+	Executa a regra de negócio da confirmação dos eventos de pós-faturamento
+	
+	@type function
+	@author Squad TechFin
+	@since 10/31/2025
+	@param cCompany	 , character, Grupo Empresa
+	@param cBranch 	 , character, Filial
+	@param cData	 , character, dados do evento
+	@param cPayload	 , character, mensagem recebida
+/*/
+Function AntPostaWallet(cCompany as character, cBranch as character, cData as character, cPayload as character)
+	local nX         := 0                  as numeric
+	local nZ         := 0                  as numeric
+	Local nPos       := 0                  as numeric
+	local cEvent     := ""                 as character
+	local cLogModel  := ""                 as character
+	local cTransCode := ""                 as character
+	local cEventSeq	 := ""                 as character
+	local cStatus    := ""                 as character
+	local aEvents    := {}                 as array
+	local oModel     := Nil                as object
+	local oMdlMaster := Nil                as object
+	local oEvent     := Nil                as object
+	local oResult    := Nil                as object
+	local jData      := JsonObject():New() as json
+	local nTam1      := 0                  as numeric
+	local nTam2      := 0                  as numeric
+	local oSmartUtil := nil                as object
+
+	RPCSetType(3) 
+	RPCSetEnv(cCompany, cBranch,,,"FIN") 
+
+	//-- Eventos suportados no processamendo dessa fila
+	/*
+	aEvents[n,1] - Identificação do evento vinda da mensagem Techfin
+	aEvents[n,2] - Descrição do Evento
+	aEvents[n,3] - Método a ser executado
+	aEvents[n,4] - Identificação do evento dentro do Model "monitorBilling"
+	aEvents[n,5] - ARF_TIPO
+	*/
+	Aadd(aEvents,{"1", "Baixa"		, {|| oEvent:FBaixa() }		 , 6, "X"})
+	Aadd(aEvents,{"2", "Estorno"	, {|| oEvent:FEstorno() }	 , 6, "Z"})
+	Aadd(aEvents,{"3", "Coobrigacao", {|| oEvent:FCoobrigacao() }, 6, "C"})
+	Aadd(aEvents,{"4", "Divergencia", {|| oEvent:FDivergencia() }, 6, "V"})
+
+	jData:fromJson(cData)
+	oSmartUtil 	:= totvs.protheus.backoffice.techfin.util.SmartlinkUtil():new()
+	nTam1       := TamSX3("ARE_TRANSC")[1]
+	nTam2		:= TamSX3("ARF_IDMOV")[1]
+
+	For nX:= 1 to Len( jData["entries"] )
+		cStatus := "2"    // 1=Em processamento;2=Aprovado;3=Reprovado
+		cEvent	:= cValtoChar(jData["entries"][nX]["processingType"]) //1-Baixa; 2-Estorno; 3-Coobrigacao; 4-Divergencia Comercial
+		nPos	:= AScan(aEvents, {|x| x[1] == cEvent})
+		If nPos == 0 
+			oSmartUtil:addLogMSG("error", "Wallet Update - Event code not supported", "Json attribute 'processingType': "+ cEvent)
+			Loop
+		EndIF
+		
+		cTransCode  := jData["entries"][nX]["transactionCode"]//mesmo códiogo recebido na confirmação da Antecipação
+		cEventSeq	:= jData["entries"][nX]["walletEventSequence"]//identificador único de evento na Supplier
+
+		//-- Verifica a existencia do Id único de movimento
+		dbSelectArea("ARF")
+		dbSetOrder(5)
+		IF msSeek(FwxFilial("ARF") + PadR(cEventSeq,nTam2))
+			oSmartUtil:addLogMSG("error", "Wallet Update - walletEventSequence already exists.", "ARF_IDMOV: " + cEventSeq)
+			Loop
+		EndIf
+
+		dbSelectArea("ARE")
+		dbSetOrder(2)
+		//-- Posiciona no item registro do pós-faturamento
+		IF !msSeek(FwxFilial("ARE") + PadR(cTransCode,nTam1))
+			oSmartUtil:addLogMSG("error", "Wallet Update - transactionCode not found.", "ARE_TRANSC: " + cTransCode)
+			Loop
+		EndIf
+
+		Begin Transaction
+				//-------------------------------------------------------------------------------------------
+				//-- Executa regra de negócio do evento
+				oEvent := totvs.protheus.backoffice.techfin.smartlink.antecipa.events.AntecipaEvents():new()
+				oEvent:setData(jData["entries"][nX])
+				Eval( aEvents[nPos,3] )
+				oResult := oEvent:getResult()
+
+				If Len(oResult["error"]) > 0
+					cStatus := "3"
+					oSmartUtil:addLogMSG("error", "Wallet Update ["+aEvents[nPos,2]+"]", "ARE_TRANSC: " + cTransCode)
+					For nZ := 1 to Len(oResult["error"])
+						oSmartUtil:addLogMSG("error", "Processing failure.", oResult["error"][nZ]["description"])
+					Next nZ
+				EndIf
+
+				//-------------------------------------------------------------------------------------------
+				// Cria novo registro na ARF
+				totvs.protheus.backoffice.techfin.antecipa.postbilling.SetEventToModelDef( aEvents[nPos,4] )//Atualiza variavel __nFolderActive conforme #Define WALLET_UPDATE = 6
+				oModel := FWLoadModel("totvs.protheus.backoffice.techfin.antecipa.postbilling.monitorBilling")
+				oModel:SetOperation(MODEL_OPERATION_INSERT)
+				oModel:Activate()
+				oMdlMaster := oModel:GetModel("ARFMASTER")
+
+				oMdlMaster:SetValue("ARF_TIPO"  , aEvents[nPos,5])
+				oMdlMaster:SetValue("ARF_FILIAL", FwxFilial("ARF") )
+				oMdlMaster:SetValue("ARF_NUMSOL", ARE->ARE_NUM)
+				oMdlMaster:SetValue("ARF_ITEM"  , ARE->ARE_ITEM)
+				oMdlMaster:SetValue("ARF_FILTIT", ARE->ARE_FILTIT)
+				oMdlMaster:SetValue("ARF_PREFIX", ARE->ARE_PREFIX)
+				oMdlMaster:SetValue("ARF_NUMTIT", ARE->ARE_NUMTIT)
+				oMdlMaster:SetValue("ARF_PARTIT", ARE->ARE_PARTIT)
+				oMdlMaster:SetValue("ARF_TIPTIT", ARE->ARE_TIPTIT)
+				oMdlMaster:SetValue("ARF_CLITIT", ARE->ARE_CLITIT)
+				oMdlMaster:SetValue("ARF_LOJTIT", ARE->ARE_LOJTIT)
+				oMdlMaster:SetValue("ARF_VLSOL" , jData["entries"][nX]["installmentAmount"])
+				oMdlMaster:SetValue("ARF_RECOMP", "2")
+				oMdlMaster:SetValue("ARF_STATUS", cStatus)
+				oMdlMaster:SetValue("ARF_IDMOV" , cEventSeq)//Id unico de lançamento da Supplier
+
+				If !(oModel:VldData() .and. oModel:CommitData())
+					cLogModel := cValToChar(oModel:GetErrorMessage()[4]) + " - "
+					cLogModel += cValToChar(oModel:GetErrorMessage()[5]) + " - "
+					cLogModel += cValToChar(oModel:GetErrorMessage()[6])
+					oSmartUtil:addLogMSG("error", "Model validation (ARE_TRANSC): "+ cTransCode, cLogModel)
+					DisarmTransaction()
+				EndIf
+				oModel:DeActivate()
+				oModel:Destroy()
+		End Transaction
+	Next nX
+
+	oSmartUtil:setAliasMSUID("ARF")
+	oSmartUtil:logResponse(cPayload)
+	FwFreeObj(oSmartUtil)
+
+	RpcClearEnv()
+
+Return .T.

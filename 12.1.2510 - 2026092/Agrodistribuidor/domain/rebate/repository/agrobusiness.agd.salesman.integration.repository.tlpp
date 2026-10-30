@@ -1,0 +1,192 @@
+#Include "totvs.ch"
+#Include "tlpp-core.th"
+
+namespace totvs.protheus.agrobusiness.agd
+
+/*/{Protheus.doc} SalesmanIntegrationRepository
+Repositório responsável pela consulta de vendedores para integração de rebate.
+@type class
+@version 1.0
+@author beatriz.dantas
+@since 29/07/2026
+/*/
+class SalesmanIntegrationRepository from UtilsRepository
+	public method new()
+	public method find(nPage,nPageSize,jQueryParams)
+	public method getFields() as array
+
+	private method getCustomQuery() 		    as character
+	private method formatResponse(jResponse) 	as object
+	private method getSensitiveFieldsMap() 	    as array
+endclass
+
+/*/{Protheus.doc} new
+Construtor do repositório de integração de vendedores.
+@type method
+@return object, instância da classe
+/*/
+method new() class SalesmanIntegrationRepository
+	_Super:new("SA3", self:getFields())
+return self
+
+/*/{Protheus.doc} find
+Consulta paginada dos vendedores para integração de rebate (Syngenta).
+@type method
+@author beatriz.dantas
+@since 29/07/2026
+@param nPage, numeric, número da página
+@param nPageSize, numeric, quantidade de registros por página
+@param jQueryParams, json, parâmetros de filtro e ordenação
+@return nil
+/*/
+method find(nPage,nPageSize,jQueryParams) class SalesmanIntegrationRepository
+	Local aArea      as array
+	Local cOrder     as character
+	Local cWhere     as character
+	Local jResponse  as object
+
+	Default nPage        := 1
+	Default nPageSize    := 10
+	Default jQueryParams := Nil
+
+	If self:lOk
+		aArea  := FWGetArea()
+		cWhere := self:getWhereQueryParam(jQueryParams, self:aFieldsRepository)
+        cOrder := self:getOrderQueryParam(jQueryParams, self:aFieldsRepository)
+
+		self:setFieldsConsulta(self:getFields())
+		self:setPage(nPage)
+		self:setPageSize(nPageSize)
+		self:SetQuery(self:getQueryDefault({}, self:getCustomQuery()))
+		self:SetWhere(self:getWhereDefault(if(Empty(cWhere),"1=1",cWhere)))
+		self:SetUrlFilter(self:getFilterAdvancedQueryParam(jQueryParams))
+		self:SetOrder(cOrder)
+
+        If self:Execute()
+            self:FillGetResponse()
+            If self:lOk
+                jResponse := self:convertToJson(self:getJSONResponse())
+                self:setSuccess(self:formatResponse(jResponse))
+            EndIf
+        EndIf
+
+		FWRestArea(aArea)
+		FWFreeArray(aArea)
+		FreeObj(jResponse)
+	EndIf
+return nil
+
+/*/{Protheus.doc} getFields
+Retorna os campos disponibilizados pela API (layout Syngenta) e seus respectivos campos Protheus. 
+@type method
+@author beatriz.dantas
+@since 29/07/2026
+@return array, campos do repositório
+/*/
+method getFields() as array class SalesmanIntegrationRepository
+	Local aFields := {}
+	aAdd(aFields,{"GerenteAtivo"      ,"GER_ATIVO" ,"C",.T.})
+	aAdd(aFields,{"GerenteCodigo"     ,"GER_COD"   ,"C",.T.})
+	aAdd(aFields,{"GerenteCPF"        ,"GER_CPF"   ,"C",.T.})
+	aAdd(aFields,{"GerenteDescricao"  ,"GER_DESC"  ,"C",.T.})
+	aAdd(aFields,{"VendedorCodigo"    ,"VEN_COD"   ,"C",.T.})
+	aAdd(aFields,{"VendedorCPF"       ,"VEN_CPF"   ,"C",.T.})
+	aAdd(aFields,{"VendedorDescricao" ,"VEN_DESC"  ,"C",.T.})
+	aAdd(aFields,{"VendedorGerente"   ,"VEN_GER"   ,"C",.T.})
+return aFields
+
+/*/{Protheus.doc} getCustomQuery
+Monta o SELECT base de Gerente + Vendedor (SA3/SA3G), usado em getQueryDefault(), com suporte aos filtros automáticos de filial, registros não deletados e paginação do framework.
+@type method
+@author beatriz.dantas
+@since 30/07/2026
+@version p12
+@return character, SELECT interno
+/*/
+method getCustomQuery() as character class SalesmanIntegrationRepository
+	Local cQuery := ""
+	cQuery := " SELECT "
+	cQuery += "		SA3G.A3_MSBLQL AS GER_ATIVO, "
+	cQuery += "		SA3.A3_GEREN AS GER_COD, "
+	cQuery += "		SA3G.A3_CGC AS GER_CPF, "
+	cQuery += "		SA3G.A3_NOME AS GER_DESC, "
+	cQuery += "		SA3.A3_COD AS VEN_COD, "
+	cQuery += "		SA3.A3_CGC AS VEN_CPF, "
+	cQuery += "		SA3.A3_NOME AS VEN_DESC, "
+	cQuery += "		SA3.A3_GEREN AS VEN_GER, "
+	cQuery += "		SA3.A3_FILIAL AS A3_FILIAL, "
+	cQuery += "		SA3.D_E_L_E_T_ AS D_E_L_E_T_ "
+	cQuery += " FROM "
+	cQuery += "		" + RetSqlName("SA3") + " SA3 "
+	cQuery += "	LEFT JOIN " + RetSqlName("SA3") + " SA3G ON (SA3G.A3_COD = SA3.A3_GEREN AND SA3G.A3_FILIAL = '" + FWxFilial("SA3") + "' AND SA3G.D_E_L_E_T_ = ' ') "
+return cQuery
+
+/*/{Protheus.doc} formatResponse
+Complementa o campo GerenteAtivo (S/N), zera o bloco Gerente quando o vendedor nao possui 
+gerente vinculado e aplica a anonimizacao dos dados pessoais (CPF/CNPJ e nome) conforme permissao do usuario.
+@type method
+@author beatriz.dantas
+@since 29/07/2026
+@param jResponse, json, resposta gerada pelo FWAdapterBaseV2
+@return object, resposta tratada
+/*/
+method formatResponse(jResponse) as object class SalesmanIntegrationRepository
+	Local aItems           := {}
+	Local aProtectedFields := {}
+	Local aAllowedFields   := {}
+	Local aProtectedMap    := {}
+	Local aJsonFields      := {}
+	Local jItem            as object
+	Local nItem            := 0
+	Local nField           := 0
+	Local nJsonField       := 0
+
+	aProtectedMap := self:getSensitiveFieldsMap()
+
+	For nField := 1 To Len(aProtectedMap)
+		AAdd(aProtectedFields,aProtectedMap[nField][1])
+	Next nField
+
+	aItems := jResponse["items"]
+	aAllowedFields := FwProtectedDataUtil():UsrAccessPDField(__cUserID,aProtectedFields)
+
+	For nItem := 1 To Len(aItems)
+		jItem := aItems[nItem]
+
+		If Empty(jItem["GerenteCodigo"])
+			jItem["GerenteAtivo"]     := ""
+			jItem["GerenteCPF"]       := ""
+			jItem["GerenteDescricao"] := ""
+		Else
+			jItem["GerenteAtivo"] := IIf(AllTrim(jItem["GerenteAtivo"]) == "1","N","S")
+		EndIf
+
+		For nField := 1 To Len(aProtectedMap)
+			If AScan(aAllowedFields,aProtectedMap[nField][1]) == 0
+				aJsonFields := aProtectedMap[nField][2]
+				For nJsonField := 1 To Len(aJsonFields)
+					If jItem:HasProperty(aJsonFields[nJsonField]) .And. !Empty(jItem[aJsonFields[nJsonField]])
+						jItem[aJsonFields[nJsonField]] := FwProtectedDataUtil():ValueAsteriskToAnonymize(jItem[aJsonFields[nJsonField]])
+					EndIf
+				Next nJsonField
+			EndIf
+		Next nField
+	Next nItem
+
+	jResponse["items"] := aItems
+return jResponse
+
+/*/{Protheus.doc} getSensitiveFieldsMap
+Retorna o mapeamento entre os campos físicos do Protheus e os respectivos campos expostos pela API para utilização da Protected Data (XAM).
+@type method
+@author beatriz.dantas
+@since 30/07/2026
+@version p12
+@return aMapFields, array, Mapeamento de campos sensíveis.
+/*/
+method getSensitiveFieldsMap() as array class SalesmanIntegrationRepository
+	Local aMapFields := {}
+
+	AAdd(aMapFields, {"A3_CGC" , {"VendedorCPF","GerenteCPF"}})
+	AAdd(aMapFields, {"A3_NOME", {"VendedorDescricao","GerenteDescricao"}})
+return aMapFields

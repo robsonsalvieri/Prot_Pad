@@ -1,0 +1,657 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+#include "msobject.ch"
+#include "backoffice.sv.est.MoveRecursion.ch"
+#include "totvs.framework.treports.integratedprovider.th"
+
+#DEFINE SX1GRUPO "ESTT030"
+
+// Teto de rodadas da poda iterativa dos arcos (profundidade maxima de encadeamento
+// pai/componente esperada). Substitui o antigo limite de 98 niveis da FRecursiva.
+#DEFINE BP_MAXPODA  500
+
+namespace totvs.protheus.backoffice.est.moverecursion.integratedprovider
+using namespace totvs.protheus.backoffice.est.smartView.integratedProvider
+
+@totvsFrameworkTReportsIntegratedProvider(active=.T., team="SIGAEST", tables="SB1,SD3",name="Recursividade Por Movimentacao", country="ALL")
+
+//--------------------------------------------------------------------
+/*{Protheus.doc} MoveRecursionSmartViewBusinessObject
+Classe para criação do Objeto de Negocio de Prodotos   
+ 
+@author Michel Sander
+@since 	11/2023
+@version 1.0
+*/
+//--------------------------------------------------------------------  
+Class MoveRecursionSmartViewBusinessObject From totvs.protheus.backoffice.est.smartView.integratedProvider.EstIntegratedProvider
+
+	Public Method new() as object
+	Public Method getData() as object
+
+	Protected Method oNGetSchema()
+	Protected Method addItem()
+
+	Protected data aFields as array
+	Protected data jItems  as json
+	Protected data cWhere  as character
+	Protected data lExistPergunte as Logical
+	Protected data cTabInsert  as character 
+
+EndClass
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} new
+Método de instancia da classe
+ 
+@return object: self
+ 
+@author Michel Sander
+@since  11/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method new() Class MoveRecursionSmartViewBusinessObject
+
+	LOCAL cMsgSX1 := ""
+
+	_Super:new()
+
+	//Define a area
+	self:appendArea( STR0001 ) 					//#Estoque Custos
+
+	//Define o nome do Objeto de Negocio
+	self:setDisplayName( STR0002 )				//#Recursividade Por Movimentacao
+
+	//Define a descricao do Objeto de Negocio
+	self:setDescription( STR0003 )				//#Visao de dados para demonstracao da recursividade por Movimentacao de estoque
+
+	//Grupo de Perguntas
+	self:lExistPergunte := self:SetPergunte(SX1GRUPO)
+	If !self:lExistPergunte
+		cMsgSX1 := OemToAnsi(I18N(STR0004,{SX1GRUPO})) //#Grupo de perguntas #1[SX1GRUPO]# nao encontrado. Verifique na tabela SX1, o grupo de perguntas informado
+		self:setErrorStatus(400,STR0005,cMsgSX1)		//#Sem Pergunte
+		FwLogMsg("WARN",, "SmartView ESTSV030",,,,cMsgSX1,,,)
+	EndIf
+
+	self:aFields := {}
+
+Return self
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} getData
+Retorna os dados do objeto de Negocio
+ 
+@param nPage, numerico, indica a pagina atual do relatorio
+@param oFilter, objeto, contem o filtro do TReports
+ 
+@return object: self:oData
+ 
+@author Michel Sander
+@since 11/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method getData( nPage as Numeric, oFilter as object) as object Class MoveRecursionSmartViewBusinessObject
+
+	Local oQuery     as Object
+	Local cQuery	 as Character
+	Local cBkpFil	 as Character
+	Local nFil		 as Numeric
+	Local jParams	 as Json
+	Local dDataIni   as Date
+	Local dDataFin   as Date
+	Local cArqTemp	 as Character
+	Local cOpVazia	 as Character
+	Local cProdMNT   as Character
+	Local aArqTemp	 as Array
+	Local cFields    as character
+	Local aFilSD3    as array
+	Local cFilSD3    as character
+	Local cFilLog    as character
+	Local cInFiliais as character
+	Local lUseSetIn  as logical
+	Local nBind      as Numeric
+	Local oParCache  as Object
+	Local jFilLog    as Json
+	Local jProdMNT   as Json
+	Local nRet		 as Numeric
+	Local oTempTable as Object
+	Local oTabArco   as Object
+	Local oQryArc    as Object
+	Local cTabArco   as Character
+	Local nQtdArco   as Numeric
+	Local cAliasArc  as Character
+	Local cChvFil    as Character
+	Local cPai       as Character
+	Local cComp      as Character
+	Local nTamFil    as Numeric
+	Local nTamCod    as Numeric
+
+	If !self:lExistPergunte
+		Return self:oData
+	EndIf
+
+	cArqTemp  := ""
+	cOpVazia  := Criavar("D3_OP",.F.)
+	aArqTemp  := {}
+	cAliasArc := ""
+	nQtdArco  := 0
+	nTamFil   := TamSx3( 'D3_FILIAL' )[ 01 ]
+	nTamCod   := TamSx3( 'B1_COD' )[ 01 ]
+
+	jParams   := oFilter:getParameters() //metodo para retorno do json dos parametro
+	dDataIni	:= if(!empty(jParams['MV_PAR01'][1]), FwDateTimeToLocal(jParams['MV_PAR01'][1])[1], LastDate(dDataBase))
+	dDataFin	:= if(!empty(jParams['MV_PAR02'][1]), FwDateTimeToLocal(jParams['MV_PAR02'][1])[1], LastDate(dDataBase))
+
+    //Retorno da tela de multi filiais com as filiais selecionadas ou somente a filial corrente
+    self:aFils := self:retFils(jParams['SV_MULTBRANCH'], oFilter)
+
+	// Montagem do arquivo de trabalho (detalhe dos movimentos)
+	// FILIAL: guarda o valor fisico de D3_FILIAL, permitindo particionar o grafo por
+	// filial e recuperar a filial logica de cada linha no enriquecimento.
+	// Os campos REGISTRO/G1NIVEL/G1NIVINV foram removidos: existiam apenas para a
+	// marcacao de nivel feita registro a registro pela antiga FRecursiva (com RecLock
+	// por visita), etapa que passou a ser resolvida em SQL na tabela de arcos.
+	Aadd(aArqTemp,{"FILIAL"		, TamSx3( 'D3_FILIAL' )[ 03 ]	, TamSx3( 'D3_FILIAL' )[ 01 ]	, TamSx3( 'D3_FILIAL' )[ 02 ] } )
+	Aadd(aArqTemp,{"CODIGO"		, TamSx3( 'B1_COD' )[ 03 ]		, TamSx3( 'B1_COD' )[ 01 ]		, TamSx3( 'B1_COD' )[ 02 ] } )
+	Aadd(aArqTemp,{"COMPONENTE"	, TamSx3( 'B1_COD' )[ 03 ]		, TamSx3( 'B1_COD' )[ 01 ]		, TamSx3( 'B1_COD' )[ 02 ] } )
+	Aadd(aArqTemp,{"OP"			, TamSx3( 'D3_OP' )[ 03 ]		, TamSx3( 'D3_OP' )[ 01 ] 		, TamSx3( 'D3_OP' )[ 02 ] } )
+	Aadd(aArqTemp,{"ARMAZEM"	, TamSx3( 'D3_LOCAL' )[ 03 ]	, TamSx3( 'D3_LOCAL' )[ 01 ]	, TamSx3( 'D3_LOCAL' )[ 02 ] } )
+	Aadd(aArqTemp,{"MOVIMENTO"	, TamSx3( 'D3_TM' )[ 03 ]		, TamSx3( 'D3_TM' )[ 01 ]		, TamSx3( 'D3_TM' )[ 02 ] } )
+	Aadd(aArqTemp,{"EMISSAO"	, TamSx3( 'D3_EMISSAO' )[ 03 ]	, TamSx3( 'D3_EMISSAO' )[ 01 ]	, TamSx3( 'D3_EMISSAO' )[ 02 ] } )
+	Aadd(aArqTemp,{"DOCUMENTO"	, TamSx3( 'D3_DOC' )[ 03 ]		, TamSx3( 'D3_DOC' )[ 01 ]		, TamSx3( 'D3_DOC' )[ 02 ] } )
+
+	cArqTemp   := GetNextAlias()
+	oTempTable := FWTemporaryTable():New( cArqTemp )
+	oTempTable:SetFields( aArqTemp )
+	// Indice usado para recuperar os movimentos de um arco (FILIAL+PAI+COMPONENTE)
+	// apontado como recursivo pela poda em SQL.
+	oTempTable:AddIndex("01", {"FILIAL","CODIGO","COMPONENTE","OP"} )
+	oTempTable:Create()
+	Self:cTabInsert := oTempTable:GetRealName()
+
+	// ---------- filiais e parametros resolvidos uma unica vez, fora do laco ----------
+	cBkpFil := cFilAnt
+
+	// Lista de filiais no formato SQL (FWxFilial) e mapa fisico->logico.
+	// SD3 e exclusiva (SX2 X2_MODO='E'), logo FWxFilial('SD3',cFilLog) e o valor fisico
+	// gravado em D3_FILIAL - a mesma chave usada na temporaria e na tabela de arcos.
+	// jFilLog/jProdMNT sao indexados por esse valor fisico. Se duas filiais logicas
+	// colapsarem no mesmo valor fisico, a primeira prevalece - mesmo efeito da versao
+	// anterior, em que a segunda passagem encontrava os registros ja marcados (G1NIVEL
+	// diferente de "01") e os ignorava.
+	aFilSD3   := {}
+	oParCache := JsonObject():New()
+	jFilLog   := JsonObject():New()
+	jProdMNT  := JsonObject():New()
+	For nFil := 1 To Len(self:aFils)
+		cFilSD3 := FWxFilial('SD3', self:aFils[nFil])
+		// Chave do mapa: bpChvFil normaliza o valor fisico da filial (sem espacos e com
+		// prefixo), evitando depender de padding na indexacao do JsonObject. Calculada
+		// uma unica vez por iteracao.
+		cChvFil := bpChvFil(cFilSD3)
+		// MV_PRODMNT resolvido por filial (4o arg do SuperGetMV), sem trocar cFilAnt,
+		// e cacheado - o filtro do produto de manutencao e aplicado por arco.
+		oParCache[self:aFils[nFil]] := bpGetParFil(self:aFils[nFil])
+		If ValType(jFilLog[cChvFil]) != "C"
+			aAdd(aFilSD3, cFilSD3)
+			jFilLog[cChvFil]  := self:aFils[nFil]
+			jProdMNT[cChvFil] := AllTrim(oParCache[self:aFils[nFil]]["MV_PRODMNT"])
+		EndIf
+	Next nFil
+	cFilAnt := cBkpFil
+
+	lUseSetIn  := (Len(aFilSD3) <= 50)
+	// bpFilIn retorna a lista literal quando > 50 filiais; vazio quando usa setIn()
+	cInFiliais := bpFilIn(aFilSD3, lUseSetIn)
+
+	cFields		 	:= "D3_FILIAL, D3_OP, C2_PRODUTO, D3_COD, D3_TM, D3_LOCAL, D3_EMISSAO,  MIN( D3_DOC ) DOC "
+
+	nBind  := 1
+	cQuery := " SELECT ? "
+	cQuery += " FROM "+ RetSQLName( 'SD3' ) +" SD3 "
+	cQuery += " 	INNER JOIN "+ RetSQLName( 'SC2' ) +" SC2 "
+	cQuery += " 	 ON  " + FWJoinFilial( "SC2", "SD3" )
+	cQuery += "      AND C2_NUM || C2_ITEM || C2_SEQUEN = D3_OP "
+	cQuery += " 	 AND SC2.D_E_L_E_T_ = ? "
+	If lUseSetIn
+		cQuery += " WHERE       D3_FILIAL IN (?) "
+	Else
+		// CA2050:SUPPRESS - cInFiliais e construido de forma segura usando FWxFilial()
+		cQuery += " WHERE       D3_FILIAL IN (" + cInFiliais + ") "
+	EndIf
+	cQuery += "         AND D3_EMISSAO >= ? "
+	cQuery += "         AND D3_EMISSAO <= ? "
+	cQuery += " 		AND D3_OP <> ? "
+	cQuery += " 		AND D3_CF NOT IN (?) "
+	cQuery += " 		AND D3_ESTORNO <> ? "
+
+	//Os filtros serao setados na interface do Smart View
+	cQuery += self:cWhereFiltroSV
+
+	//Internacionalizacao
+	cQuery += self:cWhere
+
+	cQuery += " 		AND SD3.D_E_L_E_T_ = ? "
+	cQuery += " GROUP BY D3_FILIAL, D3_OP, C2_PRODUTO, D3_COD, D3_TM, D3_LOCAL, D3_EMISSAO "
+	cQuery += " ORDER BY D3_FILIAL, D3_OP, D3_COD, D3_EMISSAO "
+	cQuery := ChangeQuery( cQuery )
+
+	oQuery := FwExecStatement():New(cQuery)
+
+	oQuery:SetUnsafe(nBind++, cFields)                //1  SELECT ?
+	oQuery:SetString(nBind++, ' ')                    //2  SC2.D_E_L_E_T_
+	If lUseSetIn
+		oQuery:SetIn(nBind++, aFilSD3)                //3  D3_FILIAL IN
+	EndIf
+	oQuery:SetString(nBind++, Dtos(dDataIni))         //4  D3_EMISSAO >=
+	oQuery:SetString(nBind++, Dtos(dDataFin))         //5  D3_EMISSAO <=
+	oQuery:SetString(nBind++, cOpVazia)               //6  D3_OP <>
+	oQuery:SetIn(nBind++, {'PR0','PR1'})              //7  D3_CF NOT IN
+	oQuery:SetString(nBind++, "S")                    //8  D3_ESTORNO <>
+	oQuery:SetString(nBind++, ' ')                    //9  SD3.D_E_L_E_T_
+
+	//Popula a tabela temporaria numa unica execucao (todas as filiais)
+	// GetFixQuery ja retorna a query tratada; o cabecalho do INSERT passa por ChangeQuery
+	cQuery 	 := " INSERT INTO " + Self:cTabInsert
+	cQuery 	 +=  " ( FILIAL, OP, CODIGO, COMPONENTE, MOVIMENTO, ARMAZEM, EMISSAO, DOCUMENTO ) "
+	cQuery   += oQuery:GetFixQuery()
+
+	nRet := TCSQLExec(cQuery)
+
+	// ---------------------------------------------------------------------------------
+	// Deteccao da recursividade em SQL (substitui a antiga Static Function FRecursiva)
+	//
+	// O detalhe da temporaria e, na pratica, um grafo: cada linha e um arco
+	// CODIGO (produto da OP) -> COMPONENTE (produto consumido). A recursividade que o
+	// relatorio aponta e a existencia de ciclo nesse grafo.
+	//
+	// A FRecursiva percorria o grafo registro a registro - dbSeek + RecLock/MsUnLock a
+	// cada visita, recursao de ate 98 niveis e uma chamada por linha do detalhe, mesmo
+	// para arcos repetidos. Agora o mesmo resultado sai de duas operacoes de conjunto:
+	//
+	//   1) ARCOS := DISTINCT (FILIAL, PAI, COMP) do detalhe. Colapsa de uma vez a
+	//      repeticao de arcos - varias OPs/movimentos com o mesmo par pai/componente
+	//      geram um unico arco a ser analisado;
+	//   2) poda iterativa: enquanto existir arco cujo COMP nao seja PAI de nenhum outro
+	//      arco da mesma filial, esse arco e removido. Se o componente nao consome nada,
+	//      ele nao pode fechar ciclo.
+	//
+	// Ao fim da poda todo no remanescente tem grau de saida >= 1. Em um grafo finito isso
+	// implica caminhada infinita, ou seja, todo arco que sobrou alcanca um ciclo - que e
+	// exatamente o conjunto de movimentos que o relatorio deve exibir. Cada rodada e um
+	// unico DELETE e o numero de rodadas depende da profundidade da estrutura, nao do
+	// volume de movimentos.
+	// ---------------------------------------------------------------------------------
+	oTabArco := FWTemporaryTable():New( GetNextAlias() )
+	oTabArco:SetFields( { { "FILIAL", TamSx3( 'D3_FILIAL' )[ 03 ], nTamFil, 0 } , ;
+	                      { "PAI"   , TamSx3( 'B1_COD' )[ 03 ]   , nTamCod, 0 } , ;
+	                      { "COMP"  , TamSx3( 'B1_COD' )[ 03 ]   , nTamCod, 0 } } )
+	// Atende a poda (procura por FILIAL+PAI) e a leitura ordenada dos arcos remanescentes
+	oTabArco:AddIndex("01", {"FILIAL","PAI","COMP"} )
+	oTabArco:Create()
+	cTabArco := oTabArco:GetRealName()
+
+	If bpArcCarga(cTabArco, Self:cTabInsert) == 0
+		nQtdArco := bpArcPoda(cTabArco)
+	EndIf
+
+	// nQtdArco < 0 sinaliza poda incompleta (falha no DELETE): nao publica o grafo,
+	// pois ele poderia conter arcos nao recursivos (falsos positivos).
+	If nQtdArco > 0
+		// CA2050:SUPPRESS - nome vindo de FWTemporaryTable:GetRealName(), sem input externo
+		cQuery    := ChangeQuery(" SELECT FILIAL, PAI, COMP FROM " + cTabArco + " ORDER BY FILIAL, PAI, COMP ")
+		oQryArc   := FwExecStatement():New(cQuery)
+		cAliasArc := oQryArc:OpenAlias()
+	EndIf
+
+	// Ordem 1 = FILIAL+CODIGO+COMPONENTE+OP: definida uma unica vez, fora do laco
+	dbSelectArea(cArqTemp)
+	(cArqTemp)->(dbSetOrder(1))
+
+	// Percorre somente os arcos recursivos e, para cada um, os movimentos correspondentes
+	// no detalhe. Sem recursao, sem gravacao na temporaria e sem varrer o detalhe inteiro.
+	While !Empty(cAliasArc) .And. !(cAliasArc)->(Eof())
+
+		cFilSD3 := PadR((cAliasArc)->FILIAL, nTamFil)
+		cChvFil := bpChvFil(cFilSD3)
+		cPai    := AllTrim((cAliasArc)->PAI)
+		cComp   := AllTrim((cAliasArc)->COMP)
+
+		// Filial nao selecionada (defesa) - nao ha filial logica associada ao valor fisico
+		If ValType(jFilLog[cChvFil]) != "C"
+			(cAliasArc)->(DBSkip())
+			Loop
+		EndIf
+
+		cFilLog  := jFilLog[cChvFil]
+		// Produto de manutencao: MV_PRODMNT pode variar por filial, por isso vem do cache
+		// e nao do SQL. Antes era avaliado por linha do detalhe; agora, uma vez por arco.
+		cProdMNT := jProdMNT[cChvFil]
+
+		If cPai == cProdMNT
+			(cAliasArc)->(DBSkip())
+			Loop
+		EndIf
+
+		// cFilAnt e trocado para a filial logica do arco: o enriquecimento le SB1/NNR via
+		// xFilial() e o dataset publica a filial logica.
+		cFilAnt := cFilLog
+
+		If (cArqTemp)->(dbSeek( cFilSD3 + PadR(cPai, nTamCod) + PadR(cComp, nTamCod) ))
+			While !(cArqTemp)->(Eof()) .And. (cArqTemp)->FILIAL == cFilSD3 ;
+				.And. AllTrim((cArqTemp)->CODIGO) == cPai ;
+				.And. AllTrim((cArqTemp)->COMPONENTE) == cComp
+
+				self:addItem(cArqTemp, cFilLog)
+				(cArqTemp)->(DBSkip())
+			EndDo
+		EndIf
+
+		(cAliasArc)->(DBSkip())
+	EndDo
+
+	If !Empty(cAliasArc)
+		(cAliasArc)->(DBCloseArea())
+	EndIf
+
+	If ValType(oQryArc) == "O"
+		oQryArc:Destroy()
+	EndIf
+
+	(cArqTemp)->(DBCloseArea())
+
+	cFilAnt := cBkpFil
+
+	FWFreeObj(oParCache)
+	FWFreeObj(jFilLog)
+	FWFreeObj(jProdMNT)
+	oQuery:Destroy()
+	oTabArco:Delete()
+	oTempTable:Delete()
+	
+Return self:oData
+
+
+/*/{Protheus.doc} addItem
+Monta e publica no dataset um item do relatorio a partir do registro posicionado no
+detalhe da tabela temporaria, enriquecendo com as descricoes de produto (SB1) e de
+armazem (NNR) da filial logica informada.
+@type Method
+@param cAliasDet, character, alias da temporaria de detalhe, posicionado no movimento
+@param cFilLog  , character, filial logica correspondente ao arco
+@author Squad Entradas
+@since 09/2026
+/*/
+Method addItem(cAliasDet as character, cFilLog as character) Class MoveRecursionSmartViewBusinessObject
+
+	self:jItems := JsonObject():New()
+
+	SB1->(dbSeek(xFilial('SB1',cFilLog)+(cAliasDet)->COMPONENTE))
+	self:jItems["FILIAL"]	  := cFilLog
+	self:jItems["D3_COD"]     := SB1->B1_COD
+	self:jItems["B1_DESCCOM"] := SB1->B1_DESC
+	self:jItems["D3_UM"]      := SB1->B1_UM
+	self:jItems["D3_LOCAL"]   := (cAliasDet)->ARMAZEM
+
+	NNR->(dbSeek(xFilial('NNR',cFilLog)+(cAliasDet)->ARMAZEM))
+	self:jItems["NNR_DESCRI"] := NNR->NNR_DESCRI
+
+	self:jItems["D3_TM"]      := (cAliasDet)->MOVIMENTO
+	self:jItems["D3_DOC"]     := (cAliasDet)->DOCUMENTO
+	self:jItems["D3_EMISSAO"] := totvs.framework.treports.date.dateToTimeStamp((cAliasDet)->EMISSAO)
+	self:jItems["D3_OP"]      := (cAliasDet)->OP
+
+	SB1->(dbSeek(xFilial('SB1',cFilLog)+(cAliasDet)->CODIGO))
+	self:jItems["C2_PRODUTO"] := SB1->B1_COD
+	self:jItems["B1_DESCPAI"] := SB1->B1_DESC
+
+	self:processData()
+	self:oData:appendData(self:jItems)
+
+Return
+
+//-------------------------------------------------------------------
+/*{Protheus.doc} oNGetSchema
+Retorna a estrutura dos campos
+ 
+@return object: self:oSchema
+ 
+@author Michel Sander
+@since 11/2023
+@version 1.0
+*/
+//-------------------------------------------------------------------   
+Method oNGetSchema() Class MoveRecursionSmartViewBusinessObject
+
+	Local aStrSD3    as Array
+	Local aStrSB1    as Array
+	Local aStrSC2    as Array
+	Local aStrNNR    as Array
+	Local nC         as Numeric
+	Local nPosDescr  as Numeric
+	Local aFieldsSD3 as Array
+	Local aFieldsSC2 as Array
+	Local aFieldsNNR as Array
+
+	aStrSD3 := SD3->( DBStruct() )
+	aStrSB1 := SB1->( DBStruct() )
+	aStrSC2 := SC2->( DBStruct() )
+	aStrNNR := NNR->( DBStruct() )
+
+	
+	For nC := 1 To Len( aStrSD3 )
+		If aStrSD3[ nC , 02 ] != "M" .And. (Alltrim( aStrSD3[ nC , 01 ] ) $ "D3_COD|D3_LOCAL|D3_UM|D3_EMISSAO|D3_TM|D3_OP|D3_DOC")
+			aAdd( self:aFields , { Alltrim( aStrSD3[ nC , 01 ] ) , aStrSD3[ nC , 02 ] } )
+			If Alltrim( aStrSD3[ nC , 01 ]) == "D3_COD"
+				nPosDescr := ASCAN(aStrSB1, { |x| AllTrim(x[1])=="B1_DESC"})
+				If nPosDescr > 0
+					aAdd( self:aFields , { "B1_DESCCOM", aStrSB1[ nPosDescr , 02 ] } )
+				EndIf
+			EndIf
+		EndIf
+	Next nC
+
+	For nC := 1 To Len( aStrSC2 )
+		If aStrSC2[ nC , 02 ] != "M" .And. (Alltrim( aStrSC2[ nC , 01 ] ) == "C2_PRODUTO")
+			aAdd( self:aFields , { Alltrim( aStrSC2[ nC , 01 ] ) , aStrSC2[ nC , 02 ] } )
+			nPosDescr := ASCAN(aStrSB1, { |x| AllTrim(x[1])=="B1_DESC"})
+			If nPosDescr > 0
+				aAdd( self:aFields , { "B1_DESCPAI", aStrSB1[ nPosDescr , 02 ] } )
+			EndIf
+		EndIf
+	Next nC
+
+	For nC := 1 To Len( aStrNNR )
+		If aStrNNR[ nC , 02 ] != "M" .And. (Alltrim( aStrNNR[ nC , 01 ] ) == "NNR_DESCRI")
+			aAdd( self:aFields , { Alltrim( aStrNNR[ nC , 01 ] ) , aStrNNR[ nC , 02 ] } )
+		EndIf
+	Next nC
+
+	self:addProperty( "FILIAL" , STR0008 , "string" , STR0008 , "FILIAL"	) //"Filial"
+
+	aFieldsSD3 := {"D3_OP", "D3_COD","D3_LOCAL", "D3_UM", "D3_EMISSAO", "D3_TM", "D3_DOC"}
+	aFieldsSC2 := {"C2_PRODUTO"}
+	aFieldsNNR := {"NNR_DESCRI"}
+
+	self:AliasToSchema("SD3",aFieldsSD3)
+	self:AliasToSchema("SC2",aFieldsSC2)
+	self:AliasToSchema("NNR",aFieldsNNR)
+
+	self:addProperty("B1_DESCPAI"    , STR0006, "string", STR0006, "B1_DESCPAI")
+	self:addProperty("B1_DESCCOM"    , STR0007, "string", STR0007, "B1_DESCCOM")
+
+Return
+
+/*/{Protheus.doc} bpChvFil
+Normaliza o valor fisico da filial (D3_FILIAL) para uso como chave dos mapas
+jFilLog/jProdMNT. O prefixo garante uma chave valida mesmo quando o valor da filial e
+vazio (tabela compartilhada) e o AllTrim elimina a dependencia de padding na indexacao
+do JsonObject.
+@type Static Function
+@param cFilFis, character, valor fisico da filial
+@return character, chave normalizada
+@author Squad Entradas
+@since 09/2026
+/*/
+Static Function bpChvFil(cFilFis as Character) as Character
+Return "F" + AllTrim(cFilFis)
+
+
+/*/{Protheus.doc} bpArcCarga
+Carrega a tabela de arcos com os pares distintos (FILIAL, PAI, COMP) existentes no
+detalhe. O DISTINCT elimina a repeticao de arcos: varias OPs e movimentos com o mesmo
+par produto/componente passam a representar um unico arco na analise de ciclo.
+@type Static Function
+@param cTabArco, character, nome fisico da tabela de arcos
+@param cTabDet , character, nome fisico da tabela de detalhe dos movimentos
+@return numeric, retorno do TCSQLExec (0 = sucesso)
+@author Squad Entradas
+@since 09/2026
+/*/
+Static Function bpArcCarga(cTabArco as Character, cTabDet as Character) as Numeric
+
+	Local cQuery := "" as Character
+	Local nRet   := 0  as Numeric
+
+	// CA2050:SUPPRESS - nomes vindos de FWTemporaryTable:GetRealName(), sem input externo
+	cQuery := " INSERT INTO " + cTabArco + " ( FILIAL, PAI, COMP ) "
+	cQuery += " SELECT DISTINCT FILIAL, CODIGO, COMPONENTE FROM " + cTabDet
+
+	nRet := TCSQLExec(cQuery)
+
+Return nRet
+
+
+/*/{Protheus.doc} bpArcPoda
+Poda iterativa da tabela de arcos, em SQL, substituindo a navegacao recursiva registro
+a registro da antiga FRecursiva.
+
+Cada rodada e um unico DELETE que remove os arcos cujo componente (COMP) nao aparece
+como pai (PAI) de nenhum outro arco da mesma filial - ou seja, componentes que nao
+consomem nada e portanto nao podem fechar ciclo. Repete-se enquanto houver remocao.
+
+Quando nada mais e removido, todo no remanescente tem grau de saida >= 1. Em um grafo
+finito isso implica caminhada infinita, logo todo arco remanescente alcanca um ciclo:
+sao exatamente os arcos recursivos que o relatorio deve apontar. Nos self-loops
+(PAI == COMP) o proprio arco garante o grau de saida e nunca e podado.
+
+O filtro de filial no NOT EXISTS mantem a analise dentro da fronteira da filial, como
+fazia a FRecursiva ao comparar FILIAL no dbSeek.
+@type Static Function
+@param cTabArco, character, nome fisico da tabela de arcos
+@return numeric, quantidade de arcos recursivos remanescentes; -1 se a poda falhou
+@author Squad Entradas
+@since 09/2026
+/*/
+Static Function bpArcPoda(cTabArco as Character) as Numeric
+
+	Local cQuery  := "" as Character
+	Local nQtd    := 0  as Numeric
+	Local nQtdAnt := 0  as Numeric
+	Local nVolta  := 0  as Numeric
+	Local nRet    := 0  as Numeric
+
+	// CA2050:SUPPRESS - nome vindo de FWTemporaryTable:GetRealName(), sem input externo
+	cQuery := " DELETE FROM " + cTabArco
+	cQuery += " WHERE NOT EXISTS ( SELECT 1 FROM " + cTabArco + " ARCFILHO "
+	cQuery += "                     WHERE ARCFILHO.FILIAL = " + cTabArco + ".FILIAL "
+	cQuery += "                       AND ARCFILHO.PAI    = " + cTabArco + ".COMP ) "
+
+	nQtd := bpArcConta(cTabArco)
+
+	While nQtd > 0 .And. nVolta < BP_MAXPODA
+
+		nVolta++
+		nQtdAnt := nQtd
+
+		nRet := TCSQLExec(cQuery)
+
+		nQtd := bpArcConta(cTabArco)
+
+		// Nenhuma remocao na rodada: a poda convergiu
+		If nQtd == nQtdAnt
+			Exit
+		EndIf
+
+	EndDo
+
+Return nQtd
+
+
+/*/{Protheus.doc} bpArcConta
+Retorna a quantidade de arcos presentes na tabela de arcos. Usada como criterio de
+parada da poda: a contagem so diminui, portanto contagem estavel significa que nada
+mais foi removido.
+@type Static Function
+@param cTabArco, character, nome fisico da tabela de arcos
+@return numeric, quantidade de registros
+@author Squad Entradas
+@since 09/2026
+/*/
+Static Function bpArcConta(cTabArco as Character) as Numeric
+
+	Local cQuery as Character
+	Local oStmt  as Object
+	Local xQtd   as Variant
+	Local nQtd   := 0 as Numeric
+
+	// CA2050:SUPPRESS - nome vindo de FWTemporaryTable:GetRealName(), sem input externo
+	cQuery := ChangeQuery(" SELECT COUNT(*) QTDARC FROM " + cTabArco)
+
+	oStmt := FwExecStatement():New(cQuery)
+	xQtd  := oStmt:ExecScalar("QTDARC")
+	oStmt:Destroy()
+
+	If ValType(xQtd) == "N"
+		nQtd := xQtd
+	EndIf
+
+Return nQtd
+
+/*/{Protheus.doc} bpFilIn
+Monta a lista literal de filiais para a clausula IN quando ha mais de 50 filiais
+(o setIn() do FwExecStatement suporta no maximo 50 itens). Retorna string vazia
+quando lUseSetIn e verdadeiro (nesse caso usa-se o placeholder com setIn()).
+As filiais ja vem no formato SQL (FWxFilial), portanto a lista e segura.
+@type Static Function
+@param aFiliais , array  , filiais no formato SQL (FWxFilial)
+@param lUseSetIn, logical, .T. quando <= 50 filiais (usa setIn, nao monta lista)
+@return character, lista literal 'F1','F2',... ou "" quando usa setIn
+@author Squad Entradas
+@since 09/2026
+/*/
+Static Function bpFilIn(aFiliais as Array, lUseSetIn as Logical) as Character
+	Local cIn := "" as Character
+	Local nX  := 0 as Numeric
+
+	If !lUseSetIn
+		For nX := 1 to Len(aFiliais)
+			If nX > 1
+				cIn += ","
+			EndIf
+			// CA2050:SUPPRESS - lista construida com FWxFilial(), nao contem input de usuario
+			cIn += "'" + aFiliais[nX] + "'"
+		Next nX
+	EndIf
+
+Return cIn
+
+/*/{Protheus.doc} bpGetParFil
+Resolve os parametros de calculo de uma filial especifica e retorna em um Json.
+A leitura e feita por filial usando o 4o argumento do SuperGetMV (filial), sem
+alterar cFilAnt. Centraliza a chamada de API fora do laco de filial (CA1003),
+permitindo o cache por filial (oParCache) no metodo getData.
+@type Static Function
+@param cFilRes, character, filial para a qual os parametros serao resolvidos
+@return json, com a chave MV_PRODMNT
+@author Squad Entradas
+@since 09/2026
+/*/
+Static Function bpGetParFil(cFilRes as Character) as Json
+	Local jPar := JsonObject():New() as Json
+
+	jPar["MV_PRODMNT"] := SuperGetMv("MV_PRODMNT",.F.,"MANUTENCAO",cFilRes)
+
+Return jPar
